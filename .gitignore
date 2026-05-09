@@ -3,4 +3,6 @@
 /.cache/
 /img/
 /fonts/
+/docs/html/
+/docs/xml/
 .env

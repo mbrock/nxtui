@@ -1,0 +1,35 @@
+name = 'nxt'
+description = 'A small typed raster and terminal UI library for C++.'
+author = 'Mikael Brockman'
+github = 'mbrock/nxtui'
+cpp = 23
+theme = 'dark'
+main_page = true
+show_includes = true
+generate_tagfile = true
+
+[sources]
+extract_all = true
+paths = [
+    '../test',
+]
+recursive_paths = [
+    '../src/nxt',
+    '../src/nxtio',
+]
+patterns = [
+    '*.h',
+    '*.hpp',
+    '*.cpp',
+]
+strip_paths = [
+    '../src',
+    '../test',
+]
+strip_includes = [
+    '../src/',
+]
+
+[warnings]
+treat_as_errors = false
+undocumented = false
