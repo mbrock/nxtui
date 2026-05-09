@@ -1,0 +1,285 @@
+#include "catch_amalgamated.hpp"
+
+#include <coro/coro.hpp>
+
+#include <list>
+#include <ranges>
+#include <vector>
+#include <iostream>
+
+TEST_CASE("when_all", "[when_all]")
+{
+    std::cerr << "[when_all]\n\n";
+}
+
+TEST_CASE("when_all single task with tuple container", "[when_all]")
+{
+    auto make_task = [](uint64_t amount) -> coro::task<uint64_t> { co_return amount; };
+
+    auto output_tasks = coro::sync_wait(coro::when_all(make_task(100)));
+    REQUIRE(std::tuple_size<decltype(output_tasks)>() == 1);
+
+    uint64_t counter{0};
+    std::apply([&counter](auto&&... tasks) -> void { ((counter += tasks.return_value()), ...); }, output_tasks);
+
+    REQUIRE(counter == 100);
+}
+
+TEST_CASE("when_all single task with tuple container by move", "[when_all]")
+{
+    auto make_task = [](uint64_t amount) -> coro::task<uint64_t> { co_return amount; };
+
+    auto t            = make_task(100);
+    auto output_tasks = coro::sync_wait(coro::when_all(std::move(t)));
+    REQUIRE(std::tuple_size<decltype(output_tasks)>() == 1);
+
+    uint64_t counter{0};
+    std::apply([&counter](auto&&... tasks) -> void { ((counter += tasks.return_value()), ...); }, output_tasks);
+
+    REQUIRE(counter == 100);
+}
+
+TEST_CASE("when_all multiple tasks with tuple container", "[when_all]")
+{
+    auto make_task = [](uint64_t amount) -> coro::task<uint64_t> { co_return amount; };
+
+    auto output_tasks = coro::sync_wait(coro::when_all(make_task(100), make_task(50), make_task(20)));
+    REQUIRE(std::tuple_size<decltype(output_tasks)>() == 3);
+
+    uint64_t counter{0};
+    std::apply([&counter](auto&&... tasks) -> void { ((counter += tasks.return_value()), ...); }, output_tasks);
+
+    REQUIRE(counter == 170);
+}
+
+TEST_CASE("when_all single task with vector container", "[when_all]")
+{
+    auto make_task = [](uint64_t amount) -> coro::task<uint64_t> { co_return amount; };
+
+    std::vector<coro::task<uint64_t>> input_tasks;
+    input_tasks.emplace_back(make_task(100));
+
+    auto output_tasks = coro::sync_wait(coro::when_all(std::move(input_tasks)));
+    REQUIRE(output_tasks.size() == 1);
+
+    uint64_t counter{0};
+    for (const auto& task : output_tasks)
+    {
+        counter += task.return_value();
+    }
+
+    REQUIRE(counter == 100);
+}
+
+TEST_CASE("when_all multple task withs vector container", "[when_all]")
+{
+    auto make_task = [](uint64_t amount) -> coro::task<uint64_t> { co_return amount; };
+
+    std::vector<coro::task<uint64_t>> input_tasks;
+    input_tasks.emplace_back(make_task(100));
+    input_tasks.emplace_back(make_task(200));
+    input_tasks.emplace_back(make_task(550));
+    input_tasks.emplace_back(make_task(1000));
+
+    auto output_tasks = coro::sync_wait(coro::when_all(std::move(input_tasks)));
+    REQUIRE(output_tasks.size() == 4);
+
+    uint64_t counter{0};
+    for (const auto& task : output_tasks)
+    {
+        counter += task.return_value();
+    }
+
+    REQUIRE(counter == 1850);
+}
+
+TEST_CASE("when_all multple task withs list container", "[when_all]")
+{
+    auto make_task = [](uint64_t amount) -> coro::task<uint64_t> { co_return amount; };
+
+    std::list<coro::task<uint64_t>> input_tasks;
+    input_tasks.emplace_back(make_task(100));
+    input_tasks.emplace_back(make_task(200));
+    input_tasks.emplace_back(make_task(550));
+    input_tasks.emplace_back(make_task(1000));
+
+    auto output_tasks = coro::sync_wait(coro::when_all(std::move(input_tasks)));
+    REQUIRE(output_tasks.size() == 4);
+
+    uint64_t counter{0};
+    for (const auto& task : output_tasks)
+    {
+        counter += task.return_value();
+    }
+
+    REQUIRE(counter == 1850);
+}
+
+TEST_CASE("when_all inside coroutine", "[when_all]")
+{
+    auto tp = coro::thread_pool::make_unique();
+    auto              make_task = [](std::unique_ptr<coro::thread_pool>& tp, uint64_t amount) -> coro::task<uint64_t>
+    {
+        co_await tp->schedule();
+        co_return amount;
+    };
+
+    auto runner_task = [](std::unique_ptr<coro::thread_pool>& tp, auto make_task) -> coro::task<uint64_t>
+    {
+        std::list<coro::task<uint64_t>> tasks;
+        tasks.emplace_back(make_task(tp, 1));
+        tasks.emplace_back(make_task(tp, 2));
+        tasks.emplace_back(make_task(tp, 3));
+
+        auto output_tasks = co_await coro::when_all(std::move(tasks));
+
+        uint64_t result{0};
+        for (const auto& task : output_tasks)
+        {
+            result += task.return_value();
+        }
+        co_return result;
+    };
+
+    auto result = coro::sync_wait(runner_task(tp, make_task));
+
+    REQUIRE(result == (1 + 2 + 3));
+}
+
+TEST_CASE("when_all use std::ranges::view", "[when_all]")
+{
+    auto tp = coro::thread_pool::make_unique();
+
+    auto make_runner_task = [](std::unique_ptr<coro::thread_pool>& tp) -> coro::task<uint64_t>
+    {
+        auto make_task = [](std::unique_ptr<coro::thread_pool>& tp, uint64_t amount) -> coro::task<uint64_t>
+        {
+            co_await tp->schedule();
+            co_return amount;
+        };
+        std::vector<coro::task<uint64_t>> tasks;
+        tasks.emplace_back(make_task(tp, 1));
+        tasks.emplace_back(make_task(tp, 2));
+        tasks.emplace_back(make_task(tp, 3));
+
+        auto output_tasks = co_await coro::when_all(std::ranges::views::all(tasks));
+
+        uint64_t result{0};
+        for (const auto& task : output_tasks)
+        {
+            result += task.return_value();
+        }
+        co_return result;
+    };
+
+    auto result = coro::sync_wait(make_runner_task(tp));
+    REQUIRE(result == (1 + 2 + 3));
+}
+
+TEST_CASE("when_all each task throws", "[when_all]")
+{
+    auto tp = coro::thread_pool::make_unique();
+
+    auto make_task = [](std::unique_ptr<coro::thread_pool>& tp, uint64_t i) -> coro::task<uint64_t>
+    {
+        co_await tp->schedule();
+        if (i % 2 == 0)
+        {
+            throw std::runtime_error{std::to_string(i)};
+        }
+        co_return i;
+    };
+
+    std::vector<coro::task<uint64_t>> tasks;
+    for (auto i = 1; i <= 4; ++i)
+    {
+        tasks.emplace_back(make_task(tp, i));
+    }
+
+    auto output_tasks = coro::sync_wait(coro::when_all(std::move(tasks)));
+    for (auto i = 1; i <= 4; ++i)
+    {
+        auto& task = output_tasks.at(i - 1);
+        if (i % 2 == 0)
+        {
+            REQUIRE_THROWS(task.return_value());
+        }
+        else
+        {
+            REQUIRE((int)task.return_value() == i);
+        }
+    }
+}
+
+TEST_CASE("when_all return void", "[when_all]")
+{
+    auto tp = coro::thread_pool::make_unique();
+    std::atomic<uint64_t> counter{0};
+
+    auto make_task = [](std::unique_ptr<coro::thread_pool>& tp, std::atomic<uint64_t>& counter, uint64_t i) -> coro::task<void>
+    {
+        co_await tp->schedule();
+        counter += i;
+        co_return;
+    };
+
+    std::vector<coro::task<void>> tasks;
+    for (auto i = 1; i <= 4; ++i)
+    {
+        tasks.emplace_back(make_task(tp, counter, i));
+    }
+
+    coro::sync_wait(coro::when_all(std::move(tasks)));
+    REQUIRE(counter == 1 + 2 + 3 + 4);
+}
+
+TEST_CASE("when_all move only object", "[when_all]")
+{
+    struct move_only
+    {
+        move_only() = default;
+        ~move_only() = default;
+
+        move_only(const move_only& other) = delete;
+        move_only(move_only&& other) = default;
+
+        auto operator=(const move_only&) noexcept -> move_only& = delete;
+        auto operator=(move_only&& other) noexcept -> move_only& = default;
+
+        std::string data{};
+    };
+
+    auto make_test = []() -> coro::task<void>
+    {
+        auto make_when_all_move_only = [](move_only value) -> coro::task<move_only>
+        {
+            co_return std::move(value);
+        };
+
+        move_only one{};
+        one.data = "hello";
+
+        move_only two{};
+        two.data = "world";
+
+        auto [task1, task2] = coro::sync_wait(coro::when_all(
+            make_when_all_move_only(std::move(one)),
+            make_when_all_move_only(std::move(two))
+        ));
+
+        auto result1 = std::move(task1.return_value());
+        auto result2 = std::move(task2).return_value();
+
+        REQUIRE(result1.data == "hello");
+        REQUIRE(result2.data == "world");
+
+        co_return;
+    };
+
+    coro::sync_wait(make_test());
+}
+
+TEST_CASE("~when_all", "[when_all]")
+{
+    std::cerr << "[~when_all]\n\n";
+}
