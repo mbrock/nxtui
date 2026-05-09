@@ -31,6 +31,18 @@ nxt_libcoro_dep = declare_dependency(
 )
 
 nlohmann_json_dep = dependency('nlohmann_json')
+utf8proc_dep = dependency(
+  'libutf8proc',
+  fallback : ['utf8proc', 'utf8proc_dep'],
+  default_options : ['tests=disabled'],
+)
+
+nxt_cairo_dep = dependency('cairo', required : false)
+nxt_pangocairo_dep = dependency('pangocairo', required : false)
+nxt_fontconfig_dep = dependency('fontconfig', required : false)
+nxt_png_available = nxt_cairo_dep.found() \
+  and nxt_pangocairo_dep.found() \
+  and nxt_fontconfig_dep.found()
 
 nxt_mdspan_args = [
   '-DMDSPAN_USE_BRACKET_OPERATOR=1',
@@ -43,6 +55,7 @@ nxt_inc = include_directories(
 )
 
 nxt_core_deps = []
+nxt_core_deps += utf8proc_dep
 
 nxt_core_sources = files(
   'src/nxt/ansi.cpp',
@@ -72,6 +85,28 @@ nxt_runtime_deps = [
   nlohmann_json_dep,
 ]
 
+nxt_runtime_cpp_args = []
+
+if nxt_png_available
+  nxt_png_lib = static_library('nxt-png',
+    'src/nxt/png.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_core_dep, nxt_cairo_dep, nxt_pangocairo_dep, nxt_fontconfig_dep],
+    cpp_args : nxt_mdspan_args,
+    install : true,
+  )
+
+  nxt_png_dep = declare_dependency(
+    link_with : nxt_png_lib,
+    include_directories : nxt_inc,
+    dependencies : [nxt_core_dep, nxt_cairo_dep, nxt_pangocairo_dep, nxt_fontconfig_dep],
+    compile_args : nxt_mdspan_args,
+  )
+
+  nxt_runtime_deps += nxt_png_dep
+  nxt_runtime_cpp_args += '-DNXT_HAVE_PNG=1'
+endif
+
 nxt_runtime_sources = files(
   'src/nxtio/app.cpp',
   'src/nxtio/http.cpp',
@@ -84,6 +119,7 @@ nxt_lib = static_library('nxtui',
   nxt_runtime_sources,
   include_directories : nxt_inc,
   dependencies : nxt_runtime_deps,
+  cpp_args : nxt_runtime_cpp_args,
   install : true,
 )
 
@@ -91,9 +127,18 @@ nxt_dep = declare_dependency(
   link_with : nxt_lib,
   include_directories : nxt_inc,
   dependencies : nxt_runtime_deps,
+  compile_args : nxt_runtime_cpp_args,
 )
 
 if get_option('examples')
+  if nxt_png_available
+    executable('nxtshot',
+      'src/nxt/nxtshot.cpp',
+      include_directories : nxt_inc,
+      dependencies : [nxt_dep, nxt_png_dep],
+    )
+  endif
+
   executable('tui_example',
     'src/nxt/tui_example.cpp',
     include_directories : nxt_inc,
@@ -219,6 +264,12 @@ if get_option('tests')
     dependencies : [nxt_dep, nxt_libvterm_dep],
   )
 
+  nxt_text_field_test = executable('text-field-test',
+    'test/text-field-test.cpp',
+    include_directories : [nxt_inc, nxt_test_inc],
+    dependencies : [nxt_dep],
+  )
+
   test('raster-test', nxt_raster_test)
   test('http-test', nxt_http_test)
   test('http-io-test', nxt_http_io_test)
@@ -227,4 +278,5 @@ if get_option('tests')
   test('llm-test', nxt_llm_test)
   test('net-include-test', nxt_net_include_test)
   test('terminal-test', nxt_terminal_test)
+  test('text-field-test', nxt_text_field_test)
 endif

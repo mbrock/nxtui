@@ -5,6 +5,7 @@
 #include <experimental/mdspan>
 
 #include "nxt/raster.hpp"
+#include "nxt/utf8.hpp"
 
 namespace nxt {
 
@@ -99,32 +100,24 @@ col_t RasterView::write_text(
         return pos.x;
 
     std::size_t col = pos.col();
-    std::size_t i = 0;
+    auto i = utf8::byte_offset(0);
 
-    while (i < text.size() && col < cols) {
-        // Determine UTF-8 character byte length
-        const auto byte = static_cast<unsigned char>(text[i]);
-        std::size_t char_len = 1;
+    while (i.count() < text.size() && col < cols) {
+        const auto cluster_end = utf8::next(text, i);
+        const std::string_view glyph_bytes =
+            text.substr(i.count(), cluster_end - i);
+        const auto cell_width = utf8::cluster_width(glyph_bytes);
+        if (cell_width > (cols - col) * ch)
+            break;
 
-        if ((byte & 0x80) == 0)
-            char_len = 1;
-        else if ((byte & 0xE0) == 0xC0)
-            char_len = 2;
-        else if ((byte & 0xF0) == 0xE0)
-            char_len = 3;
-        else if ((byte & 0xF8) == 0xF0)
-            char_len = 4;
-
-        if (i + char_len > text.size())
-            char_len = text.size() - i;
-
-        const std::string_view glyph_bytes = text.substr(i, char_len);
         const GlyphTable::GlyphId gid = glyph_table_->intern(glyph_bytes);
 
         glyphs_[y, col] = gid;
+        for (std::size_t dx = 1; dx < cell_width.count(); ++dx)
+            glyphs_[y, col + dx] = glyph_table_->intern("");
 
-        i += char_len;
-        ++col;
+        i = cluster_end;
+        col += cell_width.count();
     }
 
     return terminal_origin + col * ch;

@@ -14,6 +14,8 @@ namespace nxt {
 /// Unicode string interning table for terminal glyphs.
 /// Maps UTF-8 sequences to 32-bit glyph IDs.
 /// IDs 0-255 are reserved for single-byte ASCII (self-mapped).
+/// The empty string is used as a zero-advance continuation cell for
+/// multi-column glyphs.
 class GlyphTable
 {
 public:

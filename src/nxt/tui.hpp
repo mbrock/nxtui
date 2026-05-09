@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxt/raster.hpp"
+#include "nxt/utf8.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -224,23 +225,10 @@ inline std::string repeat(std::string_view glyph, width_t w)
     return result;
 }
 
-// Count UTF-8 code points (approximate display width)
+// Count UTF-8 cells (approximate display width)
 inline width_t utf8_width(std::string_view s)
 {
-    std::size_t count = 0;
-    for (std::size_t i = 0; i < s.size();) {
-        unsigned char c = static_cast<unsigned char>(s[i]);
-        if ((c & 0x80) == 0)
-            i += 1;
-        else if ((c & 0xE0) == 0xC0)
-            i += 2;
-        else if ((c & 0xF0) == 0xE0)
-            i += 3;
-        else
-            i += 4;
-        ++count;
-    }
-    return count * ch;
+    return utf8::display_width(s);
 }
 
 // ============================================================================

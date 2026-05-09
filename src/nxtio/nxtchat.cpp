@@ -1,3 +1,5 @@
+#include "nxt/baltics.hpp"
+#include "nxt/text_field.hpp"
 #include "nxt/tui.hpp"
 #include "nxt/units.hpp"
 #include "nxtio/app.hpp"
@@ -5,13 +7,14 @@
 #include "nxtio/input.hpp"
 #include "nxtio/llm.hpp"
 #include "nxtio/net.hpp"
+#include "nxtio/text_field.hpp"
 
-#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace nxt::chat {
@@ -26,108 +29,13 @@ struct message
 
 struct state
 {
-    std::string input;
-    std::size_t cursor_byte = 0;
+    TextField input;
     std::vector<message> messages;
     std::string model = "gpt-5.3";
     std::string status = "ready";
     std::string error;
     bool busy = false;
 };
-
-std::size_t next_codepoint(std::string_view text, std::size_t byte)
-{
-    if (byte >= text.size())
-        return text.size();
-    ++byte;
-    while (byte < text.size()
-           && (static_cast<unsigned char>(text[byte]) & 0xc0) == 0x80)
-        ++byte;
-    return byte;
-}
-
-std::size_t previous_codepoint(std::string_view text, std::size_t byte)
-{
-    if (byte == 0)
-        return 0;
-    --byte;
-    while (byte > 0
-           && (static_cast<unsigned char>(text[byte]) & 0xc0) == 0x80)
-        --byte;
-    return byte;
-}
-
-std::size_t codepoint_count(std::string_view text)
-{
-    std::size_t count = 0;
-    for (std::size_t byte = 0; byte < text.size();
-         byte = next_codepoint(text, byte))
-        ++count;
-    return count;
-}
-
-std::size_t byte_at_cell(std::string_view text, std::size_t cell)
-{
-    std::size_t byte = 0;
-    for (std::size_t i = 0; i < cell && byte < text.size(); ++i)
-        byte = next_codepoint(text, byte);
-    return byte;
-}
-
-std::size_t cell_at_byte(std::string_view text, std::size_t byte)
-{
-    byte = std::min(byte, text.size());
-    std::size_t cell = 0;
-    for (std::size_t i = 0; i < byte; i = next_codepoint(text, i))
-        ++cell;
-    return cell;
-}
-
-void apply_edit(state & s, const nxt::input::KeyEvent & event)
-{
-    using nxt::input::Key;
-
-    s.cursor_byte = std::min(s.cursor_byte, s.input.size());
-
-    if (event.is_text()) {
-        s.input.insert(s.cursor_byte, event.text);
-        s.cursor_byte += event.text.size();
-        return;
-    }
-
-    if (event.type == nxt::input::EventType::release)
-        return;
-
-    switch (event.key) {
-    case Key::backspace:
-        if (s.cursor_byte > 0) {
-            auto prev = previous_codepoint(s.input, s.cursor_byte);
-            s.input.erase(prev, s.cursor_byte - prev);
-            s.cursor_byte = prev;
-        }
-        break;
-    case Key::delete_:
-        if (s.cursor_byte < s.input.size()) {
-            auto next = next_codepoint(s.input, s.cursor_byte);
-            s.input.erase(s.cursor_byte, next - s.cursor_byte);
-        }
-        break;
-    case Key::left:
-        s.cursor_byte = previous_codepoint(s.input, s.cursor_byte);
-        break;
-    case Key::right:
-        s.cursor_byte = next_codepoint(s.input, s.cursor_byte);
-        break;
-    case Key::home:
-        s.cursor_byte = 0;
-        break;
-    case Key::end:
-        s.cursor_byte = s.input.size();
-        break;
-    default:
-        break;
-    }
-}
 
 std::string fit(std::string text, std::size_t width)
 {
@@ -152,6 +60,26 @@ std::string prompt_for(const state & s)
     return prompt;
 }
 
+auto input_field(const state & s)
+{
+    const auto p = theme::baltic_church;
+    return text_field(
+        s.input,
+        {
+            .prefix      = "> ",
+            .placeholder = s.busy ? "" : "ask anything (esc to quit)",
+            .style = {
+                .fg = s.busy ? Rgba8{p.fg_muted, 255}
+                             : Rgba8{p.fg, 255},
+                .bg             = Rgba8{p.bg_elev, 255},
+                .prefix_fg      = s.busy ? Rgba8{p.fg_muted, 255}
+                                         : Rgba8{p.cyan, 255},
+                .placeholder_fg = Rgba8{p.fg_subtle, 255},
+            },
+            .focused = !s.busy,
+        });
+}
+
 std::string text_delta(
     const nxt::io::llm::stream_event & event,
     std::string_view type)
@@ -161,60 +89,16 @@ std::string text_delta(
     return event.payload.value("delta", std::string{});
 }
 
-auto input_field(const state & s)
-{
-    auto input = s.input;
-    auto cursor_byte = s.cursor_byte;
-    auto busy = s.busy;
-
-    return leaf(
-        WidthHint::grow(),
-        HeightHint::fixed(1 * ln),
-        [=](RasterView & r, Size size) {
-            if (size.w.count() == 0)
-                return;
-
-            const auto bg = busy ? Rgba8(38, 40, 44) : Rgba8(42, 47, 54);
-            const auto fg = busy ? Rgba8(150, 156, 162) : Rgba8(230, 235, 240);
-            for (std::size_t x = 0; x < size.w.count(); ++x) {
-                auto pos = Pos::at(x * ch, 0 * ln);
-                r.set_bg(pos, bg);
-                r.set_fg(pos, fg);
-            }
-
-            auto prefix = std::string{"> "};
-            r.write_text(Pos::origin(), prefix);
-
-            auto prefix_w = prefix.size();
-            auto field_w =
-                size.w.count() > prefix_w ? size.w.count() - prefix_w : 0;
-            auto cursor_cell = cell_at_byte(input, cursor_byte);
-            auto total_cells = codepoint_count(input);
-            auto scroll_cell = cursor_cell >= field_w && field_w > 0
-                ? cursor_cell - field_w + 1
-                : std::size_t{0};
-            auto start_byte = byte_at_cell(input, scroll_cell);
-            auto end_byte =
-                byte_at_cell(std::string_view{input}.substr(start_byte), field_w)
-                + start_byte;
-            auto visible = input.substr(start_byte, end_byte - start_byte);
-            auto visible_cursor = cursor_cell - scroll_cell;
-
-            r.write_text(Pos::at(prefix_w * ch, 0 * ln), visible);
-
-            auto cursor_x = std::min(prefix_w + visible_cursor, size.w.count() - 1);
-            r.set_em(Pos::at(cursor_x * ch, 0 * ln), Emphasis::reverse);
-            if (cursor_cell == total_cells)
-                r.set_char(Pos::at(cursor_x * ch, 0 * ln), ' ');
-        });
-}
-
 auto chat_hud(const state & s)
 {
-    auto accent = fg(Rgba8{90, 190, 210}) | bold;
-    auto muted = fg(Rgba8{150, 156, 162});
-    auto bad = fg(Rgba8{235, 120, 120}) | bold;
-    auto status_style = s.error.empty() ? fg(Rgba8{220, 224, 228}) : bad;
+    const auto p = theme::baltic_church;
+    auto accent = fg(Rgba8{p.cyan, 255}) | bold;
+    auto muted  = fg(Rgba8{p.fg_muted, 255});
+    auto good   = fg(Rgba8{p.green, 255}) | bold;
+    auto bad    = fg(Rgba8{p.coral, 255}) | bold;
+    auto status_style = s.error.empty()
+        ? (s.busy ? muted : good)
+        : bad;
     auto turns = std::to_string(s.messages.size() / 2);
 
     return column(
@@ -313,9 +197,8 @@ nxt::task<> update(nxt::ui::UIRuntime & runtime, state & s)
             if (s.input.empty())
                 continue;
 
-            auto question = std::move(s.input);
+            auto question = std::move(s.input.text);
             s.input.clear();
-            s.cursor_byte = 0;
             s.error.clear();
             s.messages.push_back(message{.role = "user", .text = question});
 
@@ -336,8 +219,8 @@ nxt::task<> update(nxt::ui::UIRuntime & runtime, state & s)
             continue;
         }
 
-        apply_edit(s, *event);
-        runtime.signal_damage();
+        if (apply_key(s.input, *event))
+            runtime.signal_damage();
     }
 }
 

@@ -152,6 +152,48 @@ suite glyph_table_tests = [] {
 };
 
 // ============================================================================
+// Text writing tests
+// ============================================================================
+
+suite write_text_tests = [] {
+    "combining sequence is one glyph table entry"_test = [] {
+        GlyphTable glyphs;
+        Raster raster(3 * ch, 1 * ln, glyphs);
+        auto view = raster.view();
+
+        const std::string text = std::string{"e"} + "\xcc\x81" + "x";
+        view.write_text(Pos::origin(), text);
+
+        auto first = view.get_cell(Pos::origin());
+        auto second = view.get_cell(Pos::at(1 * ch, 0 * ln));
+        expect(first.has_value());
+        expect(second.has_value());
+        expect(glyphs[first->glyph] == std::string_view{text}.substr(0, 3));
+        expect(glyphs[second->glyph] == std::string_view{"x"});
+    };
+
+    "wide glyph marks continuation cell without extra bytes"_test = [] {
+        GlyphTable glyphs;
+        Raster raster(4 * ch, 1 * ln, glyphs);
+        auto view = raster.view();
+
+        const std::string text = std::string{"\xe7\x95\x8c"} + "x";
+        auto end = view.write_text(Pos::origin(), text);
+
+        auto first = view.get_cell(Pos::origin());
+        auto continuation = view.get_cell(Pos::at(1 * ch, 0 * ln));
+        auto third = view.get_cell(Pos::at(2 * ch, 0 * ln));
+        expect(end == terminal_origin + 3 * ch);
+        expect(first.has_value());
+        expect(continuation.has_value());
+        expect(third.has_value());
+        expect(glyphs[first->glyph] == std::string_view{text}.substr(0, 3));
+        expect(glyphs[continuation->glyph] == std::string_view{});
+        expect(glyphs[third->glyph] == std::string_view{"x"});
+    };
+};
+
+// ============================================================================
 // Diff algorithm tests
 // ============================================================================
 

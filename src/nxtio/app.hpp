@@ -300,6 +300,14 @@ private:
     double smoothed_hud_rows_{0.0};
     double hud_shrink_alpha_{0.05};
 
+    // Auto-screenshot (only does work when NXT_HAVE_PNG is defined).
+    std::chrono::steady_clock::time_point screenshot_start_{
+        std::chrono::steady_clock::now()};
+    std::size_t screenshot_milestone_index_{0};
+    std::string screenshot_session_tag_;
+    void maybe_screenshot() noexcept;
+    void capture_screenshot(std::string_view milestone) noexcept;
+
     std::stop_source stop_source_;
 };
 

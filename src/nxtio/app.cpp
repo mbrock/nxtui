@@ -3,8 +3,13 @@
 #include <csignal>
 #include <array>
 #include <cerrno>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <format>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include "nxtio/app.hpp"
 #include "nxt/ansi.hpp"
@@ -12,11 +17,49 @@
 #include "nxtio/input.hpp"
 #include "nxt/units.hpp"
 
+#ifdef NXT_HAVE_PNG
+#include "nxt/png.hpp"
+#endif
+
+extern "C" {
+extern char * program_invocation_short_name;  // glibc
+}
+
 namespace nxt::ui {
+
+namespace {
+
+#ifdef NXT_HAVE_PNG
+struct ScreenshotMilestone
+{
+    const char * name;
+    std::chrono::milliseconds at;
+};
+
+constexpr ScreenshotMilestone screenshot_milestones[] = {
+    {"start", std::chrono::milliseconds{0}},
+    {"t2s", std::chrono::seconds{2}},
+    {"t5s", std::chrono::seconds{5}},
+};
+#endif
+
+std::string make_session_tag() noexcept
+{
+    auto now = std::chrono::system_clock::now();
+    auto stamp = std::format("{:%Y%m%dT%H%M%S}",
+                             std::chrono::floor<std::chrono::seconds>(now));
+    const char * prog = program_invocation_short_name;
+    if (prog == nullptr || *prog == '\0')
+        prog = "nxt";
+    return std::string{prog} + "-" + stamp;
+}
+
+}  // namespace
 
 UIRuntime::UIRuntime()
     : scheduler_(
           nxt::io_scheduler::make_unique(nxt::io_scheduler::options{}))
+    , screenshot_session_tag_(make_session_tag())
 {
     signals_.watch(SIGINT, SIGTERM, SIGWINCH);
     (void) refresh_terminal_size();
@@ -48,6 +91,11 @@ void UIRuntime::request_shutdown()
 {
     if (stop_source_.stop_requested())
         return; // Already shutting down
+
+    // Capture a final screenshot of the last presented frame, but only
+    // if at least one frame actually rendered.
+    if (screenshot_milestone_index_ > 0)
+        capture_screenshot("exit");
 
     stop_source_.request_stop();
     damage_event_.set();   // Wake present_loop
@@ -84,7 +132,47 @@ void UIRuntime::render_impl(
     auto view = buffer.view();
     auto size = compositor_->size();
     render_fn(view, size);
+    maybe_screenshot();
     compositor_->present_frame();
+}
+
+void UIRuntime::maybe_screenshot() noexcept
+{
+#ifdef NXT_HAVE_PNG
+    constexpr std::size_t n =
+        sizeof(screenshot_milestones) / sizeof(screenshot_milestones[0]);
+    if (screenshot_milestone_index_ >= n)
+        return;
+
+    auto elapsed = std::chrono::steady_clock::now() - screenshot_start_;
+    while (screenshot_milestone_index_ < n
+           && elapsed >= screenshot_milestones[screenshot_milestone_index_].at) {
+        capture_screenshot(
+            screenshot_milestones[screenshot_milestone_index_].name);
+        ++screenshot_milestone_index_;
+    }
+#endif
+}
+
+void UIRuntime::capture_screenshot(std::string_view milestone) noexcept
+{
+#ifdef NXT_HAVE_PNG
+    try {
+        std::filesystem::path dir{"img"};
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec)
+            return;
+
+        auto path = dir
+            / (screenshot_session_tag_ + "-" + std::string{milestone} + ".png");
+        nxt::png::write(compositor_->back_buffer(), path);
+    } catch (...) {
+        // Best-effort; never let screenshots break the run.
+    }
+#else
+    (void) milestone;
+#endif
 }
 
 void UIRuntime::update_hud_height(height_t hud_h)
