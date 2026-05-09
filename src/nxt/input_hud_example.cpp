@@ -280,7 +280,6 @@ auto input_hud(const State & state)
 {
     auto text = state.text;
     auto cursor_byte = state.cursor_byte;
-    auto events_seen = state.events_seen;
 
     return leaf(
         WidthHint::grow(),

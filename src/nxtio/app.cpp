@@ -97,13 +97,12 @@ void UIRuntime::println(std::string_view line)
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
 
-    // No scroll region in full-screen mode. HUD mode reserves one separator
-    // row above the HUD.
-    if (hud_h > 0 * ln && hud_h + 1 * ln >= term_h)
+    // No scroll region in full-screen mode.
+    if (hud_h > 0 * ln && hud_h >= term_h)
         return;
 
     auto scroll_bottom = hud_h > 0 * ln
-        ? term_h - hud_h - 2 * ln
+        ? term_h - hud_h - 1 * ln
         : term_h - 1 * ln;
     auto has_trailing_newline = !line.empty() && line.back() == '\n';
 
@@ -126,13 +125,12 @@ void UIRuntime::print(std::string_view text)
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
 
-    // No scroll region in full-screen mode. HUD mode reserves one separator
-    // row above the HUD.
-    if (hud_h > 0 * ln && hud_h + 1 * ln >= term_h)
+    // No scroll region in full-screen mode.
+    if (hud_h > 0 * ln && hud_h >= term_h)
         return;
 
     auto scroll_bottom = hud_h > 0 * ln
-        ? term_h - hud_h - 2 * ln
+        ? term_h - hud_h - 1 * ln
         : term_h - 1 * ln;
 
     std::string buf;
@@ -153,10 +151,10 @@ void UIRuntime::cleanup()
     auto term_h = terminal_height();
 
     // Nothing to clear in no-HUD or full-screen mode
-    if (hud_h == 0 * ln || hud_h + 1 * ln >= term_h)
+    if (hud_h == 0 * ln || hud_h >= term_h)
         return;
 
-    // Clear HUD region plus spacer row above, preserving cursor position
+    // Clear HUD region, preserving cursor position
     std::string buf;
     ansi::Writer w(buf);
     w.save_cursor();
@@ -165,8 +163,7 @@ void UIRuntime::cleanup()
     // issues
     auto term_rows = static_cast<int>(term_h.count());
     auto hud_rows = static_cast<int>(hud_h.count());
-    auto start_row =
-        std::max(0, term_rows - hud_rows - 1); // extra row for spacer
+    auto start_row = std::max(0, term_rows - hud_rows);
     // Clear rows start_row through term_rows-1 (0-indexed)
     for (int r = start_row; r < term_rows; ++r) {
         w.move_to(Pos::at(0 * ch, r * ln));

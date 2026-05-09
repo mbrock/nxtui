@@ -249,9 +249,8 @@ private:
 
         if (!wants_fullscreen && target_h > 0 * ln) {
             auto reserved_log_rows = 7 * ln;
-            auto separator = 1 * ln;
-            if (term_h > reserved_log_rows + separator) {
-                auto max_hud_h = term_h - reserved_log_rows - separator;
+            if (term_h > reserved_log_rows) {
+                auto max_hud_h = term_h - reserved_log_rows;
                 target_h = std::min(target_h, max_hud_h);
             }
         }

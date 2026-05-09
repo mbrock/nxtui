@@ -23,7 +23,12 @@ nxt_libcoro_project = cmake.subproject(
   'libcoro',
   options : nxt_libcoro_options,
 )
-nxt_libcoro_dep = nxt_libcoro_project.dependency('libcoro')
+nxt_libcoro_dep = declare_dependency(
+  dependencies : [
+    nxt_libcoro_project.dependency('libcoro'),
+    nxt_libcoro_project.dependency('c_ares'),
+  ],
+)
 
 nlohmann_json_dep = dependency('nlohmann_json')
 
@@ -109,13 +114,24 @@ if get_option('examples')
 endif
 
 if get_option('llm_tool')
-  duckdb_dep = dependency('DuckDB', method : 'cmake')
+  duckdb_dep = dependency('DuckDB', method : 'cmake', required : false)
+  duckdb_rpath = ''
+
+  if not duckdb_dep.found()
+    duckdb_prefix = meson.project_build_root() / 'deps' / 'duckdb'
+    duckdb_dep = declare_dependency(
+      compile_args : ['-I' + duckdb_prefix],
+      link_args : [duckdb_prefix / 'libduckdb.so'],
+    )
+    duckdb_rpath = duckdb_prefix
+  endif
 
   executable('nxtllm',
     'src/nxtio/nxtllm.cpp',
     include_directories : nxt_inc,
     dependencies : [nxt_dep, duckdb_dep],
     cpp_args : ['-Wno-unused-parameter'],
+    build_rpath : duckdb_rpath,
   )
 endif
 

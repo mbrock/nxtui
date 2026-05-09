@@ -19,9 +19,9 @@ public:
     GlyphTable & glyphs() const noexcept;
     nxt::Size size() const noexcept;
 
-    /// Set HUD height. In HUD mode, one separator row is reserved above the
-    /// HUD and the scroll region ends above that separator. If the HUD plus
-    /// separator cannot fit, the compositor uses full-screen mode.
+    /// Set HUD height. In HUD mode, the scroll region ends immediately above
+    /// the HUD. If the HUD fills the terminal, the compositor uses full-screen
+    /// mode.
     void set_hud_height(height_t hud_height, height_t term_height);
     void set_hud_height(
         height_t hud_height, height_t term_height, std::ostream & out);

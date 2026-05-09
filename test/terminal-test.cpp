@@ -58,14 +58,6 @@ void check_display(
     }
 }
 
-std::string separator_row(std::size_t columns)
-{
-    std::string result;
-    for (std::size_t i = 0; i < columns; ++i)
-        result += "▔";
-    return result;
-}
-
 void write_at(vterm::Terminal & term, row_t row, std::string_view text)
 {
     ansi::mode = ansi::Mode::enabled;
@@ -197,8 +189,8 @@ suite hud_tests = [] {
     check_display (term, {
       "",            // row 0 ─┐
       "",            // row 1  │ scroll
-      "",            // row 2  │ region
-      separator_row(20), // row 3 separator
+      "",            // row 2  │
+      "",            // row 3 ─┘
       "HUD-LINE-1",  // row 4 ─┐ HUD
       "HUD-LINE-2",  // row 5 ─┘
     });
@@ -238,7 +230,7 @@ suite hud_tests = [] {
             term,
             {
                 "",
-                separator_row(20),
+                "",
                 "OLD-1",
                 "OLD-2",
                 "OLD-3",
@@ -258,7 +250,7 @@ suite hud_tests = [] {
                 "",
                 "",
                 "",
-                separator_row(20),
+                "",
                 "NEW-1",
                 "NEW-2",
             });
@@ -270,7 +262,7 @@ suite hud_tests = [] {
         vterm::Terminal term(6, 20);
 
         set_hud_height(compositor, term, 2 * ln, 6 * ln);
-        write_at(term, terminal_origin_v + 2 * ln, "BOTTOM");
+        write_at(term, terminal_origin_v + 3 * ln, "BOTTOM");
 
         set_hud_height(compositor, term, 3 * ln, 6 * ln);
 
@@ -278,8 +270,8 @@ suite hud_tests = [] {
             term,
             {
                 "",
-                "BOTTOM",
                 "",
+                "BOTTOM",
                 "",
                 "",
                 "",
@@ -292,7 +284,7 @@ suite hud_tests = [] {
         vterm::Terminal term(6, 20);
 
         set_hud_height(compositor, term, 3 * ln, 6 * ln);
-        write_at(term, terminal_origin_v + 1 * ln, "BOTTOM");
+        write_at(term, terminal_origin_v + 2 * ln, "BOTTOM");
 
         set_hud_height(compositor, term, 2 * ln, 6 * ln);
 
@@ -301,8 +293,8 @@ suite hud_tests = [] {
             {
                 "",
                 "",
-                "BOTTOM",
                 "",
+                "BOTTOM",
                 "",
                 "",
             });
@@ -316,7 +308,7 @@ suite hud_tests = [] {
 suite scroll_region_tests = [] {
     "println scrolls content without affecting HUD"_test = [] {
         // 6 row terminal, 2 row HUD at bottom
-        // Scroll region: rows 0-2, separator: row 3, HUD: rows 4-5
+        // Scroll region: rows 0-3, HUD: rows 4-5
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
         vterm::Terminal term(6, 20);
@@ -332,7 +324,7 @@ suite scroll_region_tests = [] {
         std::string buf;
         nxt::ansi::Writer sw(buf);
         sw.set_scroll_region(
-            terminal_origin_v + 0 * ln, terminal_origin_v + 2 * ln);
+            terminal_origin_v + 0 * ln, terminal_origin_v + 3 * ln);
         term.write(buf);
 
         // Initial state
@@ -340,50 +332,50 @@ suite scroll_region_tests = [] {
     check_display (term, {
       "",            // row 0 ─┐
       "",            // row 1  │ scroll
-      "",            // row 2  │ region
-      separator_row(20), // row 3 separator
+      "",            // row 2  │
+      "",            // row 3 ─┘
       "HUD-LINE-1",  // row 4 ─┐ HUD
       "HUD-LINE-2",  // row 5 ─┘
     });
         // clang-format on
 
         // First log line
-        println_at(term, terminal_origin_v + 2 * ln, "LOG-1");
+        println_at(term, terminal_origin_v + 3 * ln, "LOG-1");
 
         // clang-format off
     check_display (term, {
       "",            // row 0
-      "LOG-1",       // row 1 <- scrolled up from row 2
-      "",            // row 2
-      separator_row(20), // row 3
+      "",            // row 1
+      "LOG-1",       // row 2 <- scrolled up from row 3
+      "",            // row 3
       "HUD-LINE-1",  // row 4  HUD unchanged
       "HUD-LINE-2",  // row 5
     });
         // clang-format on
 
         // Second log line
-        println_at(term, terminal_origin_v + 2 * ln, "LOG-2");
+        println_at(term, terminal_origin_v + 3 * ln, "LOG-2");
 
         // clang-format off
     check_display (term, {
-      "LOG-1",       // row 0 <- scrolled up again
-      "LOG-2",       // row 1
-      "",            // row 2
-      separator_row(20), // row 3
+      "",            // row 0
+      "LOG-1",       // row 1 <- scrolled up again
+      "LOG-2",       // row 2
+      "",            // row 3
       "HUD-LINE-1",  // row 4  HUD still unchanged
       "HUD-LINE-2",  // row 5
     });
         // clang-format on
 
         // Third log line - oldest visible line scrolls off, bottom stays blank
-        println_at(term, terminal_origin_v + 2 * ln, "LOG-3");
+        println_at(term, terminal_origin_v + 3 * ln, "LOG-3");
 
         // clang-format off
     check_display (term, {
-      "LOG-2",       // row 0
-      "LOG-3",       // row 1
-      "",            // row 2
-      separator_row(20), // row 3
+      "LOG-1",       // row 0
+      "LOG-2",       // row 1
+      "LOG-3",       // row 2
+      "",            // row 3
       "HUD-LINE-1",  // row 4  HUD still unchanged!
       "HUD-LINE-2",  // row 5
     });

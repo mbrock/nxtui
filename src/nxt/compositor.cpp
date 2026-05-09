@@ -10,9 +10,6 @@
 namespace nxt::ui {
 namespace {
 
-constexpr auto separator_height = 1 * ln;
-constexpr std::string_view separator_glyph = "▔";
-
 [[nodiscard]] int row_index(const row_t row)
 {
     return static_cast<int>(
@@ -29,33 +26,26 @@ constexpr std::string_view separator_glyph = "▔";
     return static_cast<std::size_t>(count) * ln;
 }
 
-[[nodiscard]] bool has_separator_hud(
+[[nodiscard]] bool has_windowed_hud(
     const height_t hud_height, const height_t term_height)
 {
-    return hud_height > 0 * ln
-        && hud_height + separator_height < term_height;
+    return hud_height > 0 * ln && hud_height < term_height;
 }
 
 [[nodiscard]] row_t hud_start_row_for(
     const height_t hud_height, const height_t term_height)
 {
-    if (has_separator_hud(hud_height, term_height))
+    if (has_windowed_hud(hud_height, term_height))
         return terminal_origin_v + (term_height - hud_height);
     if (hud_height > 0 * ln)
         return terminal_origin_v + 0 * ln;
     return terminal_origin_v + term_height;
 }
 
-[[nodiscard]] row_t separator_row_for(
-    const height_t hud_height, const height_t term_height)
-{
-    return hud_start_row_for(hud_height, term_height) - separator_height;
-}
-
 [[nodiscard]] row_t scroll_bottom_for(
     const height_t hud_height, const height_t term_height)
 {
-    return separator_row_for(hud_height, term_height) - 1 * ln;
+    return hud_start_row_for(hud_height, term_height) - 1 * ln;
 }
 
 [[nodiscard]] height_t raster_height_for(
@@ -63,7 +53,7 @@ constexpr std::string_view separator_glyph = "▔";
 {
     if (hud_height == 0 * ln)
         return 0 * ln;
-    if (has_separator_hud(hud_height, term_height))
+    if (has_windowed_hud(hud_height, term_height))
         return hud_height;
     return term_height;
 }
@@ -71,8 +61,8 @@ constexpr std::string_view separator_glyph = "▔";
 [[nodiscard]] int chrome_start_row_for(
     const height_t hud_height, const height_t term_height)
 {
-    if (has_separator_hud(hud_height, term_height))
-        return row_index(separator_row_for(hud_height, term_height));
+    if (has_windowed_hud(hud_height, term_height))
+        return row_index(hud_start_row_for(hud_height, term_height));
     if (hud_height > 0 * ln)
         return 0;
     return row_count(term_height);
@@ -100,14 +90,14 @@ void TerminalCompositor::resize(nxt::Size size)
     back_ = Raster(size.w, raster_h, glyphs_);
 
     // Clear the compositor-owned region, preserving cursor position. The next
-    // render will redraw the separator at the resized width.
+    // render will redraw the HUD at the resized width.
     std::string buf;
     ansi::Writer w(buf);
     w.save_cursor();
 
-    if (has_separator_hud(hud_height_, size.h)) {
+    if (has_windowed_hud(hud_height_, size.h)) {
         auto end_row = terminal_origin_v + size.h;
-        auto start_row = separator_row_for(hud_height_, size.h);
+        auto start_row = hud_start_row_for(hud_height_, size.h);
         for (auto row = start_row; row < end_row; row += 1 * ln) {
             w.move_to(Pos{terminal_origin + 0 * ch, row});
             w.clear_line();
@@ -136,17 +126,17 @@ void TerminalCompositor::set_hud_height(
 
     auto old_term_height = term_height_;
     auto old_hud_height = hud_height_;
-    auto old_has_separator =
-        has_separator_hud(old_hud_height, old_term_height);
-    auto new_has_separator =
-        has_separator_hud(new_hud_height, term_height);
+    auto old_has_windowed_hud =
+        has_windowed_hud(old_hud_height, old_term_height);
+    auto new_has_windowed_hud =
+        has_windowed_hud(new_hud_height, term_height);
 
     auto old_scroll_bottom =
-        old_has_separator ? row_index(scroll_bottom_for(
-                                old_hud_height, old_term_height))
-                          : -1;
+        old_has_windowed_hud
+            ? row_index(scroll_bottom_for(old_hud_height, old_term_height))
+            : -1;
     auto new_scroll_bottom =
-        new_has_separator
+        new_has_windowed_hud
             ? row_index(scroll_bottom_for(new_hud_height, term_height))
             : -1;
 
@@ -164,7 +154,7 @@ void TerminalCompositor::set_hud_height(
 
         // Shrink the scroll region only after pushing visible log lines up so
         // they remain on screen when the HUD claims rows.
-        if (old_has_separator && new_has_separator
+        if (old_has_windowed_hud && new_has_windowed_hud
             && new_scroll_bottom < old_scroll_bottom) {
             auto scroll_diff = old_scroll_bottom - new_scroll_bottom;
             wr.move_to(
@@ -172,7 +162,7 @@ void TerminalCompositor::set_hud_height(
             wr.scroll_up(lines(scroll_diff));
         }
 
-        if (new_has_separator) {
+        if (new_has_windowed_hud) {
             hud_start_row_ =
                 hud_start_row_for(new_hud_height, term_height);
             auto scroll_top = terminal_origin_v + 0 * ln;
@@ -186,7 +176,7 @@ void TerminalCompositor::set_hud_height(
             wr.reset_scroll_region();
         }
 
-        if (old_has_separator && new_has_separator
+        if (old_has_windowed_hud && new_has_windowed_hud
             && new_scroll_bottom > old_scroll_bottom) {
             auto scroll_diff = new_scroll_bottom - old_scroll_bottom;
             wr.move_to(Pos::origin());
@@ -198,10 +188,10 @@ void TerminalCompositor::set_hud_height(
         int clear_start = std::min(
             chrome_start_row_for(old_hud_height, old_term_height),
             chrome_start_row_for(new_hud_height, term_height));
-        if (old_has_separator && new_has_separator
+        if (old_has_windowed_hud && new_has_windowed_hud
             && new_scroll_bottom != old_scroll_bottom)
             clear_start =
-                row_index(separator_row_for(new_hud_height, term_height));
+                row_index(hud_start_row_for(new_hud_height, term_height));
         if (old_term_height == 0 * ln)
             clear_start = chrome_start_row_for(new_hud_height, term_height);
         clear_start = std::clamp(clear_start, 0, row_count(term_height));
@@ -255,18 +245,6 @@ void TerminalCompositor::present_frame(std::ostream & out)
 
     // Save cursor so HUD rendering doesn't disturb log output position
     w.save_cursor();
-
-    if (has_separator_hud(hud_height_, term_height_)) {
-        w.move_to(Pos{
-            terminal_origin + 0 * ch,
-            separator_row_for(hud_height_, term_height_)});
-        w.reset();
-//        for (std::size_t col = 0;
-//             col < back_.width().count();
-//             ++col)
-//            w.text(separator_glyph);
-        w.reset();
-    }
 
     // Offset for HUD mode: raster row 0 maps to hud_start_row_ on
     // terminal hud_start_row_ is a row_t (point), subtract origin to get
