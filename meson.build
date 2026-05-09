@@ -111,6 +111,12 @@ if get_option('examples')
     include_directories : nxt_inc,
     dependencies : [nxt_dep],
   )
+
+  executable('nxtchat',
+    'src/nxtio/nxtchat.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_dep],
+  )
 endif
 
 if get_option('llm_tool')
