@@ -11,10 +11,6 @@
 
 namespace nxt::tui {
 
-// ============================================================================
-// Core Types
-// ============================================================================
-
 template<auto Unit>
 struct hint_extent;
 
@@ -53,10 +49,6 @@ struct SizeHint
 using WidthHint = SizeHint<ch>;
 using HeightHint = SizeHint<ln>;
 
-// ============================================================================
-// Layout Concept
-// ============================================================================
-
 template<typename L>
 concept Layout =
     requires(const L & layout, RasterView & raster, Size size) {
@@ -64,11 +56,6 @@ concept Layout =
         { layout.height_hint() } -> std::convertible_to<HeightHint>;
         { layout.render(raster, size) } -> std::same_as<void>;
     };
-
-// ============================================================================
-// Leaf: generic single-row layout from a render function
-// ============================================================================
-
 template<typename RenderFn>
 struct Leaf
 {
@@ -97,38 +84,25 @@ auto leaf(WidthHint w, HeightHint h, F && f)
 {
     return Leaf<std::decay_t<F>>{w, h, std::forward<F>(f)};
 }
-
-// ============================================================================
-// Typed Raster Operations (Pos/Size → raw coordinates)
-// ============================================================================
-
-// Write text at a typed position
 inline col_t write_text(RasterView & r, Pos pos, std::string_view text)
 {
     return r.write_text(pos, text);
 }
 
-// Set foreground color at a typed position
 inline void set_fg(RasterView & r, Pos pos, Rgba8 color)
 {
     r.set_fg(pos, color);
 }
 
-// Set background color at a typed position
 inline void set_bg(RasterView & r, Pos pos, Rgba8 color)
 {
     r.set_bg(pos, color);
 }
 
-// Create subraster from position and size
 inline RasterView subraster(RasterView & r, Pos pos, Size size)
 {
     return r.subraster(pos, size);
 }
-
-// ============================================================================
-// Style: fg + bg + emphasis (combinable with operator|)
-// ============================================================================
 
 struct Style
 {
@@ -146,7 +120,6 @@ struct Style
     }
 };
 
-// Style builders
 constexpr Style fg(Rgba8 color)
 {
     return {color, DEFAULT_COLOR, DEFAULT_EMPHASIS};
@@ -162,7 +135,6 @@ constexpr Style em(Emphasis e)
     return {DEFAULT_COLOR, DEFAULT_COLOR, e};
 }
 
-// Emphasis shortcuts
 inline constexpr Style bold{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::bold};
 inline constexpr Style faint{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::faint};
 inline constexpr Style italic{
@@ -174,29 +146,22 @@ inline constexpr Style reverse{
 inline constexpr Style strikethrough{
     DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::strikethrough};
 
-// ============================================================================
-// Styled span: text + style (building block for styled_text)
-// ============================================================================
-
 struct Span
 {
     std::string text;
     Style style{};
 };
 
-// Create a span with optional style
 inline Span span(std::string text, Style s = {})
 {
     return {std::move(text), s};
 }
 
-// Render a single span at a position, returns next column
 inline col_t render_span(RasterView & r, Pos pos, const Span & s)
 {
     const auto start_x = pos.x;
     const auto end_x = r.write_text(pos, s.text);
 
-    // Apply style to each cell in the span
     for (auto x = start_x; x < end_x; x += 1 * ch) {
         const Pos p{x, pos.y};
         if (s.style.fg != DEFAULT_COLOR)
@@ -210,11 +175,6 @@ inline col_t render_span(RasterView & r, Pos pos, const Span & s)
     return end_x;
 }
 
-// ============================================================================
-// String utilities
-// ============================================================================
-
-// Repeat a single-char string to fill a width
 inline std::string repeat(std::string_view glyph, width_t w)
 {
     auto n = w.count();
@@ -225,17 +185,11 @@ inline std::string repeat(std::string_view glyph, width_t w)
     return result;
 }
 
-// Count UTF-8 cells (approximate display width)
 inline width_t utf8_width(std::string_view s)
 {
     return utf8::display_width(s);
 }
 
-// ============================================================================
-// Primitives
-// ============================================================================
-
-// Text: fixed-width string (unstyled)
 inline auto text(std::string s)
 {
     auto w = utf8_width(s);
@@ -251,7 +205,6 @@ inline auto text(std::string s)
         });
 }
 
-// Text: fixed-width string with style
 inline auto text(std::string s, Style style)
 {
     auto w = utf8_width(s);
@@ -267,16 +220,13 @@ inline auto text(std::string s, Style style)
         });
 }
 
-// Styled text: multiple spans on a single line
 template<typename... Spans>
     requires(std::same_as<std::decay_t<Spans>, Span> && ...)
 inline auto styled_text(Spans &&... spans)
 {
-    // Calculate total width
     width_t total_w = 0 * ch;
     ((total_w += utf8_width(spans.text)), ...);
 
-    // Capture spans in a tuple
     auto span_tuple = std::tuple{std::forward<Spans>(spans)...};
 
     return leaf(
@@ -293,7 +243,6 @@ inline auto styled_text(Spans &&... spans)
         });
 }
 
-// Fill: solid color rectangle (grows in both dimensions)
 inline auto fill(Rgba8 color = Rgba8(60, 60, 60))
 {
     return leaf(
@@ -302,13 +251,11 @@ inline auto fill(Rgba8 color = Rgba8(60, 60, 60))
         });
 }
 
-// Horizontal rule string (for direct output)
 inline std::string hrule_string(width_t w)
 {
     return repeat("─", w);
 }
 
-// Horizontal rule: box drawing character repeated
 inline auto hrule()
 {
     return leaf(
@@ -319,7 +266,6 @@ inline auto hrule()
         });
 }
 
-// Bar string: pure function (percent, width) → string of filled blocks
 inline std::string bar_string(percent_t pct, width_t width)
 {
     static constexpr std::array<std::string_view, 9> partials = {
@@ -341,7 +287,6 @@ inline std::string bar_string(percent_t pct, width_t width)
            + std::string(partials[partial]);
 }
 
-// Progress bar: bg color + fg bar string
 inline auto progress_bar(
     percent_t pct,
     Rgba8 fg = Rgba8(100, 180, 255),
@@ -356,10 +301,6 @@ inline auto progress_bar(
             r.write_text(Pos::origin(), bar_string(pct, r.width()));
         });
 }
-
-// ============================================================================
-// Row (horizontal flex layout)
-// ============================================================================
 
 template<Layout... Children>
 struct Row
@@ -399,7 +340,6 @@ struct Row
         if constexpr (N == 0)
             return;
 
-        // Collect hints
         std::array<WidthHint, N> hints;
         std::size_t i = 0;
         std::apply(
@@ -408,10 +348,8 @@ struct Row
             },
             children);
 
-        // Calculate widths
         auto widths = flex_distribute(size.w, hints);
 
-        // Render children at successive positions
         Pos cursor = Pos::origin();
         i = 0;
         std::apply(
@@ -469,10 +407,6 @@ Row<std::decay_t<Children>...> row(Children &&... children)
     return {std::tuple{std::forward<Children>(children)...}};
 }
 
-// ============================================================================
-// Column (vertical flex layout)
-// ============================================================================
-
 template<Layout... Children>
 struct Column
 {
@@ -519,7 +453,6 @@ struct Column
 
         auto heights = flex_distribute(size.h, hints);
 
-        // Render children at successive positions
         Pos cursor = Pos::origin();
         i = 0;
         std::apply(
@@ -577,10 +510,6 @@ Column<std::decay_t<Children>...> column(Children &&... children)
 {
     return {std::tuple{std::forward<Children>(children)...}};
 }
-
-// ============================================================================
-// List (dynamic collection of uniform items)
-// ============================================================================
 
 template<typename T, typename ViewFn>
 struct List

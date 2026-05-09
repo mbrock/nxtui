@@ -14,7 +14,7 @@ namespace nxt::theme {
 
 struct Palette
 {
-    // Surfaces ---------------------------------------------------------
+    // Surface colors used for terminal-default substitutions and UI chrome.
     Rgb8 bg;              // default background
     Rgb8 bg_soft;         // surface (header-line, blocks)
     Rgb8 bg_elev;         // elevated surface (tooltips, hunk heading)
@@ -23,19 +23,19 @@ struct Palette
     Rgb8 border;
     Rgb8 border_soft;
 
-    // Mode line --------------------------------------------------------
+    // Mode-line slots mirror the source theme names.
     Rgb8 ml_bg;
     Rgb8 ml_box;
     Rgb8 ml_inactive_bg;
     Rgb8 ml_inactive_box;
 
-    // Text -------------------------------------------------------------
+    // Foreground ramp, from primary text to low-emphasis comments.
     Rgb8 fg;
     Rgb8 fg_muted;
     Rgb8 fg_subtle;
     Rgb8 fg_comment;
 
-    // Categorical hues -------------------------------------------------
+    // Semantic token colors reused by demos and screenshots.
     Rgb8 amber;           // strings
     Rgb8 amber_bg;        // const / number tint
     Rgb8 amber_deep;      // const / number fg
@@ -55,7 +55,7 @@ struct Palette
     Rgb8 chocolate_soft;  // property / parameter
     Rgb8 navy;            // accent (minibuffer prompt etc.)
 
-    // Selection / search / diff ---------------------------------------
+    // Interaction and diff backgrounds.
     Rgb8 sel_bg;
     Rgb8 match_bg;
     Rgb8 symbol_hl;

@@ -40,10 +40,6 @@ struct Rgba8
 {
     std::uint32_t value;
 
-    // ==========================================================================
-    // Construction
-    // ==========================================================================
-
     /// Construct from RGBA components (true color)
     constexpr Rgba8(
         std::uint8_t r,
@@ -67,10 +63,6 @@ struct Rgba8
         c.value = v;
         return c;
     }
-
-    // ==========================================================================
-    // Named constructors for special values
-    // ==========================================================================
 
     /// Terminal default color (SGR 39 for fg, SGR 49 for bg)
     static constexpr Rgba8 terminal_default() noexcept
@@ -168,13 +160,10 @@ struct Rgba8
     /// Fully transparent (for compositing - layer below shows through)
     static constexpr Rgba8 transparent() noexcept
     {
-        // Use a value outside palette and default range
+        // Reserve a non-palette sentinel so transparency cannot be confused
+        // with true black, palette black, or terminal default.
         return from_raw(0x00000200);
     }
-
-    // ==========================================================================
-    // Queries
-    // ==========================================================================
 
     [[nodiscard]] constexpr bool is_true_color() const noexcept
     {
@@ -200,11 +189,6 @@ struct Rgba8
     {
         return static_cast<std::uint8_t>(value & 0xFF);
     }
-
-    // ==========================================================================
-    // RGBA component access (only meaningful for true color)
-    // ==========================================================================
-
     [[nodiscard]] constexpr std::uint8_t r() const noexcept
     {
         return value & 0xFF;
@@ -231,18 +215,10 @@ struct Rgba8
         return Rgb8{r(), g(), b()};
     }
 
-    // ==========================================================================
-    // Comparison and formatting
-    // ==========================================================================
-
     constexpr auto operator<=>(const Rgba8 &) const = default;
 
     friend std::ostream & operator<<(std::ostream & os, const Rgba8 & c);
 };
-
-// ============================================================================
-// Text emphasis (SGR attributes beyond color)
-// ============================================================================
 
 /// Bitfield for text emphasis attributes.
 /// These map directly to SGR codes: bold=1, faint=2, italic=3, etc.
@@ -283,10 +259,9 @@ constexpr bool has_emphasis(Emphasis set, Emphasis flag) noexcept
 /// Default emphasis (none)
 inline constexpr Emphasis DEFAULT_EMPHASIS = Emphasis::none;
 
-// ============================================================================
-// Type aliases for mdspan views
-// ============================================================================
-
+// Raster views may cover whole buffers or rectangular subrasters.
+// layout_stride keeps the same mdspan aliases usable for both contiguous
+// storage and sliced windows.
 using mdspan_extents = std::experimental::
     extents<std::size_t, std::dynamic_extent, std::dynamic_extent>;
 using glyph_view_t =
@@ -315,10 +290,6 @@ using const_emphasis_view_t =
 /// Default color for terminal cells (resets to terminal's configured
 /// color)
 inline constexpr Rgba8 DEFAULT_COLOR = Rgba8::terminal_default();
-
-// ============================================================================
-// mdspan to range adapter
-// ============================================================================
 
 /// Convert a 2D mdspan to a flat range (row-major order).
 /// Works with any layout (contiguous or strided from submdspan).
@@ -393,10 +364,6 @@ inline auto indexed_cell_row(
                      ems[row_idx, x]};
              });
 }
-
-// ============================================================================
-// RasterView - non-owning view into raster storage
-// ============================================================================
 
 /// Cell data for inspection
 struct Cell
@@ -529,10 +496,6 @@ private:
     GlyphTable * glyph_table_;
 };
 
-// ============================================================================
-// Raster - owning storage that produces views
-// ============================================================================
-
 /// Owning raster storage. Allocates and manages the underlying arrays.
 /// Use view() to get a RasterView for rendering operations.
 class Raster
@@ -656,10 +619,6 @@ private:
     std::vector<Emphasis> ems_storage_;
     GlyphTable * glyph_table_;
 };
-
-// ============================================================================
-// Row-based iteration helpers
-// ============================================================================
 
 /// Zip two rasters' rows together for comparison.
 /// Yields (height_t y, zipped_row) where zipped_row pairs corresponding

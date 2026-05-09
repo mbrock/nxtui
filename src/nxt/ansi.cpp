@@ -30,10 +30,6 @@ constexpr std::string_view CSI = "\x1b[";
 constexpr std::string_view CSI_DEBUG = "⟨CSI:";
 } // namespace
 
-// ============================================================================
-// Writer implementation (buffered output)
-// ============================================================================
-
 void Writer::csi(std::string_view params, char final_byte)
 {
     switch (mode) {
@@ -342,10 +338,6 @@ Writer & Writer::text(std::string_view str)
     buf_.append(str);
     return *this;
 }
-
-// ============================================================================
-// Standalone functions (immediate output to stdout)
-// ============================================================================
 
 namespace {
 /// Print a CSI sequence based on current mode

@@ -27,10 +27,6 @@
 
 namespace nxt::tui {
 
-// ============================================================================
-// Editable state
-// ============================================================================
-
 /// Single-line editable text with a UTF-8-aware cursor.
 ///
 /// `cursor_byte` is always at a UTF-8 boundary in the range [0, text.size()].
@@ -127,10 +123,6 @@ struct TextField
     }
 };
 
-// ============================================================================
-// Rendering
-// ============================================================================
-
 struct TextFieldStyle
 {
     Rgba8 fg = Rgba8::terminal_default();
@@ -208,15 +200,14 @@ inline auto text_field(
             const auto field_w = size.w - prefix_w;
             const auto prefix_cells = prefix_w.count();
 
-            // 1. Paint a uniform bg + fg across the row.  Glyphs are
-            //    drawn over this; cells beyond the text keep the bg.
+            // Fill the whole row first so scrolled-off text and trailing
+            // blanks still carry the field style.
             for (std::size_t x = 0; x < total_w; ++x) {
                 auto pos = Pos::at(x * ch, 0 * ln);
                 view.set_bg(pos, r.style.bg);
                 view.set_fg(pos, r.style.fg);
             }
 
-            // 2. Prefix in its own colour.
             if (prefix_cells > 0) {
                 for (std::size_t x = 0; x < prefix_cells; ++x)
                     view.set_fg(
@@ -224,7 +215,6 @@ inline auto text_field(
                 view.write_text(Pos::origin(), r.prefix);
             }
 
-            // 3. Body: text scrolled to the cursor, or placeholder.
             const auto cursor_cell = utf8::column_at(r.text, r.cursor_byte);
             const auto scroll_cell =
                 detail::scroll_for_cursor(cursor_cell, field_w);
@@ -247,10 +237,8 @@ inline auto text_field(
                         start_byte.count(), end_byte - start_byte));
             }
 
-            // 4. Cursor: a reverse-video block on the cursor cell.
-            //    When the cursor sits past the last char it lands on
-            //    the bg-painted blank cell, which still produces a
-            //    crisp block under reverse video.
+            // The cursor may sit one column past the last glyph; the
+            // pre-filled row gives that blank cell something to reverse.
             if (r.focused && field_w > 0 * ch) {
                 const auto visible_cursor =
                     (cursor_cell - scroll_cell).count();

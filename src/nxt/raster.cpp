@@ -29,7 +29,6 @@ auto row_major_mapping(const std::size_t rows, const std::size_t cols)
 
 } // namespace
 
-// Rgba8 output formatting
 std::ostream & operator<<(std::ostream & os, const Rgba8 & c)
 {
     auto flags = os.flags();
@@ -43,10 +42,6 @@ std::ostream & operator<<(std::ostream & os, const Rgba8 & c)
     os.fill(fill);
     return os;
 }
-
-// ============================================================================
-// RasterView implementation
-// ============================================================================
 
 void RasterView::set_glyph(
     const Pos pos, const GlyphTable::GlyphId gid) const noexcept
@@ -113,6 +108,9 @@ col_t RasterView::write_text(
         const GlyphTable::GlyphId gid = glyph_table_->intern(glyph_bytes);
 
         glyphs_[y, col] = gid;
+        // A wide grapheme occupies one printable cell plus empty continuation
+        // cells. Diff/render code can then stream each glyph id once without
+        // having to rediscover UTF-8 width later.
         for (std::size_t dx = 1; dx < cell_width.count(); ++dx)
             glyphs_[y, col + dx] = glyph_table_->intern("");
 
@@ -159,10 +157,6 @@ RasterView::subraster(const Pos origin, const Size size) const noexcept
 
     return RasterView(glyph_sub, fg_sub, bg_sub, em_sub, *glyph_table_);
 }
-
-// ============================================================================
-// Raster implementation
-// ============================================================================
 
 Raster::Raster(
     const std::size_t width, const std::size_t height, GlyphTable & glyphs)

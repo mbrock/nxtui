@@ -8,10 +8,6 @@
 
 namespace nxt {
 
-// ============================================================================
-// Data types
-// ============================================================================
-
 /// A detected change: position, glyphs, colors, emphasis (before
 /// optimization).
 struct RawChange
@@ -78,10 +74,6 @@ struct StyleState
     }
 };
 
-// ============================================================================
-// Pipeline building blocks
-// ============================================================================
-
 /// Did this cell change? (comparing old vs new from a zipped pair)
 constexpr auto is_changed = [](const auto & pair) {
     const auto & [old_cell, new_cell] = pair;
@@ -99,10 +91,6 @@ constexpr auto same_run = [](const auto & a, const auto & b) {
            && new_a.bg == new_b.bg        // same background
            && new_a.em == new_b.em;       // same emphasis
 };
-
-// ============================================================================
-// The diff pipeline
-// ============================================================================
 
 /// Extract changed runs from a single row.
 /// Groups cells by run boundaries, keeps only changed runs, converts to

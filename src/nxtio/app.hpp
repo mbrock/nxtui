@@ -106,10 +106,6 @@ public:
         return nxt::when_all(std::forward<Tasks>(tasks)...);
     }
 
-    // =========================================================================
-    // Render loop helpers
-    // =========================================================================
-
     /// Render a layout to the screen.
     /// Computes HUD height from layout hint, sets up scroll region,
     /// renders.
@@ -143,16 +139,10 @@ public:
         std::chrono::milliseconds frame_time = std::chrono::milliseconds{
             16})
     {
-        // Initial render
         render(build_ui());
         auto last_render = std::chrono::steady_clock::now();
 
         while (!shutdown_requested()) {
-            // Wait for damage
-            //          damage_event_.reset();
-            //            auto ping =
-            //            scheduler_->schedule_after(frame_time);
-
             if (shutdown_requested())
                 break;
 
@@ -204,10 +194,6 @@ public:
         co_return std::nullopt;
     }
 
-    // =========================================================================
-    // Low-level access (for advanced use)
-    // =========================================================================
-
     /// Channel for resize notifications.
     nxt::queue<TermSize> & resize_channel() noexcept
     {
@@ -237,15 +223,14 @@ private:
     template<typename Layout>
     void render_frame(const Layout & layout)
     {
-        // Compute HUD height from layout
         auto hint = layout.height_hint();
         auto term_h = terminal_height();
 
-        // If layout wants to grow, use full screen; otherwise use min
-        // height
+        // Non-flexing HUDs leave a small scrollback region visible when there
+        // is enough terminal height; flexing layouts claim the whole terminal.
         auto wants_fullscreen = hint.flex > 0 * one;
         height_t target_h = wants_fullscreen ? term_h : hint.min;
-        target_h = std::min(target_h, term_h); // Clamp to terminal
+        target_h = std::min(target_h, term_h);
 
         if (!wants_fullscreen && target_h > 0 * ln) {
             auto reserved_log_rows = 7 * ln;
@@ -258,6 +243,8 @@ private:
         auto target_rows = static_cast<double>(
             target_h.count());
 
+        // Grow immediately so new content is visible, but shrink gradually to
+        // avoid jitter when transient rows disappear between frames.
         if (wants_fullscreen || !has_smoothed_hud_height_) {
             smoothed_hud_rows_ = target_rows;
             has_smoothed_hud_height_ = true;
@@ -310,10 +297,6 @@ private:
 
     std::stop_source stop_source_;
 };
-
-// ============================================================================
-// Convenient app runner
-// ============================================================================
 
 /// Run a TUI application.
 /// - initial_state: the starting state
