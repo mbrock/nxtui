@@ -190,6 +190,8 @@ if get_option('llm_tool')
 
   executable('nxtllm',
     'src/nxtio/nxtllm.cpp',
+    'src/nxtio/duckdb.cpp',
+    'src/nxtio/nxtllm-trace-store.cpp',
     include_directories : nxt_inc,
     dependencies : [nxt_dep, duckdb_dep],
     cpp_args : ['-Wno-unused-parameter'],

@@ -7,9 +7,9 @@
 #include <nxtio/input.hpp>
 #include <nxtio/llm.hpp>
 #include <nxtio/net.hpp>
+#include <nxtio/nxtllm-trace-store.hpp>
 #include <nxtio/text_field.hpp>
 
-#include <duckdb.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -33,140 +33,9 @@ namespace {
 
 using llm_request = nxt::io::llm::openai_responses_request;
 using stream_event = nxt::io::llm::stream_event;
+using trace_row = nxt::io::nxtllm::trace_row;
 
 constexpr std::size_t default_max_output_tokens = 128000;
-
-struct trace_row
-{
-    std::int64_t seq = 0;
-    std::int64_t elapsed_ms = 0;
-    std::string phase;
-    std::string event_type;
-    std::string data;
-    std::string payload_json;
-};
-
-std::string sql_string(std::string_view text)
-{
-    auto out = std::string{};
-    out.reserve(text.size());
-    for (char c : text) {
-        out.push_back(c);
-        if (c == '\'')
-            out.push_back('\'');
-    }
-    return out;
-}
-
-class duckdb_session
-{
-public:
-    duckdb_session()
-    {
-        if (duckdb_open(nullptr, &database_) == DuckDBError)
-            throw std::runtime_error{"failed to open DuckDB database"};
-        if (duckdb_connect(database_, &connection_) == DuckDBError) {
-            duckdb_close(&database_);
-            throw std::runtime_error{
-                "failed to connect to DuckDB database"};
-        }
-    }
-
-    ~duckdb_session()
-    {
-        if (connection_)
-            duckdb_disconnect(&connection_);
-        if (database_)
-            duckdb_close(&database_);
-    }
-
-    duckdb_session(const duckdb_session &) = delete;
-    duckdb_session & operator=(const duckdb_session &) = delete;
-
-    [[nodiscard]] duckdb_connection connection() const noexcept
-    {
-        return connection_;
-    }
-
-private:
-    duckdb_database database_{};
-    duckdb_connection connection_{};
-};
-
-void checked_append(duckdb_state state, duckdb_appender appender);
-
-class duckdb_appender_handle
-{
-public:
-    explicit duckdb_appender_handle(duckdb_connection connection)
-    {
-        checked_append(
-            duckdb_appender_create(
-                connection, nullptr, "trace", &appender_),
-            appender_);
-    }
-
-    ~duckdb_appender_handle()
-    {
-        if (appender_ != nullptr)
-            duckdb_appender_destroy(&appender_);
-    }
-
-    duckdb_appender_handle(const duckdb_appender_handle &) = delete;
-    duckdb_appender_handle &
-    operator=(const duckdb_appender_handle &) = delete;
-
-    [[nodiscard]] duckdb_appender get() const noexcept
-    {
-        return appender_;
-    }
-
-    void close()
-    {
-        checked_append(duckdb_appender_close(appender_), appender_);
-        if (duckdb_appender_destroy(&appender_) == DuckDBError)
-            throw std::runtime_error{"failed to destroy DuckDB appender"};
-    }
-
-private:
-    duckdb_appender appender_{};
-};
-
-void checked_query(duckdb_connection connection, const std::string & sql)
-{
-    duckdb_result result{};
-    if (duckdb_query(connection, sql.c_str(), &result) == DuckDBError) {
-        auto error = duckdb_result_error(&result);
-        auto message = error != nullptr
-                           ? std::string{error}
-                           : std::string{"DuckDB query failed"};
-        duckdb_destroy_result(&result);
-        throw std::runtime_error{message};
-    }
-    duckdb_destroy_result(&result);
-}
-
-void checked_append(duckdb_state state, duckdb_appender appender)
-{
-    if (state != DuckDBError)
-        return;
-    auto error =
-        appender != nullptr ? duckdb_appender_error(appender) : nullptr;
-    throw std::runtime_error{
-        error != nullptr ? std::string{error}
-                         : std::string{"DuckDB append failed"}};
-}
-
-std::string
-duckdb_string_value(duckdb_result & result, idx_t col, idx_t row)
-{
-    char * value = duckdb_value_varchar(&result, col, row);
-    if (value == nullptr)
-        return {};
-    std::string out{value};
-    duckdb_free(value);
-    return out;
-}
 
 class parquet_trace
 {
@@ -240,49 +109,7 @@ public:
         if (!enabled())
             return;
 
-        auto session = duckdb_session{};
-        auto connection = session.connection();
-        checked_query(
-            connection,
-            "create table trace ("
-            "run_id varchar,"
-            "seq bigint,"
-            "elapsed_ms bigint,"
-            "phase varchar,"
-            "event_type varchar,"
-            "data varchar,"
-            "payload_json varchar)");
-
-        auto appender_handle = duckdb_appender_handle{connection};
-        auto appender = appender_handle.get();
-        for (const auto & row : rows_) {
-            checked_append(duckdb_appender_begin_row(appender), appender);
-            checked_append(
-                duckdb_append_varchar(appender, run_id_.c_str()), appender);
-            checked_append(
-                duckdb_append_int64(appender, row.seq), appender);
-            checked_append(
-                duckdb_append_int64(appender, row.elapsed_ms), appender);
-            checked_append(
-                duckdb_append_varchar(appender, row.phase.c_str()),
-                appender);
-            checked_append(
-                duckdb_append_varchar(appender, row.event_type.c_str()),
-                appender);
-            checked_append(
-                duckdb_append_varchar(appender, row.data.c_str()),
-                appender);
-            checked_append(
-                duckdb_append_varchar(appender, row.payload_json.c_str()),
-                appender);
-            checked_append(duckdb_appender_end_row(appender), appender);
-        }
-        appender_handle.close();
-
-        checked_query(
-            connection,
-            "copy trace to '" + sql_string(*output_path_)
-                + "' (format parquet)");
+        nxt::io::nxtllm::write_trace_parquet(*output_path_, run_id_, rows_);
     }
 
 private:
@@ -447,41 +274,6 @@ llm_request make_request(const cli_options & options, std::string api_key)
                                  ? std::string{}
                                  : options.reasoning_summary,
     };
-}
-
-std::vector<trace_row> read_trace_rows(std::string_view path)
-{
-    auto session = duckdb_session{};
-    duckdb_result result{};
-    auto query = std::string{
-        "select seq, elapsed_ms, phase, event_type, data, payload_json "
-        "from read_parquet('" + sql_string(path) + "') "
-        "order by seq"};
-    if (duckdb_query(session.connection(), query.c_str(), &result)
-        == DuckDBError) {
-        auto error = duckdb_result_error(&result);
-        auto message = error != nullptr
-                           ? std::string{error}
-                           : std::string{"DuckDB query failed"};
-        duckdb_destroy_result(&result);
-        throw std::runtime_error{message};
-    }
-
-    auto rows = std::vector<trace_row>{};
-    rows.reserve(static_cast<std::size_t>(duckdb_row_count(&result)));
-    for (idx_t i = 0; i < duckdb_row_count(&result); ++i) {
-        rows.push_back(
-            trace_row{
-                .seq = duckdb_value_int64(&result, 0, i),
-                .elapsed_ms = duckdb_value_int64(&result, 1, i),
-                .phase = duckdb_string_value(result, 2, i),
-                .event_type = duckdb_string_value(result, 3, i),
-                .data = duckdb_string_value(result, 4, i),
-                .payload_json = duckdb_string_value(result, 5, i),
-            });
-    }
-    duckdb_destroy_result(&result);
-    return rows;
 }
 
 std::size_t playback_start_index(
@@ -885,10 +677,13 @@ void print_text(
     runtime.print(styled);
 }
 
-nxt::task<> read_reasoning_item(
+nxt::task<> read_text_delta_item(
     hud_stream_reader & reader,
     nxt::ui::UIRuntime & runtime,
-    llm_hud_state & state)
+    llm_hud_state & state,
+    std::string_view delta_event_type,
+    bool dim,
+    auto update_state)
 {
     auto text = std::string{};
     auto cursor = std::size_t{0};
@@ -908,20 +703,20 @@ nxt::task<> read_reasoning_item(
             runtime.print("\n");
             cursor = 0;
         }
-        print_text(runtime, segment.text, true);
+        print_text(runtime, segment.text, dim);
         runtime.print(" ");
         cursor += word_width + 1;
         wrote = true;
     };
 
     while (auto event = co_await reader.next_event()) {
-        if (is_event(*event, "response.reasoning_summary_text.delta")) {
+        if (is_event(*event, delta_event_type)) {
             auto delta = event->payload.value("delta", std::string{});
             if (!delta.empty()) {
                 text += delta;
                 for_complete_words(text, false, print_segment);
-                update_hud(runtime, state, [](llm_hud_state & hud) {
-                    hud.status = "thinking";
+                update_hud(runtime, state, [&](llm_hud_state & hud) {
+                    update_state(hud, std::string_view{delta});
                 });
             }
             continue;
@@ -940,60 +735,37 @@ nxt::task<> read_reasoning_item(
         runtime.print("\n");
 }
 
+nxt::task<> read_reasoning_item(
+    hud_stream_reader & reader,
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state)
+{
+    co_await read_text_delta_item(
+        reader,
+        runtime,
+        state,
+        "response.reasoning_summary_text.delta",
+        true,
+        [](llm_hud_state & hud, std::string_view) {
+            hud.status = "thinking";
+        });
+}
+
 nxt::task<> read_message_item(
     hud_stream_reader & reader,
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state)
 {
-    auto text = std::string{};
-    auto cursor = std::size_t{0};
-    auto wrap_width = stream_wrap_width(runtime);
-    auto wrote = false;
-
-    auto print_segment = [&](nxt::utf8::text_segment segment) {
-        if (segment.kind == nxt::utf8::text_segment::kind_t::line_break) {
-            runtime.print("\n");
-            cursor = 0;
-            wrote = true;
-            return;
-        }
-
-        auto word_width = segment.width.count();
-        if (cursor > 0 && cursor + word_width > wrap_width) {
-            runtime.print("\n");
-            cursor = 0;
-        }
-        print_text(runtime, segment.text, false);
-        runtime.print(" ");
-        cursor += word_width + 1;
-        wrote = true;
-    };
-
-    while (auto event = co_await reader.next_event()) {
-        if (is_event(*event, "response.output_text.delta")) {
-            auto delta = event->payload.value("delta", std::string{});
-            if (!delta.empty()) {
-                text += delta;
-                for_complete_words(text, false, print_segment);
-                update_hud(runtime, state, [&](llm_hud_state & hud) {
-                    hud.status = "streaming";
-                    hud.output_bytes += delta.size();
-                });
-            }
-            continue;
-        }
-
-        if (is_event(*event, "response.output_item.done")) {
-            for_complete_words(text, true, print_segment);
-            if (wrote && cursor != 0)
-                runtime.print("\n");
-            co_return;
-        }
-    }
-
-    for_complete_words(text, true, print_segment);
-    if (wrote && cursor != 0)
-        runtime.print("\n");
+    co_await read_text_delta_item(
+        reader,
+        runtime,
+        state,
+        "response.output_text.delta",
+        false,
+        [](llm_hud_state & hud, std::string_view delta) {
+            hud.status = "streaming";
+            hud.output_bytes += delta.size();
+        });
 }
 
 nxt::task<> read_output_item(
@@ -1248,7 +1020,8 @@ int main(int argc, char ** argv)
                 "--trace records live requests; use --playback without it"};
 
         if (options.playback_path) {
-            auto rows = read_trace_rows(*options.playback_path);
+            auto rows =
+                nxt::io::nxtllm::read_trace_parquet(*options.playback_path);
             auto start_index =
                 playback_start_index(rows, options.playback_from);
             auto state = llm_hud_state{};
