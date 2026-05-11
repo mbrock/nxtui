@@ -69,6 +69,7 @@ std::string make_session_tag() noexcept
 UIRuntime::UIRuntime()
     : scheduler_(
           nxt::scheduler::make_unique(nxt::scheduler::options{}))
+    , terminal_surface_(isatty(STDOUT_FILENO) != 0)
     , screenshot_session_tag_(make_session_tag())
 {
     signals_.watch(SIGINT, SIGTERM, SIGWINCH);
@@ -137,6 +138,9 @@ nxt::height_t UIRuntime::terminal_height() const noexcept
 void UIRuntime::render_impl(
     std::function<void(RasterView &, Size)> render_fn)
 {
+    if (!has_terminal_surface())
+        return;
+
     auto & buffer = compositor_->back_buffer();
     buffer.clear();
     auto view = buffer.view();
@@ -187,11 +191,22 @@ void UIRuntime::capture_screenshot(std::string_view milestone) noexcept
 
 void UIRuntime::update_hud_height(height_t hud_h)
 {
+    if (!has_terminal_surface())
+        return;
+
     compositor_->set_hud_height(hud_h, terminal_height());
 }
 
 void UIRuntime::println(std::string_view line)
 {
+    if (!has_terminal_surface()) {
+        std::cout << line;
+        if (line.empty() || line.back() != '\n')
+            std::cout << '\n';
+        std::cout.flush();
+        return;
+    }
+
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
 
@@ -228,6 +243,12 @@ void UIRuntime::println(std::string_view line)
 
 void UIRuntime::print(std::string_view text)
 {
+    if (!has_terminal_surface()) {
+        std::cout << text;
+        std::cout.flush();
+        return;
+    }
+
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
 
@@ -259,6 +280,9 @@ void UIRuntime::print(std::string_view text)
 
 void UIRuntime::cleanup()
 {
+    if (!has_terminal_surface())
+        return;
+
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
 

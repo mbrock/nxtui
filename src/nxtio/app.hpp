@@ -99,6 +99,10 @@ public:
     [[nodiscard]] TermSize terminal_size() const noexcept;
     [[nodiscard]] width_t terminal_width() const noexcept;
     [[nodiscard]] height_t terminal_height() const noexcept;
+    [[nodiscard]] bool has_terminal_surface() const noexcept
+    {
+        return terminal_surface_;
+    }
 
     /// Schedule tasks on the runtime scheduler and await all of them.
     template<typename... Tasks>
@@ -116,6 +120,8 @@ public:
     template<typename Layout>
     void render(const Layout & layout)
     {
+        if (!has_terminal_surface())
+            return;
         ansi::SynchronizedUpdate synchronized_update;
         render_frame(layout);
     }
@@ -143,6 +149,9 @@ public:
         std::chrono::milliseconds frame_time = std::chrono::milliseconds{
             16})
     {
+        if (!has_terminal_surface())
+            co_return;
+
         render(build_ui());
         auto last_render = std::chrono::steady_clock::now();
 
@@ -228,6 +237,9 @@ private:
     void render_frame(const Layout & layout)
     {
         auto hint = layout.height_hint();
+        if (!has_terminal_surface())
+            return;
+
         auto term_h = terminal_height();
 
         // Non-flexing HUDs leave a small scrollback region visible when there
@@ -274,6 +286,7 @@ private:
     }
 
     std::unique_ptr<nxt::scheduler> scheduler_;
+    bool terminal_surface_{false};
     GlyphTable glyphs_;
     std::unique_ptr<TerminalCompositor> compositor_;
     SignalPipe signals_;

@@ -218,25 +218,10 @@ if get_option('examples')
 endif
 
 if get_option('llm_tool')
-  nanoarrow_ipc_dep = dependency(
-    'nanoarrow-ipc',
-    default_options : [
-      'apps=disabled',
-      'benchmarks=disabled',
-      'device=disabled',
-      'ipc=enabled',
-      'ipc_with_zstd=disabled',
-      'testing=disabled',
-      'tests=disabled',
-    ],
-  )
-
   executable('nxtllm',
     'src/nxtai/nxtllm.cpp',
-    'src/nxtai/trace.cpp',
-    'src/nxtio/arrow.cpp',
     include_directories : nxt_inc,
-    dependencies : [nxt_dep, nanoarrow_ipc_dep],
+    dependencies : [nxt_dep],
     cpp_args : ['-Wno-unused-parameter'],
   )
 endif

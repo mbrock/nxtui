@@ -18,7 +18,7 @@ using namespace nxt::ui;
 
 using KeyPress = std::monostate;
 
-nxt::task<> root(Self & self)
+nxt::task<> root(yard & self)
 {
     auto yes = nxt::signal<KeyPress>{};
     auto no = nxt::signal<KeyPress>{};
@@ -27,29 +27,22 @@ nxt::task<> root(Self & self)
     auto in = self.spawn(
         [yes = nxt::publisher_for(yes),
          no = nxt::publisher_for(no),
-         quit = nxt::publisher_for(quit)](Self & s) -> nxt::task<> {
-            using nxt::input::Key;
+         quit = nxt::publisher_for(quit)](yard & s) -> nxt::task<> {
             while (!s.cancelled()) {
-                auto ev = co_await s.next_input();
+                auto ev = co_await next_key_press(s, [](const auto & ev) {
+                    return is_quit_key(ev)
+                        || is_character(ev, 'y')
+                        || is_character(ev, 'n');
+                });
                 if (!ev)
                     co_return;
 
-                if (ev->type != input::EventType::release)
-                    continue;
-
                 try {
-                    if (ev->key == Key::escape
-                        || (ev->key == Key::character
-                            && ev->codepoint == 'q'))
-                    {
+                    if (is_quit_key(*ev)) {
                         co_await nxt::publish(quit, {});
-                    } else if (
-                        ev->key == Key::character && ev->codepoint == 'y')
-                    {
+                    } else if (is_character(*ev, 'y')) {
                         co_await nxt::publish(yes, {});
-                    } else if (
-                        ev->key == Key::character && ev->codepoint == 'n')
-                    {
+                    } else if (is_character(*ev, 'n')) {
                         co_await nxt::publish(no, {});
                     }
                 } catch (const nxt::disconnected &) {

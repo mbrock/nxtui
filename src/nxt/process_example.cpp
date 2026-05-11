@@ -17,7 +17,7 @@ using namespace nxt::ui;
 using namespace std::chrono_literals;
 
 nxt::task<> animator(
-    Self & self, std::string a, std::string b, Rgba8 color)
+    yard & self, std::string a, std::string b, Rgba8 color)
 {
     int i = 0;
     while (!self.cancelled()) {
@@ -27,12 +27,12 @@ nxt::task<> animator(
     }
 }
 
-nxt::task<> root(Self & self)
+nxt::task<> root(yard & self)
 {
-    auto left = self.spawn([](Self & s) {
+    auto left = self.spawn([](yard & s) {
         return animator(s, "<<<", ">>>", Rgba8::cyan());
     });
-    auto right = self.spawn([](Self & s) {
+    auto right = self.spawn([](yard & s) {
         return animator(s, "***", "...", Rgba8::yellow());
     });
 
@@ -44,15 +44,7 @@ nxt::task<> root(Self & self)
         text(std::string{"press q or esc to quit"},
              fg(Rgba8::white()))));
 
-    using nxt::input::Key;
-    while (!self.cancelled()) {
-        auto event = co_await self.next_input();
-        if (!event)
-            co_return;
-        if (event->key == Key::escape
-            || (event->key == Key::character && event->codepoint == 'q'))
-            co_return;
-    }
+    co_await next_key_press(self, is_quit_key);
 }
 
 } // namespace nxt::process_example

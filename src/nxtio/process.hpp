@@ -8,6 +8,7 @@
 #include "nxtio/input.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -40,18 +41,20 @@ struct OutputPublisher
 
     void print(std::string_view text) const
     {
-        publish(OutputMessage{
-            .kind = OutputMessage::Kind::print,
-            .text = std::string{text},
-        });
+        publish(
+            OutputMessage{
+                .kind = OutputMessage::Kind::print,
+                .text = std::string{text},
+            });
     }
 
     void println(std::string_view line) const
     {
-        publish(OutputMessage{
-            .kind = OutputMessage::Kind::line,
-            .text = std::string{line},
-        });
+        publish(
+            OutputMessage{
+                .kind = OutputMessage::Kind::line,
+                .text = std::string{line},
+            });
     }
 };
 
@@ -65,26 +68,24 @@ struct ProcessContext
 inline OutputPublisher runtime_output(UIRuntime & runtime)
 {
     return OutputPublisher{
-        .publish = [&runtime](OutputMessage message) {
-            if (message.kind == OutputMessage::Kind::line)
-                runtime.println(message.text);
-            else
-                runtime.print(message.text);
-        },
+        .publish =
+            [&runtime](OutputMessage message) {
+                if (message.kind == OutputMessage::Kind::line)
+                    runtime.println(message.text);
+                else
+                    runtime.print(message.text);
+            },
     };
 }
 
-/// Capability proxy passed to a process body. Everything a body needs to
-/// interact with the world — drawing, spawning children, sleeping,
-/// reading input, requesting shutdown — goes through `self`. The
-/// underlying runtime is reachable via `runtime()` as an escape hatch
-/// for things not yet wrapped here.
-class Self
+/// A yard is a drawable process scope context, or something.
+class yard
 {
 public:
-    explicit Self(nxt::scope<ProcessContext> & sc)
+    explicit yard(nxt::scope<ProcessContext> & sc)
         : scope_(&sc)
-    {}
+    {
+    }
 
     // ---- Drawing -------------------------------------------------------
 
@@ -198,6 +199,46 @@ private:
     nxt::scope<ProcessContext> * scope_;
 };
 
+[[nodiscard]] inline bool is_escape(const nxt::input::KeyEvent & event)
+{
+    return event.key == nxt::input::Key::escape;
+}
+
+[[nodiscard]] inline bool
+is_character(const nxt::input::KeyEvent & event, char ch)
+{
+    return event.key == nxt::input::Key::character
+           && event.codepoint == static_cast<std::uint32_t>(ch);
+}
+
+[[nodiscard]] inline bool is_quit_key(const nxt::input::KeyEvent & event)
+{
+    return is_escape(event) || is_character(event, 'q');
+}
+
+template<typename Predicate>
+[[nodiscard]] nxt::task<std::optional<nxt::input::KeyEvent>>
+next_key_press(const yard & self, Predicate predicate)
+{
+    while (!self.cancelled()) {
+        auto event = co_await self.next_input();
+        if (!event)
+            co_return std::nullopt;
+        if (event->type == nxt::input::EventType::release)
+            continue;
+        if (predicate(*event))
+            co_return event;
+    }
+    co_return std::nullopt;
+}
+
+[[nodiscard]] inline nxt::task<std::optional<nxt::input::KeyEvent>>
+next_key_press(const yard & self)
+{
+    co_return co_await next_key_press(
+        self, [](const nxt::input::KeyEvent &) { return true; });
+}
+
 /// Internal state of a process. Heap-allocated and shared between the
 /// running body coroutine and any ProcessHandles held by parents.
 class ProcessState
@@ -217,16 +258,39 @@ public:
                   .output = std::move(output),
               })
         , self_(scope_)
-    {}
+    {
+    }
 
-    nxt::scope<ProcessContext> & scope() noexcept { return scope_; }
-    const tui::Slot<tui::AnyLayout> & surface() const noexcept { return surface_; }
-    Self & self() noexcept { return self_; }
+    nxt::scope<ProcessContext> & scope() noexcept
+    {
+        return scope_;
+    }
+
+    const tui::Slot<tui::AnyLayout> & surface() const noexcept
+    {
+        return surface_;
+    }
+
+    yard & self() noexcept
+    {
+        return self_;
+    }
+
+    void complete() noexcept
+    {
+        done_.count_down();
+    }
+
+    nxt::task<> join() const
+    {
+        co_await done_;
+    }
 
 private:
     tui::Slot<tui::AnyLayout> surface_;
     nxt::scope<ProcessContext> scope_;
-    Self self_;
+    yard self_;
+    nxt::latch done_{1};
 };
 
 /// Parent-side handle to a spawned process. Cancels the child's scope
@@ -236,12 +300,14 @@ class ProcessHandle
 public:
     explicit ProcessHandle(std::shared_ptr<ProcessState> state) noexcept
         : state_(std::move(state))
-    {}
+    {
+    }
 
     ProcessHandle(const ProcessHandle &) = delete;
     ProcessHandle & operator=(const ProcessHandle &) = delete;
 
     ProcessHandle(ProcessHandle && other) noexcept = default;
+
     ProcessHandle & operator=(ProcessHandle && other) noexcept
     {
         if (this != &other) {
@@ -275,6 +341,14 @@ public:
             state_->scope().cancel();
     }
 
+    /// Wait until the child body has exited.
+    nxt::task<> join() const
+    {
+        auto state = state_;
+        if (state)
+            co_await state->join();
+    }
+
 private:
     std::shared_ptr<ProcessState> state_;
 };
@@ -290,16 +364,23 @@ nxt::task<> run_body(std::shared_ptr<ProcessState> state, Body body)
         // Normal scope teardown.
     } catch (...) {
         state->scope().cancel();
+        state->complete();
         throw;
     }
     state->scope().cancel();
+    state->complete();
+}
+
+inline nxt::task<> join_body(std::shared_ptr<ProcessState> state)
+{
+    co_await state->join();
 }
 
 } // namespace detail
 
 /// Spawn a child process within `parent`'s cancellation scope.
 template<typename Body>
-[[nodiscard]] ProcessHandle spawn(const Self & parent, Body body)
+[[nodiscard]] ProcessHandle spawn(const yard & parent, Body body)
 {
     auto state = std::make_shared<ProcessState>(
         parent.runtime(),
@@ -309,13 +390,57 @@ template<typename Body>
     parent.runtime().scheduler().spawn_detached(
         detail::run_body(state, std::move(body)));
 
+    parent.scope().spawn(detail::join_body(state));
+
     return ProcessHandle{state};
 }
 
 template<typename Body>
-[[nodiscard]] ProcessHandle Self::spawn(Body body) const
+[[nodiscard]] ProcessHandle yard::spawn(Body body) const
 {
     return nxt::ui::spawn(*this, std::move(body));
+}
+
+inline auto spinner(
+    std::chrono::milliseconds interval = std::chrono::milliseconds{80},
+    tui::Style style = tui::bold | tui::fg(Rgba8::black())
+                       | tui::bg(Rgba8::white()))
+{
+    return [=](yard & self) -> nxt::task<> {
+        for (std::size_t tick = 0; !self.cancelled(); ++tick) {
+            self.draw(tui::spinner(tick, style));
+            co_await self.sleep(interval);
+        }
+    };
+}
+
+template<typename WorkerBody, typename CompanionBody, typename Layout>
+nxt::task<> accompany(
+    const yard & self,
+    WorkerBody worker_body,
+    CompanionBody companion_body,
+    Layout layout)
+{
+    auto companion = self.spawn(std::move(companion_body));
+    auto worker = self.spawn(std::move(worker_body));
+
+    self.draw(layout(companion.surface(), worker.surface()));
+
+    co_await worker.join();
+    companion.cancel();
+    co_await self.scope().all();
+}
+
+template<typename WorkerBody>
+nxt::task<> spintag(const yard & self, WorkerBody worker_body)
+{
+    return accompany(
+        self,
+        worker_body,
+        nxt::ui::spinner(),
+        [](const auto & spinner, const auto & worker) {
+            return nxt::tui::row(spinner, nxt::tui::text(" "), worker);
+        });
 }
 
 /// Run a TUI application Proact-style: the body coroutine owns the
@@ -339,9 +464,10 @@ int run2(Body body)
         tasks.push_back(runtime.run_render_loop(
             [surface = root_state->surface()] { return surface; }));
 
-        auto root_runner =
-            [&runtime, root_state, body = std::move(body)]()
-            -> nxt::task<> {
+        auto root_runner = [&runtime,
+                            root_state,
+                            body =
+                                std::move(body)]() mutable -> nxt::task<> {
             try {
                 co_await body(root_state->self());
             } catch (const nxt::cancelled &) {

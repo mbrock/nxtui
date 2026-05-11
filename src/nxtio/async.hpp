@@ -34,6 +34,30 @@ struct source_value<channel<T>>
     using type = T;
 };
 
+template<typename T, typename Pull>
+class pull_source
+{
+public:
+    explicit pull_source(Pull pull)
+        : pull_(std::move(pull))
+    {}
+
+    [[nodiscard]] task<std::optional<T>>
+    next(std::stop_token stop = {})
+    {
+        co_return co_await pull_(std::move(stop));
+    }
+
+private:
+    Pull pull_;
+};
+
+template<typename T, typename Pull>
+struct source_value<pull_source<T, Pull>>
+{
+    using type = T;
+};
+
 template<typename T>
 using source_value_t =
     typename source_value<std::remove_cvref_t<T>>::type;
@@ -116,6 +140,13 @@ next(channel<T> & ch, std::stop_token = {})
     co_return co_await ch.next();
 }
 
+template<typename T, typename Pull>
+[[nodiscard]] task<std::optional<T>>
+next(pull_source<T, Pull> & src, std::stop_token stop = {})
+{
+    co_return co_await src.next(std::move(stop));
+}
+
 template<typename T>
 [[nodiscard]] task<void> publish(const publisher<T> & pub, T value)
 {
@@ -162,6 +193,13 @@ template<typename T>
 [[nodiscard]] task<void> cancel(channel<T> & ch)
 {
     co_await ch.cancel();
+}
+
+template<typename T, typename Pull>
+[[nodiscard]] auto make_source(Pull && pull)
+{
+    return pull_source<T, std::decay_t<Pull>>{
+        std::forward<Pull>(pull)};
 }
 
 template<typename Source>

@@ -4,6 +4,7 @@
 #include "nxt/utf8.hpp"
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <span>
 #include <string>
@@ -386,6 +387,29 @@ inline auto text(std::string s, Style style)
             std::ranges::fill(r.glyphs(), 32);
             render_span(r, Pos::origin(), Span{s, style});
         });
+}
+
+/// Create a compact one-line spinner frame.
+inline auto spinner(
+    std::size_t tick,
+    Style style = bold | fg(Rgba8::black()) | bg(Rgba8::white()))
+{
+    using namespace std::string_view_literals;
+    constexpr auto frames = std::to_array({
+        "⠋"sv,
+        "⠙"sv,
+        "⠹"sv,
+        "⠸"sv,
+        "⠼"sv,
+        "⠴"sv,
+        "⠦"sv,
+        "⠧"sv,
+        "⠇"sv,
+        "⠏"sv,
+    });
+
+    auto frame = frames[tick % frames.size()];
+    return text(" " + std::string{frame} + " ", style);
 }
 
 /// Create a one-line text leaf from several styled spans.
