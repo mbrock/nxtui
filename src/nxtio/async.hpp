@@ -6,9 +6,7 @@
 
 #include "nxt/signal.hpp"
 #include "nxtio/event-queue.hpp"
-#include "nxtio/scope.hpp"
 
-#include <concepts>
 #include <optional>
 #include <stop_token>
 #include <type_traits>

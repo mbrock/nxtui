@@ -7,8 +7,6 @@
 #include <string_view>
 #include <vector>
 
-#include "nxtio/async-core.hpp"
-
 namespace nxt::input {
 
 /// Normalized key identity after terminal escape-sequence decoding.
