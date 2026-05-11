@@ -366,7 +366,110 @@ void print_csi(std::format_string<Args...> fmt_str, Args &&... args)
         break;
     }
 }
+
+struct RasterCellStyle
+{
+    Rgba8 fg = DEFAULT_COLOR;
+    Rgba8 bg = DEFAULT_COLOR;
+    Emphasis em = DEFAULT_EMPHASIS;
+
+    constexpr auto operator<=>(const RasterCellStyle &) const = default;
+};
+
+bool is_visible_trailing_cell(
+    GlyphTable::GlyphId glyph, Rgba8 bg, Emphasis em)
+{
+    return glyph != ' ' || !bg.is_terminal_default()
+           || em != Emphasis::none;
+}
+
+void emit_fg(Writer & w, Rgba8 color)
+{
+    if (color.is_terminal_default() || color.is_transparent()) {
+        w.fg_default();
+    } else if (color.is_palette()) {
+        w.fg_palette(color.palette_index());
+    } else {
+        w.fg(color.to_rgb());
+    }
+}
+
+void emit_bg(Writer & w, Rgba8 color)
+{
+    if (color.is_terminal_default() || color.is_transparent()) {
+        w.bg_default();
+    } else if (color.is_palette()) {
+        w.bg_palette(color.palette_index());
+    } else {
+        w.bg(color.to_rgb());
+    }
+}
+
+void apply_style(
+    Writer & w,
+    std::optional<RasterCellStyle> & current,
+    RasterCellStyle desired)
+{
+    if (current == desired)
+        return;
+
+    w.reset();
+    if (!desired.fg.is_terminal_default())
+        emit_fg(w, desired.fg);
+    if (!desired.bg.is_terminal_default())
+        emit_bg(w, desired.bg);
+    if (desired.em != Emphasis::none)
+        w.style(desired.em);
+
+    current = desired;
+}
 } // namespace
+
+std::string render_raster(const Raster & raster)
+{
+    std::string buf;
+    Writer w(buf);
+    std::optional<RasterCellStyle> current_style;
+    bool emitted_row = false;
+    auto glyphs = raster.glyphs_2d();
+    auto fgs = raster.fgs_2d();
+    auto bgs = raster.bgs_2d();
+    auto ems = raster.ems_2d();
+    const auto rows = glyphs.extent(0);
+    const auto cols = glyphs.extent(1);
+
+    for (std::size_t y = 0; y < rows; ++y) {
+        std::size_t last_visible = 0;
+        for (std::size_t x = 0; x < cols; ++x)
+            if (is_visible_trailing_cell(
+                    glyphs[y, x], bgs[y, x], ems[y, x]))
+                last_visible = x + 1;
+
+        if (emitted_row) {
+            w.reset();
+            current_style = std::nullopt;
+            w.text('\n');
+        }
+
+        for (std::size_t x = 0; x < last_visible; ++x) {
+            apply_style(
+                w,
+                current_style,
+                RasterCellStyle{
+                    .fg = fgs[y, x], .bg = bgs[y, x], .em = ems[y, x]});
+
+            if (auto text = raster.glyph_table().get(glyphs[y, x]))
+                w.text(*text);
+            else
+                w.text(' ');
+        }
+
+        emitted_row = true;
+    }
+
+    w.reset();
+    return buf;
+}
 
 void move_to(const ansi_row_t row, const ansi_col_t col)
 {

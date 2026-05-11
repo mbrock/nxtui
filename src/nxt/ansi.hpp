@@ -156,6 +156,10 @@ private:
 /// Standalone functions for immediate output (writes directly to
 /// stdout)
 
+/// Render a raster as inline SGR-styled text suitable for scrollback
+/// output.
+[[nodiscard]] std::string render_raster(const Raster & raster);
+
 void move_to(ansi_row_t row, ansi_col_t col);
 void move_to(Pos pos);
 void clear_screen();

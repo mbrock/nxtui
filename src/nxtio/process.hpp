@@ -1,8 +1,11 @@
 #pragma once
 
+#include "nxt/ansi.hpp"
 #include "nxt/any_layout.hpp"
+#include "nxt/raster.hpp"
 #include "nxt/slot.hpp"
 #include "nxt/tui.hpp"
+#include "nxt/units.hpp"
 #include "nxtio/app.hpp"
 #include "nxtio/async.hpp"
 #include "nxtio/input.hpp"
@@ -143,6 +146,26 @@ public:
     void print(std::string_view text) const
     {
         scope_->context().output.print(text);
+    }
+
+    template<typename L>
+        requires tui::Layout<std::decay_t<L>>
+    void print(L && layout) const
+    {
+        auto height = layout.height_hint().min;
+        if (height.count() == 0)
+            height = 1 * ln;
+
+        Raster raster(
+            runtime().terminal_width(), height, runtime().glyphs());
+        auto view = raster.view();
+        layout.render(view, raster.extent());
+        print(ansi::render_raster(raster));
+    }
+
+    void print(tui::Span span) const
+    {
+        print(tui::styled_text(std::move(span)));
     }
 
     /// Replace this process's output publisher. Child processes inherit

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxt/tui.hpp"
 #include <nxtai/agent.hpp>
 #include <nxtai/responses.hpp>
 #include <nxtai/tools.hpp>
@@ -69,6 +70,7 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
     Stream & stream,
     nxt::ui::yard & self,
     std::string_view delta_event_type,
+    tui::Style style,
     auto on_delta)
 {
     auto text = std::string{};
@@ -89,7 +91,7 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
             self.print("\n");
             cursor = 0;
         }
-        self.print(segment.text);
+        self.print(tui::text(std::string(segment.text), style));
         self.print(" ");
         cursor += word_width + 1;
         wrote = true;
@@ -109,15 +111,16 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
         if (agent::is_event(*event, "response.output_item.done")) {
             auto item = agent::output_item_from_event(*event);
             for_complete_words(text, true, print_segment);
-            if (wrote && cursor != 0)
-                self.print("\n");
+            self.print("\n");
             co_return item;
         }
     }
 
     for_complete_words(text, true, print_segment);
-    if (wrote && cursor != 0)
+    if (wrote) {
         self.print("\n");
+    }
+
     co_return std::nullopt;
 }
 
@@ -129,6 +132,7 @@ read_reasoning_item(Stream & stream, nxt::ui::yard & self)
         stream,
         self,
         "response.reasoning_summary_text.delta",
+        nxt::tui::fg(nxt::Rgba8::cyan()),
         [&](std::string_view delta) {
             self.draw(nxt::tui::styled_text(
                 nxt::tui::span(
@@ -145,6 +149,7 @@ read_message_item(Stream & stream, nxt::ui::yard & self)
         stream,
         self,
         "response.output_text.delta",
+        nxt::tui::fg(nxt::Rgba8::yellow()),
         [&](std::string_view delta) {
             self.draw(nxt::tui::styled_text(
                 nxt::tui::span(
@@ -198,6 +203,8 @@ nxt::task<output_item_result> read_output_item(
     auto item = agent::output_item_from_event(first);
     while (auto event = co_await nxt::next(stream)) {
         if (agent::is_event(*event, "response.output_item.done")) {
+            self.println(" [✓]");
+            self.println("");
             if (auto done_item = agent::output_item_from_event(*event))
                 item = std::move(*done_item);
             break;
@@ -256,6 +263,8 @@ read_openai_response_stream(nxt::ui::yard & self, Stream & stream)
         if (agent::is_event(*event, "response.output_item.added")) {
             auto output_item =
                 co_await read_output_item(events, self, *event);
+
+            self.print("\n\n");
 
             if (output_item.item)
                 result.output_items.push_back(std::move(*output_item.item));
