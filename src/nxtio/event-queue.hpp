@@ -7,7 +7,7 @@
 #include <stop_token>
 #include <utility>
 
-namespace nxt::io {
+namespace nxt::detail {
 
 /// Small cancellable async event queue.
 template<typename T>
@@ -80,4 +80,4 @@ private:
     std::atomic<bool> closed_{false};
 };
 
-} // namespace nxt::io
+} // namespace nxt::detail

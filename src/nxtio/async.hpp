@@ -17,34 +17,21 @@
 
 namespace nxt {
 
-/// Public spelling for the executor used by nxt async operations.
-using scheduler = io_scheduler;
-
-/// Public lowercase spellings for signal endpoints.
-template<typename T>
-using signal = Signal<T>;
-
-template<typename T>
-using publisher = Publisher<T>;
-
-template<typename T>
-using bound_publisher = BoundPublisher<T>;
-
 /// Buffered async stream of values.
 template<typename T>
-using channel = nxt::io::event_queue<T>;
+using channel = nxt::detail::event_queue<T>;
 
 template<typename T>
 struct source_value;
 
 template<typename T>
-struct source_value<Signal<T>>
+struct source_value<signal<T>>
 {
     using type = T;
 };
 
 template<typename T>
-struct source_value<nxt::io::event_queue<T>>
+struct source_value<channel<T>>
 {
     using type = T;
 };
@@ -113,68 +100,68 @@ template<scoped Scope, typename... Awaitables>
 }
 
 template<typename T>
-[[nodiscard]] auto next(const Signal<T> & sig)
+[[nodiscard]] auto next(const signal<T> & sig)
 {
     return sig.next();
 }
 
 template<typename T>
-[[nodiscard]] auto next(const Signal<T> & sig, std::stop_token stop)
+[[nodiscard]] auto next(const signal<T> & sig, std::stop_token stop)
 {
     return sig.next(std::move(stop));
 }
 
 template<typename T>
 [[nodiscard]] task<std::optional<T>>
-next(nxt::io::event_queue<T> & ch, std::stop_token = {})
+next(channel<T> & ch, std::stop_token = {})
 {
     co_return co_await ch.next();
 }
 
 template<typename T>
-[[nodiscard]] task<void> publish(const Publisher<T> & pub, T value)
+[[nodiscard]] task<void> publish(const publisher<T> & pub, T value)
 {
     co_await pub.push(std::move(value));
 }
 
 template<typename T>
-[[nodiscard]] task<void> publish(const BoundPublisher<T> & pub)
+[[nodiscard]] task<void> publish(const bound_publisher<T> & pub)
 {
     co_await pub.push();
 }
 
 template<typename T>
-[[nodiscard]] task<bool> publish(nxt::io::event_queue<T> & ch, T value)
+[[nodiscard]] task<bool> publish(channel<T> & ch, T value)
 {
     co_return co_await ch.publish(std::move(value));
 }
 
 template<typename T>
-[[nodiscard]] auto publisher_for(const Signal<T> & sig)
+[[nodiscard]] auto publisher_for(const signal<T> & sig)
 {
     return sig.publisher();
 }
 
 template<typename T>
-[[nodiscard]] auto publisher_for(const Signal<T> & sig, T value)
+[[nodiscard]] auto publisher_for(const signal<T> & sig, T value)
 {
     return sig.publisher(std::move(value));
 }
 
 template<typename T>
-[[nodiscard]] task<void> close(nxt::io::event_queue<T> & ch)
+[[nodiscard]] task<void> close(channel<T> & ch)
 {
     co_await ch.close();
 }
 
 template<typename T>
-void close(Signal<T> & sig)
+void close(signal<T> & sig)
 {
     sig.close();
 }
 
 template<typename T>
-[[nodiscard]] task<void> cancel(nxt::io::event_queue<T> & ch)
+[[nodiscard]] task<void> cancel(channel<T> & ch)
 {
     co_await ch.cancel();
 }

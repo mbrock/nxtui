@@ -42,8 +42,9 @@ using event = coro::event;
 /// Coroutine latch primitive.
 using latch = coro::latch;
 
-/// I/O scheduler type used by libcoro transports.
-using io_scheduler = coro::scheduler;
+/// Scheduler type used by nxt async operations.
+using scheduler = coro::scheduler;
+using io_scheduler = scheduler;
 
 /// Poll operation type from libcoro.
 using poll_op = coro::poll_op;
@@ -64,10 +65,19 @@ inline auto when_all(auto && tasks)
     return coro::when_all(std::forward<decltype(tasks)>(tasks));
 }
 
+/// Await several awaitables.
+inline auto when_all(auto && first, auto && second, auto &&... rest)
+{
+    return coro::when_all(
+        std::forward<decltype(first)>(first),
+        std::forward<decltype(second)>(second),
+        std::forward<decltype(rest)>(rest)...);
+}
+
 /// Schedule a task to run on the given scheduler.
 /// Use this instead of co_await scheduler.schedule() at the top
 /// of coroutines.
-inline auto start(io_scheduler & sched, task<> t)
+inline auto start(scheduler & sched, task<> t)
 {
     return sched.schedule(std::move(t));
 }

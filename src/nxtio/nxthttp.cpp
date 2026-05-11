@@ -60,7 +60,7 @@ fetch_over(Transport & transport, nxt::io::http::url const & url)
 }
 
 nxt::task<>
-fetch(std::unique_ptr<nxt::io_scheduler> & sched, nxt::io::http::url url)
+fetch(std::unique_ptr<nxt::scheduler> & sched, nxt::io::http::url url)
 {
     if (url.tls) {
         auto transport = co_await nxt::io::net::connect_tls(
@@ -94,9 +94,9 @@ int main(int argc, char ** argv)
 
     try {
         auto url = nxt::io::http::parse_url(argv[1]);
-        auto sched = nxt::io_scheduler::make_unique(
-            nxt::io_scheduler::options{
-                .execution_strategy = nxt::io_scheduler::
+        auto sched = nxt::scheduler::make_unique(
+            nxt::scheduler::options{
+                .execution_strategy = nxt::scheduler::
                     execution_strategy_t::process_tasks_inline,
             });
         nxt::sync_wait(sched->schedule(fetch(sched, std::move(url))));

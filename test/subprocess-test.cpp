@@ -20,7 +20,7 @@ std::string trimmed_row(const nxt::vterm::Terminal & term, int row)
 
 suite subprocess_tests = [] {
     "captures pty output into vterm asynchronously"_test = [] {
-        auto scheduler = nxt::io_scheduler::make_unique();
+        auto scheduler = nxt::scheduler::make_unique();
         auto session = nxt::subprocess::PtySession::spawn({
             .argv = {
                 "/bin/sh",
@@ -49,7 +49,7 @@ suite subprocess_tests = [] {
     };
 
     "writes input through the pty"_test = [] {
-        auto scheduler = nxt::io_scheduler::make_unique();
+        auto scheduler = nxt::scheduler::make_unique();
         auto session = nxt::subprocess::PtySession::spawn({
             .argv = {
                 "/bin/sh",
@@ -83,7 +83,7 @@ suite subprocess_tests = [] {
         expect(rows == 7_i);
         expect(cols == 23_i);
 
-        auto scheduler = nxt::io_scheduler::make_unique();
+        auto scheduler = nxt::scheduler::make_unique();
         auto status = nxt::sync_wait(session.read_loop(*scheduler));
         expect(status.success());
         expect(session.terminal().get_screen_text().find("7 23")
@@ -91,7 +91,7 @@ suite subprocess_tests = [] {
     };
 
     "overlays child environment"_test = [] {
-        auto scheduler = nxt::io_scheduler::make_unique();
+        auto scheduler = nxt::scheduler::make_unique();
         auto session = nxt::subprocess::PtySession::spawn({
             .argv = {
                 "/bin/sh",

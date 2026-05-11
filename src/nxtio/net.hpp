@@ -96,19 +96,19 @@ private:
 
 /// Resolve an endpoint using the scheduler-owned DNS resolver.
 nxt::task<resolved_target> resolve_target(
-    std::unique_ptr<nxt::io_scheduler> & sched,
+    std::unique_ptr<nxt::scheduler> & sched,
     endpoint target,
     std::chrono::milliseconds timeout = std::chrono::milliseconds{5000});
 
 /// Resolve and open a TCP connection to an endpoint.
 nxt::task<tcp_transport> connect_tcp(
-    std::unique_ptr<nxt::io_scheduler> & sched,
+    std::unique_ptr<nxt::scheduler> & sched,
     endpoint target,
     std::chrono::milliseconds timeout = std::chrono::milliseconds{5000});
 
 /// Resolve, open, and TLS-wrap a connection to an endpoint.
 nxt::task<tls_transport> connect_tls(
-    std::unique_ptr<nxt::io_scheduler> & sched,
+    std::unique_ptr<nxt::scheduler> & sched,
     endpoint target,
     std::chrono::milliseconds timeout = std::chrono::milliseconds{5000});
 

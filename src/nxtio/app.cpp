@@ -68,7 +68,7 @@ std::string make_session_tag() noexcept
 
 UIRuntime::UIRuntime()
     : scheduler_(
-          nxt::io_scheduler::make_unique(nxt::io_scheduler::options{}))
+          nxt::scheduler::make_unique(nxt::scheduler::options{}))
     , screenshot_session_tag_(make_session_tag())
 {
     signals_.watch(SIGINT, SIGTERM, SIGWINCH);

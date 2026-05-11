@@ -1,6 +1,5 @@
 #pragma once
 
-#include <coro/when_any.hpp>
 #include <stop_token>
 #include <algorithm>
 #include <atomic>
@@ -46,13 +45,13 @@ public:
     UIRuntime & operator=(UIRuntime &&) = delete;
 
     /// Access the scheduler.
-    [[nodiscard]] nxt::io_scheduler & scheduler() noexcept
+    [[nodiscard]] nxt::scheduler & scheduler() noexcept
     {
         return *scheduler_;
     }
 
     /// Access the scheduler owner for libcoro networking APIs.
-    [[nodiscard]] std::unique_ptr<nxt::io_scheduler> &
+    [[nodiscard]] std::unique_ptr<nxt::scheduler> &
     scheduler_handle() noexcept
     {
         return scheduler_;
@@ -274,7 +273,7 @@ private:
         });
     }
 
-    std::unique_ptr<nxt::io_scheduler> scheduler_;
+    std::unique_ptr<nxt::scheduler> scheduler_;
     GlyphTable glyphs_;
     std::unique_ptr<TerminalCompositor> compositor_;
     SignalPipe signals_;

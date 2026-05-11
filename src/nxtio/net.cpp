@@ -161,11 +161,11 @@ nxt::task<> tls_transport::shutdown(std::chrono::seconds timeout)
 }
 
 nxt::task<resolved_target> resolve_target(
-    std::unique_ptr<nxt::io_scheduler> & sched,
+    std::unique_ptr<nxt::scheduler> & sched,
     endpoint target,
     std::chrono::milliseconds timeout)
 {
-    auto resolver = coro::net::dns::resolver<nxt::io_scheduler>{
+    auto resolver = coro::net::dns::resolver<nxt::scheduler>{
         sched,
         timeout,
     };
@@ -184,7 +184,7 @@ nxt::task<resolved_target> resolve_target(
 }
 
 nxt::task<tcp_transport> connect_tcp(
-    std::unique_ptr<nxt::io_scheduler> & sched,
+    std::unique_ptr<nxt::scheduler> & sched,
     endpoint target,
     std::chrono::milliseconds timeout)
 {
@@ -208,7 +208,7 @@ nxt::task<tcp_transport> connect_tcp(
 }
 
 nxt::task<tls_transport> connect_tls(
-    std::unique_ptr<nxt::io_scheduler> & sched,
+    std::unique_ptr<nxt::scheduler> & sched,
     endpoint target,
     std::chrono::milliseconds timeout)
 {

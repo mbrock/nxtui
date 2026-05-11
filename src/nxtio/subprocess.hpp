@@ -145,7 +145,7 @@ public:
     void write(std::string_view bytes);
     /// Asynchronously write all bytes to the PTY master.
     nxt::task<> write_all(
-        nxt::io_scheduler & scheduler,
+        nxt::scheduler & scheduler,
         std::string bytes,
         std::stop_token stop = {});
 
@@ -153,13 +153,13 @@ public:
     [[nodiscard]] std::string encode_key(const nxt::input::KeyEvent & event);
     /// Encode and send one input event to the child process.
     nxt::task<> send_key(
-        nxt::io_scheduler & scheduler,
+        nxt::scheduler & scheduler,
         const nxt::input::KeyEvent & event,
         std::stop_token stop = {});
 
     /// Read PTY output into libvterm until EOF, cancellation, or process exit.
     nxt::task<ExitStatus> read_loop(
-        nxt::io_scheduler & scheduler,
+        nxt::scheduler & scheduler,
         std::stop_token stop = {},
         DamageCallback on_damage = {});
 
@@ -168,7 +168,7 @@ private:
 
     [[nodiscard]] std::optional<ExitStatus> try_reap() noexcept;
     [[nodiscard]] nxt::task<ExitStatus> finish_reap(
-        nxt::io_scheduler & scheduler,
+        nxt::scheduler & scheduler,
         std::stop_token stop);
 
     int master_fd_ = -1;

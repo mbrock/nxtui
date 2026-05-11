@@ -14,12 +14,13 @@
 
 namespace nxt {
 
-template<typename T> class Publisher;
-template<typename T> class BoundPublisher;
-
 namespace detail {
 
-/// Internal shared state of a Signal.
+template<typename T> class signal;
+template<typename T> class publisher;
+template<typename T> class bound_publisher;
+
+/// Internal shared state of a signal.
 ///
 /// Single-slot delivery semantics: at most one awaiter is registered at
 /// any time. A new `next()` while a previous awaiter is pending will
@@ -90,7 +91,7 @@ inline bool cancel_pending(
     return true;
 }
 
-/// Awaitable returned by `Signal::next()`.
+/// Awaitable returned by `signal::next()`.
 template<typename T>
 struct next_awaiter
 {
@@ -169,8 +170,6 @@ struct next_awaiter
     }
 };
 
-} // namespace detail
-
 /// The consumer end of a typed event channel.
 ///
 /// Single-slot semantics:
@@ -181,24 +180,24 @@ struct next_awaiter
 ///   cancellation is requested.
 ///
 /// Lifetime rules:
-/// - Destroying the Signal closes the receiver side: the current
+/// - Destroying the signal closes the receiver side: the current
 ///   pending waiter (if any) wakes with `nullopt`; subsequent pushes
 ///   throw `disconnected`.
-/// - When the last Publisher is destroyed, the sender side closes:
+/// - When the last publisher is destroyed, the sender side closes:
 ///   `next()` wakes with `nullopt`.
 template<typename T>
-class Signal
+class signal
 {
 public:
-    Signal()
+    signal()
         : state_(std::make_shared<detail::signal_state<T>>())
     {}
 
-    Signal(const Signal &) = delete;
-    Signal & operator=(const Signal &) = delete;
+    signal(const signal &) = delete;
+    signal & operator=(const signal &) = delete;
 
-    Signal(Signal && other) noexcept = default;
-    Signal & operator=(Signal && other) noexcept
+    signal(signal && other) noexcept = default;
+    signal & operator=(signal && other) noexcept
     {
         if (this != &other) {
             close();
@@ -207,7 +206,7 @@ public:
         return *this;
     }
 
-    ~Signal()
+    ~signal()
     {
         close();
     }
@@ -228,10 +227,10 @@ public:
     }
 
     /// Create a new write-endpoint. Cheap; copies share refcount.
-    Publisher<T> publisher() const;
+    detail::publisher<T> publisher() const;
 
     /// Create a write-endpoint that always pushes the same value.
-    BoundPublisher<T> publisher(T value) const;
+    detail::bound_publisher<T> publisher(T value) const;
 
     /// True once the receiver side has been closed.
     bool closed() const noexcept
@@ -252,22 +251,22 @@ public:
 private:
     std::shared_ptr<detail::signal_state<T>> state_;
 
-    template<typename U> friend class Publisher;
+    template<typename U> friend class publisher;
 };
 
-/// A copyable write-endpoint for a Signal. Multiple producers can hold
+/// A copyable write-endpoint for a signal. Multiple producers can hold
 /// copies; the sender side closes when the last copy is destroyed.
 template<typename T>
-class Publisher
+class publisher
 {
 public:
-    Publisher(const Publisher & other) noexcept
+    publisher(const publisher & other) noexcept
         : state_(other.state_)
     {
         acquire();
     }
 
-    Publisher & operator=(const Publisher & other) noexcept
+    publisher & operator=(const publisher & other) noexcept
     {
         if (this != &other) {
             release();
@@ -277,11 +276,11 @@ public:
         return *this;
     }
 
-    Publisher(Publisher && other) noexcept
+    publisher(publisher && other) noexcept
         : state_(std::move(other.state_))
     {}
 
-    Publisher & operator=(Publisher && other) noexcept
+    publisher & operator=(publisher && other) noexcept
     {
         if (this != &other) {
             release();
@@ -290,14 +289,14 @@ public:
         return *this;
     }
 
-    ~Publisher()
+    ~publisher()
     {
         release();
     }
 
     /// Deliver a value to the current waiter, if any. Drops the value
     /// if no waiter is pending. Throws `nxt::disconnected` if the
-    /// Signal has been closed.
+    /// signal has been closed.
     nxt::task<void> push(T value) const
     {
         if (!state_
@@ -316,12 +315,12 @@ public:
             || state_->closed.load(std::memory_order_acquire);
     }
 
-    BoundPublisher<T> bound(T value) const;
+    detail::bound_publisher<T> bound(T value) const;
 
 private:
-    friend class Signal<T>;
+    friend class signal<T>;
 
-    explicit Publisher(
+    explicit publisher(
         std::shared_ptr<detail::signal_state<T>> s) noexcept
         : state_(std::move(s))
     {
@@ -361,10 +360,10 @@ private:
 /// A publisher with a value baked in. Calling `push()` (no args)
 /// pushes the bound value into the underlying signal.
 template<typename T>
-class BoundPublisher
+class bound_publisher
 {
 public:
-    BoundPublisher(Publisher<T> pub, T value)
+    bound_publisher(detail::publisher<T> pub, T value)
         : pub_(std::move(pub))
         , value_(std::move(value))
     {}
@@ -380,32 +379,32 @@ public:
     }
 
 private:
-    Publisher<T> pub_;
+    detail::publisher<T> pub_;
     T value_;
 };
 
 template<typename T>
-Publisher<T> Signal<T>::publisher() const
+detail::publisher<T> signal<T>::publisher() const
 {
-    return Publisher<T>(state_);
+    return detail::publisher<T>(state_);
 }
 
 template<typename T>
-BoundPublisher<T> Signal<T>::publisher(T value) const
+detail::bound_publisher<T> signal<T>::publisher(T value) const
 {
-    return BoundPublisher<T>(publisher(), std::move(value));
+    return detail::bound_publisher<T>(publisher(), std::move(value));
 }
 
 template<typename T>
-BoundPublisher<T> Publisher<T>::bound(T value) const
+detail::bound_publisher<T> publisher<T>::bound(T value) const
 {
-    return BoundPublisher<T>(*this, std::move(value));
+    return detail::bound_publisher<T>(*this, std::move(value));
 }
 
 /// Race awaitables, requesting `stop_source` once the first completes.
 /// Awaitables must observe the corresponding stop token themselves.
 template<typename... Awaitables>
-auto select(std::stop_source stop_source, Awaitables &&... aws)
+auto select_when_any(std::stop_source stop_source, Awaitables &&... aws)
 {
     return coro::when_any(
         std::move(stop_source), std::forward<Awaitables>(aws)...);
@@ -415,9 +414,20 @@ auto select(std::stop_source stop_source, Awaitables &&... aws)
 /// `std::variant`. `void`-returning awaitables become `std::monostate`
 /// alternatives.
 template<typename... Awaitables>
-auto select(Awaitables &&... aws)
+auto select_when_any(Awaitables &&... aws)
 {
     return coro::when_any(std::forward<Awaitables>(aws)...);
 }
+
+} // namespace detail
+
+template<typename T>
+using signal = detail::signal<T>;
+
+template<typename T>
+using publisher = detail::publisher<T>;
+
+template<typename T>
+using bound_publisher = detail::bound_publisher<T>;
 
 } // namespace nxt

@@ -1,13 +1,11 @@
 #pragma once
 
 #include "nxt/any_layout.hpp"
-#include "nxt/signal.hpp"
 #include "nxt/slot.hpp"
 #include "nxt/tui.hpp"
 #include "nxtio/app.hpp"
-#include "nxtio/async-core.hpp"
+#include "nxtio/async.hpp"
 #include "nxtio/input.hpp"
-#include "nxtio/scope.hpp"
 
 #include <chrono>
 #include <exception>
@@ -18,7 +16,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace nxt::ui {
@@ -114,28 +111,6 @@ public:
     /// body)` for the implementation; this is the canonical entry point.
     template<typename Body>
     [[nodiscard]] ProcessHandle spawn(Body body) const;
-
-    // ---- Signals -------------------------------------------------------
-
-    /// Create a new Signal<T>. The Signal is move-only and is intended
-    /// to live as a local in the caller. Hand out write-endpoints via
-    /// `signal.publisher()` or `signal.publisher(value)`.
-    template<typename T>
-    [[nodiscard]] nxt::Signal<T> signal() const
-    {
-        return nxt::Signal<T>{};
-    }
-
-    /// Race the next values from several Signals. The losing waits are
-    /// cancelled when one signal wins, or when this process is cancelled.
-    template<typename... T>
-    nxt::task<std::variant<std::optional<T>...>>
-    select(const nxt::Signal<T> &... signals) const
-    {
-        auto select_scope = scope_->subscope();
-        co_return co_await select_scope.any(
-            signals.next(select_scope.stop_token())...);
-    }
 
     // ---- Time ----------------------------------------------------------
 

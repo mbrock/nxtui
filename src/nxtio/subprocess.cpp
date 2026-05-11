@@ -558,7 +558,7 @@ void PtySession::write(std::string_view bytes)
 }
 
 nxt::task<> PtySession::write_all(
-    nxt::io_scheduler & scheduler,
+    nxt::scheduler & scheduler,
     std::string bytes,
     std::stop_token stop)
 {
@@ -639,7 +639,7 @@ std::string PtySession::encode_key(const nxt::input::KeyEvent & event)
 }
 
 nxt::task<> PtySession::send_key(
-    nxt::io_scheduler & scheduler,
+    nxt::scheduler & scheduler,
     const nxt::input::KeyEvent & event,
     std::stop_token stop)
 {
@@ -673,7 +673,7 @@ std::optional<ExitStatus> PtySession::try_reap() noexcept
 }
 
 nxt::task<ExitStatus> PtySession::finish_reap(
-    nxt::io_scheduler & scheduler,
+    nxt::scheduler & scheduler,
     std::stop_token stop)
 {
     if (auto status = try_reap())
@@ -715,7 +715,7 @@ nxt::task<ExitStatus> PtySession::finish_reap(
 }
 
 nxt::task<ExitStatus> PtySession::read_loop(
-    nxt::io_scheduler & scheduler,
+    nxt::scheduler & scheduler,
     std::stop_token stop,
     DamageCallback on_damage)
 {

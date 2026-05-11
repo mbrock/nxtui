@@ -43,7 +43,7 @@ template<typename Context = empty_context>
 class scope
 {
 public:
-    explicit scope(io_scheduler & sched, Context context = {})
+    explicit scope(nxt::scheduler & sched, Context context = {})
         : sched_(sched)
         , context_(std::move(context))
     {
@@ -52,7 +52,7 @@ public:
     /// Create a scope with a parent stop token.
     /// When the parent is cancelled, this scope is also cancelled.
     scope(
-        io_scheduler & sched,
+        nxt::scheduler & sched,
         std::stop_token parent_token,
         Context context = {})
         : sched_(sched)
@@ -115,7 +115,7 @@ public:
     }
 
     /// Access the scheduler.
-    [[nodiscard]] io_scheduler & scheduler() noexcept
+    [[nodiscard]] nxt::scheduler & scheduler() noexcept
     {
         return sched_;
     }
@@ -189,7 +189,7 @@ public:
     }
 
 private:
-    io_scheduler & sched_;
+    nxt::scheduler & sched_;
     std::stop_source stop_source_;
     Context context_;
     std::optional<std::stop_callback<std::function<void()>>> parent_callback_;

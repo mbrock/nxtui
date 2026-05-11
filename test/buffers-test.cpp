@@ -1,5 +1,5 @@
 #include <nxtio/buffers.hpp>
-#include <nxtio/event-queue.hpp>
+#include <nxtio/async.hpp>
 
 #include <boost/ut.hpp>
 
@@ -210,29 +210,29 @@ suite buffers_tests = [] {
 
 suite event_queue_tests = [] {
     "event queue publishes values until closed"_test = [] {
-        auto events = nxt::io::event_queue<int>{};
+        auto events = nxt::channel<int>{};
 
-        expect(nxt::sync_wait(events.publish(1)));
-        expect(nxt::sync_wait(events.publish(2)));
+        expect(nxt::sync_wait(nxt::publish(events, 1)));
+        expect(nxt::sync_wait(nxt::publish(events, 2)));
 
-        auto first = nxt::sync_wait(events.next());
-        auto second = nxt::sync_wait(events.next());
+        auto first = nxt::sync_wait(nxt::next(events));
+        auto second = nxt::sync_wait(nxt::next(events));
         expect(first && *first == 1_i);
         expect(second && *second == 2_i);
 
-        nxt::sync_wait(events.close());
-        expect(!nxt::sync_wait(events.next()));
-        expect(!nxt::sync_wait(events.publish(3)));
+        nxt::sync_wait(nxt::close(events));
+        expect(!nxt::sync_wait(nxt::next(events)));
+        expect(!nxt::sync_wait(nxt::publish(events, 3)));
     };
 
     "event queue cancel requests stop and closes"_test = [] {
-        auto events = nxt::io::event_queue<int>{};
+        auto events = nxt::channel<int>{};
 
         expect(!events.stop_requested());
-        nxt::sync_wait(events.cancel());
+        nxt::sync_wait(nxt::cancel(events));
         expect(events.stop_requested());
-        expect(!nxt::sync_wait(events.next()));
-        expect(!nxt::sync_wait(events.publish(1)));
+        expect(!nxt::sync_wait(nxt::next(events)));
+        expect(!nxt::sync_wait(nxt::publish(events, 1)));
     };
 };
 

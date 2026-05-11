@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <coro/when_all.hpp>
 #include <cstdint>
 #include <format>
 #include <memory>
@@ -293,7 +292,7 @@ nxt::task<> run_shell(nxt::ui::UIRuntime & runtime, State & state)
         co_await forward_input(runtime, state, *state.shell);
     };
 
-    co_await coro::when_all(reader(), input());
+    co_await nxt::when_all(reader(), input());
 }
 
 int main()
