@@ -182,6 +182,7 @@ llm_request make_request(const cli_options & options, std::string api_key)
         .input = options.input,
         .input_items = nlohmann::json::array(),
         .tools = nlohmann::json::array(),
+        .include = nlohmann::json::array(),
         .previous_response_id = {},
         .max_output_tokens = options.max_output_tokens,
         .reasoning_effort = options.reasoning_effort,
@@ -232,7 +233,18 @@ llm_request request_from_trace(
 
         auto body = nlohmann::json::parse(row.payload_json);
         request.model = body.value("model", request.model);
-        request.input = body.value("input", request.input);
+        if (auto input = body.find("input"); input != body.end()) {
+            if (input->is_string())
+                request.input = input->get<std::string>();
+            else if (input->is_array())
+                request.input_items = *input;
+        }
+        if (auto tools = body.find("tools"); tools != body.end())
+            request.tools = *tools;
+        if (auto include = body.find("include"); include != body.end())
+            request.include = *include;
+        request.previous_response_id =
+            body.value("previous_response_id", request.previous_response_id);
         request.max_output_tokens =
             body.value("max_output_tokens", request.max_output_tokens);
         request.store = body.value("store", request.store);
@@ -376,6 +388,11 @@ bool load_api_key(nxt::ui::UIRuntime & runtime, llm_hud_state & state)
     });
     runtime.println("error: OPENAI_API_KEY is not set");
     return false;
+}
+
+void request_encrypted_reasoning(llm_request & request)
+{
+    request.include = nlohmann::json::array({"reasoning.encrypted_content"});
 }
 
 nlohmann::json object_schema(nlohmann::json properties, nlohmann::json required)
@@ -992,8 +1009,11 @@ nxt::task<> stream_live_request(
         ? builtin_agent_tools(runtime)
         : std::vector<function_tool>{};
     auto request = state.request;
-    if (!tools.empty())
+    if (!tools.empty()) {
         request.tools = nxt::io::llm::function_tool_definitions(tools);
+        if (!request.store)
+            request_encrypted_reasoning(request);
+    }
     auto stateless_input =
         nxt::io::llm::input_items_from_request(request);
 
@@ -1047,6 +1067,7 @@ nxt::task<> stream_live_request(
             for (auto & output : outputs)
                 stateless_input.push_back(std::move(output));
             request.input_items = stateless_input;
+            request_encrypted_reasoning(request);
         }
         request.tools = nxt::io::llm::function_tool_definitions(tools);
         update_hud(runtime, state, [](llm_hud_state & hud) {

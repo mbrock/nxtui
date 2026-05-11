@@ -23,6 +23,7 @@ suite llm_tests = [] {
             .input = "Say ok.",
             .input_items = nlohmann::json::array(),
             .tools = nlohmann::json::array(),
+            .include = nlohmann::json::array(),
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_effort = "minimal",
@@ -75,6 +76,7 @@ suite llm_tests = [] {
                         {"strict", true},
                     },
                 }),
+            .include = nlohmann::json::array({"reasoning.encrypted_content"}),
             .previous_response_id = "resp_123",
             .max_output_tokens = 64,
             .reasoning_summary = "",
@@ -86,6 +88,7 @@ suite llm_tests = [] {
         expect(body["input"][0]["type"] == "function_call_output");
         expect(body["input"][0]["call_id"] == "call_123");
         expect(body["tools"][0]["name"] == "nxt_echo");
+        expect(body["include"][0] == "reasoning.encrypted_content");
         expect(body["previous_response_id"] == "resp_123");
         expect(body["store"] == true);
     };
@@ -97,6 +100,7 @@ suite llm_tests = [] {
             .input = "Use a tool.",
             .input_items = nlohmann::json::array(),
             .tools = nlohmann::json::array(),
+            .include = nlohmann::json::array({"reasoning.encrypted_content"}),
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_summary = "",
@@ -119,6 +123,7 @@ suite llm_tests = [] {
         request.input_items = std::move(input);
         auto body = nxt::io::llm::openai_responses_body(request);
         expect(body["store"] == false);
+        expect(body["include"][0] == "reasoning.encrypted_content");
         expect(!body.contains("previous_response_id"));
         expect(body["input"].is_array());
         expect(body["input"][0]["role"] == "user");
@@ -184,6 +189,7 @@ suite llm_tests = [] {
             .input = "Say ok.",
             .input_items = nlohmann::json::array(),
             .tools = nlohmann::json::array(),
+            .include = nlohmann::json::array(),
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_summary = "",

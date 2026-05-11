@@ -33,6 +33,7 @@ struct openai_responses_request
     std::string input;
     nlohmann::json input_items = nlohmann::json::array();
     nlohmann::json tools = nlohmann::json::array();
+    nlohmann::json include = nlohmann::json::array();
     std::string previous_response_id;
     std::size_t max_output_tokens = 6000;
     std::string reasoning_effort = "medium";
@@ -210,6 +211,9 @@ openai_responses_body(const openai_responses_request & request)
 
     if (request.tools.is_array() && !request.tools.empty())
         body["tools"] = request.tools;
+
+    if (request.include.is_array() && !request.include.empty())
+        body["include"] = request.include;
 
     if (!request.previous_response_id.empty())
         body["previous_response_id"] = request.previous_response_id;
