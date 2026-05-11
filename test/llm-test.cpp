@@ -21,6 +21,9 @@ suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
+            .input_items = nlohmann::json::array(),
+            .tools = nlohmann::json::array(),
+            .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_effort = "minimal",
             .reasoning_summary = "auto",
@@ -41,6 +44,121 @@ suite llm_tests = [] {
         expect(body["reasoning"]["effort"] == "minimal");
         expect(body["reasoning"]["summary"] == "auto");
         expect(wire.find("Authorization: Bearer test-key\r\n") != std::string::npos);
+    };
+
+    "openai responses request serializes tools and function outputs"_test = [] {
+        auto request = nxt::io::llm::openai_responses_request{
+            .api_key = "test-key",
+            .model = "gpt-5-mini",
+            .input = "ignored for tool output turn",
+            .input_items =
+                nlohmann::json::array({
+                    nxt::io::llm::function_call_output(
+                        "call_123",
+                        "{\"ok\":true}")}),
+            .tools =
+                nlohmann::json::array({
+                    {
+                        {"type", "function"},
+                        {"name", "nxt_echo"},
+                        {"description", "Echo text."},
+                        {"parameters",
+                         {
+                             {"type", "object"},
+                             {"properties",
+                              {
+                                  {"text", {{"type", "string"}}},
+                              }},
+                             {"required", {"text"}},
+                             {"additionalProperties", false},
+                         }},
+                        {"strict", true},
+                    },
+                }),
+            .previous_response_id = "resp_123",
+            .max_output_tokens = 64,
+            .reasoning_summary = "",
+            .store = true,
+        };
+
+        auto body = nxt::io::llm::openai_responses_body(request);
+        expect(body["input"].is_array());
+        expect(body["input"][0]["type"] == "function_call_output");
+        expect(body["input"][0]["call_id"] == "call_123");
+        expect(body["tools"][0]["name"] == "nxt_echo");
+        expect(body["previous_response_id"] == "resp_123");
+        expect(body["store"] == true);
+    };
+
+    "openai responses request builds stateless tool input history"_test = [] {
+        auto request = nxt::io::llm::openai_responses_request{
+            .api_key = "test-key",
+            .model = "gpt-5-mini",
+            .input = "Use a tool.",
+            .input_items = nlohmann::json::array(),
+            .tools = nlohmann::json::array(),
+            .previous_response_id = {},
+            .max_output_tokens = 64,
+            .reasoning_summary = "",
+            .store = false,
+        };
+
+        auto input = nxt::io::llm::input_items_from_request(request);
+        input.push_back({
+            {"id", "fc_123"},
+            {"type", "function_call"},
+            {"call_id", "call_123"},
+            {"name", "nxt_echo"},
+            {"arguments", "{\"text\":\"hello\"}"},
+        });
+        input.push_back(nxt::io::llm::function_call_output(
+            "call_123",
+            "{\"text\":\"hello\"}"));
+
+        request.input.clear();
+        request.input_items = std::move(input);
+        auto body = nxt::io::llm::openai_responses_body(request);
+        expect(body["store"] == false);
+        expect(!body.contains("previous_response_id"));
+        expect(body["input"].is_array());
+        expect(body["input"][0]["role"] == "user");
+        expect(body["input"][1]["type"] == "function_call");
+        expect(body["input"][2]["type"] == "function_call_output");
+    };
+
+    "function call item parses and runs matching tool"_test = [] {
+        auto item = nlohmann::json{
+            {"id", "fc_123"},
+            {"type", "function_call"},
+            {"call_id", "call_123"},
+            {"name", "nxt_echo"},
+            {"arguments", "{\"text\":\"hello\"}"},
+        };
+        auto call = nxt::io::llm::function_call_from_item(item);
+        expect(call.has_value());
+        expect(call->call_id == "call_123");
+        expect(call->name == "nxt_echo");
+
+        auto tools = std::vector<nxt::io::llm::function_tool>{};
+        tools.push_back({
+            .name = "nxt_echo",
+            .description = "Echo text.",
+            .parameters = nlohmann::json::object(),
+            .strict = true,
+            .run = [](const nlohmann::json & args) -> nxt::task<std::string> {
+                co_return args.value("text", std::string{});
+            },
+        });
+
+        auto output =
+            nxt::sync_wait(nxt::io::llm::run_function_tool(tools, *call));
+        expect(output == "hello");
+
+        auto missing = *call;
+        missing.name = "missing";
+        auto error =
+            nxt::sync_wait(nxt::io::llm::run_function_tool(tools, missing));
+        expect(nlohmann::json::parse(error)["error"] == "unknown tool");
     };
 
     "openai responses stream emits parsed sse json events"_test = [] {
@@ -64,6 +182,9 @@ suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
+            .input_items = nlohmann::json::array(),
+            .tools = nlohmann::json::array(),
+            .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_summary = "",
         };

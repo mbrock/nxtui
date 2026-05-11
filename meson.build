@@ -49,6 +49,33 @@ nxt_mdspan_args = [
   '-DMDSPAN_USE_PAREN_OPERATOR=0',
 ]
 
+nxt_libvterm_sources = files(
+  'vendor/libvterm/src/encoding.c',
+  'vendor/libvterm/src/keyboard.c',
+  'vendor/libvterm/src/mouse.c',
+  'vendor/libvterm/src/parser.c',
+  'vendor/libvterm/src/pen.c',
+  'vendor/libvterm/src/screen.c',
+  'vendor/libvterm/src/state.c',
+  'vendor/libvterm/src/unicode.c',
+  'vendor/libvterm/src/vterm.c',
+)
+
+nxt_libvterm = static_library('vterm',
+  nxt_libvterm_sources,
+  include_directories : include_directories(
+    'vendor/libvterm/include',
+    'vendor/libvterm/src'
+  ),
+  c_args : ['-I' + meson.current_build_dir()],
+  override_options : ['warning_level=0'],
+)
+
+nxt_libvterm_dep = declare_dependency(
+  link_with : nxt_libvterm,
+  include_directories : include_directories('vendor/libvterm/include'),
+)
+
 nxt_inc = include_directories(
   'src',
   'vendor/mdspan/include',
@@ -56,6 +83,7 @@ nxt_inc = include_directories(
 
 nxt_core_deps = []
 nxt_core_deps += utf8proc_dep
+nxt_core_deps += nxt_libvterm_dep
 
 nxt_core_sources = files(
   'src/nxt/ansi.cpp',
@@ -113,6 +141,7 @@ nxt_runtime_sources = files(
   'src/nxtio/input.cpp',
   'src/nxtio/net.cpp',
   'src/nxtio/signal-pipe.cpp',
+  'src/nxtio/subprocess.cpp',
 )
 
 nxt_lib = static_library('nxtui',
@@ -147,6 +176,12 @@ if get_option('examples')
 
   executable('input_hud_example',
     'src/nxt/input_hud_example.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_dep],
+  )
+
+  executable('shell_column_example',
+    'src/nxt/shell_column_example.cpp',
     include_directories : nxt_inc,
     dependencies : [nxt_dep],
   )
@@ -189,33 +224,6 @@ endif
 
 if get_option('tests')
   nxt_test_inc = include_directories('test')
-
-  nxt_libvterm_sources = files(
-    'vendor/libvterm/src/encoding.c',
-    'vendor/libvterm/src/keyboard.c',
-    'vendor/libvterm/src/mouse.c',
-    'vendor/libvterm/src/parser.c',
-    'vendor/libvterm/src/pen.c',
-    'vendor/libvterm/src/screen.c',
-    'vendor/libvterm/src/state.c',
-    'vendor/libvterm/src/unicode.c',
-    'vendor/libvterm/src/vterm.c',
-  )
-
-  nxt_libvterm = static_library('vterm',
-    nxt_libvterm_sources,
-    include_directories : include_directories(
-      'vendor/libvterm/include',
-      'vendor/libvterm/src'
-    ),
-    c_args : ['-I' + meson.current_build_dir()],
-    override_options : ['warning_level=0'],
-  )
-
-  nxt_libvterm_dep = declare_dependency(
-    link_with : nxt_libvterm,
-    include_directories : include_directories('vendor/libvterm/include'),
-  )
 
   nxt_raster_test = executable('raster-test',
     'test/raster-test.cpp',
@@ -262,7 +270,13 @@ if get_option('tests')
   nxt_terminal_test = executable('terminal-test',
     'test/terminal-test.cpp',
     include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep, nxt_libvterm_dep],
+    dependencies : [nxt_dep],
+  )
+
+  nxt_subprocess_test = executable('subprocess-test',
+    'test/subprocess-test.cpp',
+    include_directories : [nxt_inc, nxt_test_inc],
+    dependencies : [nxt_dep],
   )
 
   nxt_text_field_test = executable('text-field-test',
@@ -279,5 +293,6 @@ if get_option('tests')
   test('llm-test', nxt_llm_test)
   test('net-include-test', nxt_net_include_test)
   test('terminal-test', nxt_terminal_test)
+  test('subprocess-test', nxt_subprocess_test)
   test('text-field-test', nxt_text_field_test)
 endif

@@ -8,6 +8,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace nxt::tui {
 
@@ -198,6 +200,70 @@ struct Span
 inline Span span(std::string text, Style s = {})
 {
     return {std::move(text), s};
+}
+
+template<Layout Child>
+struct Surface
+{
+    Style style{};
+    Child child;
+
+    constexpr WidthHint width_hint() const
+    {
+        return child.width_hint();
+    }
+
+    constexpr HeightHint height_hint() const
+    {
+        return child.height_hint();
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        std::ranges::fill(raster.glyphs(), 32);
+        std::ranges::fill(raster.fgs(), style.fg);
+        std::ranges::fill(raster.bgs(), style.bg);
+        std::ranges::fill(raster.ems(), style.em);
+        child.render(raster, size);
+    }
+};
+
+template<Layout Child>
+auto surface(Style style, Child && child)
+{
+    return Surface<std::decay_t<Child>>{
+        style,
+        std::forward<Child>(child)};
+}
+
+template<Layout Child>
+struct FixedHeight
+{
+    height_t height{0 * ln};
+    Child child;
+
+    constexpr WidthHint width_hint() const
+    {
+        return child.width_hint();
+    }
+
+    constexpr HeightHint height_hint() const
+    {
+        return HeightHint::fixed(height);
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        child.render(raster, size);
+    }
+};
+
+template<Layout Child>
+auto fixed_height(height_t height, Child && child)
+{
+    return FixedHeight<std::decay_t<Child>>{
+        height,
+        std::forward<Child>(child)};
 }
 
 inline col_t render_span(RasterView & r, Pos pos, const Span & s)

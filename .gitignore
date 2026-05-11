@@ -6,3 +6,12 @@
 /docs/html/
 /docs/xml/
 .env
+
+# Meson fallback downloads created by optional subprojects. The checked-in
+# wraps/vendor trees stay visible, but configure-time downloads should not.
+/subprojects/apache-arrow-nanoarrow-*/
+/subprojects/flatcc-*/
+/subprojects/flatcc.wrap
+/subprojects/packagecache/*
+!/subprojects/packagecache/utf8proc-2.10.0.tar.gz
+!/subprojects/packagecache/utf8proc_2.10.0-1_patch.zip

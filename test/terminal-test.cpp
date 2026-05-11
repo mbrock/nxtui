@@ -2,6 +2,7 @@
 #include <nxt/ansi.hpp>
 #include <nxtio/app.hpp>
 #include <nxt/tui.hpp>
+#include <nxt/tui_terminal.hpp>
 
 #include <boost/ut.hpp>
 #include <format>
@@ -124,6 +125,53 @@ suite compositor_tests = [] {
                 "",
                 "",
             });
+    };
+
+    "renders vterm screen layout"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({12 * ch, 3 * ln}, glyphs);
+        vterm::Terminal source(3, 12);
+        vterm::Terminal term(3, 12);
+
+        source.write("\x1b[32mOK\x1b[0m\r\nplain");
+        auto layout = tui::vterm_screen(source, tui::bg(Rgba8(10, 20, 30)));
+        term.write(render_to_string(compositor, layout, {12 * ch, 3 * ln}));
+
+        check_display(term, {"OK", "plain", ""});
+        auto cell = term.get_cell(0, 0);
+        expect(cell.has_value());
+        expect(cell->fg.is_indexed() && cell->fg.c.indexed.idx == 2);
+        auto blank = term.get_cell(2, 0);
+        expect(blank.has_value());
+        expect(blank->bg.is_rgb() && blank->bg.c.rgb.red == 10);
+    };
+
+    "renders vterm cursor overlay"_test = [] {
+        GlyphTable glyphs;
+        Raster raster({6 * ch, 2 * ln}, glyphs);
+        vterm::Terminal source(2, 6);
+        const auto pane_bg = Rgba8(10, 20, 30);
+        auto layout =
+            tui::vterm_screen(source, tui::bg(pane_bg) | tui::fg(Rgba8::white()));
+
+        source.write("x");
+        auto view = raster.view();
+        layout.render(view, raster.extent());
+
+        auto cursor = view.get_cell(Pos::at(1 * ch, 0 * ln));
+        expect(cursor.has_value());
+        expect(cursor->fg == pane_bg);
+        expect(cursor->bg == Rgba8::white());
+
+        source.write("\x1b[?25l");
+        raster.clear();
+        view = raster.view();
+        layout.render(view, raster.extent());
+
+        auto hidden = view.get_cell(Pos::at(1 * ch, 0 * ln));
+        expect(hidden.has_value());
+        expect(hidden->fg == Rgba8::white());
+        expect(hidden->bg == pane_bg);
     };
 
     "renders styled text with colors"_test = [] {

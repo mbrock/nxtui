@@ -16,10 +16,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -31,6 +34,8 @@ namespace {
 
 using llm_request = nxt::io::llm::openai_responses_request;
 using arrow_trace = nxt::io::nxtllm::arrow_trace;
+using function_call = nxt::io::llm::function_call;
+using function_tool = nxt::io::llm::function_tool;
 using stream_event = nxt::io::llm::stream_event;
 using trace_row = nxt::io::nxtllm::trace_row;
 
@@ -46,6 +51,7 @@ struct cli_options
     std::optional<std::string> trace_path;
     std::optional<std::string> playback_path;
     std::optional<std::string> playback_from;
+    bool agent = false;
     bool hud = true;
     bool hud_explicit = false;
     bool input_provided = false;
@@ -62,6 +68,14 @@ cli_options parse_args(int argc, char ** argv)
         if (arg == "--hud") {
             options.hud = true;
             options.hud_explicit = true;
+            continue;
+        }
+        if (arg == "--agent") {
+            options.agent = true;
+            continue;
+        }
+        if (arg == "--no-agent") {
+            options.agent = false;
             continue;
         }
         if (arg == "--no-hud") {
@@ -130,6 +144,8 @@ cli_options parse_args(int argc, char ** argv)
                 << "usage: nxtllm [options] [input] [model]\n"
                    "  --hud                    open the prompt HUD\n"
                    "  --no-hud                 run one prompt in plain CLI mode\n"
+                   "  --agent                  enable local function tools\n"
+                   "  --no-agent               disable local function tools\n"
                    "  --trace out.arrow\n"
                    "  --playback in.arrow\n"
                    "  --playback-realtime\n"
@@ -164,6 +180,9 @@ llm_request make_request(const cli_options & options, std::string api_key)
         .api_key = std::move(api_key),
         .model = options.model,
         .input = options.input,
+        .input_items = nlohmann::json::array(),
+        .tools = nlohmann::json::array(),
+        .previous_response_id = {},
         .max_output_tokens = options.max_output_tokens,
         .reasoning_effort = options.reasoning_effort,
         .reasoning_summary = options.reasoning_summary == "none"
@@ -254,9 +273,11 @@ struct llm_hud_state
     std::string error;
     std::size_t event_count = 0;
     std::size_t output_bytes = 0;
+    std::size_t tool_call_count = 0;
     bool done = false;
     bool busy = false;
     bool input_enabled = false;
+    bool agent_enabled = false;
 };
 
 std::string spinner_for(const llm_hud_state & state)
@@ -276,6 +297,7 @@ void reset_hud_request_state(llm_hud_state & state)
     state.error.clear();
     state.event_count = 0;
     state.output_bytes = 0;
+    state.tool_call_count = 0;
     state.done = false;
 }
 
@@ -300,6 +322,7 @@ auto build_hud(const llm_hud_state & state)
     auto status = spinner_for(state) + " " + state.status;
     auto events = "events " + std::to_string(state.event_count);
     auto bytes = "bytes " + std::to_string(state.output_bytes);
+    auto tools = " tools " + std::to_string(state.tool_call_count);
     auto field_style = TextFieldStyle{
         .fg = state.busy ? nxt::Rgba8{150, 156, 162}
                          : nxt::Rgba8{220, 224, 228},
@@ -319,7 +342,8 @@ auto build_hud(const llm_hud_state & state)
         !state.busy,
         row(text(status, status_style),
             text("  " + events, muted),
-            text("  " + bytes, muted)),
+            text("  " + bytes, muted),
+            text(state.agent_enabled ? tools : "", muted)),
         text_field(
             input,
             {
@@ -352,6 +376,87 @@ bool load_api_key(nxt::ui::UIRuntime & runtime, llm_hud_state & state)
     });
     runtime.println("error: OPENAI_API_KEY is not set");
     return false;
+}
+
+nlohmann::json object_schema(nlohmann::json properties, nlohmann::json required)
+{
+    return {
+        {"type", "object"},
+        {"properties", std::move(properties)},
+        {"required", std::move(required)},
+        {"additionalProperties", false},
+    };
+}
+
+std::string local_timestamp()
+{
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    auto tm = std::tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &time);
+#else
+    localtime_r(&time, &tm);
+#endif
+
+    auto out = std::ostringstream{};
+    out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S %z");
+    return out.str();
+}
+
+std::vector<function_tool> builtin_agent_tools(nxt::ui::UIRuntime & runtime)
+{
+    auto tools = std::vector<function_tool>{};
+
+    tools.push_back(function_tool{
+        .name = "nxt_current_time",
+        .description =
+            "Return the current local timestamp for the nxtllm process.",
+        .parameters = object_schema(nlohmann::json::object(), nlohmann::json::array()),
+        .strict = true,
+        .run = [](const nlohmann::json &) -> nxt::task<std::string> {
+            co_return nlohmann::json{
+                {"local_time", local_timestamp()},
+            }.dump();
+        },
+    });
+
+    tools.push_back(function_tool{
+        .name = "nxt_terminal_size",
+        .description =
+            "Return the current terminal size used by the nxt UI runtime.",
+        .parameters = object_schema(nlohmann::json::object(), nlohmann::json::array()),
+        .strict = true,
+        .run = [&runtime](const nlohmann::json &) -> nxt::task<std::string> {
+            co_return nlohmann::json{
+                {"columns", runtime.terminal_width().count()},
+                {"rows", runtime.terminal_height().count()},
+            }.dump();
+        },
+    });
+
+    tools.push_back(function_tool{
+        .name = "nxt_echo",
+        .description =
+            "Echo a short text string. Useful for checking that tool calling works.",
+        .parameters = object_schema(
+            {
+                {"text",
+                 {
+                     {"type", "string"},
+                     {"description", "Text to echo back."},
+                 }},
+            },
+            {"text"}),
+        .strict = true,
+        .run = [](const nlohmann::json & args) -> nxt::task<std::string> {
+            co_return nlohmann::json{
+                {"text", args.value("text", std::string{})},
+            }.dump();
+        },
+    });
+
+    return tools;
 }
 
 nxt::task<> playback_delay(
@@ -417,9 +522,32 @@ bool is_event(const stream_event & event, std::string_view type)
     return event.type == type;
 }
 
+struct response_stream_result
+{
+    std::vector<function_call> function_calls;
+    std::vector<nlohmann::json> output_items;
+    std::optional<std::string> response_id;
+    bool completed = false;
+};
+
+struct output_item_result
+{
+    std::optional<function_call> call;
+    std::optional<nlohmann::json> item;
+};
+
+std::optional<nlohmann::json> output_item_from_event(const stream_event & event)
+{
+    if (auto it = event.payload.find("item");
+        it != event.payload.end() && it->is_object())
+        return *it;
+    return std::nullopt;
+}
+
 std::string output_item_type(const stream_event & event)
 {
-    if (auto it = event.payload.find("item"); it != event.payload.end())
+    if (auto it = event.payload.find("item");
+        it != event.payload.end() && it->is_object())
         return it->value("type", std::string{});
     return {};
 }
@@ -460,7 +588,7 @@ void print_text(
 }
 
 template<typename Stream>
-nxt::task<> read_text_delta_item(
+nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
     Stream & stream,
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
@@ -506,23 +634,25 @@ nxt::task<> read_text_delta_item(
         }
 
         if (is_event(*event, "response.output_item.done")) {
+            auto item = output_item_from_event(*event);
             for_complete_words(text, true, print_segment);
             if (wrote && cursor != 0)
                 runtime.print("\n");
-            co_return;
+            co_return item;
         }
     }
 
     for_complete_words(text, true, print_segment);
     if (wrote && cursor != 0)
         runtime.print("\n");
+    co_return std::nullopt;
 }
 
 template<typename Stream>
-nxt::task<> read_reasoning_item(
+nxt::task<std::optional<nlohmann::json>> read_reasoning_item(
     Stream & stream, nxt::ui::UIRuntime & runtime, llm_hud_state & state)
 {
-    co_await read_text_delta_item(
+    co_return co_await read_text_delta_item(
         stream,
         runtime,
         state,
@@ -534,10 +664,10 @@ nxt::task<> read_reasoning_item(
 }
 
 template<typename Stream>
-nxt::task<> read_message_item(
+nxt::task<std::optional<nlohmann::json>> read_message_item(
     Stream & stream, nxt::ui::UIRuntime & runtime, llm_hud_state & state)
 {
-    co_await read_text_delta_item(
+    co_return co_await read_text_delta_item(
         stream,
         runtime,
         state,
@@ -550,7 +680,7 @@ nxt::task<> read_message_item(
 }
 
 template<typename Stream>
-nxt::task<> read_output_item(
+nxt::task<output_item_result> read_output_item(
     Stream & stream,
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
@@ -559,21 +689,52 @@ nxt::task<> read_output_item(
     auto type = output_item_type(first);
 
     if (type == "reasoning") {
-        co_await read_reasoning_item(stream, runtime, state);
-        co_return;
+        co_return output_item_result{
+            .call = std::nullopt,
+            .item = co_await read_reasoning_item(stream, runtime, state),
+        };
     }
 
     if (type == "message") {
-        co_await read_message_item(stream, runtime, state);
-        co_return;
+        co_return output_item_result{
+            .call = std::nullopt,
+            .item = co_await read_message_item(stream, runtime, state),
+        };
     }
 
+    if (type == "function_call") {
+        auto item = output_item_from_event(first);
+
+        while (auto event = co_await stream.next()) {
+            if (is_event(*event, "response.output_item.done")) {
+                if (auto done_item = output_item_from_event(*event))
+                    item = std::move(*done_item);
+                break;
+            }
+        }
+
+        auto call = item
+            ? nxt::io::llm::function_call_from_item(*item)
+            : std::optional<function_call>{};
+        co_return output_item_result{
+            .call = std::move(call),
+            .item = std::move(item),
+        };
+    }
+
+    auto item = output_item_from_event(first);
     while (auto event = co_await stream.next()) {
-        if (is_event(*event, "response.output_item.done"))
+        if (is_event(*event, "response.output_item.done")) {
+            if (auto done_item = output_item_from_event(*event))
+                item = std::move(*done_item);
             break;
+        }
     }
 
-    co_return;
+    co_return output_item_result{
+        .call = std::nullopt,
+        .item = std::move(item),
+    };
 }
 
 nxt::task<> playback_delay(
@@ -635,29 +796,53 @@ private:
 };
 
 template<typename Stream>
-nxt::task<> consume_response_stream(
+nxt::task<response_stream_result> consume_response_stream(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
     arrow_trace & trace,
     Stream & stream)
 {
     auto stream_error = std::optional<std::string>{};
+    auto result = response_stream_result{};
 
     try {
         while (auto event = co_await stream.next()) {
+            if (auto response_id = nxt::io::llm::response_id_from_event(*event))
+                result.response_id = std::move(*response_id);
+
             if (is_event(*event, "response.output_item.added")) {
-                co_await read_output_item(stream, runtime, state, *event);
+                auto output_item =
+                    co_await read_output_item(stream, runtime, state, *event);
+                if (output_item.item)
+                    result.output_items.push_back(std::move(*output_item.item));
+                if (output_item.call) {
+                    result.function_calls.push_back(
+                        std::move(*output_item.call));
+                    update_hud(runtime, state, [](llm_hud_state & hud) {
+                        hud.status = "tool requested";
+                        ++hud.tool_call_count;
+                    });
+                }
                 continue;
             }
 
             if (is_event(*event, "response.completed")) {
+                if (auto response_id = nxt::io::llm::response_id_from_event(*event))
+                    result.response_id = std::move(*response_id);
                 trace.record_marker("complete");
-                update_hud(runtime, state, [](llm_hud_state & hud) {
-                    hud.status = "completed";
-                    hud.done = true;
-                    hud.busy = false;
+                update_hud(runtime, state, [&](llm_hud_state & hud) {
+                    if (result.function_calls.empty()) {
+                        hud.status = "completed";
+                        hud.done = true;
+                        hud.busy = false;
+                    } else {
+                        hud.status = "running tools";
+                        hud.done = false;
+                        hud.busy = true;
+                    }
                 });
-                co_return;
+                result.completed = true;
+                co_return result;
             }
 
             if (is_event(*event, "response.failed")
@@ -669,7 +854,7 @@ nxt::task<> consume_response_stream(
                     hud.done = true;
                     hud.busy = false;
                 });
-                co_return;
+                co_return result;
             }
         }
 
@@ -680,7 +865,7 @@ nxt::task<> consume_response_stream(
                 hud.done = true;
                 hud.busy = false;
             });
-            co_return;
+            co_return result;
         }
 
         trace.record_marker("complete");
@@ -689,7 +874,8 @@ nxt::task<> consume_response_stream(
             hud.done = true;
             hud.busy = false;
         });
-        co_return;
+        result.completed = true;
+        co_return result;
     } catch (const std::exception & e) {
         if (!runtime.shutdown_requested())
             stream_error = e.what();
@@ -704,7 +890,7 @@ nxt::task<> consume_response_stream(
             hud.done = true;
             hud.busy = false;
         });
-        co_return;
+        co_return result;
     }
 
     trace.record_marker("cancelled");
@@ -713,15 +899,16 @@ nxt::task<> consume_response_stream(
         hud.done = true;
         hud.busy = false;
     });
+    co_return result;
 }
 
-nxt::task<> stream_live_request(
+nxt::task<response_stream_result> stream_live_response_once(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    arrow_trace & trace)
+    arrow_trace & trace,
+    const llm_request & request)
 {
-    start_hud_transcript(runtime, state);
-    trace.record_request(state.request);
+    trace.record_request(request);
     update_hud(runtime, state, [](llm_hud_state & hud) {
         hud.status = "connecting";
     });
@@ -738,14 +925,15 @@ nxt::task<> stream_live_request(
         nxt::io::llm::openai_response_stream<transport_t>{
             transport, runtime.get_stop_token()};
 
+    auto result = response_stream_result{};
     try {
-        co_await stream.connect(state.request);
+        co_await stream.connect(request);
         update_hud(runtime, state, [](llm_hud_state & hud) {
             hud.status = "streaming";
         });
 
         auto traced = traced_stream{stream, runtime, state, trace};
-        co_await consume_response_stream(runtime, state, trace, traced);
+        result = co_await consume_response_stream(runtime, state, trace, traced);
     } catch (const std::exception & e) {
         if (!runtime.shutdown_requested()) {
             trace.record_marker("error", e.what());
@@ -760,6 +948,121 @@ nxt::task<> stream_live_request(
     }
 
     co_await transport.shutdown();
+    co_return result;
+}
+
+nxt::task<std::vector<nlohmann::json>> run_agent_tools(
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    arrow_trace & trace,
+    const std::vector<function_tool> & tools,
+    const std::vector<function_call> & calls)
+{
+    auto outputs = std::vector<nlohmann::json>{};
+    outputs.reserve(calls.size());
+
+    for (const auto & call : calls) {
+        trace.record_marker("tool_call", call.name);
+        runtime.println(
+            std::format("tool: {}({})", call.name, call.arguments));
+        update_hud(runtime, state, [&](llm_hud_state & hud) {
+            hud.status = "tool " + call.name;
+        });
+
+        auto output =
+            co_await nxt::io::llm::run_function_tool(tools, call);
+        trace.record_marker("tool_output", output);
+        runtime.println(std::format("tool result: {}", output));
+        outputs.push_back(nxt::io::llm::function_call_output(
+            call.call_id,
+            std::move(output)));
+    }
+
+    co_return outputs;
+}
+
+nxt::task<> stream_live_request(
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    arrow_trace & trace)
+{
+    start_hud_transcript(runtime, state);
+
+    auto tools = state.agent_enabled
+        ? builtin_agent_tools(runtime)
+        : std::vector<function_tool>{};
+    auto request = state.request;
+    if (!tools.empty())
+        request.tools = nxt::io::llm::function_tool_definitions(tools);
+    auto stateless_input =
+        nxt::io::llm::input_items_from_request(request);
+
+    constexpr auto max_agent_steps = 6;
+    for (int step = 0; step < max_agent_steps; ++step) {
+        auto result =
+            co_await stream_live_response_once(runtime, state, trace, request);
+
+        if (runtime.shutdown_requested() || state.error.size() > 0)
+            co_return;
+        if (result.function_calls.empty())
+            co_return;
+
+        if (!state.agent_enabled) {
+            runtime.println("model requested a tool, but --agent is disabled");
+            update_hud(runtime, state, [](llm_hud_state & hud) {
+                hud.status = "tool call blocked";
+                hud.done = true;
+                hud.busy = false;
+            });
+            co_return;
+        }
+
+        if (request.store && !result.response_id) {
+            runtime.println("error: tool call response had no response id");
+            update_hud(runtime, state, [](llm_hud_state & hud) {
+                hud.status = "error";
+                hud.error = "tool call response had no response id";
+                hud.done = true;
+                hud.busy = false;
+            });
+            co_return;
+        }
+
+        auto outputs = co_await run_agent_tools(
+            runtime,
+            state,
+            trace,
+            tools,
+            result.function_calls);
+
+        request = state.request;
+        request.input.clear();
+        request.previous_response_id.clear();
+        if (request.store) {
+            request.input_items = std::move(outputs);
+            request.previous_response_id = *result.response_id;
+        } else {
+            for (auto & item : result.output_items)
+                stateless_input.push_back(std::move(item));
+            for (auto & output : outputs)
+                stateless_input.push_back(std::move(output));
+            request.input_items = stateless_input;
+        }
+        request.tools = nxt::io::llm::function_tool_definitions(tools);
+        update_hud(runtime, state, [](llm_hud_state & hud) {
+            hud.status = "continuing";
+            hud.busy = true;
+            hud.done = false;
+        });
+    }
+
+    runtime.println("error: agent step limit reached");
+    update_hud(runtime, state, [](llm_hud_state & hud) {
+        hud.status = "error";
+        hud.error = "agent step limit reached";
+        hud.done = true;
+        hud.busy = false;
+    });
 }
 
 nxt::task<> stream_playback_request(
@@ -876,6 +1179,7 @@ int main(int argc, char ** argv)
                 playback_start_index(rows, options.playback_from);
             auto state = llm_hud_state{};
             state.request = request_from_trace(rows, options);
+            state.agent_enabled = options.agent;
             auto update =
                 [&trace,
                  rows = std::move(rows),
@@ -901,6 +1205,7 @@ int main(int argc, char ** argv)
 
         auto state = llm_hud_state{};
         state.request = make_request(options, {});
+        state.agent_enabled = options.agent;
         auto status = 0;
         if (options.hud) {
             state.input_enabled = true;

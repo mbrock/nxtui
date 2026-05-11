@@ -8,11 +8,16 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
+#include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace nxt::io::llm {
 
@@ -26,6 +31,9 @@ struct openai_responses_request
     std::string api_key;
     std::string model = "gpt-5-mini";
     std::string input;
+    nlohmann::json input_items = nlohmann::json::array();
+    nlohmann::json tools = nlohmann::json::array();
+    std::string previous_response_id;
     std::size_t max_output_tokens = 6000;
     std::string reasoning_effort = "medium";
     std::string reasoning_summary;
@@ -39,16 +47,172 @@ struct stream_event
     std::string raw;
 };
 
+struct function_call
+{
+    std::string id;
+    std::string call_id;
+    std::string name;
+    std::string arguments;
+    nlohmann::json item = nlohmann::json::object();
+};
+
+struct function_tool
+{
+    std::string name;
+    std::string description;
+    nlohmann::json parameters = nlohmann::json::object();
+    bool strict = true;
+    std::function<nxt::task<std::string>(const nlohmann::json &)> run;
+};
+
+[[nodiscard]] inline nlohmann::json
+function_tool_definition(const function_tool & tool)
+{
+    auto out = nlohmann::json{
+        {"type", "function"},
+        {"name", tool.name},
+        {"description", tool.description},
+        {"parameters", tool.parameters},
+        {"strict", tool.strict},
+    };
+    return out;
+}
+
+[[nodiscard]] inline nlohmann::json
+function_tool_definitions(const std::vector<function_tool> & tools)
+{
+    auto out = nlohmann::json::array();
+    for (const auto & tool : tools)
+        out.push_back(function_tool_definition(tool));
+    return out;
+}
+
+[[nodiscard]] inline std::optional<function_call>
+function_call_from_item(const nlohmann::json & item)
+{
+    if (!item.is_object() || item.value("type", std::string{}) != "function_call")
+        return std::nullopt;
+
+    auto call_id = item.value("call_id", std::string{});
+    auto name = item.value("name", std::string{});
+    if (call_id.empty() || name.empty())
+        return std::nullopt;
+
+    return function_call{
+        .id = item.value("id", std::string{}),
+        .call_id = std::move(call_id),
+        .name = std::move(name),
+        .arguments = item.value("arguments", std::string{}),
+        .item = item,
+    };
+}
+
+[[nodiscard]] inline nlohmann::json
+function_call_output(std::string call_id, std::string output)
+{
+    return {
+        {"type", "function_call_output"},
+        {"call_id", std::move(call_id)},
+        {"output", std::move(output)},
+    };
+}
+
+[[nodiscard]] inline nlohmann::json
+input_items_from_request(const openai_responses_request & request)
+{
+    if (request.input_items.is_array() && !request.input_items.empty())
+        return request.input_items;
+
+    auto input = nlohmann::json::array();
+    if (!request.input.empty())
+        input.push_back({
+            {"role", "user"},
+            {"content", request.input},
+        });
+    return input;
+}
+
+[[nodiscard]] inline std::optional<std::string>
+response_id_from_event(const stream_event & event)
+{
+    if (auto it = event.payload.find("response");
+        it != event.payload.end() && it->is_object()) {
+        auto id = it->value("id", std::string{});
+        if (!id.empty())
+            return id;
+    }
+
+    auto id = event.payload.value("response_id", std::string{});
+    if (!id.empty())
+        return id;
+    return std::nullopt;
+}
+
+inline nxt::task<std::string> run_function_tool(
+    const std::vector<function_tool> & tools,
+    const function_call & call)
+{
+    auto it = std::ranges::find_if(tools, [&](const function_tool & tool) {
+        return tool.name == call.name;
+    });
+    if (it == tools.end()) {
+        co_return nlohmann::json{
+            {"error", "unknown tool"},
+            {"name", call.name},
+        }.dump();
+    }
+    if (!it->run) {
+        co_return nlohmann::json{
+            {"error", "tool has no executor"},
+            {"name", call.name},
+        }.dump();
+    }
+
+    nlohmann::json arguments = nlohmann::json::object();
+    if (!call.arguments.empty()) {
+        try {
+            arguments = nlohmann::json::parse(call.arguments);
+        } catch (const nlohmann::json::exception & e) {
+            co_return nlohmann::json{
+                {"error", "invalid tool arguments json"},
+                {"name", call.name},
+                {"detail", e.what()},
+                {"arguments", call.arguments},
+            }.dump();
+        }
+    }
+
+    try {
+        co_return co_await it->run(arguments);
+    } catch (const std::exception & e) {
+        co_return nlohmann::json{
+            {"error", "tool execution failed"},
+            {"name", call.name},
+            {"detail", e.what()},
+        }.dump();
+    }
+}
+
 [[nodiscard]] inline nlohmann::json
 openai_responses_body(const openai_responses_request & request)
 {
     auto body = nlohmann::json{
         {"model", request.model},
-        {"input", request.input},
         {"stream", true},
         {"store", request.store},
         {"max_output_tokens", request.max_output_tokens},
     };
+
+    if (request.input_items.is_array() && !request.input_items.empty())
+        body["input"] = request.input_items;
+    else
+        body["input"] = request.input;
+
+    if (request.tools.is_array() && !request.tools.empty())
+        body["tools"] = request.tools;
+
+    if (!request.previous_response_id.empty())
+        body["previous_response_id"] = request.previous_response_id;
 
     if (!request.reasoning_effort.empty()
         || !request.reasoning_summary.empty()) {
@@ -108,7 +272,8 @@ public:
     {
         if (request.api_key.empty())
             throw protocol_error{"OPENAI_API_KEY is empty"};
-        if (request.input.empty())
+        if (request.input.empty()
+            && (!request.input_items.is_array() || request.input_items.empty()))
             throw protocol_error{"OpenAI Responses input is empty"};
 
         auto response = co_await nxt::io::http::send_request(
