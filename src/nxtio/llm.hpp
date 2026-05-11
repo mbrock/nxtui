@@ -85,6 +85,7 @@ openai_responses_http_request(const openai_responses_request & request)
                 {"Accept", "text/event-stream"},
                 {"Content-Type", "application/json"},
                 {"Authorization", "Bearer " + request.api_key},
+                {"Connection", "keep-alive"},
             },
         .body = std::move(body),
     };

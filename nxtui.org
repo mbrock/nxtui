@@ -1,0 +1,771 @@
+
+* Agent Execution Substrate Architecture
+[2026-05-11 Mon]
+
+This could be separated into two different ideas: the Emacs agent, and the Swash system for observable command execution.
+
+** Purpose
+Build a local agent execution environment where commands, editor actions, traces, outputs, errors, resource usage, and agent notes become durable, queryable, compactable context.
+
+The system should support:
+- reliable command execution
+- structured stdout/stderr/TTY capture
+- Org-mode chronicle generation
+- process/session telemetry
+- cgroup resource sampling
+- optional Linux trace/eBPF data
+- Arrow IPC hot segments
+- Parquet archival datasets
+- DuckDB forensic/analytical queries
+- progressive context compaction
+- durable environment improvement from repeated friction
+
+** Core design principle
+Separate operational control from historical memory.
+
+Operational control:
+- session host process
+- PTY/pipes
+- Unix control socket
+- process lifecycle
+- cancellation/signals
+- cgroup/session supervision
+
+Historical memory:
+- append-only Arrow IPC event segments
+- Parquet archive
+- DuckDB queries
+- Org-mode chronicle
+- compacted summaries and linked evidence
+
+Systemd may supervise processes, but journald is not the canonical event store.
+
+** High-level architecture
+#+begin_src text
+agent / Emacs / Org
+  |
+  | keyboard_input / eval_elisp / shell_session
+  v
+swash CLI
+  |
+  | Linux backend: systemd-run --user
+  | generic backend: fork/setsid/pidfile or platform supervisor
+  v
+swash-host session process
+  |
+  +-- forks command / owns process tree
+  +-- owns PTY or stdout/stderr pipes
+  +-- exposes Unix control socket
+  +-- maintains vterm screen model
+  +-- samples cgroup stats
+  +-- receives lifecycle/signals
+  +-- optionally receives trace/eBPF events
+  +-- writes Arrow IPC hot segments
+  v
+DuckDB compactor
+  |
+  +-- scans closed Arrow IPC segments
+  +-- normalizes/enriches/merges events
+  +-- writes partitioned Parquet datasets
+  v
+DuckDB query layer + Org chronicle
+#+end_src
+
+** Main components
+*** Emacs / Org interface
+Org is the semantic control plane and chronicle.
+
+Responsibilities:
+- maintain current task node
+- insert source blocks before evaluation
+- link command/session IDs to Org entries
+- store hypotheses, observations, failures, and summaries
+- allow progressive folding/unfolding of history
+- provide search via incremental search, =org-occur=, sparse trees, tags, properties
+- support compaction passes over structured history
+
+*** Agent tools
+**** =keyboard_input=
+Send robust Emacs key sequences.
+
+Example syntax:
+#+begin_src text
+C-x C-f src/foo.el RET
+C-s defun RET
+M-x compile RET
+C-c C-c
+#+end_src
+
+Expected behavior:
+- deliver exact Emacs key sequence
+- rate limit safely
+- stop and yield if Emacs signals an immediate error
+- return current editor state and message area
+
+***** Implementation in Emacs Lisp
+
+#+begin_src elisp
+  (defun agent-run-key-sequence (keys)
+    "Run KEYS as Emacs key notation, stopping on first error."
+    (let* ((events (append (read-kbd-macro keys t) nil))
+  		 (executed '())
+  		 (result nil))
+      (condition-case err
+          (progn
+            ;; feed events through command loop-ish machinery
+            (execute-kbd-macro (vconcat events))
+            (setq result `(:ok t
+                         :executed ,keys
+                         :message ,(current-message)
+                         :buffer ,(buffer-name)
+                         :point ,(point))))
+      (error
+       (setq result `(:ok nil
+                      :executed ,keys
+                      :error ,(error-message-string err)
+                      :error-data ,err
+                      :message ,(current-message)
+                      :buffer ,(buffer-name)
+                      :point ,(point)))))
+    result))
+#+end_src
+
+#+begin_src elisp
+  (advice-add 'command-execute :around #'agent-command-execute-advice) (advice-add 'call-interactively :around #'agent-call-interactively-advice)
+#+end_src
+
+> For minibuffer interaction, pure command-execute is not enough if
+  commands prompt. In that case, execute-kbd-macro is useful because
+  it can drive the minibuffer with subsequent events. So the practical
+  tool likely uses execute-kbd-macro for fidelity, plus advice around
+  command-execute/call-interactively for instrumentation.
+
+**** =eval_elisp=
+Evaluate Elisp chronicle-natively.
+
+Expected behavior:
+- first insert an Org Babel =elisp= block into current context node
+- evaluate through Org Babel or equivalent
+- capture result/error into Org
+- emit structured event with block ID and result ID
+
+**** =shell_session=
+Start shell command via swash.
+
+Expected behavior:
+- create Org entry containing intent, cwd, argv, environment summary, trace profile
+- start command through session backend
+- store session ID as Org property
+- return immediate status and observation
+- update chronicle with exit/errors/results
+
+*** swash CLI
+Frontend command that chooses a supervisor backend.
+
+Linux default:
+#+begin_src sh
+systemd-run --user --unit swash-SESSION_ID swash-host SESSION_ID -- COMMAND...
+#+end_src
+
+Portable alternatives:
+- launchd on macOS
+- direct fork/setsid backend
+- custom supervisor
+- test backend without systemd
+
+*** swash-host
+One session equals one supervised host process.
+
+Responsibilities:
+- create control socket
+- create PTY or stdout/stderr pipes
+- fork/exec command
+- maintain process group/session
+- write structured events
+- update terminal model
+- sample resources
+- react to signals and child exit
+- finalize event segments
+
+Linux event loop fds:
+
+- pty master fd
+- stdout/stderr pipe fds
+- unix control socket fd
+- timerfd for flush/fsync
+- timerfd for cgroup sampling
+- signalfd or self-pipe for signals
+- pidfd or SIGCHLD/waitpid for child exit
+- optional trace/event fds
+
+Coroutine split:
+
+ - reader coroutine      reads PTY/pipes/control/trace
+ - vterm coroutine       updates terminal screen state
+ - writer coroutine      batches events and writes Arrow IPC
+ - stats coroutine       samples cgroup stats
+ - supervisor coroutine  handles signals, lifecycle, shutdown
+
+** Control protocol
+Prefer per-session Unix domain socket over D-Bus.
+
+Path example:
+#+begin_src text
+$XDG_RUNTIME_DIR/swash/SESSION_ID/control.sock
+#+end_src
+
+Possible JSONL protocol:
+#+begin_src json
+{"op":"status"}
+{"op":"send","data":"make test\n"}
+{"op":"signal","signal":"TERM"}
+{"op":"resize","rows":40,"cols":120}
+{"op":"screen"}
+{"op":"recent_output","limit_bytes":8192}
+#+end_src
+
+Advantages:
+- portable
+- simple
+- debuggable with socat/nc-like tools
+- filesystem permissions
+- avoids D-Bus lifecycle/name complexity
+
+** Event storage model
+*** Hot path
+Use append-only Arrow IPC stream segments.
+
+Properties:
+- typed batches
+- self-describing schema
+- easy interop
+- readable by DuckDB / Arrow tooling
+- not treated as transactional database
+
+Segment discipline:
+#+begin_src text
+write segment-N.arrow.tmp
+periodically fdatasync
+on rotate/finalize:
+  fdatasync file
+  close file
+  rename segment-N.arrow.tmp -> segment-N.arrow
+  fsync parent directory
+#+end_src
+
+Do not rely on one endless append file.
+
+*** Cold archive
+Use DuckDB to compact closed Arrow IPC segments into partitioned Parquet datasets.
+
+Example shape:
+#+begin_src text
+archive/
+  events/date=2026-05-10/part-0001.parquet
+  stdio/date=2026-05-10/part-0001.parquet
+  tty/date=2026-05-10/part-0001.parquet
+  cgroup/date=2026-05-10/part-0001.parquet
+  trace/date=2026-05-10/part-0001.parquet
+#+end_src
+
+Possible DuckDB compaction:
+#+begin_src sql
+COPY (
+  SELECT
+    *,
+    CAST(ts AS DATE) AS date
+  FROM scan_arrow_ipc('spool/closed/*.arrow')
+)
+TO 'archive/events'
+(
+  FORMAT parquet,
+  COMPRESSION zstd,
+  PARTITION_BY (date),
+  APPEND true,
+  FILENAME_PATTERN 'part-{uuidv7}'
+);
+#+end_src
+
+*** Suggested tables
+**** sessions
+#+begin_src text
+session_id
+command_id
+started_at
+ended_at
+status
+exit_code
+cwd
+argv
+argv_hash
+env_hash
+supervisor_backend
+systemd_unit
+trace_profile
+org_node_id
+#+end_src
+
+**** process_events
+#+begin_src text
+ts
+session_id
+pid
+ppid
+tid
+event_type        exec | fork | clone | exit | signal
+exe
+cwd
+argv
+exit_code
+signal
+#+end_src
+
+**** stdio_events
+#+begin_src text
+ts
+session_id
+stream            stdout | stderr | pty_out | pty_in
+bytes
+text_preview
+offset
+#+end_src
+
+**** tty_snapshots
+#+begin_src text
+ts
+session_id
+rows
+cols
+cursor_row
+cursor_col
+screen_text_lines
+sgr_runs
+screen_hash
+reason            interval | input | resize | exit | material_change
+#+end_src
+
+**** cgroup_samples
+#+begin_src text
+ts
+session_id
+cgroup_path
+cpu_usage_usec
+user_usec
+system_usec
+memory_current
+memory_peak
+io_read_bytes
+io_write_bytes
+pids_current
+cpu_pressure_some
+memory_pressure_some
+io_pressure_some
+#+end_src
+
+**** syscall_events / trace_events
+#+begin_src text
+ts
+session_id
+pid
+tid
+event_type
+syscall
+fd
+path
+errno
+duration_us
+bytes
+cwd
+exe
+#+end_src
+
+**** agent_events
+#+begin_src text
+ts
+session_id
+org_node_id
+agent_id
+event_type        intention | action | observation | error | hypothesis | compaction | friction
+payload
+#+end_src
+
+*** Durability policy
+Use durability tiers.
+
+#+begin_src text
+stdout/stderr/pty bytes:
+  buffered append
+  fdatasync periodically or on segment rotation
+
+session started/exited events:
+  fsync immediately or very soon
+
+exit status:
+  fsync before marking session complete
+
+closed segments:
+  fdatasync file, close, rename, fsync directory
+#+end_src
+
+Avoid fsyncing every stdout chunk.
+
+** Process tracing
+*** TTY recording
+Always store raw PTY bytes as ground truth.
+
+Also maintain a vterm screen model and store snapshots.
+
+Mandatory:
+- raw PTY input/output bytes
+- final screen snapshot
+- lifecycle events
+
+Recommended snapshots:
+- after agent/user input
+- on resize
+- on exit
+- every 500ms-2s while active if screen changed
+- when screen hash changes materially
+
+Optional:
+- vterm damage/update events
+- cell-level attributes
+- rendered HTML/image snapshots
+
+Principle:
+The vterm state is an index/projection over raw PTY bytes, not the only source of truth.
+
+*** Linux tracing
+Start with layers:
+#+begin_src text
+always:
+  process lifecycle
+  stdout/stderr/PTY
+  cgroup samples
+
+light trace:
+  syscall errors
+  failed file opens/stats/access
+  exec events
+  network connect/listen
+
+debug trace:
+  broader syscall/fs/net tracing
+#+end_src
+
+Implementation options:
+- cgroup v2 files for resource stats
+- pidfd for child lifecycle on newer Linux
+- signalfd or self-pipe for signals
+- eBPF tracepoints for lower-overhead structured tracing
+- ptrace/strace only for special debug mode
+
+*** macOS / portable backend
+Keep schema portable even if telemetry differs.
+
+Possible macOS sources:
+- process supervision through fork/posix_spawn/waitpid
+- kqueue EVFILT_PROC where useful
+- libproc/proc_pidinfo for process/resource observations
+- Endpoint Security for deeper process/filesystem events, if deployment allows
+- DTrace only if permissions/SIP constraints are acceptable
+
+Generic POSIX fallback:
+- stdout/stderr/PTY capture
+- exit status
+- process group management
+- periodic coarse resource sampling if available
+
+** Querying the history
+*** Query examples
+**** Errors with nearest resource sample
+#+begin_src sql
+SELECT
+  e.ts,
+  e.session_id,
+  e.pid,
+  e.syscall,
+  e.path,
+  e.errno,
+  c.memory_current,
+  c.pids_current,
+  c.cpu_usage_usec
+FROM syscall_events e
+ASOF LEFT JOIN cgroup_samples c
+  ON e.session_id = c.session_id
+ AND e.ts >= c.ts
+WHERE e.errno IS NOT NULL
+ORDER BY e.ts;
+#+end_src
+
+**** Path churn
+#+begin_src sql
+SELECT path, count(*) AS opens
+FROM syscall_events
+WHERE session_id = $session
+  AND syscall IN ('openat', 'statx', 'access')
+GROUP BY path
+ORDER BY opens DESC;
+#+end_src
+
+**** Per-second resource/error timeline
+#+begin_src sql
+SELECT
+  time_bucket(INTERVAL '1 second', ts) AS t,
+  max(memory_current) AS mem,
+  max(pids_current) AS pids,
+  max(cpu_usage_usec) AS cpu
+FROM cgroup_samples
+WHERE session_id = $session
+GROUP BY t
+ORDER BY t;
+#+end_src
+
+**** Event summary with aggregate filters
+#+begin_src sql
+SELECT
+  session_id,
+  count(*) FILTER (event_type = 'syscall_error') AS syscall_errors,
+  count(*) FILTER (event_type = 'exec') AS execs,
+  count(*) FILTER (event_type = 'signal') AS signals
+FROM trace_events
+GROUP BY session_id;
+#+end_src
+
+*** Diagnostic projections
+Small query results can be projected into Org as sparklines.
+
+Example:
+#+begin_src org
+- CPU:    ▁▂▄▇█▅▂▁
+- Memory: ▁▁▂▄▆███
+- Errors: ···▴▴···
+- PIDs:   ▁▃▆█▃▁▁▁
+#+end_src
+
+These are perceptual handles, not replacements for raw data.
+
+** Org chronicle shape
+Every meaningful action should grow the current context node.
+
+Example:
+#+begin_src org
+  ,** Investigate parser race
+  ,:PROPERTIES:
+  ,:SESSION: abc123
+  ,:PROJECT: miniopus
+  ,:END:
+  ,
+  ,*** Intention
+  ,Run focused test and inspect failures.
+  ,
+  ,*** Action
+  ,:PROPERTIES:
+  ,:KIND: shell-session
+  ,:SESSION: abc123
+  ,:CWD: ~/src/miniopus
+  ,:END:
+  ,
+  ,#+begin_src sh
+  ,mix test test/parser_test.exs:42
+  ,#+end_src
+  ,
+  ,*** Result
+  ,:PROPERTIES:
+  ,:STATUS: failed
+  ,:EXIT_CODE: 1
+  ,:END:
+  ,
+  ,#+begin_example
+  ,*** (MatchError) no match of right hand side value
+  ,#+end_example
+  ,
+  ,*** Observation
+  ,Failure occurs after async worker shutdown.
+  ,
+  ,*** Query
+  ,#+begin_src sql
+  ,SELECT * FROM syscall_events WHERE session_id = 'abc123' AND errno IS NOT NULL;
+  ,#+end_src
+  ,
+  ,*** Hypothesis
+  ,Worker cleanup may race with socket removal.
+#+end_src
+
+** Compaction model
+The chronicle is born partially structured, so compaction does not need to infer everything from flat transcripts.
+
+Compaction pass should produce:
+- current state
+- stable conclusions
+- open questions
+- rejected hypotheses
+- next actions
+- linked evidence
+- repeated frictions
+
+Preserve backlinks to raw actions, sessions, and query results.
+
+** Failure handling
+Immediate failure subagent classifies failures and may auto-repair when safe.
+
+Fields:
+#+begin_src text
+intention
+situation
+invocation
+expectation
+irritation
+designation
+severity
+reversibility
+confidence
+resolution_mode
+next_action
+friction_note
+#+end_src
+
+Resolution modes:
+#+begin_src text
+auto_retry
+auto_repair
+delegate_primary
+ask_human
+abort
+#+end_src
+
+Auto-resolve only when action is local, reversible, low-cost, non-destructive, and directly supported by error evidence.
+
+** Friction mining
+A separate ergonomics process watches history for repeated confusion.
+
+Inputs:
+- failed tool calls
+- Emacs errors/messages
+- repeated command sequences
+- wrong cwd/path failures
+- repeated failed syscalls
+- aborted prompts
+- compile/test patterns
+- resource anomalies
+
+Outputs:
+#+begin_src org
+,*** TODO Repeatedly runs tests outside project root
+,:TYPE: friction
+,:FREQUENCY: high
+,:EVIDENCE: session links
+,:CANDIDATE_FIX: project-root-aware test command
+,:STATUS: pending
+#+end_src
+
+Improvement classes:
+- add Emacs command
+- improve tool description
+- add preflight check
+- create transient menu
+- add diagnostic overlay
+- add snippet/template
+- improve agent prompt
+- add guardrail
+
+** Implementation choices
+*** Hot path library
+Candidate: =nanoarrow= for lightweight Arrow-compatible data generation.
+
+Why:
+- small C runtime
+- C/C++ helpers
+- Arrow C Data and C Stream interfaces
+- Arrow IPC support
+- avoids heavy Arrow C++ dependency in always-on session host
+
+Use full Arrow C++ only if needed in compactor/tools.
+
+*** Compactor
+Candidate: DuckDB.
+
+Responsibilities:
+- read closed Arrow IPC files
+- merge and enrich rows
+- write compressed partitioned Parquet
+- expose ad hoc queries
+
+*** Supervisor backend
+Linux first:
+- =systemd-run --user=
+- cgroup v2 stats
+- optional eBPF tracing
+
+Portable core:
+- Unix socket control protocol
+- PTY/pipes
+- Arrow IPC segments
+- Org chronicle
+- DuckDB/Parquet archive
+
+** Open questions
+*** Arrow IPC segment recovery
+How to handle crash-truncated active segments?
+
+Options:
+- tolerate losing active segment tail
+- length-framed outer WAL around IPC messages
+- write smaller segments
+- repair scanner that reads until last valid batch
+
+*** Schema evolution
+How should event schemas evolve?
+
+Options:
+- version column per table
+- schema registry file
+- DuckDB normalization views
+- Parquet dataset evolution with nullable additions
+
+*** TTY snapshots
+How rich should snapshots be?
+
+Options:
+- plain visible text only
+- visible text + cursor + SGR runs
+- full cell grid
+- rendered HTML/image previews
+
+*** Trace scope
+Which trace profiles are worth defaulting on?
+
+Candidate default:
+- process lifecycle
+- cgroup samples
+- syscall errors only
+- failed file opens/access/stats
+
+*** Agent authorization
+Which repairs/improvements can be automatic?
+
+Session-local helpers: likely automatic.
+Persistent config changes: probably require approval.
+
+** Minimal viable implementation
+1. =swash-host= runs a command under PTY/pipes.
+2. Per-session Unix control socket.
+3. Raw stdout/stderr/PTY events written to Arrow IPC segment.
+4. Session lifecycle events written to Arrow IPC segment.
+5. Simple cgroup samples on Linux.
+6. Org entry created with session ID and command metadata.
+7. DuckDB compacts closed segments to Parquet.
+8. Basic DuckDB queries are inserted into Org summaries.
+
+** Later extensions
+
+- eBPF tracepoint integration
+- pidfd lifecycle handling
+- richer vterm snapshots
+- inline sparkline diagnostics
+- failure subagent auto-repair
+- friction miner
+- environment-improvement maintenance pass
+- Emacs commands generated from recurring patterns
+- macOS telemetry backend
+- query-result visualization blocks

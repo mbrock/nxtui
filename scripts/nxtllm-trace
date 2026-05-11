@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: scripts/nxtllm-trace [options] TRACE.parquet [SQL]
+
+View an nxtllm parquet trace through the DuckDB CLI.
+
+Options:
+  --json          emit one JSON array (default)
+  --jsonlines     emit one JSON object per row
+  --table         emit DuckDB's table output
+  --sse           emit a concise linewise SSE event log
+  --schema        show parquet schema
+  -h, --help      show this help
+
+If SQL is omitted, a compact trace view is emitted. If SQL is provided, use
+the table name "trace":
+
+  scripts/nxtllm-trace out.parquet
+  scripts/nxtllm-trace --jsonlines out.parquet
+  scripts/nxtllm-trace --sse out.parquet
+  scripts/nxtllm-trace out.parquet "select * from trace where phase = 'error'"
+EOF
+}
+
+mode="-json"
+schema=false
+sse=false
+
+while (($#)); do
+  case "$1" in
+    --json)
+      mode="-json"
+      shift
+      ;;
+    --jsonlines|--jsonl)
+      mode="-jsonlines"
+      shift
+      ;;
+    --table)
+      mode="-table"
+      shift
+      ;;
+    --sse)
+      mode="-list"
+      sse=true
+      shift
+      ;;
+    --schema)
+      schema=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if (($# < 1)); then
+  usage >&2
+  exit 2
+fi
+
+trace_path=$1
+shift
+
+if [[ ! -f "$trace_path" ]]; then
+  echo "trace parquet not found: $trace_path" >&2
+  exit 1
+fi
+
+if ! command -v duckdb >/dev/null 2>&1; then
+  echo "duckdb CLI not found on PATH" >&2
+  exit 1
+fi
+
+sql_string() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
+trace_sql=$(sql_string "$trace_path")
+
+if [[ "$schema" == true ]]; then
+  sql="describe select * from read_parquet('$trace_sql')"
+elif [[ "$sse" == true ]]; then
+  sql="
+    create or replace view trace as select * from read_parquet('$trace_sql');
+    select printf(
+      '%5d  %8dms  %-42s%s',
+      seq,
+      elapsed_ms,
+      event_type,
+      case
+        when json_extract_string(payload_json, '$.delta') is not null
+          then '  ' || replace(
+            replace(
+              json_extract_string(payload_json, '$.delta'),
+              chr(10),
+              '\\n'),
+            chr(13),
+            '\\r')
+        when json_extract_string(payload_json, '$.response.status') is not null
+          then '  status=' || json_extract_string(payload_json, '$.response.status')
+        when json_extract_string(payload_json, '$.error.code') is not null
+          then '  error=' || json_extract_string(payload_json, '$.error.code')
+        else ''
+      end
+    ) as sse
+    from trace
+    where phase = 'sse_event'
+    order by seq;
+  "
+elif (($# > 0)); then
+  query=$*
+  sql="create or replace view trace as select * from read_parquet('$trace_sql'); $query"
+else
+  sql="
+    create or replace view trace as select * from read_parquet('$trace_sql');
+    select
+      seq,
+      elapsed_ms,
+      phase,
+      event_type,
+      case
+        when length(data) > 240 then substr(data, 1, 237) || '...'
+        else data
+      end as data,
+      case
+        when payload_json is null or payload_json = '' then null
+        else json(payload_json)
+      end as payload
+    from trace
+    order by seq;
+  "
+fi
+
+if [[ "$sse" == true ]]; then
+  exec duckdb "$mode" -noheader :memory: -c "$sql"
+else
+  exec duckdb "$mode" :memory: -c "$sql"
+fi

@@ -4,6 +4,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <format>
@@ -21,9 +22,11 @@
 #include "nxt/png.hpp"
 #endif
 
+#if defined(__linux__)
 extern "C" {
-extern char * program_invocation_short_name;  // glibc
+extern char * program_invocation_short_name; // glibc
 }
+#endif
 
 namespace nxt::ui {
 
@@ -48,7 +51,14 @@ std::string make_session_tag() noexcept
     auto now = std::chrono::system_clock::now();
     auto stamp = std::format("{:%Y%m%dT%H%M%S}",
                              std::chrono::floor<std::chrono::seconds>(now));
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) \
+    || defined(__NetBSD__)
+    const char * prog = getprogname();
+#elif defined(__linux__)
     const char * prog = program_invocation_short_name;
+#else
+    const char * prog = nullptr;
+#endif
     if (prog == nullptr || *prog == '\0')
         prog = "nxt";
     return std::string{prog} + "-" + stamp;
@@ -185,6 +195,14 @@ void UIRuntime::println(std::string_view line)
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
 
+    if (hud_h == 0 * ln) {
+        std::cout << line;
+        if (line.empty() || line.back() != '\n')
+            std::cout << '\n';
+        std::cout.flush();
+        return;
+    }
+
     // No scroll region in full-screen mode.
     if (hud_h > 0 * ln && hud_h >= term_h)
         return;
@@ -212,6 +230,12 @@ void UIRuntime::print(std::string_view text)
 {
     auto hud_h = compositor_->hud_height();
     auto term_h = terminal_height();
+
+    if (hud_h == 0 * ln) {
+        std::cout << text;
+        std::cout.flush();
+        return;
+    }
 
     // No scroll region in full-screen mode.
     if (hud_h > 0 * ln && hud_h >= term_h)

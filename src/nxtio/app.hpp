@@ -334,4 +334,39 @@ int run(State initial_state, BuildUI build_ui, Update update)
     return 0;
 }
 
+/// Run the UI runtime without a rendered HUD. This still gives callers the
+/// scheduler, signal handling, and scroll output helpers.
+template<typename State, typename Update>
+int run_headless(State initial_state, Update update, bool read_input = false)
+{
+    UIRuntime runtime;
+    State state = std::move(initial_state);
+
+    std::vector<nxt::task<>> tasks;
+    try {
+        TerminalGuard guard;
+        runtime.compositor().set_hud_height(0 * ln, runtime.terminal_height());
+        std::optional<nxt::input::InputModeGuard> input_guard;
+        if (read_input)
+            input_guard.emplace();
+
+        tasks.push_back(runtime.signal_loop());
+        if (read_input)
+            tasks.push_back(runtime.input_loop());
+        tasks.push_back(update(runtime, state));
+
+        nxt::sync_wait(nxt::when_all(std::move(tasks)));
+        runtime.cleanup();
+    } catch (const std::exception & e) {
+        runtime.cleanup();
+        std::cerr << "Error: " << e.what() << '\n';
+        std::exit(1);
+    } catch (...) {
+        runtime.cleanup();
+        throw;
+    }
+
+    return 0;
+}
+
 } // namespace nxt::ui

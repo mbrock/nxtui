@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace nxt::test {
 
@@ -175,6 +176,52 @@ suite utf8_helpers = [] {
         expect(nxt::utf8::next(text, byte_offset(0)) == byte_offset(1));
         expect(nxt::utf8::next(text, byte_offset(1)) == byte_offset(2));
         expect(nxt::utf8::prev(text, byte_offset(2)) == byte_offset(1));
+    };
+
+    "views words with display widths"_test = [] {
+        std::string text =
+            " hello\twide \xe7\x95\x8c  e\xcc\x81\xc2\xa0" "bar";
+        auto words = std::vector<nxt::utf8::word>{};
+        for (auto word : nxt::utf8::words(text))
+            words.push_back(word);
+
+        expect(words.size() == std::size_t{5});
+        expect(words[0].text == "hello");
+        expect(words[0].width == 5 * ch);
+        expect(words[2].text == "\xe7\x95\x8c");
+        expect(words[2].width == 2 * ch);
+        expect(words[3].text == "e\xcc\x81");
+        expect(words[3].width == 1 * ch);
+        expect(words[4].text == "bar");
+    };
+
+    "complete words prefix leaves partial tail"_test = [] {
+        auto text = std::string{"hello wide wor"};
+        auto prefix = nxt::utf8::complete_words_prefix_size(text);
+        expect(prefix == std::size_t{11});
+
+        auto complete = std::string_view{text}.substr(0, prefix);
+        auto words = std::vector<std::string_view>{};
+        for (auto word : nxt::utf8::words(complete))
+            words.push_back(word.text);
+
+        expect(words == std::vector<std::string_view>{"hello", "wide"});
+    };
+
+    "segments preserve line breaks and blank lines"_test = [] {
+        auto text = std::string{"hello\n\nwide world"};
+        auto segments = std::vector<nxt::utf8::text_segment>{};
+        for (auto segment : nxt::utf8::segments(text))
+            segments.push_back(segment);
+
+        using kind = nxt::utf8::text_segment::kind_t;
+        expect(segments.size() == std::size_t{5});
+        expect(segments[0].kind == kind::word);
+        expect(segments[0].text == "hello");
+        expect(segments[1].kind == kind::line_break);
+        expect(segments[2].kind == kind::line_break);
+        expect(segments[3].text == "wide");
+        expect(segments[4].text == "world");
     };
 };
 

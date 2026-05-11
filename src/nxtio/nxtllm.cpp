@@ -1,10 +1,15 @@
+#include <nxt/text_field.hpp>
+#include <nxt/ansi.hpp>
 #include <nxt/tui.hpp>
 #include <nxtio/app.hpp>
 #include <nxtio/async.hpp>
+#include <nxtio/event-queue.hpp>
+#include <nxtio/input.hpp>
 #include <nxtio/llm.hpp>
 #include <nxtio/net.hpp>
+#include <nxtio/text_field.hpp>
 
-#include <duckdb.hpp>
+#include <duckdb.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -21,12 +26,15 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
 
 using llm_request = nxt::io::llm::openai_responses_request;
 using stream_event = nxt::io::llm::stream_event;
+
+constexpr std::size_t default_max_output_tokens = 128000;
 
 struct trace_row
 {
@@ -50,11 +58,114 @@ std::string sql_string(std::string_view text)
     return out;
 }
 
-void checked_query(duckdb::Connection & connection, const std::string & sql)
+class duckdb_session
 {
-    auto result = connection.Query(sql);
-    if (result->HasError())
-        throw std::runtime_error{result->GetError()};
+public:
+    duckdb_session()
+    {
+        if (duckdb_open(nullptr, &database_) == DuckDBError)
+            throw std::runtime_error{"failed to open DuckDB database"};
+        if (duckdb_connect(database_, &connection_) == DuckDBError) {
+            duckdb_close(&database_);
+            throw std::runtime_error{
+                "failed to connect to DuckDB database"};
+        }
+    }
+
+    ~duckdb_session()
+    {
+        if (connection_)
+            duckdb_disconnect(&connection_);
+        if (database_)
+            duckdb_close(&database_);
+    }
+
+    duckdb_session(const duckdb_session &) = delete;
+    duckdb_session & operator=(const duckdb_session &) = delete;
+
+    [[nodiscard]] duckdb_connection connection() const noexcept
+    {
+        return connection_;
+    }
+
+private:
+    duckdb_database database_{};
+    duckdb_connection connection_{};
+};
+
+void checked_append(duckdb_state state, duckdb_appender appender);
+
+class duckdb_appender_handle
+{
+public:
+    explicit duckdb_appender_handle(duckdb_connection connection)
+    {
+        checked_append(
+            duckdb_appender_create(
+                connection, nullptr, "trace", &appender_),
+            appender_);
+    }
+
+    ~duckdb_appender_handle()
+    {
+        if (appender_ != nullptr)
+            duckdb_appender_destroy(&appender_);
+    }
+
+    duckdb_appender_handle(const duckdb_appender_handle &) = delete;
+    duckdb_appender_handle &
+    operator=(const duckdb_appender_handle &) = delete;
+
+    [[nodiscard]] duckdb_appender get() const noexcept
+    {
+        return appender_;
+    }
+
+    void close()
+    {
+        checked_append(duckdb_appender_close(appender_), appender_);
+        if (duckdb_appender_destroy(&appender_) == DuckDBError)
+            throw std::runtime_error{"failed to destroy DuckDB appender"};
+    }
+
+private:
+    duckdb_appender appender_{};
+};
+
+void checked_query(duckdb_connection connection, const std::string & sql)
+{
+    duckdb_result result{};
+    if (duckdb_query(connection, sql.c_str(), &result) == DuckDBError) {
+        auto error = duckdb_result_error(&result);
+        auto message = error != nullptr
+                           ? std::string{error}
+                           : std::string{"DuckDB query failed"};
+        duckdb_destroy_result(&result);
+        throw std::runtime_error{message};
+    }
+    duckdb_destroy_result(&result);
+}
+
+void checked_append(duckdb_state state, duckdb_appender appender)
+{
+    if (state != DuckDBError)
+        return;
+    auto error =
+        appender != nullptr ? duckdb_appender_error(appender) : nullptr;
+    throw std::runtime_error{
+        error != nullptr ? std::string{error}
+                         : std::string{"DuckDB append failed"}};
+}
+
+std::string
+duckdb_string_value(duckdb_result & result, idx_t col, idx_t row)
+{
+    char * value = duckdb_value_varchar(&result, col, row);
+    if (value == nullptr)
+        return {};
+    std::string out{value};
+    duckdb_free(value);
+    return out;
 }
 
 class parquet_trace
@@ -65,9 +176,8 @@ public:
         , start_(std::chrono::steady_clock::now())
     {
         if (output_path_) {
-            auto now = std::chrono::system_clock::now()
-                           .time_since_epoch()
-                           .count();
+            auto now =
+                std::chrono::system_clock::now().time_since_epoch().count();
             run_id_ = "nxtllm-" + std::to_string(now);
         }
     }
@@ -103,8 +213,7 @@ public:
             {"authorization_header_present", !request.api_key.empty()},
         };
 
-        add(
-            "request",
+        add("request",
             "openai.responses.request",
             metadata.dump(),
             body.dump());
@@ -131,8 +240,8 @@ public:
         if (!enabled())
             return;
 
-        auto db = duckdb::DuckDB{nullptr};
-        auto connection = duckdb::Connection{db};
+        auto session = duckdb_session{};
+        auto connection = session.connection();
         checked_query(
             connection,
             "create table trace ("
@@ -144,19 +253,31 @@ public:
             "data varchar,"
             "payload_json varchar)");
 
-        auto appender = duckdb::Appender{connection, "trace"};
+        auto appender_handle = duckdb_appender_handle{connection};
+        auto appender = appender_handle.get();
         for (const auto & row : rows_) {
-            appender.BeginRow();
-            appender.Append(run_id_.c_str());
-            appender.Append(row.seq);
-            appender.Append(row.elapsed_ms);
-            appender.Append(row.phase.c_str());
-            appender.Append(row.event_type.c_str());
-            appender.Append(row.data.c_str());
-            appender.Append(row.payload_json.c_str());
-            appender.EndRow();
+            checked_append(duckdb_appender_begin_row(appender), appender);
+            checked_append(
+                duckdb_append_varchar(appender, run_id_.c_str()), appender);
+            checked_append(
+                duckdb_append_int64(appender, row.seq), appender);
+            checked_append(
+                duckdb_append_int64(appender, row.elapsed_ms), appender);
+            checked_append(
+                duckdb_append_varchar(appender, row.phase.c_str()),
+                appender);
+            checked_append(
+                duckdb_append_varchar(appender, row.event_type.c_str()),
+                appender);
+            checked_append(
+                duckdb_append_varchar(appender, row.data.c_str()),
+                appender);
+            checked_append(
+                duckdb_append_varchar(appender, row.payload_json.c_str()),
+                appender);
+            checked_append(duckdb_appender_end_row(appender), appender);
         }
-        appender.Close();
+        appender_handle.close();
 
         checked_query(
             connection,
@@ -165,23 +286,25 @@ public:
     }
 
 private:
-    void add(
-        std::string phase,
+    void
+    add(std::string phase,
         std::string event_type,
         std::string data,
         std::string payload_json)
     {
         auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - start_);
-        rows_.push_back(trace_row{
-            .seq = static_cast<std::int64_t>(rows_.size()),
-            .elapsed_ms = elapsed.count(),
-            .phase = std::move(phase),
-            .event_type = std::move(event_type),
-            .data = std::move(data),
-            .payload_json = std::move(payload_json),
-        });
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - start_);
+        rows_.push_back(
+            trace_row{
+                .seq = static_cast<std::int64_t>(rows_.size()),
+                .elapsed_ms = elapsed.count(),
+                .phase = std::move(phase),
+                .event_type = std::move(event_type),
+                .data = std::move(data),
+                .payload_json = std::move(payload_json),
+            });
     }
 
     std::optional<std::string> output_path_;
@@ -192,15 +315,17 @@ private:
 
 struct cli_options
 {
-    std::string input = "Say ok in one word.";
-    std::string model = "gpt-5.3";
-    std::size_t max_output_tokens = 1000;
+    std::string input;
+    std::string model = "gpt-5.5";
+    std::size_t max_output_tokens = default_max_output_tokens;
     std::string reasoning_effort = "medium";
     std::string reasoning_summary = "auto";
     std::optional<std::string> trace_path;
     std::optional<std::string> playback_path;
     std::optional<std::string> playback_from;
-    bool hud = false;
+    bool hud = true;
+    bool hud_explicit = false;
+    bool input_provided = false;
     double playback_speed = 0.0;
 };
 
@@ -213,6 +338,12 @@ cli_options parse_args(int argc, char ** argv)
         auto arg = std::string_view{argv[i]};
         if (arg == "--hud") {
             options.hud = true;
+            options.hud_explicit = true;
+            continue;
+        }
+        if (arg == "--no-hud") {
+            options.hud = false;
+            options.hud_explicit = true;
             continue;
         }
         if (arg == "--trace" || arg == "--trace-parquet") {
@@ -242,7 +373,8 @@ cli_options parse_args(int argc, char ** argv)
         }
         if (arg == "--playback-speed") {
             if (i + 1 >= argc)
-                throw std::runtime_error{"--playback-speed requires a value"};
+                throw std::runtime_error{
+                    "--playback-speed requires a value"};
             options.playback_speed = std::stod(argv[++i]);
             if (options.playback_speed < 0.0)
                 throw std::runtime_error{
@@ -273,7 +405,8 @@ cli_options parse_args(int argc, char ** argv)
         if (arg == "--help" || arg == "-h") {
             std::cout
                 << "usage: nxtllm [options] [input] [model]\n"
-                   "  --hud\n"
+                   "  --hud                    open the prompt HUD\n"
+                   "  --no-hud                 run one prompt in plain CLI mode\n"
                    "  --trace out.parquet\n"
                    "  --playback in.parquet\n"
                    "  --playback-realtime\n"
@@ -287,12 +420,17 @@ cli_options parse_args(int argc, char ** argv)
         positionals.emplace_back(arg);
     }
 
-    if (!positionals.empty())
+    if (!positionals.empty()) {
         options.input = std::move(positionals[0]);
+        options.input_provided = true;
+    }
     if (positionals.size() > 1)
         options.model = std::move(positionals[1]);
     if (positionals.size() > 2)
         throw std::runtime_error{"too many positional arguments"};
+
+    if (options.input_provided && !options.hud_explicit)
+        options.hud = false;
 
     return options;
 }
@@ -305,36 +443,44 @@ llm_request make_request(const cli_options & options, std::string api_key)
         .input = options.input,
         .max_output_tokens = options.max_output_tokens,
         .reasoning_effort = options.reasoning_effort,
-        .reasoning_summary =
-            options.reasoning_summary == "none"
-                ? std::string{}
-                : options.reasoning_summary,
+        .reasoning_summary = options.reasoning_summary == "none"
+                                 ? std::string{}
+                                 : options.reasoning_summary,
     };
 }
 
 std::vector<trace_row> read_trace_rows(std::string_view path)
 {
-    auto db = duckdb::DuckDB{nullptr};
-    auto connection = duckdb::Connection{db};
-    auto result = connection.Query(
+    auto session = duckdb_session{};
+    duckdb_result result{};
+    auto query = std::string{
         "select seq, elapsed_ms, phase, event_type, data, payload_json "
         "from read_parquet('" + sql_string(path) + "') "
-        "order by seq");
-    if (result->HasError())
-        throw std::runtime_error{result->GetError()};
+        "order by seq"};
+    if (duckdb_query(session.connection(), query.c_str(), &result)
+        == DuckDBError) {
+        auto error = duckdb_result_error(&result);
+        auto message = error != nullptr
+                           ? std::string{error}
+                           : std::string{"DuckDB query failed"};
+        duckdb_destroy_result(&result);
+        throw std::runtime_error{message};
+    }
 
     auto rows = std::vector<trace_row>{};
-    rows.reserve(static_cast<std::size_t>(result->RowCount()));
-    for (duckdb::idx_t i = 0; i < result->RowCount(); ++i) {
-        rows.push_back(trace_row{
-            .seq = result->GetValue(0, i).GetValue<std::int64_t>(),
-            .elapsed_ms = result->GetValue(1, i).GetValue<std::int64_t>(),
-            .phase = result->GetValue(2, i).GetValue<std::string>(),
-            .event_type = result->GetValue(3, i).GetValue<std::string>(),
-            .data = result->GetValue(4, i).GetValue<std::string>(),
-            .payload_json = result->GetValue(5, i).GetValue<std::string>(),
-        });
+    rows.reserve(static_cast<std::size_t>(duckdb_row_count(&result)));
+    for (idx_t i = 0; i < duckdb_row_count(&result); ++i) {
+        rows.push_back(
+            trace_row{
+                .seq = duckdb_value_int64(&result, 0, i),
+                .elapsed_ms = duckdb_value_int64(&result, 1, i),
+                .phase = duckdb_string_value(result, 2, i),
+                .event_type = duckdb_string_value(result, 3, i),
+                .data = duckdb_string_value(result, 4, i),
+                .payload_json = duckdb_string_value(result, 5, i),
+            });
     }
+    duckdb_destroy_result(&result);
     return rows;
 }
 
@@ -359,8 +505,8 @@ std::size_t playback_start_index(
     auto last_elapsed = rows.back().elapsed_ms;
     auto span = std::max<std::int64_t>(0, last_elapsed - first_elapsed);
     auto target = first_elapsed
-        + static_cast<std::int64_t>(
-            static_cast<double>(span) * percent / 100.0);
+                  + static_cast<std::int64_t>(
+                      static_cast<double>(span) * percent / 100.0);
 
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i].elapsed_ms >= target)
@@ -370,8 +516,7 @@ std::size_t playback_start_index(
 }
 
 llm_request request_from_trace(
-    const std::vector<trace_row> & rows,
-    const cli_options & options)
+    const std::vector<trace_row> & rows, const cli_options & options)
 {
     auto request = make_request(options, {});
     for (const auto & row : rows) {
@@ -400,11 +545,12 @@ std::optional<stream_event> event_from_trace_row(const trace_row & row)
     if (row.phase != "sse_event")
         return std::nullopt;
 
-    auto payload_text = row.payload_json.empty() ? row.data : row.payload_json;
+    auto payload_text =
+        row.payload_json.empty() ? row.data : row.payload_json;
     auto payload = nlohmann::json::parse(payload_text);
     auto type = row.event_type.empty()
-        ? payload.value("type", std::string{})
-        : row.event_type;
+                    ? payload.value("type", std::string{})
+                    : row.event_type;
     return stream_event{
         .type = std::move(type),
         .payload = std::move(payload),
@@ -412,137 +558,23 @@ std::optional<stream_event> event_from_trace_row(const trace_row & row)
     };
 }
 
-std::string optional_text_delta(
-    const stream_event & event,
-    std::string_view type)
-{
-    if (event.type != type)
-        return {};
-    return event.payload.value("delta", std::string{});
-}
-
-void print_cli_event(const stream_event & event)
-{
-    std::cout << "event: " << event.type << '\n';
-
-    if (auto delta =
-            optional_text_delta(event, "response.output_text.delta");
-        !delta.empty())
-        std::cout << "text: " << delta << '\n';
-
-    if (auto delta = optional_text_delta(
-            event,
-            "response.reasoning_summary_text.delta");
-        !delta.empty())
-        std::cout << "thinking: " << delta << '\n';
-
-    std::cout << "data: " << event.payload.dump() << "\n\n";
-}
-
-void playback_delay(
-    std::int64_t & previous_elapsed_ms,
-    const trace_row & row,
-    double playback_speed)
-{
-    if (playback_speed <= 0.0) {
-        previous_elapsed_ms = row.elapsed_ms;
-        return;
-    }
-
-    auto delta_ms = std::max<std::int64_t>(
-        0,
-        row.elapsed_ms - previous_elapsed_ms);
-    previous_elapsed_ms = row.elapsed_ms;
-    auto scaled_ms = static_cast<std::int64_t>(
-        static_cast<double>(delta_ms) / playback_speed);
-    if (scaled_ms > 0)
-        std::this_thread::sleep_for(std::chrono::milliseconds{scaled_ms});
-}
-
-void run_cli_playback(
-    const std::vector<trace_row> & rows,
-    double playback_speed,
-    std::size_t start_index)
-{
-    if (rows.empty())
-        return;
-
-    start_index = std::min(start_index, rows.size() - 1);
-    auto previous_elapsed_ms = rows[start_index].elapsed_ms;
-    for (auto i = start_index; i < rows.size(); ++i) {
-        const auto & row = rows[i];
-        playback_delay(previous_elapsed_ms, row, playback_speed);
-        if (auto event = event_from_trace_row(row)) {
-            print_cli_event(*event);
-        } else if (row.phase == "error") {
-            std::cerr << "playback error marker: " << row.data << '\n';
-        }
-    }
-}
-
-nxt::task<> run_live_cli(
-    std::unique_ptr<nxt::io_scheduler> & scheduler,
-    const llm_request & request,
-    parquet_trace & trace)
-{
-    try {
-        trace.record_request(request);
-
-        auto transport = co_await nxt::io::net::connect_tls(
-            scheduler,
-            nxt::io::net::endpoint{
-                .host = "api.openai.com",
-                .port = 443,
-            });
-
-        auto on_event = [&](stream_event event) -> nxt::task<> {
-            trace.record_event(event);
-            print_cli_event(event);
-            co_return;
-        };
-
-        co_await nxt::io::llm::stream_openai_responses_over(
-            transport,
-            request,
-            on_event);
-        trace.record_marker("complete");
-        co_await transport.shutdown();
-    } catch (const std::exception & e) {
-        trace.record_marker("error", e.what());
-        throw;
-    }
-}
-
 struct llm_hud_state
 {
     llm_request request;
+    nxt::tui::TextField input;
     std::string status = "ready";
-    std::string last_event;
     std::string error;
     std::size_t event_count = 0;
     std::size_t output_bytes = 0;
-    std::size_t output_chunks = 0;
-    std::size_t reasoning_bytes = 0;
-    std::size_t reasoning_chunks = 0;
-    bool transcript_started = false;
-    bool saw_output = false;
-    bool saw_reasoning = false;
-    bool output_ended_with_newline = true;
-    bool reasoning_ended_with_newline = true;
     bool done = false;
+    bool busy = false;
+    bool input_enabled = false;
 };
-
-std::string fit_label(std::string text, std::size_t width)
-{
-    if (text.size() <= width)
-        return text;
-    if (width <= 3)
-        return text.substr(0, width);
-    return text.substr(0, width - 3) + "...";
-}
 
 std::string spinner_for(const llm_hud_state & state)
 {
+    if (!state.busy && !state.done)
+        return ">";
     if (state.done)
         return state.error.empty() ? "ok" : "!!";
 
@@ -550,10 +582,17 @@ std::string spinner_for(const llm_hud_state & state)
     return frames[state.event_count % frames.size()];
 }
 
+void reset_hud_request_state(llm_hud_state & state)
+{
+    state.status = "ready";
+    state.error.clear();
+    state.event_count = 0;
+    state.output_bytes = 0;
+    state.done = false;
+}
+
 void update_hud(
-    nxt::ui::UIRuntime & runtime,
-    llm_hud_state & state,
-    auto fn)
+    nxt::ui::UIRuntime & runtime, llm_hud_state & state, auto fn)
 {
     fn(state);
     runtime.signal_damage();
@@ -563,117 +602,424 @@ auto build_hud(const llm_hud_state & state)
 {
     using namespace nxt::tui;
 
-    auto accent = fg(nxt::Rgba8{90, 190, 210}) | bold;
     auto muted = fg(nxt::Rgba8{150, 156, 162});
     auto normal = fg(nxt::Rgba8{220, 224, 228});
     auto good = fg(nxt::Rgba8{125, 200, 145}) | bold;
     auto bad = fg(nxt::Rgba8{235, 120, 120}) | bold;
-    auto status_style = state.error.empty()
-        ? (state.done ? good : normal)
-        : bad;
+    auto status_style =
+        state.error.empty() ? (!state.busy ? good : normal) : bad;
 
     auto status = spinner_for(state) + " " + state.status;
     auto events = "events " + std::to_string(state.event_count);
-    auto chunks = "chunks " + std::to_string(state.output_chunks);
     auto bytes = "bytes " + std::to_string(state.output_bytes);
-    auto thoughts = "thinking "
-        + std::to_string(state.reasoning_chunks) + "/"
-        + std::to_string(state.reasoning_bytes);
-    auto last = state.last_event.empty() ? "none" : state.last_event;
-    auto detail = state.error.empty()
-        ? std::string{"assistant text and reasoning summaries stream above"}
-        : "error " + state.error;
+    auto field_style = TextFieldStyle{
+        .fg = state.busy ? nxt::Rgba8{150, 156, 162}
+                         : nxt::Rgba8{220, 224, 228},
+        .bg = nxt::Rgba8{28, 32, 36},
+        .prefix_fg = state.busy || !state.input_enabled
+                         ? nxt::Rgba8{150, 156, 162}
+                         : nxt::Rgba8{90, 190, 210},
+        .placeholder_fg = nxt::Rgba8{105, 110, 118},
+    };
+    auto input = state.input;
+    if (!state.input_enabled) {
+        input.text = state.request.input;
+        input.cursor_byte = nxt::utf8::byte_offset(input.text.size());
+    }
 
-    return column(
-        row(
-            text("nxtllm ", accent),
-            text(status, status_style),
+    return either(
+        !state.busy,
+        row(text(status, status_style),
             text("  " + events, muted),
-            text("  " + chunks, muted),
-            text("  " + bytes, muted),
-            text("  " + thoughts, muted)),
-        hrule(),
-        row(
-            text("model ", muted),
-            text(fit_label(state.request.model, 24), normal),
-            text("  last ", muted),
-            text(fit_label(last, 44), muted)),
-        row(
-            text("input ", muted),
-            text(fit_label(state.request.input, 72), normal)),
-        row(text(fit_label(detail, 96), state.error.empty() ? muted : bad)));
+            text("  " + bytes, muted)),
+        text_field(
+            input,
+            {
+                .prefix = state.request.model + "> ",
+                .placeholder = "",
+                .style = field_style,
+                .focused = state.input_enabled && !state.busy,
+            }));
 }
 
 void start_hud_transcript(
-    nxt::ui::UIRuntime & runtime,
-    llm_hud_state & state)
+    nxt::ui::UIRuntime & runtime, llm_hud_state & state)
 {
-    if (state.transcript_started)
-        return;
-
-    runtime.println("user: " + state.request.input);
-    runtime.println("thinking:");
-    state.transcript_started = true;
+    runtime.println("> " + state.request.input);
 }
 
-void apply_hud_event(
-    nxt::ui::UIRuntime & runtime,
-    llm_hud_state & state,
-    const stream_event & event)
+bool load_api_key(nxt::ui::UIRuntime & runtime, llm_hud_state & state)
 {
-    auto delta =
-        optional_text_delta(event, "response.output_text.delta");
-    auto reasoning_delta = optional_text_delta(
-        event,
-        "response.reasoning_summary_text.delta");
-
-    if (!reasoning_delta.empty())
-        runtime.print(reasoning_delta);
-
-    if (!delta.empty()) {
-        if (!state.saw_output && state.saw_reasoning
-            && !state.reasoning_ended_with_newline)
-            runtime.print("\n");
-        if (!state.saw_output)
-            runtime.print("assistant:\n");
-        runtime.print(delta);
+    auto api_key = std::getenv("OPENAI_API_KEY");
+    if (api_key != nullptr && !std::string_view{api_key}.empty()) {
+        state.request.api_key = api_key;
+        return true;
     }
 
-    update_hud(runtime, state, [&](llm_hud_state & hud) {
-        hud.last_event = event.type;
-        ++hud.event_count;
-        if (!reasoning_delta.empty()) {
-            hud.saw_reasoning = true;
-            hud.reasoning_bytes += reasoning_delta.size();
-            ++hud.reasoning_chunks;
-            hud.reasoning_ended_with_newline = reasoning_delta.back() == '\n';
-            hud.status = "thinking";
-        }
-        if (!delta.empty()) {
-            hud.saw_output = true;
-            hud.output_bytes += delta.size();
-            ++hud.output_chunks;
-            hud.output_ended_with_newline = delta.back() == '\n';
-            hud.status = "streaming";
-        }
-        if (event.type == "response.completed") {
-            hud.status = "completed";
-            hud.done = true;
-        } else if (
-            event.type == "response.failed"
-            || event.type == "response.incomplete") {
-            hud.status = event.type;
-            hud.done = true;
-        }
+    update_hud(runtime, state, [](llm_hud_state & hud) {
+        hud.status = "error";
+        hud.error = "OPENAI_API_KEY is not set";
+        hud.done = true;
+        hud.busy = false;
     });
+    runtime.println("error: OPENAI_API_KEY is not set");
+    return false;
 }
 
-void finish_hud_output(
+struct hud_stream_connected
+{};
+
+struct hud_stream_complete
+{};
+
+struct hud_stream_error
+{
+    std::string message;
+};
+
+using hud_stream_item = std::variant<
+    hud_stream_connected,
+    stream_event,
+    hud_stream_complete,
+    hud_stream_error>;
+
+struct stream_queue_closed : std::exception
+{
+    [[nodiscard]] const char * what() const noexcept override
+    {
+        return "stream event queue closed";
+    }
+};
+
+nxt::task<> playback_delay(
+    nxt::ui::UIRuntime & runtime,
+    std::int64_t & previous_elapsed_ms,
+    const trace_row & row,
+    double playback_speed);
+
+nxt::task<> publish_or_stop(
+    nxt::io::event_queue<hud_stream_item> & events, hud_stream_item item)
+{
+    if (!co_await events.publish(std::move(item)))
+        throw stream_queue_closed{};
+}
+
+nxt::task<> produce_hud_stream(
+    std::unique_ptr<nxt::io_scheduler> & scheduler,
+    llm_request request,
+    nxt::io::event_queue<hud_stream_item> & events)
+{
+    auto error = std::optional<std::string>{};
+    try {
+        auto transport = co_await nxt::io::net::connect_tls(
+            scheduler,
+            nxt::io::net::endpoint{
+                .host = "api.openai.com",
+                .port = 443,
+            });
+
+        co_await publish_or_stop(events, hud_stream_connected{});
+
+        auto on_event = [&](stream_event event) -> nxt::task<> {
+            co_await publish_or_stop(events, std::move(event));
+        };
+
+        co_await nxt::io::llm::stream_openai_responses_over(
+            transport, request, on_event, events.stop_token());
+        co_await transport.shutdown();
+        co_await publish_or_stop(events, hud_stream_complete{});
+    } catch (const stream_queue_closed &) {
+    } catch (const std::exception & e) {
+        if (!events.stop_requested())
+            error = e.what();
+    }
+
+    if (error)
+        co_await events.publish(hud_stream_error{std::move(*error)});
+    co_await events.close();
+}
+
+nxt::task<> produce_playback_stream(
+    nxt::ui::UIRuntime & runtime,
+    std::vector<trace_row> rows,
+    std::size_t start_index,
+    double playback_speed,
+    nxt::io::event_queue<hud_stream_item> & events)
+{
+    try {
+        co_await publish_or_stop(events, hud_stream_connected{});
+
+        if (rows.empty()) {
+            co_await publish_or_stop(events, hud_stream_complete{});
+            co_await events.close();
+            co_return;
+        }
+
+        start_index = std::min(start_index, rows.size() - 1);
+        auto previous_elapsed_ms = rows[start_index].elapsed_ms;
+        for (auto i = start_index; i < rows.size(); ++i) {
+            if (runtime.shutdown_requested() || events.stop_requested())
+                break;
+
+            const auto & row = rows[i];
+            co_await playback_delay(
+                runtime, previous_elapsed_ms, row, playback_speed);
+
+            if (auto event = event_from_trace_row(row)) {
+                co_await publish_or_stop(events, std::move(*event));
+            } else if (row.phase == "error") {
+                co_await publish_or_stop(events, hud_stream_error{row.data});
+                co_await events.close();
+                co_return;
+            } else if (row.phase == "complete") {
+                co_await publish_or_stop(events, hud_stream_complete{});
+                co_await events.close();
+                co_return;
+            }
+        }
+
+        co_await publish_or_stop(events, hud_stream_complete{});
+    } catch (const stream_queue_closed &) {
+    }
+
+    co_await events.close();
+}
+
+class hud_stream_reader
+{
+public:
+    hud_stream_reader(
+        nxt::ui::UIRuntime & runtime,
+        llm_hud_state & state,
+        parquet_trace & trace,
+        nxt::io::event_queue<hud_stream_item> & events)
+        : runtime_(runtime)
+        , state_(state)
+        , trace_(trace)
+        , events_(events)
+    {
+    }
+
+    nxt::task<std::optional<stream_event>> next_event()
+    {
+        while (!runtime_.shutdown_requested()) {
+            auto item = co_await events_.next();
+            if (!item)
+                co_return std::nullopt;
+
+            if (std::holds_alternative<hud_stream_connected>(*item)) {
+                update_hud(runtime_, state_, [](llm_hud_state & hud) {
+                    hud.status = "streaming";
+                });
+                continue;
+            }
+
+            if (auto * error = std::get_if<hud_stream_error>(&*item))
+                throw std::runtime_error{error->message};
+
+            if (std::holds_alternative<hud_stream_complete>(*item))
+                co_return std::nullopt;
+
+            auto event = std::move(std::get<stream_event>(*item));
+            trace_.record_event(event);
+            update_hud(runtime_, state_, [](llm_hud_state & hud) {
+                ++hud.event_count;
+            });
+            co_return event;
+        }
+
+        co_return std::nullopt;
+    }
+
+private:
+    nxt::ui::UIRuntime & runtime_;
+    llm_hud_state & state_;
+    parquet_trace & trace_;
+    nxt::io::event_queue<hud_stream_item> & events_;
+};
+
+bool is_event(const stream_event & event, std::string_view type)
+{
+    return event.type == type;
+}
+
+std::string output_item_type(const stream_event & event)
+{
+    if (auto it = event.payload.find("item"); it != event.payload.end())
+        return it->value("type", std::string{});
+    return {};
+}
+
+std::size_t stream_wrap_width(nxt::ui::UIRuntime & runtime)
+{
+    auto columns = runtime.terminal_width().count();
+    if (columns > 32)
+        return columns - 8;
+    return std::max<std::size_t>(1, columns);
+}
+
+void for_complete_words(std::string & text, bool finish, auto fn)
+{
+    auto n = finish ? text.size() : nxt::utf8::complete_words_prefix_size(text);
+    auto complete = std::string_view{text}.substr(0, n);
+    for (auto segment : nxt::utf8::segments(complete))
+        fn(segment);
+    text.erase(0, n);
+}
+
+void print_text(
+    nxt::ui::UIRuntime & runtime,
+    std::string_view text,
+    bool dim)
+{
+    if (!dim) {
+        runtime.print(text);
+        return;
+    }
+
+    auto styled = std::string{};
+    auto writer = nxt::ansi::Writer{styled};
+    writer.dim();
+    writer.text(text);
+    writer.reset();
+    runtime.print(styled);
+}
+
+nxt::task<> read_reasoning_item(
+    hud_stream_reader & reader,
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state)
 {
-    if (state.saw_output && !state.output_ended_with_newline)
+    auto text = std::string{};
+    auto cursor = std::size_t{0};
+    auto wrap_width = stream_wrap_width(runtime);
+    auto wrote = false;
+
+    auto print_segment = [&](nxt::utf8::text_segment segment) {
+        if (segment.kind == nxt::utf8::text_segment::kind_t::line_break) {
+            runtime.print("\n");
+            cursor = 0;
+            wrote = true;
+            return;
+        }
+
+        auto word_width = segment.width.count();
+        if (cursor > 0 && cursor + word_width > wrap_width) {
+            runtime.print("\n");
+            cursor = 0;
+        }
+        print_text(runtime, segment.text, true);
+        runtime.print(" ");
+        cursor += word_width + 1;
+        wrote = true;
+    };
+
+    while (auto event = co_await reader.next_event()) {
+        if (is_event(*event, "response.reasoning_summary_text.delta")) {
+            auto delta = event->payload.value("delta", std::string{});
+            if (!delta.empty()) {
+                text += delta;
+                for_complete_words(text, false, print_segment);
+                update_hud(runtime, state, [](llm_hud_state & hud) {
+                    hud.status = "thinking";
+                });
+            }
+            continue;
+        }
+
+        if (is_event(*event, "response.output_item.done")) {
+            for_complete_words(text, true, print_segment);
+            if (wrote && cursor != 0)
+                runtime.print("\n");
+            co_return;
+        }
+    }
+
+    for_complete_words(text, true, print_segment);
+    if (wrote && cursor != 0)
         runtime.print("\n");
+}
+
+nxt::task<> read_message_item(
+    hud_stream_reader & reader,
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state)
+{
+    auto text = std::string{};
+    auto cursor = std::size_t{0};
+    auto wrap_width = stream_wrap_width(runtime);
+    auto wrote = false;
+
+    auto print_segment = [&](nxt::utf8::text_segment segment) {
+        if (segment.kind == nxt::utf8::text_segment::kind_t::line_break) {
+            runtime.print("\n");
+            cursor = 0;
+            wrote = true;
+            return;
+        }
+
+        auto word_width = segment.width.count();
+        if (cursor > 0 && cursor + word_width > wrap_width) {
+            runtime.print("\n");
+            cursor = 0;
+        }
+        print_text(runtime, segment.text, false);
+        runtime.print(" ");
+        cursor += word_width + 1;
+        wrote = true;
+    };
+
+    while (auto event = co_await reader.next_event()) {
+        if (is_event(*event, "response.output_text.delta")) {
+            auto delta = event->payload.value("delta", std::string{});
+            if (!delta.empty()) {
+                text += delta;
+                for_complete_words(text, false, print_segment);
+                update_hud(runtime, state, [&](llm_hud_state & hud) {
+                    hud.status = "streaming";
+                    hud.output_bytes += delta.size();
+                });
+            }
+            continue;
+        }
+
+        if (is_event(*event, "response.output_item.done")) {
+            for_complete_words(text, true, print_segment);
+            if (wrote && cursor != 0)
+                runtime.print("\n");
+            co_return;
+        }
+    }
+
+    for_complete_words(text, true, print_segment);
+    if (wrote && cursor != 0)
+        runtime.print("\n");
+}
+
+nxt::task<> read_output_item(
+    hud_stream_reader & reader,
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    const stream_event & first)
+{
+    auto type = output_item_type(first);
+
+    if (type == "reasoning") {
+        co_await read_reasoning_item(reader, runtime, state);
+        co_return;
+    }
+
+    if (type == "message") {
+        co_await read_message_item(reader, runtime, state);
+        co_return;
+    }
+
+    while (auto event = co_await reader.next_event()) {
+        if (is_event(*event, "response.output_item.done"))
+            break;
+    }
+
+    co_return;
 }
 
 nxt::task<> playback_delay(
@@ -687,9 +1033,8 @@ nxt::task<> playback_delay(
         co_return;
     }
 
-    auto delta_ms = std::max<std::int64_t>(
-        0,
-        row.elapsed_ms - previous_elapsed_ms);
+    auto delta_ms =
+        std::max<std::int64_t>(0, row.elapsed_ms - previous_elapsed_ms);
     previous_elapsed_ms = row.elapsed_ms;
     auto scaled_ms = static_cast<std::int64_t>(
         static_cast<double>(delta_ms) / playback_speed);
@@ -697,142 +1042,197 @@ nxt::task<> playback_delay(
         co_await runtime.sleep(std::chrono::milliseconds{scaled_ms});
 }
 
-nxt::task<> run_hud_playback(
+nxt::task<> consume_response_stream(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    const std::vector<trace_row> & rows,
-    double playback_speed,
-    std::size_t start_index)
+    parquet_trace & trace,
+    nxt::io::event_queue<hud_stream_item> & events)
 {
-    using namespace std::chrono_literals;
+    auto reader = hud_stream_reader{runtime, state, trace, events};
+    auto stream_error = std::optional<std::string>{};
 
+    try {
+        while (auto event = co_await reader.next_event()) {
+            if (is_event(*event, "response.output_item.added")) {
+                co_await read_output_item(reader, runtime, state, *event);
+                continue;
+            }
+
+            if (is_event(*event, "response.completed")) {
+                trace.record_marker("complete");
+                update_hud(runtime, state, [](llm_hud_state & hud) {
+                    hud.status = "completed";
+                    hud.done = true;
+                    hud.busy = false;
+                });
+                co_return;
+            }
+
+            if (is_event(*event, "response.failed")
+                || is_event(*event, "response.incomplete")) {
+                trace.record_marker("error", event->type);
+                update_hud(runtime, state, [&](llm_hud_state & hud) {
+                    hud.status = event->type;
+                    hud.error = event->type;
+                    hud.done = true;
+                    hud.busy = false;
+                });
+                co_return;
+            }
+        }
+
+        if (!runtime.shutdown_requested()) {
+            trace.record_marker("complete");
+            update_hud(runtime, state, [](llm_hud_state & hud) {
+                hud.status = "completed";
+                hud.done = true;
+                hud.busy = false;
+            });
+            co_return;
+        }
+    } catch (const std::exception & e) {
+        if (!runtime.shutdown_requested())
+            stream_error = e.what();
+    }
+
+    if (stream_error) {
+        trace.record_marker("error", *stream_error);
+        runtime.println("error: " + *stream_error);
+        update_hud(runtime, state, [&](llm_hud_state & hud) {
+            hud.status = "error";
+            hud.error = *stream_error;
+            hud.done = true;
+            hud.busy = false;
+        });
+        co_return;
+    }
+
+    co_await events.cancel();
+
+    trace.record_marker("cancelled");
+    update_hud(runtime, state, [](llm_hud_state & hud) {
+        hud.status = "cancelled";
+        hud.done = true;
+        hud.busy = false;
+    });
+}
+
+nxt::task<> stream_live_request(
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    parquet_trace & trace)
+{
+    start_hud_transcript(runtime, state);
+    trace.record_request(state.request);
+    update_hud(runtime, state, [](llm_hud_state & hud) {
+        hud.status = "connecting";
+    });
+
+    auto events = nxt::io::event_queue<hud_stream_item>{};
+    auto producer = runtime.scheduler().spawn_joinable(produce_hud_stream(
+        runtime.scheduler_handle(), state.request, events));
+
+    co_await consume_response_stream(runtime, state, trace, events);
+    co_await events.cancel();
+    co_await producer;
+}
+
+nxt::task<> stream_playback_request(
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    parquet_trace & trace,
+    std::vector<trace_row> rows,
+    std::size_t start_index,
+    double playback_speed)
+{
     start_hud_transcript(runtime, state);
     update_hud(runtime, state, [](llm_hud_state & hud) {
         hud.status = "replaying";
     });
 
-    if (rows.empty()) {
-        update_hud(runtime, state, [](llm_hud_state & hud) {
-            hud.status = "completed";
-            hud.done = true;
-        });
-        co_await runtime.sleep(1500ms);
-        runtime.request_shutdown();
-        co_return;
-    }
+    auto events = nxt::io::event_queue<hud_stream_item>{};
+    auto producer = runtime.scheduler().spawn_joinable(produce_playback_stream(
+        runtime, std::move(rows), start_index, playback_speed, events));
 
-    start_index = std::min(start_index, rows.size() - 1);
-    auto previous_elapsed_ms = rows[start_index].elapsed_ms;
-    for (auto i = start_index; i < rows.size(); ++i) {
-        const auto & row = rows[i];
-        if (runtime.shutdown_requested())
-            co_return;
-
-        co_await playback_delay(
-            runtime,
-            previous_elapsed_ms,
-            row,
-            playback_speed);
-
-        if (auto event = event_from_trace_row(row)) {
-            apply_hud_event(runtime, state, *event);
-        } else if (row.phase == "error") {
-            runtime.println("playback error marker: " + row.data);
-            update_hud(runtime, state, [&](llm_hud_state & hud) {
-                hud.status = "error";
-                hud.error = row.data;
-                hud.done = true;
-            });
-        } else if (row.phase == "complete") {
-            update_hud(runtime, state, [](llm_hud_state & hud) {
-                hud.status = "completed";
-                hud.done = true;
-            });
-        }
-    }
-
-    finish_hud_output(runtime, state);
-    update_hud(runtime, state, [](llm_hud_state & hud) {
-        if (!hud.done) {
-            hud.status = "completed";
-            hud.done = true;
-        }
-    });
-
-    co_await runtime.sleep(1500ms);
-    runtime.request_shutdown();
+    co_await consume_response_stream(runtime, state, trace, events);
+    co_await events.cancel();
+    co_await producer;
 }
 
-nxt::task<> run_hud_live(
+nxt::task<> run_hud(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
     parquet_trace & trace)
 {
-    using namespace std::chrono_literals;
-
-    auto exit_delay = 1500ms;
-    start_hud_transcript(runtime, state);
-
-    try {
-        trace.record_request(state.request);
-        update_hud(runtime, state, [](llm_hud_state & hud) {
-            hud.status = "connecting";
-        });
-
-        auto transport = co_await nxt::io::net::connect_tls(
-            runtime.scheduler_handle(),
-            nxt::io::net::endpoint{
-                .host = "api.openai.com",
-                .port = 443,
-            });
-
-        update_hud(runtime, state, [](llm_hud_state & hud) {
-            hud.status = "streaming";
-        });
-
-        auto on_event = [&](stream_event event) -> nxt::task<> {
-            trace.record_event(event);
-            apply_hud_event(runtime, state, event);
+    while (!runtime.shutdown_requested()) {
+        auto event = co_await runtime.next_input();
+        if (!event)
             co_return;
-        };
 
-        co_await nxt::io::llm::stream_openai_responses_over(
-            transport,
-            state.request,
-            on_event,
-            runtime.get_stop_token());
-        trace.record_marker("complete");
-        co_await transport.shutdown();
+        if (event->type == nxt::input::EventType::release)
+            continue;
 
-        finish_hud_output(runtime, state);
-        update_hud(runtime, state, [](llm_hud_state & hud) {
-            if (!hud.done) {
-                hud.status = "completed";
-                hud.done = true;
-            }
-        });
-    } catch (const std::exception & e) {
-        if (runtime.shutdown_requested()) {
-            trace.record_marker("cancelled");
-            finish_hud_output(runtime, state);
-            update_hud(runtime, state, [](llm_hud_state & hud) {
-                hud.status = "cancelled";
-                hud.done = true;
-            });
+        if (event->key == nxt::input::Key::escape) {
+            runtime.request_shutdown();
             co_return;
         }
 
-        trace.record_marker("error", e.what());
-        runtime.println(std::string{"nxtllm error: "} + e.what());
-        update_hud(runtime, state, [&](llm_hud_state & hud) {
-            hud.status = "error";
-            hud.error = e.what();
-            hud.done = true;
-        });
-        exit_delay = 3000ms;
-    }
+        if (state.busy)
+            continue;
 
-    co_await runtime.sleep(exit_delay);
+        if (event->key == nxt::input::Key::enter) {
+            if (state.input.empty())
+                continue;
+
+            auto prompt = std::move(state.input.text);
+            state.input.clear();
+            reset_hud_request_state(state);
+            state.busy = true;
+            state.request.input = std::move(prompt);
+
+            if (!load_api_key(runtime, state))
+                continue;
+
+            runtime.println("");
+            runtime.signal_damage();
+            co_await stream_live_request(runtime, state, trace);
+            continue;
+        }
+
+        if (nxt::tui::apply_key(state.input, *event))
+            runtime.signal_damage();
+    }
+}
+
+nxt::task<> run_single_prompt(
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    parquet_trace & trace)
+{
+    reset_hud_request_state(state);
+    state.busy = true;
+    if (load_api_key(runtime, state))
+        co_await stream_live_request(runtime, state, trace);
+    runtime.request_shutdown();
+}
+
+nxt::task<> run_playback(
+    nxt::ui::UIRuntime & runtime,
+    llm_hud_state & state,
+    parquet_trace & trace,
+    std::vector<trace_row> rows,
+    std::size_t start_index,
+    double playback_speed)
+{
+    reset_hud_request_state(state);
+    state.busy = true;
+    co_await stream_playback_request(
+        runtime,
+        state,
+        trace,
+        std::move(rows),
+        start_index,
+        playback_speed);
     runtime.request_shutdown();
 }
 
@@ -853,61 +1253,62 @@ int main(int argc, char ** argv)
                 playback_start_index(rows, options.playback_from);
             auto state = llm_hud_state{};
             state.request = request_from_trace(rows, options);
-            if (options.hud) {
-                return nxt::ui::run(
-                    std::move(state),
-                    build_hud,
-                    [rows = std::move(rows),
-                     speed = options.playback_speed,
-                     start_index](
-                        nxt::ui::UIRuntime & runtime,
-                        llm_hud_state & hud) -> nxt::task<> {
-                        co_await run_hud_playback(
-                            runtime,
-                            hud,
-                            rows,
-                            speed,
-                            start_index);
-                    });
-            }
+            auto update =
+                [&trace,
+                 rows = std::move(rows),
+                 speed = options.playback_speed,
+                 start_index](
+                    nxt::ui::UIRuntime & runtime,
+                    llm_hud_state & hud) mutable -> nxt::task<> {
+                co_await run_playback(
+                    runtime,
+                    hud,
+                    trace,
+                    std::move(rows),
+                    start_index,
+                    speed);
+            };
 
-            run_cli_playback(rows, options.playback_speed, start_index);
-            return 0;
+            if (options.hud)
+                return nxt::ui::run(std::move(state), build_hud, update);
+            return nxt::ui::run_headless(std::move(state), update);
         }
-
-        const char * api_key = std::getenv("OPENAI_API_KEY");
-        if (api_key == nullptr || std::string_view{api_key}.empty())
-            throw std::runtime_error{"OPENAI_API_KEY is not set"};
 
         trace = parquet_trace{options.trace_path};
-        auto request = make_request(options, api_key);
 
+        auto state = llm_hud_state{};
+        state.request = make_request(options, {});
+        auto status = 0;
         if (options.hud) {
-            auto state = llm_hud_state{};
-            state.request = std::move(request);
-            auto status = nxt::ui::run(
+            state.input_enabled = true;
+            if (options.input_provided) {
+                state.input.text = state.request.input;
+                state.input.cursor_byte =
+                    nxt::utf8::byte_offset(state.input.text.size());
+            } else {
+                state.request.input.clear();
+            }
+            status = nxt::ui::run(
                 std::move(state),
                 build_hud,
-                [&trace](
-                    nxt::ui::UIRuntime & runtime,
-                    llm_hud_state & hud) -> nxt::task<> {
-                    co_await run_hud_live(runtime, hud, trace);
+                [&trace](nxt::ui::UIRuntime & runtime, llm_hud_state & hud)
+                    -> nxt::task<> {
+                    co_await run_hud(runtime, hud, trace);
                 });
-            trace.write();
-            if (trace.output_path())
-                std::cout << "wrote trace parquet: " << *trace.output_path()
-                          << '\n';
-            return status;
+        } else {
+            status = nxt::ui::run_headless(
+                std::move(state),
+                [&trace](nxt::ui::UIRuntime & runtime, llm_hud_state & hud)
+                    -> nxt::task<> {
+                    co_await run_single_prompt(runtime, hud, trace);
+                });
         }
-
-        auto scheduler =
-            nxt::io_scheduler::make_unique(nxt::io_scheduler::options{});
-        nxt::sync_wait(run_live_cli(scheduler, request, trace));
         trace.write();
         if (trace.output_path())
             std::cout << "wrote trace parquet: " << *trace.output_path()
                       << '\n';
-        return 0;
+        return status;
+
     } catch (const std::exception & e) {
         try {
             trace.write();

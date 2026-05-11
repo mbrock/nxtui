@@ -168,7 +168,18 @@ if get_option('llm_tool')
   duckdb_dep = dependency('DuckDB', method : 'cmake', required : false)
   duckdb_rpath = ''
 
-  if not duckdb_dep.found()
+  if duckdb_dep.found()
+    duckdb_include_dirs = duckdb_dep.get_variable(
+      cmake : 'DuckDB_INCLUDE_DIRS',
+      default_value : '',
+    )
+    if duckdb_include_dirs != ''
+      duckdb_dep = declare_dependency(
+        dependencies : duckdb_dep,
+        compile_args : ['-I' + duckdb_include_dirs],
+      )
+    endif
+  else
     duckdb_prefix = meson.project_build_root() / 'deps' / 'duckdb'
     duckdb_dep = declare_dependency(
       compile_args : ['-I' + duckdb_prefix],

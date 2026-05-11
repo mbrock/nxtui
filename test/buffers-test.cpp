@@ -1,4 +1,5 @@
 #include <nxtio/buffers.hpp>
+#include <nxtio/event-queue.hpp>
 
 #include <boost/ut.hpp>
 
@@ -204,6 +205,34 @@ suite buffers_tests = [] {
         expect(throws_exception<nxt::io::operation_cancelled>([&] {
             nxt::sync_wait(writer.write_all("hello world"sv));
         }));
+    };
+};
+
+suite event_queue_tests = [] {
+    "event queue publishes values until closed"_test = [] {
+        auto events = nxt::io::event_queue<int>{};
+
+        expect(nxt::sync_wait(events.publish(1)));
+        expect(nxt::sync_wait(events.publish(2)));
+
+        auto first = nxt::sync_wait(events.next());
+        auto second = nxt::sync_wait(events.next());
+        expect(first && *first == 1_i);
+        expect(second && *second == 2_i);
+
+        nxt::sync_wait(events.close());
+        expect(!nxt::sync_wait(events.next()));
+        expect(!nxt::sync_wait(events.publish(3)));
+    };
+
+    "event queue cancel requests stop and closes"_test = [] {
+        auto events = nxt::io::event_queue<int>{};
+
+        expect(!events.stop_requested());
+        nxt::sync_wait(events.cancel());
+        expect(events.stop_requested());
+        expect(!nxt::sync_wait(events.next()));
+        expect(!nxt::sync_wait(events.publish(1)));
     };
 };
 

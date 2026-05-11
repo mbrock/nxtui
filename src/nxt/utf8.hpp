@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <string_view>
 
 #include <utf8proc.h>
@@ -114,6 +115,46 @@ decode(std::string_view text, byte_offset_t byte) noexcept
 }
 
 }  // namespace detail
+
+[[nodiscard]] inline bool is_word_separator(
+    std::string_view cluster) noexcept
+{
+    auto byte = byte_offset(0);
+    while (byte.count() < cluster.size()) {
+        const auto d = detail::decode(cluster, byte);
+        if (!d.valid)
+            return false;
+
+        switch (d.codepoint) {
+        case '\t':
+        case '\n':
+        case '\v':
+        case '\f':
+        case '\r':
+            return true;
+        default:
+            break;
+        }
+
+        switch (utf8proc_category(d.codepoint)) {
+        case UTF8PROC_CATEGORY_ZS:
+        case UTF8PROC_CATEGORY_ZL:
+        case UTF8PROC_CATEGORY_ZP:
+            return true;
+        default:
+            break;
+        }
+
+        byte += d.length;
+    }
+
+    return false;
+}
+
+[[nodiscard]] inline bool is_line_break(std::string_view cluster) noexcept
+{
+    return cluster == "\n" || cluster == "\r\n" || cluster == "\r";
+}
 
 /// Byte offset of the grapheme cluster after the one starting at `byte`.
 /// Returns `text.size()` if `byte` is at or past the end.
@@ -245,6 +286,251 @@ floor_boundary(std::string_view text, byte_offset_t byte) noexcept
         b = n;
     }
     return width;
+}
+
+struct word
+{
+    std::string_view text;
+    width_t width{};
+};
+
+struct text_segment
+{
+    enum class kind_t {
+        word,
+        line_break,
+    };
+
+    kind_t kind = kind_t::word;
+    std::string_view text;
+    width_t width{};
+};
+
+class word_view : public std::ranges::view_interface<word_view>
+{
+public:
+    word_view() = default;
+
+    explicit word_view(std::string_view text)
+        : text_(text)
+    {
+    }
+
+    class iterator
+    {
+    public:
+        using iterator_concept = std::forward_iterator_tag;
+        using value_type = word;
+        using difference_type = std::ptrdiff_t;
+
+        iterator() = default;
+
+        explicit iterator(std::string_view text)
+            : text_(text)
+        {
+            scan();
+        }
+
+        [[nodiscard]] word operator*() const noexcept
+        {
+            return {
+                .text = text_.substr(start_.count(), end_ - start_),
+                .width = width_,
+            };
+        }
+
+        iterator & operator++() noexcept
+        {
+            start_ = end_;
+            scan();
+            return *this;
+        }
+
+        iterator operator++(int) noexcept
+        {
+            auto copy = *this;
+            ++*this;
+            return copy;
+        }
+
+        friend bool operator==(const iterator & it, std::default_sentinel_t)
+            noexcept
+        {
+            return it.start_.count() >= it.text_.size();
+        }
+
+    private:
+        void scan() noexcept
+        {
+            while (start_.count() < text_.size()) {
+                auto next_byte = next(text_, start_);
+                auto cluster =
+                    text_.substr(start_.count(), next_byte - start_);
+                if (!is_word_separator(cluster))
+                    break;
+                start_ = next_byte;
+            }
+
+            end_ = start_;
+            width_ = 0 * ch;
+            while (end_.count() < text_.size()) {
+                auto next_byte = next(text_, end_);
+                auto cluster = text_.substr(end_.count(), next_byte - end_);
+                if (is_word_separator(cluster))
+                    break;
+                width_ += cluster_width(cluster);
+                end_ = next_byte;
+            }
+        }
+
+        std::string_view text_;
+        byte_offset_t start_{};
+        byte_offset_t end_{};
+        width_t width_{};
+    };
+
+    [[nodiscard]] iterator begin() const noexcept
+    {
+        return iterator{text_};
+    }
+
+    [[nodiscard]] std::default_sentinel_t end() const noexcept
+    {
+        return {};
+    }
+
+private:
+    std::string_view text_;
+};
+
+[[nodiscard]] inline word_view words(std::string_view text) noexcept
+{
+    return word_view{text};
+}
+
+class segment_view : public std::ranges::view_interface<segment_view>
+{
+public:
+    segment_view() = default;
+
+    explicit segment_view(std::string_view text)
+        : text_(text)
+    {
+    }
+
+    class iterator
+    {
+    public:
+        using iterator_concept = std::forward_iterator_tag;
+        using value_type = text_segment;
+        using difference_type = std::ptrdiff_t;
+
+        iterator() = default;
+
+        explicit iterator(std::string_view text)
+            : text_(text)
+        {
+            scan();
+        }
+
+        [[nodiscard]] text_segment operator*() const noexcept
+        {
+            return current_;
+        }
+
+        iterator & operator++() noexcept
+        {
+            start_ = end_;
+            scan();
+            return *this;
+        }
+
+        iterator operator++(int) noexcept
+        {
+            auto copy = *this;
+            ++*this;
+            return copy;
+        }
+
+        friend bool operator==(const iterator & it, std::default_sentinel_t)
+            noexcept
+        {
+            return it.start_.count() >= it.text_.size();
+        }
+
+    private:
+        void scan() noexcept
+        {
+            while (start_.count() < text_.size()) {
+                auto next_byte = next(text_, start_);
+                auto cluster =
+                    text_.substr(start_.count(), next_byte - start_);
+                if (is_line_break(cluster)) {
+                    end_ = next_byte;
+                    current_ = text_segment{
+                        .kind = text_segment::kind_t::line_break,
+                    };
+                    return;
+                }
+                if (!is_word_separator(cluster))
+                    break;
+                start_ = next_byte;
+            }
+
+            end_ = start_;
+            auto width = 0 * ch;
+            while (end_.count() < text_.size()) {
+                auto next_byte = next(text_, end_);
+                auto cluster = text_.substr(end_.count(), next_byte - end_);
+                if (is_word_separator(cluster))
+                    break;
+                width += cluster_width(cluster);
+                end_ = next_byte;
+            }
+
+            current_ = text_segment{
+                .text = text_.substr(start_.count(), end_ - start_),
+                .width = width,
+            };
+        }
+
+        std::string_view text_;
+        byte_offset_t start_{};
+        byte_offset_t end_{};
+        text_segment current_{};
+    };
+
+    [[nodiscard]] iterator begin() const noexcept
+    {
+        return iterator{text_};
+    }
+
+    [[nodiscard]] std::default_sentinel_t end() const noexcept
+    {
+        return {};
+    }
+
+private:
+    std::string_view text_;
+};
+
+[[nodiscard]] inline segment_view segments(std::string_view text) noexcept
+{
+    return segment_view{text};
+}
+
+[[nodiscard]] inline std::size_t
+complete_words_prefix_size(std::string_view text) noexcept
+{
+    auto consumed = std::size_t{0};
+    for (auto b = byte_offset(0); b.count() < text.size();) {
+        auto n = next(text, b);
+        auto cluster = text.substr(b.count(), n - b);
+        if (is_word_separator(cluster))
+            consumed = n.count();
+        b = n;
+    }
+    return consumed;
 }
 
 /// Byte offset at the `cell`-th grapheme cluster (clamped to text.size()).

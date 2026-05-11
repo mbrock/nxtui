@@ -96,6 +96,26 @@ suite layout_tests = [] {
         renders(row(text("A"), text(" "), text("B"))) | "A B";
     };
 
+    "either renders selected branch"_test = [] {
+        renders(either(false, text("off"), text("on"))) | "off";
+        renders(either(true, text("off"), text("on"))) | "on";
+    };
+
+    "either uses selected branch hints"_test = [] {
+        auto small = text("x");
+        auto large = row(text("hello"), fill(), text("world"));
+
+        auto false_selected = either(false, small, large);
+        expect(false_selected.width_hint().min == 1 * ch);
+        expect(false_selected.width_hint().flex == 0.0 * one);
+        expect(false_selected.height_hint().min == 1 * ln);
+
+        auto true_selected = either(true, small, large);
+        expect(true_selected.width_hint().min == 10 * ch);
+        expect(true_selected.width_hint().flex == 1.0 * one);
+        expect(true_selected.height_hint().min == 1 * ln);
+    };
+
     "hrule"_test = [] {
         GlyphTable glyphs;
         Raster raster(5 * ch, 1 * ln, glyphs);

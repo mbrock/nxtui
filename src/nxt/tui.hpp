@@ -56,6 +56,7 @@ concept Layout =
         { layout.height_hint() } -> std::convertible_to<HeightHint>;
         { layout.render(raster, size) } -> std::same_as<void>;
     };
+
 template<typename RenderFn>
 struct Leaf
 {
@@ -84,6 +85,48 @@ auto leaf(WidthHint w, HeightHint h, F && f)
 {
     return Leaf<std::decay_t<F>>{w, h, std::forward<F>(f)};
 }
+
+template<Layout FalseLayout, Layout TrueLayout>
+struct Either
+{
+    bool choose_true = false;
+    FalseLayout false_layout;
+    TrueLayout true_layout;
+
+    constexpr WidthHint width_hint() const
+    {
+        return choose_true ? true_layout.width_hint()
+                           : false_layout.width_hint();
+    }
+
+    constexpr HeightHint height_hint() const
+    {
+        return choose_true ? true_layout.height_hint()
+                           : false_layout.height_hint();
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        if (choose_true)
+            true_layout.render(raster, size);
+        else
+            false_layout.render(raster, size);
+    }
+};
+
+template<Layout FalseLayout, Layout TrueLayout>
+auto either(
+    bool choose_true,
+    FalseLayout && false_layout,
+    TrueLayout && true_layout)
+{
+    return Either<std::decay_t<FalseLayout>, std::decay_t<TrueLayout>>{
+        choose_true,
+        std::forward<FalseLayout>(false_layout),
+        std::forward<TrueLayout>(true_layout),
+    };
+}
+
 inline col_t write_text(RasterView & r, Pos pos, std::string_view text)
 {
     return r.write_text(pos, text);
