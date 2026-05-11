@@ -4,8 +4,10 @@
 #include <nxtio/buffers.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -196,25 +198,197 @@ nxt::task<std::string> read_response_text(
     co_return body;
 }
 
-template<typename Reader, typename OnEvent>
-nxt::task<> read_sse_response(
-    Reader & reader,
-    const response_start & response,
-    OnEvent on_event)
+// Source-shaped view over an HTTP response body.  Strips HTTP transfer framing
+// (Content-Length, chunked, or close-delimited) so callers see only payload
+// bytes through the usual read_some interface — typically by wrapping this in
+// a second byte_reader for line-oriented protocols like SSE.
+template<typename Reader>
+class http_body_reader
 {
-    // Convenience semantic stage for callers that already decided this response
-    // is an SSE stream.  The HTTP transfer framing is stripped by
-    // read_response_body; only complete SSE events are emitted here.
-    auto parser = nxt::http::server_sent_event_parser{};
-    auto on_chunk = [&](std::span<const std::byte> chunk) -> nxt::task<> {
-        for (auto & event : parser.feed(as_text(chunk)))
-            co_await on_event(std::move(event));
+public:
+    http_body_reader(Reader & upstream, const nxt::http::response_head & head)
+        : upstream_(&upstream)
+    {
+        if (response_is_chunked(head)) {
+            mode_ = mode::chunked;
+        } else if (auto length = response_content_length(head)) {
+            mode_ = mode::content_length;
+            content_remaining_ = *length;
+        } else {
+            mode_ = mode::eof;
+        }
+    }
+
+    nxt::task<std::size_t> read_some(std::span<std::byte> dst)
+    {
+        if (done_ || dst.empty())
+            co_return 0;
+
+        switch (mode_) {
+        case mode::content_length:
+            co_return co_await read_bounded(dst);
+        case mode::eof:
+            co_return co_await read_eof(dst);
+        case mode::chunked:
+            co_return co_await read_chunked(dst);
+        }
+        co_return 0;
+    }
+
+private:
+    enum class mode
+    {
+        content_length,
+        chunked,
+        eof,
     };
 
-    co_await read_response_body(reader, response, on_chunk);
+    nxt::task<std::size_t> copy_from_buffered(
+        std::span<std::byte> dst, std::size_t budget)
+    {
+        auto buffered = upstream_->buffered();
+        if (buffered.empty()) {
+            auto filled = co_await upstream_->fill_more();
+            if (filled == 0)
+                co_return 0;
+            buffered = upstream_->buffered();
+        }
+        auto n = std::min({buffered.size(), dst.size(), budget});
+        std::memcpy(dst.data(), buffered.data(), n);
+        upstream_->toss(n);
+        co_return n;
+    }
 
-    for (auto & event : parser.close())
-        co_await on_event(std::move(event));
+    nxt::task<std::size_t> read_bounded(std::span<std::byte> dst)
+    {
+        auto n = co_await copy_from_buffered(dst, content_remaining_);
+        if (n == 0)
+            throw protocol_error{"unexpected end of content-length body"};
+        content_remaining_ -= n;
+        if (content_remaining_ == 0)
+            done_ = true;
+        co_return n;
+    }
+
+    nxt::task<std::size_t> read_eof(std::span<std::byte> dst)
+    {
+        auto n = co_await copy_from_buffered(dst, dst.size());
+        if (n == 0)
+            done_ = true;
+        co_return n;
+    }
+
+    nxt::task<std::size_t> read_chunked(std::span<std::byte> dst)
+    {
+        while (true) {
+            if (chunk_remaining_ > 0) {
+                auto n = co_await copy_from_buffered(dst, chunk_remaining_);
+                if (n == 0)
+                    throw protocol_error{"unexpected end of chunked body"};
+                chunk_remaining_ -= n;
+                if (chunk_remaining_ == 0) {
+                    auto crlf = co_await upstream_->take_until("\r\n");
+                    if (!crlf.empty())
+                        throw protocol_error{
+                            "chunk data was not followed by CRLF"};
+                }
+                co_return n;
+            }
+
+            auto line = co_await upstream_->take_until("\r\n");
+            auto chunk_size = parse_chunk_size(line);
+            if (chunk_size == 0) {
+                auto trailers = co_await upstream_->take_until("\r\n");
+                if (!trailers.empty())
+                    throw protocol_error{"chunk trailers are not supported"};
+                done_ = true;
+                co_return 0;
+            }
+            chunk_remaining_ = chunk_size;
+        }
+    }
+
+    Reader * upstream_;
+    mode mode_ = mode::eof;
+    std::size_t content_remaining_ = 0;
+    std::size_t chunk_remaining_ = 0;
+    bool done_ = false;
+};
+
+// Pull one server-sent event from a byte stream.  Returns nullopt on clean
+// end-of-stream.  Reader is expected to be a byte_reader-shaped buffered
+// source (take_until("\n"), buffered_size(), etc.).
+template<typename Reader>
+nxt::task<std::optional<nxt::http::server_sent_event>>
+parse_sse_event(Reader & reader)
+{
+    auto event = nxt::http::server_sent_event{};
+    auto have_data = false;
+    auto have_fields = false;
+
+    while (true) {
+        std::span<const std::byte> raw;
+        try {
+            raw = co_await reader.take_until("\n");
+        } catch (const end_of_stream &) {
+            if (have_data) {
+                if (!event.data.empty() && event.data.back() == '\n')
+                    event.data.pop_back();
+                co_return std::move(event);
+            }
+            if (have_fields)
+                throw protocol_error{"unterminated server-sent event"};
+            co_return std::nullopt;
+        }
+
+        if (!raw.empty() && raw.back() == std::byte{'\r'})
+            raw = raw.first(raw.size() - 1);
+
+        if (raw.empty()) {
+            if (have_data) {
+                if (!event.data.empty() && event.data.back() == '\n')
+                    event.data.pop_back();
+                co_return std::move(event);
+            }
+            // Blank line with no fields — separator between events; keep going.
+            have_fields = false;
+            continue;
+        }
+
+        have_fields = true;
+
+        auto text = as_text(raw);
+        if (text.front() == ':')
+            continue;
+
+        auto colon = text.find(':');
+        auto field = colon == std::string_view::npos
+                         ? text
+                         : text.substr(0, colon);
+        auto value = colon == std::string_view::npos
+                         ? std::string_view{}
+                         : text.substr(colon + 1);
+        if (!value.empty() && value.front() == ' ')
+            value.remove_prefix(1);
+
+        if (field == "data") {
+            event.data += value;
+            event.data += '\n';
+            have_data = true;
+        } else if (field == "event") {
+            event.type = value.empty() ? "message" : std::string{value};
+        } else if (field == "id") {
+            if (value.find('\0') == std::string_view::npos)
+                event.id = std::string{value};
+        } else if (field == "retry") {
+            auto retry = 0;
+            auto * first = value.data();
+            auto * last = value.data() + value.size();
+            auto [ptr, ec] = std::from_chars(first, last, retry);
+            if (!value.empty() && ec == std::errc{} && ptr == last)
+                event.retry_ms = retry;
+        }
+    }
 }
 
 } // namespace nxt::io::http

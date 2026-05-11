@@ -1,0 +1,10 @@
+[wrap-file]
+directory = apache-arrow-nanoarrow-0.8.0
+source_url = https://www.apache.org/dyn/closer.lua?action=download&filename=arrow/apache-arrow-nanoarrow-0.8.0/apache-arrow-nanoarrow-0.8.0.tar.gz
+source_fallback_url = https://wrapdb.mesonbuild.com/v2/nanoarrow_0.8.0-1/get_source/apache-arrow-nanoarrow-0.8.0.tar.gz
+source_filename = apache-arrow-nanoarrow-0.8.0.tar.gz
+source_hash = 6e61e2819c9138e9092ba32b568ed6f4594928b306171937251eaaafa7dc2b8c
+wrapdb_version = 0.8.0-1
+
+[provide]
+dependency_names = nanoarrow, nanoarrow-ipc

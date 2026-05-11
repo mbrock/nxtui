@@ -60,21 +60,21 @@ suite llm_tests = [] {
         nxt::io::string_transport transport{std::span{chunks}};
 
         std::vector<nxt::io::llm::stream_event> events;
-        auto on_event = [&](nxt::io::llm::stream_event event) -> nxt::task<> {
-            events.push_back(std::move(event));
-            co_return;
+        auto request = nxt::io::llm::openai_responses_request{
+            .api_key = "test-key",
+            .model = "gpt-5-mini",
+            .input = "Say ok.",
+            .max_output_tokens = 64,
+            .reasoning_summary = "",
         };
 
-        nxt::sync_wait(nxt::io::llm::stream_openai_responses_over(
-            transport,
-            nxt::io::llm::openai_responses_request{
-                .api_key = "test-key",
-                .model = "gpt-5-mini",
-                .input = "Say ok.",
-                .max_output_tokens = 64,
-                .reasoning_summary = "",
-            },
-            on_event));
+        nxt::sync_wait([&]() -> nxt::task<> {
+            auto stream = nxt::io::llm::openai_response_stream<
+                nxt::io::string_transport>{transport};
+            co_await stream.connect(request);
+            while (auto event = co_await stream.next())
+                events.push_back(std::move(*event));
+        }());
 
         expect(events.size() == 2_ul);
         expect(events[0].type == "response.output_text.delta");

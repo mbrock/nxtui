@@ -3,11 +3,10 @@
 #include <nxt/tui.hpp>
 #include <nxtio/app.hpp>
 #include <nxtio/async.hpp>
-#include <nxtio/event-queue.hpp>
 #include <nxtio/input.hpp>
+#include <nxtio/llm-trace.hpp>
 #include <nxtio/llm.hpp>
 #include <nxtio/net.hpp>
-#include <nxtio/nxtllm-trace-store.hpp>
 #include <nxtio/text_field.hpp>
 
 #include <nlohmann/json.hpp>
@@ -26,119 +25,16 @@
 #include <string_view>
 #include <thread>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace {
 
 using llm_request = nxt::io::llm::openai_responses_request;
+using arrow_trace = nxt::io::nxtllm::arrow_trace;
 using stream_event = nxt::io::llm::stream_event;
 using trace_row = nxt::io::nxtllm::trace_row;
 
 constexpr std::size_t default_max_output_tokens = 128000;
-
-class parquet_trace
-{
-public:
-    explicit parquet_trace(std::optional<std::string> output_path)
-        : output_path_(std::move(output_path))
-        , start_(std::chrono::steady_clock::now())
-    {
-        if (output_path_) {
-            auto now =
-                std::chrono::system_clock::now().time_since_epoch().count();
-            run_id_ = "nxtllm-" + std::to_string(now);
-        }
-    }
-
-    [[nodiscard]] bool enabled() const noexcept
-    {
-        return output_path_.has_value();
-    }
-
-    [[nodiscard]] const std::optional<std::string> & output_path() const
-    {
-        return output_path_;
-    }
-
-    void record_request(const llm_request & request)
-    {
-        if (!enabled())
-            return;
-
-        auto body = nxt::io::llm::openai_responses_body(request);
-        auto metadata = nlohmann::json{
-            {"provider", "openai"},
-            {"api", "responses"},
-            {"url", "https://api.openai.com/v1/responses"},
-            {"method", "POST"},
-            {"request_body", body},
-            {"headers",
-             {
-                 {"Accept", "text/event-stream"},
-                 {"Content-Type", "application/json"},
-                 {"User-Agent", "nxtllm/0"},
-             }},
-            {"authorization_header_present", !request.api_key.empty()},
-        };
-
-        add("request",
-            "openai.responses.request",
-            metadata.dump(),
-            body.dump());
-    }
-
-    void record_event(const stream_event & event)
-    {
-        if (!enabled())
-            return;
-
-        add("sse_event", event.type, event.raw, event.payload.dump());
-    }
-
-    void record_marker(std::string phase, std::string data = {})
-    {
-        if (!enabled())
-            return;
-
-        add(std::move(phase), {}, std::move(data), {});
-    }
-
-    void write() const
-    {
-        if (!enabled())
-            return;
-
-        nxt::io::nxtllm::write_trace_parquet(*output_path_, run_id_, rows_);
-    }
-
-private:
-    void
-    add(std::string phase,
-        std::string event_type,
-        std::string data,
-        std::string payload_json)
-    {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - start_);
-        rows_.push_back(
-            trace_row{
-                .seq = static_cast<std::int64_t>(rows_.size()),
-                .elapsed_ms = elapsed.count(),
-                .phase = std::move(phase),
-                .event_type = std::move(event_type),
-                .data = std::move(data),
-                .payload_json = std::move(payload_json),
-            });
-    }
-
-    std::optional<std::string> output_path_;
-    std::string run_id_;
-    std::chrono::steady_clock::time_point start_;
-    std::vector<trace_row> rows_;
-};
 
 struct cli_options
 {
@@ -173,17 +69,17 @@ cli_options parse_args(int argc, char ** argv)
             options.hud_explicit = true;
             continue;
         }
-        if (arg == "--trace" || arg == "--trace-parquet") {
+        if (arg == "--trace" || arg == "--trace-arrow") {
             if (i + 1 >= argc)
                 throw std::runtime_error{
-                    "--trace requires a parquet output path"};
+                    "--trace requires an Arrow IPC output path"};
             options.trace_path = argv[++i];
             continue;
         }
         if (arg == "--playback") {
             if (i + 1 >= argc)
                 throw std::runtime_error{
-                    "--playback requires a parquet trace path"};
+                    "--playback requires an Arrow IPC trace path"};
             options.playback_path = argv[++i];
             continue;
         }
@@ -234,8 +130,8 @@ cli_options parse_args(int argc, char ** argv)
                 << "usage: nxtllm [options] [input] [model]\n"
                    "  --hud                    open the prompt HUD\n"
                    "  --no-hud                 run one prompt in plain CLI mode\n"
-                   "  --trace out.parquet\n"
-                   "  --playback in.parquet\n"
+                   "  --trace out.arrow\n"
+                   "  --playback in.arrow\n"
                    "  --playback-realtime\n"
                    "  --playback-from 70%     seek by trace elapsed time\n"
                    "  --playback-speed N        0 means as fast as possible\n"
@@ -458,176 +354,62 @@ bool load_api_key(nxt::ui::UIRuntime & runtime, llm_hud_state & state)
     return false;
 }
 
-struct hud_stream_connected
-{};
-
-struct hud_stream_complete
-{};
-
-struct hud_stream_error
-{
-    std::string message;
-};
-
-using hud_stream_item = std::variant<
-    hud_stream_connected,
-    stream_event,
-    hud_stream_complete,
-    hud_stream_error>;
-
-struct stream_queue_closed : std::exception
-{
-    [[nodiscard]] const char * what() const noexcept override
-    {
-        return "stream event queue closed";
-    }
-};
-
 nxt::task<> playback_delay(
     nxt::ui::UIRuntime & runtime,
     std::int64_t & previous_elapsed_ms,
     const trace_row & row,
     double playback_speed);
 
-nxt::task<> publish_or_stop(
-    nxt::io::event_queue<hud_stream_item> & events, hud_stream_item item)
-{
-    if (!co_await events.publish(std::move(item)))
-        throw stream_queue_closed{};
-}
-
-nxt::task<> produce_hud_stream(
-    std::unique_ptr<nxt::io_scheduler> & scheduler,
-    llm_request request,
-    nxt::io::event_queue<hud_stream_item> & events)
-{
-    auto error = std::optional<std::string>{};
-    try {
-        auto transport = co_await nxt::io::net::connect_tls(
-            scheduler,
-            nxt::io::net::endpoint{
-                .host = "api.openai.com",
-                .port = 443,
-            });
-
-        co_await publish_or_stop(events, hud_stream_connected{});
-
-        auto on_event = [&](stream_event event) -> nxt::task<> {
-            co_await publish_or_stop(events, std::move(event));
-        };
-
-        co_await nxt::io::llm::stream_openai_responses_over(
-            transport, request, on_event, events.stop_token());
-        co_await transport.shutdown();
-        co_await publish_or_stop(events, hud_stream_complete{});
-    } catch (const stream_queue_closed &) {
-    } catch (const std::exception & e) {
-        if (!events.stop_requested())
-            error = e.what();
-    }
-
-    if (error)
-        co_await events.publish(hud_stream_error{std::move(*error)});
-    co_await events.close();
-}
-
-nxt::task<> produce_playback_stream(
-    nxt::ui::UIRuntime & runtime,
-    std::vector<trace_row> rows,
-    std::size_t start_index,
-    double playback_speed,
-    nxt::io::event_queue<hud_stream_item> & events)
-{
-    try {
-        co_await publish_or_stop(events, hud_stream_connected{});
-
-        if (rows.empty()) {
-            co_await publish_or_stop(events, hud_stream_complete{});
-            co_await events.close();
-            co_return;
-        }
-
-        start_index = std::min(start_index, rows.size() - 1);
-        auto previous_elapsed_ms = rows[start_index].elapsed_ms;
-        for (auto i = start_index; i < rows.size(); ++i) {
-            if (runtime.shutdown_requested() || events.stop_requested())
-                break;
-
-            const auto & row = rows[i];
-            co_await playback_delay(
-                runtime, previous_elapsed_ms, row, playback_speed);
-
-            if (auto event = event_from_trace_row(row)) {
-                co_await publish_or_stop(events, std::move(*event));
-            } else if (row.phase == "error") {
-                co_await publish_or_stop(events, hud_stream_error{row.data});
-                co_await events.close();
-                co_return;
-            } else if (row.phase == "complete") {
-                co_await publish_or_stop(events, hud_stream_complete{});
-                co_await events.close();
-                co_return;
-            }
-        }
-
-        co_await publish_or_stop(events, hud_stream_complete{});
-    } catch (const stream_queue_closed &) {
-    }
-
-    co_await events.close();
-}
-
-class hud_stream_reader
+// Pull-shaped event source backed by a recorded Arrow IPC trace. Mirrors the
+// shape of nxt::io::llm::openai_response_stream so the consumer loop can be
+// written once and reused for both live and replay.
+class playback_stream
 {
 public:
-    hud_stream_reader(
+    playback_stream(
         nxt::ui::UIRuntime & runtime,
-        llm_hud_state & state,
-        parquet_trace & trace,
-        nxt::io::event_queue<hud_stream_item> & events)
-        : runtime_(runtime)
-        , state_(state)
-        , trace_(trace)
-        , events_(events)
+        std::vector<trace_row> rows,
+        std::size_t start_index,
+        double playback_speed)
+        : runtime_(&runtime)
+        , rows_(std::move(rows))
+        , index_(rows_.empty() ? 0 : std::min(start_index, rows_.size() - 1))
+        , previous_elapsed_ms_(rows_.empty() ? 0 : rows_[index_].elapsed_ms)
+        , playback_speed_(playback_speed)
     {
     }
 
-    nxt::task<std::optional<stream_event>> next_event()
+    playback_stream(const playback_stream &) = delete;
+    playback_stream & operator=(const playback_stream &) = delete;
+    playback_stream(playback_stream &&) = delete;
+    playback_stream & operator=(playback_stream &&) = delete;
+
+    nxt::task<std::optional<stream_event>> next()
     {
-        while (!runtime_.shutdown_requested()) {
-            auto item = co_await events_.next();
-            if (!item)
+        while (index_ < rows_.size()) {
+            if (runtime_->shutdown_requested())
                 co_return std::nullopt;
 
-            if (std::holds_alternative<hud_stream_connected>(*item)) {
-                update_hud(runtime_, state_, [](llm_hud_state & hud) {
-                    hud.status = "streaming";
-                });
-                continue;
-            }
+            const auto & row = rows_[index_++];
+            co_await playback_delay(
+                *runtime_, previous_elapsed_ms_, row, playback_speed_);
 
-            if (auto * error = std::get_if<hud_stream_error>(&*item))
-                throw std::runtime_error{error->message};
-
-            if (std::holds_alternative<hud_stream_complete>(*item))
+            if (row.phase == "error")
+                throw std::runtime_error{row.data};
+            if (row.phase == "complete")
                 co_return std::nullopt;
-
-            auto event = std::move(std::get<stream_event>(*item));
-            trace_.record_event(event);
-            update_hud(runtime_, state_, [](llm_hud_state & hud) {
-                ++hud.event_count;
-            });
-            co_return event;
+            if (auto event = event_from_trace_row(row))
+                co_return std::move(*event);
         }
-
         co_return std::nullopt;
     }
 
 private:
-    nxt::ui::UIRuntime & runtime_;
-    llm_hud_state & state_;
-    parquet_trace & trace_;
-    nxt::io::event_queue<hud_stream_item> & events_;
+    nxt::ui::UIRuntime * runtime_;
+    std::vector<trace_row> rows_;
+    std::size_t index_;
+    std::int64_t previous_elapsed_ms_;
+    double playback_speed_;
 };
 
 bool is_event(const stream_event & event, std::string_view type)
@@ -677,8 +459,9 @@ void print_text(
     runtime.print(styled);
 }
 
+template<typename Stream>
 nxt::task<> read_text_delta_item(
-    hud_stream_reader & reader,
+    Stream & stream,
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
     std::string_view delta_event_type,
@@ -709,7 +492,7 @@ nxt::task<> read_text_delta_item(
         wrote = true;
     };
 
-    while (auto event = co_await reader.next_event()) {
+    while (auto event = co_await stream.next()) {
         if (is_event(*event, delta_event_type)) {
             auto delta = event->payload.value("delta", std::string{});
             if (!delta.empty()) {
@@ -735,13 +518,12 @@ nxt::task<> read_text_delta_item(
         runtime.print("\n");
 }
 
+template<typename Stream>
 nxt::task<> read_reasoning_item(
-    hud_stream_reader & reader,
-    nxt::ui::UIRuntime & runtime,
-    llm_hud_state & state)
+    Stream & stream, nxt::ui::UIRuntime & runtime, llm_hud_state & state)
 {
     co_await read_text_delta_item(
-        reader,
+        stream,
         runtime,
         state,
         "response.reasoning_summary_text.delta",
@@ -751,13 +533,12 @@ nxt::task<> read_reasoning_item(
         });
 }
 
+template<typename Stream>
 nxt::task<> read_message_item(
-    hud_stream_reader & reader,
-    nxt::ui::UIRuntime & runtime,
-    llm_hud_state & state)
+    Stream & stream, nxt::ui::UIRuntime & runtime, llm_hud_state & state)
 {
     co_await read_text_delta_item(
-        reader,
+        stream,
         runtime,
         state,
         "response.output_text.delta",
@@ -768,8 +549,9 @@ nxt::task<> read_message_item(
         });
 }
 
+template<typename Stream>
 nxt::task<> read_output_item(
-    hud_stream_reader & reader,
+    Stream & stream,
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
     const stream_event & first)
@@ -777,16 +559,16 @@ nxt::task<> read_output_item(
     auto type = output_item_type(first);
 
     if (type == "reasoning") {
-        co_await read_reasoning_item(reader, runtime, state);
+        co_await read_reasoning_item(stream, runtime, state);
         co_return;
     }
 
     if (type == "message") {
-        co_await read_message_item(reader, runtime, state);
+        co_await read_message_item(stream, runtime, state);
         co_return;
     }
 
-    while (auto event = co_await reader.next_event()) {
+    while (auto event = co_await stream.next()) {
         if (is_event(*event, "response.output_item.done"))
             break;
     }
@@ -814,19 +596,57 @@ nxt::task<> playback_delay(
         co_await runtime.sleep(std::chrono::milliseconds{scaled_ms});
 }
 
+// Pass-through stream that records each pulled event into the Arrow IPC trace
+// and bumps the HUD event counter.  Wraps any inner stream that exposes
+// task<optional<stream_event>> next().
+template<typename Inner>
+class traced_stream
+{
+public:
+    traced_stream(
+        Inner & inner,
+        nxt::ui::UIRuntime & runtime,
+        llm_hud_state & state,
+        arrow_trace & trace)
+        : inner_(&inner)
+        , runtime_(&runtime)
+        , state_(&state)
+        , trace_(&trace)
+    {
+    }
+
+    nxt::task<std::optional<stream_event>> next()
+    {
+        auto event = co_await inner_->next();
+        if (event) {
+            trace_->record_event(*event);
+            update_hud(*runtime_, *state_, [](llm_hud_state & hud) {
+                ++hud.event_count;
+            });
+        }
+        co_return event;
+    }
+
+private:
+    Inner * inner_;
+    nxt::ui::UIRuntime * runtime_;
+    llm_hud_state * state_;
+    arrow_trace * trace_;
+};
+
+template<typename Stream>
 nxt::task<> consume_response_stream(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    parquet_trace & trace,
-    nxt::io::event_queue<hud_stream_item> & events)
+    arrow_trace & trace,
+    Stream & stream)
 {
-    auto reader = hud_stream_reader{runtime, state, trace, events};
     auto stream_error = std::optional<std::string>{};
 
     try {
-        while (auto event = co_await reader.next_event()) {
+        while (auto event = co_await stream.next()) {
             if (is_event(*event, "response.output_item.added")) {
-                co_await read_output_item(reader, runtime, state, *event);
+                co_await read_output_item(stream, runtime, state, *event);
                 continue;
             }
 
@@ -853,15 +673,23 @@ nxt::task<> consume_response_stream(
             }
         }
 
-        if (!runtime.shutdown_requested()) {
-            trace.record_marker("complete");
+        if (runtime.shutdown_requested()) {
+            trace.record_marker("cancelled");
             update_hud(runtime, state, [](llm_hud_state & hud) {
-                hud.status = "completed";
+                hud.status = "cancelled";
                 hud.done = true;
                 hud.busy = false;
             });
             co_return;
         }
+
+        trace.record_marker("complete");
+        update_hud(runtime, state, [](llm_hud_state & hud) {
+            hud.status = "completed";
+            hud.done = true;
+            hud.busy = false;
+        });
+        co_return;
     } catch (const std::exception & e) {
         if (!runtime.shutdown_requested())
             stream_error = e.what();
@@ -879,8 +707,6 @@ nxt::task<> consume_response_stream(
         co_return;
     }
 
-    co_await events.cancel();
-
     trace.record_marker("cancelled");
     update_hud(runtime, state, [](llm_hud_state & hud) {
         hud.status = "cancelled";
@@ -892,7 +718,7 @@ nxt::task<> consume_response_stream(
 nxt::task<> stream_live_request(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    parquet_trace & trace)
+    arrow_trace & trace)
 {
     start_hud_transcript(runtime, state);
     trace.record_request(state.request);
@@ -900,19 +726,46 @@ nxt::task<> stream_live_request(
         hud.status = "connecting";
     });
 
-    auto events = nxt::io::event_queue<hud_stream_item>{};
-    auto producer = runtime.scheduler().spawn_joinable(produce_hud_stream(
-        runtime.scheduler_handle(), state.request, events));
+    auto transport = co_await nxt::io::net::connect_tls(
+        runtime.scheduler_handle(),
+        nxt::io::net::endpoint{
+            .host = "api.openai.com",
+            .port = 443,
+        });
 
-    co_await consume_response_stream(runtime, state, trace, events);
-    co_await events.cancel();
-    co_await producer;
+    using transport_t = decltype(transport);
+    auto stream =
+        nxt::io::llm::openai_response_stream<transport_t>{
+            transport, runtime.get_stop_token()};
+
+    try {
+        co_await stream.connect(state.request);
+        update_hud(runtime, state, [](llm_hud_state & hud) {
+            hud.status = "streaming";
+        });
+
+        auto traced = traced_stream{stream, runtime, state, trace};
+        co_await consume_response_stream(runtime, state, trace, traced);
+    } catch (const std::exception & e) {
+        if (!runtime.shutdown_requested()) {
+            trace.record_marker("error", e.what());
+            runtime.println(std::string{"error: "} + e.what());
+            update_hud(runtime, state, [&](llm_hud_state & hud) {
+                hud.status = "error";
+                hud.error = e.what();
+                hud.done = true;
+                hud.busy = false;
+            });
+        }
+    }
+
+    co_await transport.shutdown();
 }
 
 nxt::task<> stream_playback_request(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    parquet_trace & trace,
+    arrow_trace & trace,
     std::vector<trace_row> rows,
     std::size_t start_index,
     double playback_speed)
@@ -922,19 +775,16 @@ nxt::task<> stream_playback_request(
         hud.status = "replaying";
     });
 
-    auto events = nxt::io::event_queue<hud_stream_item>{};
-    auto producer = runtime.scheduler().spawn_joinable(produce_playback_stream(
-        runtime, std::move(rows), start_index, playback_speed, events));
-
-    co_await consume_response_stream(runtime, state, trace, events);
-    co_await events.cancel();
-    co_await producer;
+    auto stream = playback_stream{
+        runtime, std::move(rows), start_index, playback_speed};
+    auto traced = traced_stream{stream, runtime, state, trace};
+    co_await consume_response_stream(runtime, state, trace, traced);
 }
 
 nxt::task<> run_hud(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    parquet_trace & trace)
+    arrow_trace & trace)
 {
     while (!runtime.shutdown_requested()) {
         auto event = co_await runtime.next_input();
@@ -979,7 +829,7 @@ nxt::task<> run_hud(
 nxt::task<> run_single_prompt(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    parquet_trace & trace)
+    arrow_trace & trace)
 {
     reset_hud_request_state(state);
     state.busy = true;
@@ -991,7 +841,7 @@ nxt::task<> run_single_prompt(
 nxt::task<> run_playback(
     nxt::ui::UIRuntime & runtime,
     llm_hud_state & state,
-    parquet_trace & trace,
+    arrow_trace & trace,
     std::vector<trace_row> rows,
     std::size_t start_index,
     double playback_speed)
@@ -1012,7 +862,7 @@ nxt::task<> run_playback(
 
 int main(int argc, char ** argv)
 {
-    auto trace = parquet_trace{std::nullopt};
+    auto trace = arrow_trace{std::nullopt};
     try {
         auto options = parse_args(argc, argv);
         if (options.playback_path && options.trace_path)
@@ -1021,7 +871,7 @@ int main(int argc, char ** argv)
 
         if (options.playback_path) {
             auto rows =
-                nxt::io::nxtllm::read_trace_parquet(*options.playback_path);
+                nxt::io::nxtllm::read_trace_ipc(*options.playback_path);
             auto start_index =
                 playback_start_index(rows, options.playback_from);
             auto state = llm_hud_state{};
@@ -1047,7 +897,7 @@ int main(int argc, char ** argv)
             return nxt::ui::run_headless(std::move(state), update);
         }
 
-        trace = parquet_trace{options.trace_path};
+        trace = arrow_trace{options.trace_path};
 
         auto state = llm_hud_state{};
         state.request = make_request(options, {});
@@ -1078,7 +928,7 @@ int main(int argc, char ** argv)
         }
         trace.write();
         if (trace.output_path())
-            std::cout << "wrote trace parquet: " << *trace.output_path()
+            std::cout << "wrote trace Arrow IPC: " << *trace.output_path()
                       << '\n';
         return status;
 

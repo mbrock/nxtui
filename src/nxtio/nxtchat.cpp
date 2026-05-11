@@ -141,20 +141,18 @@ nxt::task<> ask_model(nxt::ui::UIRuntime & runtime, state & s, std::string api_k
             .reasoning_summary = {},
         };
 
-        auto on_event = [&](nxt::io::llm::stream_event event) -> nxt::task<> {
-            auto delta = text_delta(event, "response.output_text.delta");
+        using transport_t = decltype(transport);
+        auto stream = nxt::io::llm::openai_response_stream<transport_t>{
+            transport, runtime.get_stop_token()};
+        co_await stream.connect(request);
+
+        while (auto event = co_await stream.next()) {
+            auto delta = text_delta(*event, "response.output_text.delta");
             if (!delta.empty()) {
                 reply += delta;
                 runtime.print(delta);
             }
-            co_return;
-        };
-
-        co_await nxt::io::llm::stream_openai_responses_over(
-            transport,
-            request,
-            on_event,
-            runtime.get_stop_token());
+        }
         co_await transport.shutdown();
 
         if (!reply.empty() && reply.back() != '\n')

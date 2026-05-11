@@ -178,12 +178,13 @@ suite http_io_tests = [] {
             head.head, "text/event-stream"));
 
         std::vector<nxt::http::server_sent_event> events;
-        auto on_event = [&](nxt::http::server_sent_event event) -> nxt::task<> {
-            events.push_back(std::move(event));
-            co_return;
-        };
-
-        nxt::sync_wait(io_http::read_sse_response(reader, head, on_event));
+        nxt::sync_wait([&]() -> nxt::task<> {
+            auto body = io_http::http_body_reader{reader, head.head};
+            std::array<std::byte, 4096> body_buffer{};
+            auto body_reader = nxt::io::byte_reader{body, std::span{body_buffer}};
+            while (auto event = co_await io_http::parse_sse_event(body_reader))
+                events.push_back(std::move(*event));
+        }());
 
         expect(transport.written().starts_with("POST /stream HTTP/1.1\r\n"));
         expect(events.size() == 1_ul);

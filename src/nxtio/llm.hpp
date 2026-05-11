@@ -21,14 +21,6 @@ struct protocol_error : std::runtime_error
     using std::runtime_error::runtime_error;
 };
 
-struct stream_complete : std::exception
-{
-    [[nodiscard]] const char * what() const noexcept override
-    {
-        return "stream complete";
-    }
-};
-
 struct openai_responses_request
 {
     std::string api_key;
@@ -91,80 +83,114 @@ openai_responses_http_request(const openai_responses_request & request)
     };
 }
 
-template<typename OnEvent>
-nxt::task<bool>
-emit_sse_event(nxt::http::server_sent_event const & sse, OnEvent & on_event)
+// Pull-shaped OpenAI Responses SSE stream.  Construct with a transport,
+// call connect() once to send the request and read the response head, then
+// drive the stream by calling next() until it returns nullopt.  Errors
+// propagate as exceptions from connect() or next().
+template<typename Transport>
+class openai_response_stream
 {
-    if (sse.data == "[DONE]")
-        co_return true;
-
-    nlohmann::json payload;
-    try {
-        payload = nlohmann::json::parse(sse.data);
-    } catch (const nlohmann::json::exception & e) {
-        throw protocol_error{
-            "OpenAI Responses stream sent invalid JSON: "
-            + std::string{e.what()}};
+public:
+    explicit openai_response_stream(
+        Transport & transport, std::stop_token stop = {})
+        : transport_(&transport)
+        , stop_(std::move(stop))
+        , reader_(transport, std::span{head_buffer_}, stop_)
+    {
     }
 
-    co_await on_event(stream_event{
-        .type = sse.type,
-        .payload = std::move(payload),
-        .raw = sse.data,
-    });
+    openai_response_stream(const openai_response_stream &) = delete;
+    openai_response_stream & operator=(const openai_response_stream &) = delete;
+    openai_response_stream(openai_response_stream &&) = delete;
+    openai_response_stream & operator=(openai_response_stream &&) = delete;
 
-    co_return sse.type == "response.completed"
-        || sse.type == "response.incomplete" || sse.type == "response.failed";
-}
+    nxt::task<> connect(const openai_responses_request & request)
+    {
+        if (request.api_key.empty())
+            throw protocol_error{"OPENAI_API_KEY is empty"};
+        if (request.input.empty())
+            throw protocol_error{"OpenAI Responses input is empty"};
 
-template<typename Transport, typename OnEvent>
-nxt::task<> stream_openai_responses_over(
-    Transport & transport,
-    const openai_responses_request & request,
-    OnEvent on_event,
-    std::stop_token stop = {})
-{
-    if (request.api_key.empty())
-        throw protocol_error{"OPENAI_API_KEY is empty"};
-    if (request.input.empty())
-        throw protocol_error{"OpenAI Responses input is empty"};
+        auto response = co_await nxt::io::http::send_request(
+            *transport_, reader_, openai_responses_http_request(request));
 
-    auto response_buffer = std::array<std::byte, 16 * 1024>{};
-    auto reader =
-        nxt::io::byte_reader{transport, std::span{response_buffer}, stop};
-    auto response = co_await nxt::io::http::send_request(
-        transport, reader, openai_responses_http_request(request));
-    auto status = nxt::io::http::response_status_text(response.head);
+        if (!nxt::io::http::response_status_is_success(response.head)) {
+            auto status = nxt::io::http::response_status_text(response.head);
+            auto body = co_await nxt::io::http::read_response_text(
+                reader_, response);
+            throw protocol_error{
+                "OpenAI Responses HTTP error: " + status + ": " + body};
+        }
 
-    if (!nxt::io::http::response_status_is_success(response.head)) {
-        auto body =
-            co_await nxt::io::http::read_response_text(reader, response);
-        throw protocol_error{
-            "OpenAI Responses HTTP error: " + status + ": " + body};
+        if (!nxt::io::http::response_content_type_is(
+                response.head, "text/event-stream")) {
+            auto content_type =
+                nxt::io::http::header_value(response.head, "content-type")
+                    .value_or("<missing>");
+            throw protocol_error{
+                "OpenAI Responses expected text/event-stream, got "
+                + std::string{content_type}};
+        }
+
+        body_.emplace(reader_, response.head);
+        body_reader_.emplace(*body_, std::span{body_buffer_}, stop_);
     }
 
-    if (!nxt::io::http::response_content_type_is(
-            response.head, "text/event-stream")) {
-        auto content_type =
-            nxt::io::http::header_value(response.head, "content-type")
-                .value_or("<missing>");
-        throw protocol_error{
-            "OpenAI Responses expected text/event-stream, got "
-            + std::string{content_type}};
+    nxt::task<std::optional<stream_event>> next()
+    {
+        if (done_ || !body_reader_)
+            co_return std::nullopt;
+
+        while (true) {
+            auto sse = co_await nxt::io::http::parse_sse_event(*body_reader_);
+            if (!sse) {
+                done_ = true;
+                co_return std::nullopt;
+            }
+
+            if (sse->data == "[DONE]") {
+                done_ = true;
+                co_return std::nullopt;
+            }
+
+            nlohmann::json payload;
+            try {
+                payload = nlohmann::json::parse(sse->data);
+            } catch (const nlohmann::json::exception & e) {
+                throw protocol_error{
+                    "OpenAI Responses stream sent invalid JSON: "
+                    + std::string{e.what()}};
+            }
+
+            auto terminal = sse->type == "response.completed"
+                            || sse->type == "response.incomplete"
+                            || sse->type == "response.failed";
+
+            auto event = stream_event{
+                .type = std::move(sse->type),
+                .payload = std::move(payload),
+                .raw = std::move(sse->data),
+            };
+
+            if (terminal)
+                done_ = true;
+            co_return event;
+        }
     }
 
-    auto on_sse_event = [&](nxt::http::server_sent_event event) -> nxt::task<> {
-        if (co_await emit_sse_event(event, on_event))
-            throw stream_complete{};
-        co_return;
-    };
+private:
+    using head_reader_t = nxt::io::byte_reader<Transport>;
+    using body_t = nxt::io::http::http_body_reader<head_reader_t>;
+    using body_reader_t = nxt::io::byte_reader<body_t>;
 
-    try {
-        co_await nxt::io::http::read_sse_response(
-            reader, response, on_sse_event);
-    } catch (const stream_complete &) {
-        co_return;
-    }
-}
+    Transport * transport_;
+    std::stop_token stop_;
+    std::array<std::byte, 8 * 1024> head_buffer_{};
+    head_reader_t reader_;
+    std::array<std::byte, 16 * 1024> body_buffer_{};
+    std::optional<body_t> body_;
+    std::optional<body_reader_t> body_reader_;
+    bool done_ = false;
+};
 
 } // namespace nxt::io::llm

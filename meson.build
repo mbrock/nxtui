@@ -165,37 +165,25 @@ if get_option('examples')
 endif
 
 if get_option('llm_tool')
-  duckdb_dep = dependency('DuckDB', method : 'cmake', required : false)
-  duckdb_rpath = ''
-
-  if duckdb_dep.found()
-    duckdb_include_dirs = duckdb_dep.get_variable(
-      cmake : 'DuckDB_INCLUDE_DIRS',
-      default_value : '',
-    )
-    if duckdb_include_dirs != ''
-      duckdb_dep = declare_dependency(
-        dependencies : duckdb_dep,
-        compile_args : ['-I' + duckdb_include_dirs],
-      )
-    endif
-  else
-    duckdb_prefix = meson.project_build_root() / 'deps' / 'duckdb'
-    duckdb_dep = declare_dependency(
-      compile_args : ['-I' + duckdb_prefix],
-      link_args : [duckdb_prefix / 'libduckdb.so'],
-    )
-    duckdb_rpath = duckdb_prefix
-  endif
+  nanoarrow_ipc_dep = dependency(
+    'nanoarrow-ipc',
+    default_options : [
+      'apps=disabled',
+      'benchmarks=disabled',
+      'device=disabled',
+      'ipc=enabled',
+      'ipc_with_zstd=disabled',
+      'testing=disabled',
+      'tests=disabled',
+    ],
+  )
 
   executable('nxtllm',
     'src/nxtio/nxtllm.cpp',
-    'src/nxtio/duckdb.cpp',
-    'src/nxtio/nxtllm-trace-store.cpp',
+    'src/nxtio/llm-trace.cpp',
     include_directories : nxt_inc,
-    dependencies : [nxt_dep, duckdb_dep],
+    dependencies : [nxt_dep, nanoarrow_ipc_dep],
     cpp_args : ['-Wno-unused-parameter'],
-    build_rpath : duckdb_rpath,
   )
 endif
 

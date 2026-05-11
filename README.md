@@ -199,7 +199,7 @@ meson test -C build
 ```
 
 The default build includes examples and tests. The `nxtllm` trace/debug tool is
-off by default because it requires DuckDB:
+off by default because it pulls in nanoarrow IPC support:
 
 ```sh
 meson setup build -Dllm_tool=true
