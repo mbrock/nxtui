@@ -214,8 +214,9 @@ if get_option('llm_tool')
   )
 
   executable('nxtllm',
-    'src/nxtio/nxtllm.cpp',
-    'src/nxtio/llm-trace.cpp',
+    'src/nxtai/nxtllm.cpp',
+    'src/nxtai/trace.cpp',
+    'src/nxtio/arrow.cpp',
     include_directories : nxt_inc,
     dependencies : [nxt_dep, nanoarrow_ipc_dep],
     cpp_args : ['-Wno-unused-parameter'],

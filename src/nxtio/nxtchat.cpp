@@ -2,10 +2,10 @@
 #include "nxt/text_field.hpp"
 #include "nxt/tui.hpp"
 #include "nxt/units.hpp"
+#include "nxtai/responses.hpp"
 #include "nxtio/app.hpp"
 #include "nxtio/async.hpp"
 #include "nxtio/input.hpp"
-#include "nxtio/llm.hpp"
 #include "nxtio/net.hpp"
 #include "nxtio/text_field.hpp"
 
@@ -81,7 +81,7 @@ auto input_field(const state & s)
 }
 
 std::string text_delta(
-    const nxt::io::llm::stream_event & event,
+    const nxt::ai::responses::stream_event & event,
     std::string_view type)
 {
     if (event.type != type)
@@ -132,7 +132,7 @@ nxt::task<> ask_model(nxt::ui::UIRuntime & runtime, state & s, std::string api_k
         s.status = "streaming";
         runtime.signal_damage();
 
-        auto request = nxt::io::llm::openai_responses_request{
+        auto request = nxt::ai::responses::openai_responses_request{
             .api_key = std::move(api_key),
             .model = s.model,
             .input = prompt_for(s),
@@ -146,7 +146,7 @@ nxt::task<> ask_model(nxt::ui::UIRuntime & runtime, state & s, std::string api_k
         };
 
         using transport_t = decltype(transport);
-        auto stream = nxt::io::llm::openai_response_stream<transport_t>{
+        auto stream = nxt::ai::responses::openai_response_stream<transport_t>{
             transport, runtime.get_stop_token()};
         co_await stream.connect(request);
 

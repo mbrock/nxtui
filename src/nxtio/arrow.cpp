@@ -1,6 +1,4 @@
-#include <nxtio/llm-trace.hpp>
-
-#include <nlohmann/json.hpp>
+#include <nxtio/arrow.hpp>
 
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
@@ -13,7 +11,7 @@
 #include <string>
 #include <utility>
 
-namespace nxt::io::nxtllm {
+namespace nxt::io::arrow {
 namespace {
 
 constexpr int trace_field_count = 7;
@@ -288,7 +286,6 @@ void set_child(
 
 [[nodiscard]] array_handle make_trace_batch(
     const ArrowSchema * schema,
-    std::string_view run_id,
     const trace_row & row)
 {
     auto error = nanoarrow_error{};
@@ -299,9 +296,8 @@ void set_child(
         error.value);
     check(ArrowArrayStartAppending(batch.get()), "start trace batch");
 
-    auto run_id_text = std::string{run_id};
     check(
-        ArrowArrayAppendString(batch.get()->children[0], string_view(run_id_text)),
+        ArrowArrayAppendString(batch.get()->children[0], string_view(row.run_id)),
         "append run_id");
     check(ArrowArrayAppendInt(batch.get()->children[1], row.seq), "append seq");
     check(
@@ -334,6 +330,8 @@ void set_child(
 [[nodiscard]] trace_row row_from_view(const ArrowArrayView * view, int64_t index)
 {
     return trace_row{
+        .run_id = to_string(
+            ArrowArrayViewGetStringUnsafe(view->children[0], index)),
         .seq = ArrowArrayViewGetIntUnsafe(view->children[1], index),
         .elapsed_ms = ArrowArrayViewGetIntUnsafe(view->children[2], index),
         .phase = to_string(
@@ -349,7 +347,7 @@ void set_child(
 
 } // namespace
 
-class arrow_trace::writer
+class ipc_trace::writer
 {
 public:
     writer(std::string_view path, std::string_view run_id)
@@ -423,7 +421,7 @@ public:
             throw std::runtime_error{"cannot append to closed trace"};
 
         auto error = nanoarrow_error{};
-        auto batch = make_trace_batch(schema_.get(), run_id_, row);
+        auto batch = make_trace_batch(schema_.get(), row);
         check(
             ArrowArrayViewSetArray(&array_view_, batch.get(), &error.value),
             "prepare trace batch",
@@ -473,82 +471,40 @@ private:
     bool closed_ = false;
 };
 
-arrow_trace::arrow_trace(std::optional<std::string> output_path)
+ipc_trace::ipc_trace(
+    std::optional<std::string> output_path,
+    std::string run_id_prefix)
     : output_path_(std::move(output_path))
     , start_(std::chrono::steady_clock::now())
 {
     if (output_path_) {
         auto now = std::chrono::system_clock::now().time_since_epoch().count();
-        run_id_ = "nxtllm-" + std::to_string(now);
+        run_id_ = std::move(run_id_prefix) + "-" + std::to_string(now);
         writer_ = std::make_unique<writer>(*output_path_, run_id_);
     }
 }
 
-arrow_trace::~arrow_trace() = default;
-arrow_trace::arrow_trace(arrow_trace &&) noexcept = default;
-arrow_trace & arrow_trace::operator=(arrow_trace &&) noexcept = default;
+ipc_trace::~ipc_trace() = default;
+ipc_trace::ipc_trace(ipc_trace &&) noexcept = default;
+ipc_trace & ipc_trace::operator=(ipc_trace &&) noexcept = default;
 
-bool arrow_trace::enabled() const noexcept
+bool ipc_trace::enabled() const noexcept
 {
     return output_path_.has_value();
 }
 
-const std::optional<std::string> & arrow_trace::output_path() const
+const std::optional<std::string> & ipc_trace::output_path() const
 {
     return output_path_;
 }
 
-void arrow_trace::record_request(
-    const llm::openai_responses_request & request)
-{
-    if (!enabled())
-        return;
-
-    auto body = llm::openai_responses_body(request);
-    auto metadata = nlohmann::json{
-        {"provider", "openai"},
-        {"api", "responses"},
-        {"url", "https://api.openai.com/v1/responses"},
-        {"method", "POST"},
-        {"request_body", body},
-        {"headers",
-         {
-             {"Accept", "text/event-stream"},
-             {"Content-Type", "application/json"},
-             {"User-Agent", "nxtllm/0"},
-         }},
-        {"authorization_header_present", !request.api_key.empty()},
-    };
-
-    add("request",
-        "openai.responses.request",
-        metadata.dump(),
-        body.dump());
-}
-
-void arrow_trace::record_event(const llm::stream_event & event)
-{
-    if (!enabled())
-        return;
-
-    add("sse_event", event.type, event.raw, event.payload.dump());
-}
-
-void arrow_trace::record_marker(std::string phase, std::string data)
-{
-    if (!enabled())
-        return;
-
-    add(std::move(phase), {}, std::move(data), {});
-}
-
-void arrow_trace::write()
+void ipc_trace::write()
 {
     if (writer_ != nullptr)
         writer_->close();
 }
 
-void arrow_trace::add(
+void ipc_trace::add(
     std::string phase,
     std::string event_type,
     std::string data,
@@ -561,6 +517,7 @@ void arrow_trace::add(
     auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - start_);
     auto row = trace_row{
+        .run_id = run_id_,
         .seq = next_seq_++,
         .elapsed_ms = elapsed.count(),
         .phase = std::move(phase),
@@ -633,4 +590,4 @@ std::vector<trace_row> read_trace_ipc(std::string_view path)
     return rows;
 }
 
-} // namespace nxt::io::nxtllm
+} // namespace nxt::io::arrow

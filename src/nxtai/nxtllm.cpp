@@ -1,11 +1,13 @@
 #include <nxt/text_field.hpp>
 #include <nxt/ansi.hpp>
 #include <nxt/tui.hpp>
+#include <nxtai/agent.hpp>
+#include <nxtai/responses.hpp>
+#include <nxtai/tools.hpp>
+#include <nxtai/trace.hpp>
 #include <nxtio/app.hpp>
 #include <nxtio/async.hpp>
 #include <nxtio/input.hpp>
-#include <nxtio/llm-trace.hpp>
-#include <nxtio/llm.hpp>
 #include <nxtio/net.hpp>
 #include <nxtio/text_field.hpp>
 
@@ -32,12 +34,14 @@
 
 namespace {
 
-using llm_request = nxt::io::llm::openai_responses_request;
-using arrow_trace = nxt::io::nxtllm::arrow_trace;
-using function_call = nxt::io::llm::function_call;
-using function_tool = nxt::io::llm::function_tool;
-using stream_event = nxt::io::llm::stream_event;
-using trace_row = nxt::io::nxtllm::trace_row;
+using llm_request = nxt::ai::responses::openai_responses_request;
+using arrow_trace = nxt::ai::trace::response_trace;
+using function_call = nxt::ai::tools::function_call;
+using function_tool = nxt::ai::tools::function_tool;
+using output_item_result = nxt::ai::agent::output_item_result;
+using response_stream_result = nxt::ai::agent::response_stream_result;
+using stream_event = nxt::ai::responses::stream_event;
+using trace_row = nxt::ai::trace::trace_row;
 
 constexpr std::size_t default_max_output_tokens = 128000;
 
@@ -390,11 +394,6 @@ bool load_api_key(nxt::ui::UIRuntime & runtime, llm_hud_state & state)
     return false;
 }
 
-void request_encrypted_reasoning(llm_request & request)
-{
-    request.include = nlohmann::json::array({"reasoning.encrypted_content"});
-}
-
 nlohmann::json object_schema(nlohmann::json properties, nlohmann::json required)
 {
     return {
@@ -483,7 +482,7 @@ nxt::task<> playback_delay(
     double playback_speed);
 
 // Pull-shaped event source backed by a recorded Arrow IPC trace. Mirrors the
-// shape of nxt::io::llm::openai_response_stream so the consumer loop can be
+// shape of nxt::ai::responses::openai_response_stream so the consumer loop can be
 // written once and reused for both live and replay.
 class playback_stream
 {
@@ -533,41 +532,6 @@ private:
     std::int64_t previous_elapsed_ms_;
     double playback_speed_;
 };
-
-bool is_event(const stream_event & event, std::string_view type)
-{
-    return event.type == type;
-}
-
-struct response_stream_result
-{
-    std::vector<function_call> function_calls;
-    std::vector<nlohmann::json> output_items;
-    std::optional<std::string> response_id;
-    bool completed = false;
-};
-
-struct output_item_result
-{
-    std::optional<function_call> call;
-    std::optional<nlohmann::json> item;
-};
-
-std::optional<nlohmann::json> output_item_from_event(const stream_event & event)
-{
-    if (auto it = event.payload.find("item");
-        it != event.payload.end() && it->is_object())
-        return *it;
-    return std::nullopt;
-}
-
-std::string output_item_type(const stream_event & event)
-{
-    if (auto it = event.payload.find("item");
-        it != event.payload.end() && it->is_object())
-        return it->value("type", std::string{});
-    return {};
-}
 
 std::size_t stream_wrap_width(nxt::ui::UIRuntime & runtime)
 {
@@ -638,7 +602,7 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
     };
 
     while (auto event = co_await stream.next()) {
-        if (is_event(*event, delta_event_type)) {
+        if (nxt::ai::agent::is_event(*event, delta_event_type)) {
             auto delta = event->payload.value("delta", std::string{});
             if (!delta.empty()) {
                 text += delta;
@@ -650,8 +614,8 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
             continue;
         }
 
-        if (is_event(*event, "response.output_item.done")) {
-            auto item = output_item_from_event(*event);
+        if (nxt::ai::agent::is_event(*event, "response.output_item.done")) {
+            auto item = nxt::ai::agent::output_item_from_event(*event);
             for_complete_words(text, true, print_segment);
             if (wrote && cursor != 0)
                 runtime.print("\n");
@@ -703,7 +667,7 @@ nxt::task<output_item_result> read_output_item(
     llm_hud_state & state,
     const stream_event & first)
 {
-    auto type = output_item_type(first);
+    auto type = nxt::ai::agent::output_item_type(first);
 
     if (type == "reasoning") {
         co_return output_item_result{
@@ -720,18 +684,18 @@ nxt::task<output_item_result> read_output_item(
     }
 
     if (type == "function_call") {
-        auto item = output_item_from_event(first);
+        auto item = nxt::ai::agent::output_item_from_event(first);
 
         while (auto event = co_await stream.next()) {
-            if (is_event(*event, "response.output_item.done")) {
-                if (auto done_item = output_item_from_event(*event))
+            if (nxt::ai::agent::is_event(*event, "response.output_item.done")) {
+                if (auto done_item = nxt::ai::agent::output_item_from_event(*event))
                     item = std::move(*done_item);
                 break;
             }
         }
 
         auto call = item
-            ? nxt::io::llm::function_call_from_item(*item)
+            ? nxt::ai::tools::function_call_from_item(*item)
             : std::optional<function_call>{};
         co_return output_item_result{
             .call = std::move(call),
@@ -739,10 +703,10 @@ nxt::task<output_item_result> read_output_item(
         };
     }
 
-    auto item = output_item_from_event(first);
+    auto item = nxt::ai::agent::output_item_from_event(first);
     while (auto event = co_await stream.next()) {
-        if (is_event(*event, "response.output_item.done")) {
-            if (auto done_item = output_item_from_event(*event))
+        if (nxt::ai::agent::is_event(*event, "response.output_item.done")) {
+            if (auto done_item = nxt::ai::agent::output_item_from_event(*event))
                 item = std::move(*done_item);
             break;
         }
@@ -824,10 +788,10 @@ nxt::task<response_stream_result> consume_response_stream(
 
     try {
         while (auto event = co_await stream.next()) {
-            if (auto response_id = nxt::io::llm::response_id_from_event(*event))
+            if (auto response_id = nxt::ai::responses::response_id_from_event(*event))
                 result.response_id = std::move(*response_id);
 
-            if (is_event(*event, "response.output_item.added")) {
+            if (nxt::ai::agent::is_event(*event, "response.output_item.added")) {
                 auto output_item =
                     co_await read_output_item(stream, runtime, state, *event);
                 if (output_item.item)
@@ -843,8 +807,8 @@ nxt::task<response_stream_result> consume_response_stream(
                 continue;
             }
 
-            if (is_event(*event, "response.completed")) {
-                if (auto response_id = nxt::io::llm::response_id_from_event(*event))
+            if (nxt::ai::agent::is_event(*event, "response.completed")) {
+                if (auto response_id = nxt::ai::responses::response_id_from_event(*event))
                     result.response_id = std::move(*response_id);
                 trace.record_marker("complete");
                 update_hud(runtime, state, [&](llm_hud_state & hud) {
@@ -862,8 +826,8 @@ nxt::task<response_stream_result> consume_response_stream(
                 co_return result;
             }
 
-            if (is_event(*event, "response.failed")
-                || is_event(*event, "response.incomplete")) {
+            if (nxt::ai::agent::is_event(*event, "response.failed")
+                || nxt::ai::agent::is_event(*event, "response.incomplete")) {
                 trace.record_marker("error", event->type);
                 update_hud(runtime, state, [&](llm_hud_state & hud) {
                     hud.status = event->type;
@@ -939,7 +903,7 @@ nxt::task<response_stream_result> stream_live_response_once(
 
     using transport_t = decltype(transport);
     auto stream =
-        nxt::io::llm::openai_response_stream<transport_t>{
+        nxt::ai::responses::openai_response_stream<transport_t>{
             transport, runtime.get_stop_token()};
 
     auto result = response_stream_result{};
@@ -987,10 +951,10 @@ nxt::task<std::vector<nlohmann::json>> run_agent_tools(
         });
 
         auto output =
-            co_await nxt::io::llm::run_function_tool(tools, call);
+            co_await nxt::ai::tools::run_function_tool(tools, call);
         trace.record_marker("tool_output", output);
         runtime.println(std::format("tool result: {}", output));
-        outputs.push_back(nxt::io::llm::function_call_output(
+        outputs.push_back(nxt::ai::tools::function_call_output(
             call.call_id,
             std::move(output)));
     }
@@ -1009,13 +973,9 @@ nxt::task<> stream_live_request(
         ? builtin_agent_tools(runtime)
         : std::vector<function_tool>{};
     auto request = state.request;
-    if (!tools.empty()) {
-        request.tools = nxt::io::llm::function_tool_definitions(tools);
-        if (!request.store)
-            request_encrypted_reasoning(request);
-    }
+    nxt::ai::agent::prepare_tool_request(request, tools);
     auto stateless_input =
-        nxt::io::llm::input_items_from_request(request);
+        nxt::ai::responses::input_items_from_request(request);
 
     constexpr auto max_agent_steps = 6;
     for (int step = 0; step < max_agent_steps; ++step) {
@@ -1062,14 +1022,13 @@ nxt::task<> stream_live_request(
             request.input_items = std::move(outputs);
             request.previous_response_id = *result.response_id;
         } else {
-            for (auto & item : result.output_items)
-                stateless_input.push_back(std::move(item));
-            for (auto & output : outputs)
-                stateless_input.push_back(std::move(output));
+            nxt::ai::agent::append_stateless_turn(
+                stateless_input,
+                std::move(result.output_items),
+                std::move(outputs));
             request.input_items = stateless_input;
-            request_encrypted_reasoning(request);
         }
-        request.tools = nxt::io::llm::function_tool_definitions(tools);
+        nxt::ai::agent::prepare_tool_request(request, tools);
         update_hud(runtime, state, [](llm_hud_state & hud) {
             hud.status = "continuing";
             hud.busy = true;
@@ -1195,7 +1154,7 @@ int main(int argc, char ** argv)
 
         if (options.playback_path) {
             auto rows =
-                nxt::io::nxtllm::read_trace_ipc(*options.playback_path);
+                nxt::ai::trace::read_trace_ipc(*options.playback_path);
             auto start_index =
                 playback_start_index(rows, options.playback_from);
             auto state = llm_hud_state{};
