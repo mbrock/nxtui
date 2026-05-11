@@ -12,10 +12,15 @@ namespace nxt {
 /// optimization).
 struct RawChange
 {
+    /// Origin of the changed run.
     Pos origin;
+    /// Glyph ids for the changed run.
     std::span<const GlyphTable::GlyphId> glyphs;
+    /// New foreground color for the run.
     Rgba8 fg;
+    /// New background color for the run.
     Rgba8 bg;
+    /// New emphasis for the run.
     Emphasis em;
 };
 
@@ -23,13 +28,21 @@ struct RawChange
 /// output.
 struct ChangeRun
 {
+    /// Origin of the emitted run.
     Pos origin;
+    /// Glyph ids for the emitted run.
     std::span<const GlyphTable::GlyphId> glyphs;
+    /// Foreground change to emit before text, if any.
     std::optional<Rgba8> fg_change;
+    /// Background change to emit before text, if any.
     std::optional<Rgba8> bg_change;
+    /// Emphasis change to emit before text, if any.
     std::optional<Emphasis> em_change;
+    /// Whether foreground should be reset before text.
     bool fg_reset = false;
+    /// Whether background should be reset before text.
     bool bg_reset = false;
+    /// Whether emphasis should be reset before text.
     bool em_reset = false;
 };
 
@@ -37,10 +50,14 @@ struct ChangeRun
 /// deltas.
 struct StyleState
 {
+    /// Current emitted foreground state.
     std::optional<Rgba8> fg;
+    /// Current emitted background state.
     std::optional<Rgba8> bg;
+    /// Current emitted emphasis state.
     std::optional<Emphasis> em;
 
+    /// Convert a raw run into a run annotated with style deltas.
     ChangeRun operator()(const RawChange & raw)
     {
         ChangeRun run{

@@ -13,6 +13,7 @@
 
 namespace nxt::tui {
 
+/// Maps a logical size unit to its strongly typed extent.
 template<auto Unit>
 struct hint_extent;
 
@@ -31,26 +32,32 @@ struct hint_extent<ln>
 template<auto Unit>
 using hint_extent_t = typename hint_extent<Unit>::type;
 
+/// Minimum size plus flex-grow factor for one layout axis.
 template<auto Unit>
 struct SizeHint
 {
     hint_extent_t<Unit> min{0 * Unit}; // Minimum size needed
     ratio_t flex{0.0 * one}; // Flex grow factor (0 = don't grow)
 
+    /// Require exactly `n` minimum cells/lines and no growth.
     static constexpr SizeHint fixed(hint_extent_t<Unit> n)
     {
         return {n, 0.0 * one};
     }
 
+    /// Ask to share remaining space using `factor` as the flex weight.
     static constexpr SizeHint grow(ratio_t factor = 1.0 * one)
     {
         return {0 * Unit, factor};
     }
 };
 
+/// Width hint measured in terminal cells.
 using WidthHint = SizeHint<ch>;
+/// Height hint measured in terminal lines.
 using HeightHint = SizeHint<ln>;
 
+/// Concept implemented by values that can report size hints and render.
 template<typename L>
 concept Layout =
     requires(const L & layout, RasterView & raster, Size size) {
@@ -59,54 +66,69 @@ concept Layout =
         { layout.render(raster, size) } -> std::same_as<void>;
     };
 
+/// Leaf layout backed by a render callback.
 template<typename RenderFn>
 struct Leaf
 {
+    /// Width hint returned to parents.
     WidthHint w_hint;
+    /// Height hint returned to parents.
     HeightHint h_hint;
+    /// Callback invoked when the leaf is rendered.
     RenderFn render_fn;
 
+    /// Return this leaf's width hint.
     constexpr WidthHint width_hint() const
     {
         return w_hint;
     }
 
+    /// Return this leaf's height hint.
     constexpr HeightHint height_hint() const
     {
         return h_hint;
     }
 
+    /// Render by calling `render_fn`.
     void render(RasterView & raster, Size size) const
     {
         render_fn(raster, size);
     }
 };
 
+/// Create a callback-backed leaf layout.
 template<typename F>
 auto leaf(WidthHint w, HeightHint h, F && f)
 {
     return Leaf<std::decay_t<F>>{w, h, std::forward<F>(f)};
 }
 
+/// Conditional layout that delegates to one of two child layouts.
 template<Layout FalseLayout, Layout TrueLayout>
 struct Either
 {
+    /// Render `true_layout` when set, otherwise `false_layout`.
     bool choose_true = false;
+    /// Layout used when `choose_true` is false.
     FalseLayout false_layout;
+    /// Layout used when `choose_true` is true.
     TrueLayout true_layout;
 
+    /// Width hint of the selected child.
     constexpr WidthHint width_hint() const
     {
         return choose_true ? true_layout.width_hint()
                            : false_layout.width_hint();
     }
 
+    /// Height hint of the selected child.
     constexpr HeightHint height_hint() const
     {
         return choose_true ? true_layout.height_hint()
                            : false_layout.height_hint();
     }
 
+    /// Render the selected child.
     void render(RasterView & raster, Size size) const
     {
         if (choose_true)
@@ -116,6 +138,7 @@ struct Either
     }
 };
 
+/// Create a conditional layout from two alternatives.
 template<Layout FalseLayout, Layout TrueLayout>
 auto either(
     bool choose_true,
@@ -129,32 +152,41 @@ auto either(
     };
 }
 
+/// Write UTF-8 text into a raster.
 inline col_t write_text(RasterView & r, Pos pos, std::string_view text)
 {
     return r.write_text(pos, text);
 }
 
+/// Set one cell's foreground color.
 inline void set_fg(RasterView & r, Pos pos, Rgba8 color)
 {
     r.set_fg(pos, color);
 }
 
+/// Set one cell's background color.
 inline void set_bg(RasterView & r, Pos pos, Rgba8 color)
 {
     r.set_bg(pos, color);
 }
 
+/// Create a child raster view relative to a parent view.
 inline RasterView subraster(RasterView & r, Pos pos, Size size)
 {
     return r.subraster(pos, size);
 }
 
+/// Foreground, background, and emphasis style overlay.
 struct Style
 {
+    /// Foreground color, or `DEFAULT_COLOR` to inherit/reset.
     Rgba8 fg = DEFAULT_COLOR;
+    /// Background color, or `DEFAULT_COLOR` to inherit/reset.
     Rgba8 bg = DEFAULT_COLOR;
+    /// Emphasis bitset.
     Emphasis em = DEFAULT_EMPHASIS;
 
+    /// Merge styles, letting explicit colors in `other` override this style.
     constexpr Style operator|(const Style & other) const
     {
         return {
@@ -165,21 +197,25 @@ struct Style
     }
 };
 
+/// Build a style that sets only foreground color.
 constexpr Style fg(Rgba8 color)
 {
     return {color, DEFAULT_COLOR, DEFAULT_EMPHASIS};
 }
 
+/// Build a style that sets only background color.
 constexpr Style bg(Rgba8 color)
 {
     return {DEFAULT_COLOR, color, DEFAULT_EMPHASIS};
 }
 
+/// Build a style that sets only emphasis flags.
 constexpr Style em(Emphasis e)
 {
     return {DEFAULT_COLOR, DEFAULT_COLOR, e};
 }
 
+/// Predefined emphasis-only styles.
 inline constexpr Style bold{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::bold};
 inline constexpr Style faint{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::faint};
 inline constexpr Style italic{
@@ -191,33 +227,43 @@ inline constexpr Style reverse{
 inline constexpr Style strikethrough{
     DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::strikethrough};
 
+/// Styled text segment used by `styled_text`.
 struct Span
 {
+    /// UTF-8 text.
     std::string text;
+    /// Style applied to the text.
     Style style{};
 };
 
+/// Create a styled text segment.
 inline Span span(std::string text, Style s = {})
 {
     return {std::move(text), s};
 }
 
+/// Layout decorator that clears its raster before rendering a child.
 template<Layout Child>
 struct Surface
 {
+    /// Style used for every cell in the clear pass.
     Style style{};
+    /// Child rendered after the clear pass.
     Child child;
 
+    /// Forward the child's width hint.
     constexpr WidthHint width_hint() const
     {
         return child.width_hint();
     }
 
+    /// Forward the child's height hint.
     constexpr HeightHint height_hint() const
     {
         return child.height_hint();
     }
 
+    /// Clear the full raster and render the child.
     void render(RasterView & raster, Size size) const
     {
         std::ranges::fill(raster.glyphs(), 32);
@@ -228,6 +274,7 @@ struct Surface
     }
 };
 
+/// Create a clearing surface around a child layout.
 template<Layout Child>
 auto surface(Style style, Child && child)
 {
@@ -236,28 +283,35 @@ auto surface(Style style, Child && child)
         std::forward<Child>(child)};
 }
 
+/// Layout decorator that forces a fixed height hint.
 template<Layout Child>
 struct FixedHeight
 {
+    /// Height reported to parent columns and HUD sizing.
     height_t height{0 * ln};
+    /// Child rendered with whatever size the parent assigns.
     Child child;
 
+    /// Forward the child's width hint.
     constexpr WidthHint width_hint() const
     {
         return child.width_hint();
     }
 
+    /// Return the fixed height hint.
     constexpr HeightHint height_hint() const
     {
         return HeightHint::fixed(height);
     }
 
+    /// Render the child without additional clipping behavior.
     void render(RasterView & raster, Size size) const
     {
         child.render(raster, size);
     }
 };
 
+/// Create a layout wrapper that reports a fixed height.
 template<Layout Child>
 auto fixed_height(height_t height, Child && child)
 {
@@ -266,6 +320,7 @@ auto fixed_height(height_t height, Child && child)
         std::forward<Child>(child)};
 }
 
+/// Render one styled span and return the column after the written text.
 inline col_t render_span(RasterView & r, Pos pos, const Span & s)
 {
     const auto start_x = pos.x;
@@ -284,6 +339,7 @@ inline col_t render_span(RasterView & r, Pos pos, const Span & s)
     return end_x;
 }
 
+/// Repeat a UTF-8 glyph string `w` terminal cells worth of times.
 inline std::string repeat(std::string_view glyph, width_t w)
 {
     auto n = w.count();
@@ -294,11 +350,13 @@ inline std::string repeat(std::string_view glyph, width_t w)
     return result;
 }
 
+/// Display width of UTF-8 text in terminal cells.
 inline width_t utf8_width(std::string_view s)
 {
     return utf8::display_width(s);
 }
 
+/// Create a one-line text leaf using default style.
 inline auto text(std::string s)
 {
     auto w = utf8_width(s);
@@ -314,6 +372,7 @@ inline auto text(std::string s)
         });
 }
 
+/// Create a one-line text leaf using `style`.
 inline auto text(std::string s, Style style)
 {
     auto w = utf8_width(s);
@@ -329,6 +388,7 @@ inline auto text(std::string s, Style style)
         });
 }
 
+/// Create a one-line text leaf from several styled spans.
 template<typename... Spans>
     requires(std::same_as<std::decay_t<Spans>, Span> && ...)
 inline auto styled_text(Spans &&... spans)
@@ -352,6 +412,7 @@ inline auto styled_text(Spans &&... spans)
         });
 }
 
+/// Fill available space with a background color.
 inline auto fill(Rgba8 color = Rgba8(60, 60, 60))
 {
     return leaf(
@@ -360,11 +421,13 @@ inline auto fill(Rgba8 color = Rgba8(60, 60, 60))
         });
 }
 
+/// Build a horizontal rule string for a width.
 inline std::string hrule_string(width_t w)
 {
     return repeat("─", w);
 }
 
+/// Create a one-line horizontal rule layout.
 inline auto hrule()
 {
     return leaf(
@@ -375,6 +438,7 @@ inline auto hrule()
         });
 }
 
+/// Build the glyph string for a fractional progress bar.
 inline std::string bar_string(percent_t pct, width_t width)
 {
     static constexpr std::array<std::string_view, 9> partials = {
@@ -396,6 +460,7 @@ inline std::string bar_string(percent_t pct, width_t width)
            + std::string(partials[partial]);
 }
 
+/// Create a one-line progress bar layout.
 inline auto progress_bar(
     percent_t pct,
     Rgba8 fg = Rgba8(100, 180, 255),
@@ -411,11 +476,14 @@ inline auto progress_bar(
         });
 }
 
+/// Horizontal flex container.
 template<Layout... Children>
 struct Row
 {
+    /// Child layouts arranged left to right.
     std::tuple<Children...> children;
 
+    /// Sum child minimum widths and flex factors.
     constexpr WidthHint width_hint() const
     {
         width_t total_min = 0 * ch;
@@ -430,6 +498,7 @@ struct Row
         return {total_min, total_flex};
     }
 
+    /// Use the tallest child minimum height.
     constexpr HeightHint height_hint() const
     {
         height_t max_min = 0 * ln;
@@ -443,6 +512,7 @@ struct Row
                                                : height_t{1 * ln});
     }
 
+    /// Divide width among children and render them left to right.
     void render(RasterView & raster, Size size) const
     {
         constexpr std::size_t N = sizeof...(Children);
@@ -510,17 +580,21 @@ private:
     }
 };
 
+/// Create a horizontal flex row.
 template<Layout... Children>
 Row<std::decay_t<Children>...> row(Children &&... children)
 {
     return {std::tuple{std::forward<Children>(children)...}};
 }
 
+/// Vertical flex container.
 template<Layout... Children>
 struct Column
 {
+    /// Child layouts arranged top to bottom.
     std::tuple<Children...> children;
 
+    /// Use the widest child minimum width and grow horizontally.
     constexpr WidthHint width_hint() const
     {
         width_t max_min = 0 * ch;
@@ -532,6 +606,7 @@ struct Column
         return {max_min, 1.0 * one};
     }
 
+    /// Sum child minimum heights and flex factors.
     constexpr HeightHint height_hint() const
     {
         height_t total_min = 0 * ln;
@@ -546,6 +621,7 @@ struct Column
         return {total_min, total_flex};
     }
 
+    /// Divide height among children and render them top to bottom.
     void render(RasterView & raster, Size size) const
     {
         constexpr std::size_t N = sizeof...(Children);
@@ -614,28 +690,35 @@ private:
     }
 };
 
+/// Create a vertical flex column.
 template<Layout... Children>
 Column<std::decay_t<Children>...> column(Children &&... children)
 {
     return {std::tuple{std::forward<Children>(children)...}};
 }
 
+/// Render a span of items by mapping each item to a one-line layout.
 template<typename T, typename ViewFn>
 struct List
 {
+    /// Borrowed items to render.
     std::span<const T> items;
+    /// Function that turns an item into a layout.
     ViewFn view;
 
+    /// Lists grow to fill available width.
     constexpr WidthHint width_hint() const
     {
         return WidthHint::grow();
     }
 
+    /// One line per item.
     constexpr HeightHint height_hint() const
     {
         return HeightHint::fixed(items.size() * ln);
     }
 
+    /// Render visible items until the assigned height is filled.
     void render(RasterView & raster, Size size) const
     {
         const auto row_size = Size{size.w, 1 * ln};
@@ -655,12 +738,14 @@ struct List
     }
 };
 
+/// Create a list from a borrowed item span.
 template<typename T, typename ViewFn>
 List<T, ViewFn> list(std::span<const T> items, ViewFn && view)
 {
     return {items, std::forward<ViewFn>(view)};
 }
 
+/// Create a list from a vector, borrowing it for the lifetime of the layout.
 template<typename T, typename ViewFn>
 auto list(const std::vector<T> & items, ViewFn && view)
 {

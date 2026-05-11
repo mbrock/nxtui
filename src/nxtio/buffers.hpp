@@ -13,34 +13,39 @@
 
 namespace nxt::io {
 
+/// Base exception for buffered byte I/O helpers.
 struct buffer_error : std::runtime_error
 {
     using std::runtime_error::runtime_error;
 };
 
+/// Raised when a reader needs more bytes but the source ended.
 struct end_of_stream : buffer_error
 {
     using buffer_error::buffer_error;
 };
 
+/// Raised when a stop token cancels a buffered operation.
 struct operation_cancelled : buffer_error
 {
     using buffer_error::buffer_error;
 };
 
+/// View a byte span as immutable character data.
 inline std::string_view
 as_string_view(std::span<const std::byte> bytes) noexcept;
 
+/// Borrowed in-memory source exposed through `read_some`.
 class string_source
 {
 public:
-    // Borrowed sequence of string chunks, exposed as one contiguous byte
-    // source.  The caller owns the span and the string_view storage.
+    /// Borrow a sequence of string chunks as one byte stream.
     explicit string_source(std::span<const std::string_view> chunks)
         : chunks_(chunks)
     {
     }
 
+    /// Read bytes from the current chunk sequence into `dst`.
     nxt::task<std::size_t> read_some(std::span<std::byte> dst)
     {
         auto written = std::size_t{0};
@@ -69,21 +74,25 @@ private:
     std::size_t offset_ = 0;
 };
 
+/// In-memory sink that appends all writes to a string.
 class string_sink
 {
 public:
+    /// Append raw bytes to the sink.
     nxt::task<> write_all(std::span<const std::byte> bytes)
     {
         text_ += as_string_view(bytes);
         co_return;
     }
 
+    /// Append text bytes to the sink.
     nxt::task<> write_all(std::string_view text)
     {
         text_ += text;
         co_return;
     }
 
+    /// Return all bytes written so far.
     [[nodiscard]] const std::string & text() const noexcept
     {
         return text_;
@@ -93,31 +102,35 @@ private:
     std::string text_;
 };
 
+/// In-memory transport for tests, fixtures, and replay harnesses.
 class string_transport
 {
 public:
-    // Small in-memory transport for tests, protocol fixtures, and replay
-    // harnesses.  Incoming bytes are borrowed; outgoing bytes are collected.
+    /// Borrow incoming chunks; outgoing bytes are collected.
     explicit string_transport(std::span<const std::string_view> chunks)
         : source_(chunks)
     {
     }
 
+    /// Read from the borrowed input source.
     nxt::task<std::size_t> read_some(std::span<std::byte> dst)
     {
         co_return co_await source_.read_some(dst);
     }
 
+    /// Write raw bytes to the collected output.
     nxt::task<> write_all(std::span<const std::byte> bytes)
     {
         co_await sink_.write_all(bytes);
     }
 
+    /// Write text bytes to the collected output.
     nxt::task<> write_all(std::string_view text)
     {
         co_await sink_.write_all(text);
     }
 
+    /// Return all bytes written through this transport.
     [[nodiscard]] const std::string & written() const noexcept
     {
         return sink_.text();
@@ -128,6 +141,7 @@ private:
     string_sink sink_;
 };
 
+/// Reinterpret writable bytes as writable chars.
 inline std::span<char> as_writable_chars(std::span<std::byte> bytes) noexcept
 {
     return {
@@ -136,6 +150,7 @@ inline std::span<char> as_writable_chars(std::span<std::byte> bytes) noexcept
     };
 }
 
+/// Reinterpret immutable bytes as chars.
 inline std::span<const char>
 as_chars(std::span<const std::byte> bytes) noexcept
 {
@@ -145,6 +160,7 @@ as_chars(std::span<const std::byte> bytes) noexcept
     };
 }
 
+/// Reinterpret immutable bytes as a string view.
 inline std::string_view
 as_string_view(std::span<const std::byte> bytes) noexcept
 {
@@ -154,6 +170,7 @@ as_string_view(std::span<const std::byte> bytes) noexcept
     };
 }
 
+/// Reinterpret a string view as immutable bytes.
 inline std::span<const std::byte> as_bytes(std::string_view text) noexcept
 {
     return std::as_bytes(std::span{text});
@@ -219,24 +236,29 @@ inline std::size_t find_bytes(
 
 } // namespace detail
 
+/// Synchronous cursor over an already-buffered byte span.
 class byte_cursor
 {
 public:
+    /// Create a cursor over bytes.
     explicit byte_cursor(std::span<const std::byte> bytes)
         : rest_(bytes)
     {
     }
 
+    /// Create a cursor over text bytes.
     explicit byte_cursor(std::string_view text)
         : rest_(as_bytes(text))
     {
     }
 
+    /// Remaining unread bytes.
     [[nodiscard]] std::span<const std::byte> remaining() const noexcept
     {
         return rest_;
     }
 
+    /// Discard `n` bytes.
     void toss(std::size_t n)
     {
         if (n > rest_.size())
@@ -244,6 +266,7 @@ public:
         rest_ = rest_.subspan(n);
     }
 
+    /// Consume and return exactly `n` bytes.
     std::span<const std::byte> take(std::size_t n)
     {
         if (n > rest_.size())
@@ -253,6 +276,7 @@ public:
         return out;
     }
 
+    /// Consume through `delimiter` and return bytes before it.
     std::span<const std::byte> take_until(std::span<const std::byte> delimiter)
     {
         if (delimiter.empty())
@@ -267,6 +291,7 @@ public:
         return out;
     }
 
+    /// Consume through a string delimiter and return bytes before it.
     std::span<const std::byte> take_until(std::string_view delimiter)
     {
         return take_until(as_bytes(delimiter));
@@ -276,10 +301,12 @@ private:
     std::span<const std::byte> rest_;
 };
 
+/// Buffered asynchronous reader over any source with a `read_some` method.
 template<typename Source>
 class byte_reader
 {
 public:
+    /// Use caller-owned storage as the read-ahead buffer.
     byte_reader(
         Source & source,
         std::span<std::byte> buffer,
@@ -290,36 +317,43 @@ public:
     {
     }
 
+    /// Bytes currently buffered and not yet consumed.
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
         return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
     }
 
+    /// Number of buffered bytes.
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
         return end_ - seek_;
     }
 
+    /// Total buffer capacity.
     [[nodiscard]] std::size_t capacity() const noexcept
     {
         return buffer_.size();
     }
 
+    /// Start offset of unread bytes in the buffer.
     [[nodiscard]] std::size_t seek() const noexcept
     {
         return seek_;
     }
 
+    /// End offset of written bytes in the buffer.
     [[nodiscard]] std::size_t end() const noexcept
     {
         return end_;
     }
 
+    /// Unused buffer storage after the current end offset.
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
     {
         return buffer_.subspan(end_);
     }
 
+    /// Move unread bytes to the front when needed to expose capacity.
     void rebase(std::size_t capacity)
     {
         if (capacity > buffer_.size())
@@ -333,6 +367,7 @@ public:
         end_ = pending;
     }
 
+    /// Ensure at least `n` bytes are buffered.
     nxt::task<> fill(std::size_t n)
     {
         if (n > buffer_.size())
@@ -348,6 +383,7 @@ public:
         }
     }
 
+    /// Read more bytes from the source and return the count read.
     nxt::task<std::size_t> fill_more()
     {
         if (buffered_size() == buffer_.size())
@@ -356,12 +392,14 @@ public:
         co_return co_await fill_more_without_rebase();
     }
 
+    /// Return the next `n` bytes without consuming them.
     nxt::task<std::span<const std::byte>> peek(std::size_t n)
     {
         co_await fill(n);
         co_return buffered().first(n);
     }
 
+    /// Discard buffered bytes.
     void toss(std::size_t n)
     {
         if (n > buffered_size())
@@ -369,6 +407,7 @@ public:
         seek_ += n;
     }
 
+    /// Consume and return exactly `n` bytes.
     nxt::task<std::span<const std::byte>> take(std::size_t n)
     {
         auto out = co_await peek(n);
@@ -376,6 +415,7 @@ public:
         co_return out;
     }
 
+    /// Consume through `delimiter` and return bytes before it.
     nxt::task<std::span<const std::byte>>
     take_until(std::span<const std::byte> delimiter)
     {
@@ -400,12 +440,14 @@ public:
         }
     }
 
+    /// Consume through a string delimiter and return bytes before it.
     nxt::task<std::span<const std::byte>>
     take_until(std::string_view delimiter)
     {
         co_return co_await take_until(as_bytes(delimiter));
     }
 
+    /// Stream exactly `n` bytes to a writer without materializing a string.
     template<typename Writer>
     nxt::task<> stream_exact(Writer & writer, std::size_t n)
     {
@@ -448,10 +490,12 @@ private:
     std::stop_token stop_;
 };
 
+/// Buffered asynchronous writer over any sink with a `write_all` method.
 template<typename Sink>
 class byte_writer
 {
 public:
+    /// Use caller-owned storage as the write buffer.
     byte_writer(
         Sink & sink,
         std::span<std::byte> buffer,
@@ -462,32 +506,38 @@ public:
     {
     }
 
+    /// Bytes currently staged for writing.
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
         return std::span<const std::byte>{buffer_}.first(end_);
     }
 
+    /// Number of staged bytes.
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
         return end_;
     }
 
+    /// Total buffer capacity.
     [[nodiscard]] std::size_t capacity() const noexcept
     {
         return buffer_.size();
     }
 
+    /// Remaining writable capacity.
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
     {
         return buffer_.subspan(end_);
     }
 
+    /// Reserve `n` writable bytes, flushing first if needed.
     nxt::task<std::span<std::byte>> writable(std::size_t n)
     {
         co_await ensure_unused_capacity(n);
         co_return unused_capacity().first(n);
     }
 
+    /// Mark `n` reserved bytes as written.
     void advance(std::size_t n)
     {
         if (n > unused_capacity().size())
@@ -495,6 +545,7 @@ public:
         end_ += n;
     }
 
+    /// Remove `n` bytes from the staged output.
     void undo(std::size_t n)
     {
         if (n > end_)
@@ -502,6 +553,7 @@ public:
         end_ -= n;
     }
 
+    /// Ensure at least `n` bytes of unused capacity.
     nxt::task<> ensure_unused_capacity(std::size_t n)
     {
         if (n > buffer_.size())
@@ -514,6 +566,7 @@ public:
             throw buffer_error{"writer could not make requested capacity"};
     }
 
+    /// Write all bytes, buffering small chunks and bypassing for large chunks.
     nxt::task<> write_all(std::span<const std::byte> bytes)
     {
         auto rest = bytes;
@@ -541,11 +594,13 @@ public:
         }
     }
 
+    /// Write all text bytes.
     nxt::task<> write_all(std::string_view text)
     {
         co_await write_all(as_bytes(text));
     }
 
+    /// Flush staged bytes to the sink.
     nxt::task<> flush()
     {
         if (end_ == 0)

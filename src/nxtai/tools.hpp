@@ -13,24 +13,37 @@
 
 namespace nxt::ai::tools {
 
+/// Function-call item emitted by a Responses model.
 struct function_call
 {
+    /// Output item id, when present.
     std::string id;
+    /// Stable call id used when returning `function_call_output`.
     std::string call_id;
+    /// Tool name selected by the model.
     std::string name;
+    /// Raw JSON argument string from the response item.
     std::string arguments;
+    /// Original response output item.
     nlohmann::json item = nlohmann::json::object();
 };
 
+/// Local executable function tool plus its JSON schema.
 struct function_tool
 {
+    /// Name exposed to the model.
     std::string name;
+    /// Human-readable description exposed to the model.
     std::string description;
+    /// JSON schema for arguments.
     nlohmann::json parameters = nlohmann::json::object();
+    /// Whether the model must conform strictly to `parameters`.
     bool strict = true;
+    /// Coroutine called with parsed arguments to produce tool output text.
     std::function<nxt::task<std::string>(const nlohmann::json &)> run;
 };
 
+/// Convert one local function tool to the Responses tool-definition object.
 [[nodiscard]] inline nlohmann::json
 function_tool_definition(const function_tool & tool)
 {
@@ -44,6 +57,7 @@ function_tool_definition(const function_tool & tool)
     return out;
 }
 
+/// Convert a list of local function tools to a Responses `tools` array.
 [[nodiscard]] inline nlohmann::json
 function_tool_definitions(const std::vector<function_tool> & tools)
 {
@@ -53,6 +67,7 @@ function_tool_definitions(const std::vector<function_tool> & tools)
     return out;
 }
 
+/// Parse a Responses output item as a function call when possible.
 [[nodiscard]] inline std::optional<function_call>
 function_call_from_item(const nlohmann::json & item)
 {
@@ -73,6 +88,7 @@ function_call_from_item(const nlohmann::json & item)
     };
 }
 
+/// Build the structured input item that returns output for a function call.
 [[nodiscard]] inline nlohmann::json
 function_call_output(std::string call_id, std::string output)
 {
@@ -83,6 +99,7 @@ function_call_output(std::string call_id, std::string output)
     };
 }
 
+/// Find and execute a local tool, returning a JSON error string on failure.
 inline nxt::task<std::string> run_function_tool(
     const std::vector<function_tool> & tools,
     const function_call & call)

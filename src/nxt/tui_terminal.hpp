@@ -120,29 +120,40 @@ struct NoResize
 
 } // namespace detail
 
+/// Clear a raster and render a libvterm screen into it.
 inline void render_vterm_screen(
     RasterView & raster,
     Size size,
     nxt::vterm::Terminal & terminal,
     Style clear_style = {});
 
+/// Layout adapter that renders a `nxt::vterm::Terminal`.
+///
+/// `ResizeFn`, when supplied, is called with the raster size before rendering
+/// so PTY-backed terminals can stay in sync with their pane.
 template<typename ResizeFn = detail::NoResize>
 struct VTermScreen
 {
+    /// Terminal to render; null renders nothing.
     nxt::vterm::Terminal * terminal = nullptr;
+    /// Optional resize hook run before drawing.
     ResizeFn resize;
+    /// Style used to clear the pane before terminal cells are drawn.
     Style clear_style{};
 
+    /// Terminal screens grow to fill available width.
     constexpr WidthHint width_hint() const
     {
         return WidthHint::grow();
     }
 
+    /// Terminal screens grow to fill available height.
     constexpr HeightHint height_hint() const
     {
         return HeightHint::grow();
     }
 
+    /// Resize, clear, and render the terminal into `raster`.
     void render(RasterView & raster, Size size) const
     {
         if (terminal == nullptr || size.w == 0 * ch || size.h == 0 * ln)
@@ -153,6 +164,7 @@ struct VTermScreen
     }
 };
 
+/// Clear a raster and render terminal cells, colors, emphasis, and cursor.
 inline void render_vterm_screen(
     RasterView & raster,
     Size size,
@@ -217,16 +229,19 @@ inline void render_vterm_screen(
         detail::render_cursor(raster, size, *cursor, clear_style);
 }
 
+/// Build a growable terminal layout without a resize hook.
 inline auto vterm_screen(nxt::vterm::Terminal & terminal)
 {
     return VTermScreen<detail::NoResize>{&terminal, {}, {}};
 }
 
+/// Build a growable terminal layout with a custom clear style.
 inline auto vterm_screen(nxt::vterm::Terminal & terminal, Style clear_style)
 {
     return VTermScreen<detail::NoResize>{&terminal, {}, clear_style};
 }
 
+/// Build a growable terminal layout with a resize hook.
 template<typename ResizeFn>
     requires(!std::same_as<std::decay_t<ResizeFn>, Style>)
 auto vterm_screen(nxt::vterm::Terminal & terminal, ResizeFn && resize)
@@ -237,6 +252,7 @@ auto vterm_screen(nxt::vterm::Terminal & terminal, ResizeFn && resize)
         {}};
 }
 
+/// Build a growable terminal layout with a resize hook and clear style.
 template<typename ResizeFn>
 auto vterm_screen(
     nxt::vterm::Terminal & terminal,

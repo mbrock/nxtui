@@ -15,10 +15,14 @@
 
 namespace nxt {
 
+/// Opaque 24-bit RGB color.
 struct Rgb8
 {
+    /// Red channel.
     std::uint8_t r;
+    /// Green channel.
     std::uint8_t g;
+    /// Blue channel.
     std::uint8_t b;
 };
 
@@ -38,6 +42,7 @@ struct Rgb8
 ///
 struct Rgba8
 {
+    /// Packed representation containing either RGBA or a terminal sentinel.
     std::uint32_t value;
 
     /// Construct from RGBA components (true color)
@@ -56,7 +61,7 @@ struct Rgba8
     {
     }
 
-    /// Private: construct from raw value
+    /// Construct from an already-packed representation.
     static constexpr Rgba8 from_raw(std::uint32_t v) noexcept
     {
         Rgba8 c{0, 0, 0, 0};
@@ -76,82 +81,97 @@ struct Rgba8
         return from_raw(index);
     }
 
-    /// ANSI colors by name (0-15)
+    /// ANSI black.
     static constexpr Rgba8 black() noexcept
     {
         return palette(0);
     }
 
+    /// ANSI red.
     static constexpr Rgba8 red() noexcept
     {
         return palette(1);
     }
 
+    /// ANSI green.
     static constexpr Rgba8 green() noexcept
     {
         return palette(2);
     }
 
+    /// ANSI yellow.
     static constexpr Rgba8 yellow() noexcept
     {
         return palette(3);
     }
 
+    /// ANSI blue.
     static constexpr Rgba8 blue() noexcept
     {
         return palette(4);
     }
 
+    /// ANSI magenta.
     static constexpr Rgba8 magenta() noexcept
     {
         return palette(5);
     }
 
+    /// ANSI cyan.
     static constexpr Rgba8 cyan() noexcept
     {
         return palette(6);
     }
 
+    /// ANSI white.
     static constexpr Rgba8 white() noexcept
     {
         return palette(7);
     }
 
+    /// ANSI bright black.
     static constexpr Rgba8 bright_black() noexcept
     {
         return palette(8);
     }
 
+    /// ANSI bright red.
     static constexpr Rgba8 bright_red() noexcept
     {
         return palette(9);
     }
 
+    /// ANSI bright green.
     static constexpr Rgba8 bright_green() noexcept
     {
         return palette(10);
     }
 
+    /// ANSI bright yellow.
     static constexpr Rgba8 bright_yellow() noexcept
     {
         return palette(11);
     }
 
+    /// ANSI bright blue.
     static constexpr Rgba8 bright_blue() noexcept
     {
         return palette(12);
     }
 
+    /// ANSI bright magenta.
     static constexpr Rgba8 bright_magenta() noexcept
     {
         return palette(13);
     }
 
+    /// ANSI bright cyan.
     static constexpr Rgba8 bright_cyan() noexcept
     {
         return palette(14);
     }
 
+    /// ANSI bright white.
     static constexpr Rgba8 bright_white() noexcept
     {
         return palette(15);
@@ -165,45 +185,54 @@ struct Rgba8
         return from_raw(0x00000200);
     }
 
+    /// True when this is an explicit RGBA value.
     [[nodiscard]] constexpr bool is_true_color() const noexcept
     {
         return (value >> 24) > 0; // alpha > 0
     }
 
+    /// True when this refers to the 256-color terminal palette.
     [[nodiscard]] constexpr bool is_palette() const noexcept
     {
         return value <= 0xFF;
     }
 
+    /// True when this requests the terminal's configured default color.
     [[nodiscard]] constexpr bool is_terminal_default() const noexcept
     {
         return value == 0x00000100;
     }
 
+    /// True when this is the transparent compositing sentinel.
     [[nodiscard]] constexpr bool is_transparent() const noexcept
     {
         return value == 0x00000200;
     }
 
+    /// Palette index for palette colors.
     [[nodiscard]] constexpr std::uint8_t palette_index() const noexcept
     {
         return static_cast<std::uint8_t>(value & 0xFF);
     }
+    /// Red channel for true-color values.
     [[nodiscard]] constexpr std::uint8_t r() const noexcept
     {
         return value & 0xFF;
     }
 
+    /// Green channel for true-color values.
     [[nodiscard]] constexpr std::uint8_t g() const noexcept
     {
         return (value >> 8) & 0xFF;
     }
 
+    /// Blue channel for true-color values.
     [[nodiscard]] constexpr std::uint8_t b() const noexcept
     {
         return (value >> 16) & 0xFF;
     }
 
+    /// Alpha channel for true-color values.
     [[nodiscard]] constexpr std::uint8_t a() const noexcept
     {
         return (value >> 24) & 0xFF;
@@ -259,28 +288,32 @@ constexpr bool has_emphasis(Emphasis set, Emphasis flag) noexcept
 /// Default emphasis (none)
 inline constexpr Emphasis DEFAULT_EMPHASIS = Emphasis::none;
 
-// Raster views may cover whole buffers or rectangular subrasters.
-// layout_stride keeps the same mdspan aliases usable for both contiguous
-// storage and sliced windows.
+/// Dynamic extents for terminal-cell rasters.
 using mdspan_extents = std::experimental::
     extents<std::size_t, std::dynamic_extent, std::dynamic_extent>;
+/// Mutable 2D glyph view.
 using glyph_view_t =
     std::experimental::mdspan<
         GlyphTable::GlyphId,
         mdspan_extents,
         std::experimental::layout_stride>;
+/// Const 2D glyph view.
 using const_glyph_view_t =
     std::experimental::mdspan<
         const GlyphTable::GlyphId,
         mdspan_extents,
         std::experimental::layout_stride>;
+/// Mutable 2D color view.
 using color_view_t = std::experimental::
     mdspan<Rgba8, mdspan_extents, std::experimental::layout_stride>;
+/// Const 2D color view.
 using const_color_view_t =
     std::experimental::
         mdspan<const Rgba8, mdspan_extents, std::experimental::layout_stride>;
+/// Mutable 2D emphasis view.
 using emphasis_view_t = std::experimental::
     mdspan<Emphasis, mdspan_extents, std::experimental::layout_stride>;
+/// Const 2D emphasis view.
 using const_emphasis_view_t =
     std::experimental::mdspan<
         const Emphasis,
@@ -332,10 +365,15 @@ auto indexed_row(
 /// A cell with its column position for iteration.
 struct IndexedCell
 {
+    /// Column coordinate within the row.
     width_t col;
+    /// Glyph id stored at the cell.
     GlyphTable::GlyphId glyph;
+    /// Foreground color.
     Rgba8 fg;
+    /// Background color.
     Rgba8 bg;
+    /// Emphasis bits.
     Emphasis em;
 
     bool operator==(const IndexedCell & other) const
@@ -368,9 +406,13 @@ inline auto indexed_cell_row(
 /// Cell data for inspection
 struct Cell
 {
+    /// Glyph id stored at the cell.
     GlyphTable::GlyphId glyph;
+    /// Foreground color.
     Rgba8 fg;
+    /// Background color.
     Rgba8 bg;
+    /// Emphasis bits.
     Emphasis em;
 };
 

@@ -26,6 +26,7 @@ struct Options
     /// Pango family name. "Berkeley Mono" is auto-loaded from a local
     /// ./fonts/ directory if present; otherwise fontconfig substitutes.
     std::string font_family = "Berkeley Mono";
+    /// Font size in points.
     double font_size_pt = 12.0;
 
     /// Substituted for cells whose fg/bg is `terminal_default()`.

@@ -7,10 +7,11 @@
 #include <string_view>
 #include <vector>
 
-#include "nxtio/async.hpp"
+#include "nxtio/async-core.hpp"
 
 namespace nxt::input {
 
+/// Normalized key identity after terminal escape-sequence decoding.
 enum class Key {
     unknown,
     character,
@@ -43,37 +44,57 @@ enum class Key {
     f12,
 };
 
+/// Key event phase. Terminals that do not report releases use `press`.
 enum class EventType {
     press,
     repeat,
     release,
 };
 
+/// Modifier set decoded from terminal keyboard protocols.
 struct Modifiers
 {
+    /// Shift modifier.
     bool shift = false;
+    /// Alt/Option modifier.
     bool alt = false;
+    /// Control modifier.
     bool ctrl = false;
+    /// Super/Command/Windows modifier.
     bool super = false;
+    /// Hyper modifier.
     bool hyper = false;
+    /// Meta modifier.
     bool meta = false;
+    /// Caps Lock state when reported.
     bool caps_lock = false;
+    /// Num Lock state when reported.
     bool num_lock = false;
 
     friend bool operator==(const Modifiers &, const Modifiers &) = default;
 };
 
+/// One decoded keyboard input event.
 struct KeyEvent
 {
+    /// Logical key identity.
     Key key = Key::unknown;
+    /// Press/repeat/release phase.
     EventType type = EventType::press;
+    /// Active modifier set.
     Modifiers mods{};
+    /// Unicode codepoint for character keys, or 0 when absent.
     std::uint32_t codepoint = 0;
+    /// Shifted Unicode codepoint from keyboard protocol metadata.
     std::optional<std::uint32_t> shifted_codepoint;
+    /// Base-layout Unicode codepoint from keyboard protocol metadata.
     std::optional<std::uint32_t> base_layout_codepoint;
+    /// Text to insert for plain text events.
     std::string text;
+    /// Raw bytes consumed to produce this event.
     std::string raw;
 
+    /// True when the event should be treated as ordinary text insertion.
     [[nodiscard]] bool is_text() const noexcept
     {
         return key == Key::character && type != EventType::release
@@ -82,6 +103,7 @@ struct KeyEvent
             && !mods.meta;
     }
 
+    /// True when the event is plain Ctrl-C.
     [[nodiscard]] bool is_ctrl_c() const noexcept
     {
         return key == Key::character && type != EventType::release
@@ -90,11 +112,15 @@ struct KeyEvent
     }
 };
 
+/// Incremental parser for terminal keyboard input bytes.
 class Parser
 {
 public:
+    /// Feed bytes and return all complete decoded key events.
     [[nodiscard]] std::vector<KeyEvent> feed(std::string_view bytes);
+    /// Flush pending bytes as best-effort events.
     [[nodiscard]] std::vector<KeyEvent> flush();
+    /// True when the parser is waiting for more bytes.
     [[nodiscard]] bool has_pending() const noexcept
     {
         return !pending_.empty();
@@ -114,15 +140,19 @@ private:
     std::string pending_;
 };
 
+/// RAII guard that puts stdin into the raw input mode used by the TUI.
 class InputModeGuard
 {
 public:
+    /// Enter raw mode when possible.
     InputModeGuard();
+    /// Restore the original terminal mode.
     ~InputModeGuard();
 
     InputModeGuard(const InputModeGuard &) = delete;
     InputModeGuard & operator=(const InputModeGuard &) = delete;
 
+    /// True when raw mode was successfully enabled.
     [[nodiscard]] bool enabled() const noexcept
     {
         return enabled_;

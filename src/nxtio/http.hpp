@@ -15,55 +15,76 @@
 #include <string_view>
 #include <utility>
 
-#include "nxtio/async.hpp"
+#include "nxtio/async-core.hpp"
 
 namespace nxt::io::http {
 
+/// Error raised for HTTP protocol parsing and transfer-framing failures.
 struct protocol_error : std::runtime_error
 {
     using std::runtime_error::runtime_error;
 };
 
+/// Parsed URL pieces supported by the small HTTP client.
 struct url
 {
+    /// True for https URLs.
     bool tls = false;
+    /// Hostname or address.
     std::string host;
+    /// Port text; may be empty when the scheme implies a default.
     std::string port;
+    /// Request target path and query.
     std::string target = "/";
 };
 
+/// Parse an HTTP or HTTPS URL into connection and request-target pieces.
 url parse_url(std::string_view text);
+/// Parse a decimal TCP port.
 std::uint16_t parse_port(std::string_view text);
+/// True when the URL uses its scheme's default port.
 bool is_default_port(const url & url);
 
+/// Parse bytes up to an HTTP response-head boundary.
 nxt::http::response_head parse_response_head(std::span<const std::byte> bytes);
+/// Reinterpret bytes as text.
 std::string_view as_text(std::span<const std::byte> bytes);
 
+/// Return the first matching response header value, case-insensitively.
 std::optional<std::string_view>
 header_value(const nxt::http::response_head & response, std::string_view name);
 
+/// True when a comma-separated response header contains `token`.
 bool has_header_token(
     const nxt::http::response_head & response,
     std::string_view name,
     std::string_view token);
 
+/// Parsed Content-Length header, when present.
 std::optional<std::size_t>
 response_content_length(const nxt::http::response_head & response);
 
+/// True when the response uses chunked transfer encoding.
 bool response_is_chunked(const nxt::http::response_head & response);
+/// True for 2xx response status codes.
 bool response_status_is_success(const nxt::http::response_head & response);
 
+/// True when the response Content-Type matches the expected media type.
 bool response_content_type_is(
     const nxt::http::response_head & response,
     std::string_view expected);
 
+/// Human-readable response status line.
 std::string response_status_text(const nxt::http::response_head & response);
 
+/// Response head returned after sending a request.
 struct response_start
 {
+    /// Parsed status line and headers.
     nxt::http::response_head head;
 };
 
+/// Read exactly `content_length` bytes and pass chunks to `on_chunk`.
 template<typename Reader, typename OnChunk>
 nxt::task<> read_content_length(
     Reader & reader,
@@ -86,8 +107,10 @@ nxt::task<> read_content_length(
     }
 }
 
+/// Parse a hexadecimal chunk-size line.
 std::size_t parse_chunk_size(std::span<const std::byte> line);
 
+/// Read and validate an expected CRLF after chunk data.
 template<typename Reader>
 nxt::task<> read_expected_crlf(Reader & reader)
 {
@@ -96,6 +119,7 @@ nxt::task<> read_expected_crlf(Reader & reader)
         throw protocol_error{"chunk data was not followed by CRLF"};
 }
 
+/// Read a chunked transfer-encoded body.
 template<typename Reader, typename OnChunk>
 nxt::task<> read_chunked(
     Reader & reader,
@@ -117,6 +141,7 @@ nxt::task<> read_chunked(
     }
 }
 
+/// Read body bytes until the connection ends.
 template<typename Reader, typename OnChunk>
 nxt::task<> read_until_eof(Reader & reader, OnChunk on_chunk)
 {
@@ -133,6 +158,7 @@ nxt::task<> read_until_eof(Reader & reader, OnChunk on_chunk)
     }
 }
 
+/// Dispatch to the body reader required by the response headers.
 template<typename Reader, typename OnChunk>
 nxt::task<> read_response_body_chunks(
     Reader & reader,
@@ -150,6 +176,7 @@ nxt::task<> read_response_body_chunks(
     }
 }
 
+/// Write a request and parse the response head.
 template<typename Transport, typename Reader>
 nxt::task<response_start> send_request(
     Transport & transport,
@@ -169,6 +196,7 @@ nxt::task<response_start> send_request(
     };
 }
 
+/// Read the response body as chunks.
 template<typename Reader, typename OnChunk>
 nxt::task<> read_response_body(
     Reader & reader,
@@ -181,6 +209,7 @@ nxt::task<> read_response_body(
         on_chunk);
 }
 
+/// Read the full response body into a string.
 template<typename Reader>
 nxt::task<std::string> read_response_text(
     Reader & reader,
@@ -198,14 +227,15 @@ nxt::task<std::string> read_response_text(
     co_return body;
 }
 
-// Source-shaped view over an HTTP response body.  Strips HTTP transfer framing
-// (Content-Length, chunked, or close-delimited) so callers see only payload
-// bytes through the usual read_some interface — typically by wrapping this in
-// a second byte_reader for line-oriented protocols like SSE.
+/// Source-shaped view over an HTTP response body.
+///
+/// It strips HTTP transfer framing (Content-Length, chunked, or
+/// close-delimited) so callers see only payload bytes through `read_some`.
 template<typename Reader>
 class http_body_reader
 {
 public:
+    /// Select a body-reading mode from the response headers.
     http_body_reader(Reader & upstream, const nxt::http::response_head & head)
         : upstream_(&upstream)
     {
@@ -219,6 +249,7 @@ public:
         }
     }
 
+    /// Read unframed body bytes into `dst`.
     nxt::task<std::size_t> read_some(std::span<std::byte> dst)
     {
         if (done_ || dst.empty())
@@ -315,9 +346,10 @@ private:
     bool done_ = false;
 };
 
-// Pull one server-sent event from a byte stream.  Returns nullopt on clean
-// end-of-stream.  Reader is expected to be a byte_reader-shaped buffered
-// source (take_until("\n"), buffered_size(), etc.).
+/// Pull one server-sent event from a buffered byte stream.
+///
+/// Returns `std::nullopt` on clean end-of-stream. `Reader` is expected to be
+/// a `byte_reader`-shaped source with `take_until("\n")`.
 template<typename Reader>
 nxt::task<std::optional<nxt::http::server_sent_event>>
 parse_sse_event(Reader & reader)

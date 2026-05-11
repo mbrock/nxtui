@@ -12,11 +12,16 @@ namespace nxt::ui {
 class TerminalCompositor
 {
 public:
+    /// Create double buffers for a terminal of `size`.
     TerminalCompositor(nxt::Size size, GlyphTable & glyphs);
+    /// Resize both front and back buffers and terminal bookkeeping.
     void resize(nxt::Size size);
 
+    /// Mutable buffer rendered by the next frame.
     Raster & back_buffer() noexcept;
+    /// Shared glyph table used by both buffers.
     GlyphTable & glyphs() const noexcept;
+    /// Current compositor size.
     nxt::Size size() const noexcept;
 
     /// Set HUD height. In HUD mode, the scroll region ends immediately above
@@ -25,10 +30,12 @@ public:
     void set_hud_height(height_t hud_height, height_t term_height);
     void set_hud_height(
         height_t hud_height, height_t term_height, std::ostream & out);
+    /// Current HUD height.
     [[nodiscard]] height_t hud_height() const noexcept;
 
-    // Public for testing the rendering pipeline without async runtime
+    /// Present changed back-buffer cells to stdout.
     void present_frame();
+    /// Present changed back-buffer cells to an output stream.
     void present_frame(std::ostream & out);
 
 private:

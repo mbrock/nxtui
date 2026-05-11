@@ -14,7 +14,7 @@
 
 #include "nxtio/app.hpp"
 #include "nxt/ansi.hpp"
-#include "nxtio/async.hpp"
+#include "nxtio/async-core.hpp"
 #include "nxtio/input.hpp"
 #include "nxt/units.hpp"
 

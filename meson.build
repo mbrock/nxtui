@@ -186,6 +186,24 @@ if get_option('examples')
     dependencies : [nxt_dep],
   )
 
+  executable('slot_example',
+    'src/nxt/slot_example.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_dep],
+  )
+
+  executable('process_example',
+    'src/nxt/process_example.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_dep],
+  )
+
+  executable('signal_example',
+    'src/nxt/signal_example.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_dep],
+  )
+
   executable('nxthttp',
     'src/nxtio/nxthttp.cpp',
     include_directories : nxt_inc,

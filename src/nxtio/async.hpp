@@ -1,66 +1,49 @@
 #pragma once
 
-// Core async primitives - thin wrappers over libcoro
+// Public async facade.
 //
-// This file provides:
-// - Type aliases for libcoro types (task, queue, event, etc.)
-// - Helper functions (sync_wait, when_all, start)
-// - task_group for managing concurrent tasks with cancellation
+// This is the map of nxt's async vocabulary. It intentionally includes the
+// small core aliases first, then the higher-level building blocks that give
+// those aliases meaning in the UI/runtime system.
 //
-// For structured concurrency with channels, see scope.hpp
+// Core execution:
+//   task<T>             coroutine result
+//   io_scheduler        executor used for timers, polling, and detached work
+//   queue<T>, event     low-level libcoro synchronization primitives
+//   sync_wait(...)      bridge from synchronous main/test code into async code
+//   when_all(...)       await a collection of tasks
+//
+// Structured lifetime:
+//   scope<Context>      cancellation tree + scheduler + contextual values
+//   scope.subscope()    child lifetime inheriting cancellation and context
+//   scope.spawn(...)    collect scoped tasks
+//   scope.all()         run scoped tasks to completion
+//   scope.any()         run until one completes, then cancel the scope
+//
+// Event delivery:
+//   Signal<T>           single-waiter, unbuffered event signal
+//   Publisher<T>        copyable write endpoint for a Signal<T>
+//   signal.next(stop)   cancellable wait, suitable for scoped races
+//   event_queue<T>      buffered cancellable queue, under nxt::io
+//
+// UI process layer:
+//   UIRuntime           application host: scheduler, input, signals, rendering
+//   Self                process capability facade over scope<ProcessContext>
+//   ProcessHandle       parent-side lifetime handle for a spawned process
+//
+// System bridges:
+//   SignalPipe          OS signal delivery through a pollable fd
+//   PtySession          PTY-backed subprocess session
+//
+// Lower-level implementation headers should include `async-core.hpp` when they
+// only need task/queue/event/scheduler aliases. Application code can include
+// this header when it wants the whole async vocabulary in view.
 
-#include <coro/coro.hpp>
-#include <coro/event.hpp>
-#include <coro/generator.hpp>
-#include <coro/latch.hpp>
-#include <coro/queue.hpp>
-#include <coro/scheduler.hpp>
-#include <coro/semaphore.hpp>
-#include <coro/task.hpp>
-#include <coro/when_any.hpp>
+#include "nxtio/async-core.hpp"
 
-namespace nxt {
-
-template<typename T = void>
-using task = coro::task<T>;
-
-template<typename T>
-using queue = coro::queue<T>;
-
-template<typename T>
-using generator = coro::generator<T>;
-
-// coro::semaphore<max_value> is a counting semaphore with compile-time max
-// Use directly when you know the max at compile time:
-//   nxt::semaphore<16> slots;
-template<std::ptrdiff_t max_value>
-using semaphore = coro::semaphore<max_value>;
-
-using event = coro::event;
-using latch = coro::latch;
-
-using io_scheduler = coro::scheduler;
-
-using poll_op = coro::poll_op;
-using poll_status = coro::poll_status;
-using poll_stop_source = coro::poll_stop_source;
-
-inline auto sync_wait(auto && awaitable)
-{
-    return coro::sync_wait(std::forward<decltype(awaitable)>(awaitable));
-}
-
-inline auto when_all(auto && tasks)
-{
-    return coro::when_all(std::forward<decltype(tasks)>(tasks));
-}
-
-/// Schedule a task to run on the given scheduler.
-/// Use this instead of co_await scheduler.schedule() at the top
-/// of coroutines.
-inline auto start(io_scheduler & sched, task<> t)
-{
-    return sched.schedule(std::move(t));
-}
-
-} // namespace nxt
+#include "nxt/signal.hpp"
+#include "nxtio/event-queue.hpp"
+#include "nxtio/process.hpp"
+#include "nxtio/scope.hpp"
+#include "nxtio/signal-pipe.hpp"
+#include "nxtio/subprocess.hpp"

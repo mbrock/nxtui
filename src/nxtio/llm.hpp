@@ -3,6 +3,7 @@
 #include <nxtai/responses.hpp>
 #include <nxtai/tools.hpp>
 
+/// Compatibility aliases for the old `nxt::io::llm` namespace.
 namespace nxt::io::llm {
 
 using protocol_error = nxt::ai::responses::protocol_error;

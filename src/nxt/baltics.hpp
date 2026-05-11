@@ -12,56 +12,92 @@
 
 namespace nxt::theme {
 
+/// Complete color slot set shared by the Baltic light and dark themes.
 struct Palette
 {
-    // Surface colors used for terminal-default substitutions and UI chrome.
-    Rgb8 bg;              // default background
-    Rgb8 bg_soft;         // surface (header-line, blocks)
-    Rgb8 bg_elev;         // elevated surface (tooltips, hunk heading)
-    Rgb8 bg_active;       // active line
-    Rgb8 bg_hl;           // hover / generic highlight
+    /// Default background.
+    Rgb8 bg;
+    /// Soft surface for header lines and blocks.
+    Rgb8 bg_soft;
+    /// Elevated surface for tooltips and headings.
+    Rgb8 bg_elev;
+    /// Active-line background.
+    Rgb8 bg_active;
+    /// Hover or generic highlight background.
+    Rgb8 bg_hl;
+    /// Primary border color.
     Rgb8 border;
+    /// Low-contrast border color.
     Rgb8 border_soft;
 
-    // Mode-line slots mirror the source theme names.
+    /// Active mode-line background.
     Rgb8 ml_bg;
+    /// Active mode-line box/border color.
     Rgb8 ml_box;
+    /// Inactive mode-line background.
     Rgb8 ml_inactive_bg;
+    /// Inactive mode-line box/border color.
     Rgb8 ml_inactive_box;
 
-    // Foreground ramp, from primary text to low-emphasis comments.
+    /// Primary foreground.
     Rgb8 fg;
+    /// Muted foreground.
     Rgb8 fg_muted;
+    /// Subtle foreground.
     Rgb8 fg_subtle;
+    /// Comment foreground.
     Rgb8 fg_comment;
 
-    // Semantic token colors reused by demos and screenshots.
-    Rgb8 amber;           // strings
-    Rgb8 amber_bg;        // const / number tint
-    Rgb8 amber_deep;      // const / number fg
-    Rgb8 coral;           // invalid / error
+    /// String color.
+    Rgb8 amber;
+    /// Constant/number tint background.
+    Rgb8 amber_bg;
+    /// Constant/number foreground.
+    Rgb8 amber_deep;
+    /// Invalid/error foreground.
+    Rgb8 coral;
+    /// Invalid/error background.
     Rgb8 coral_bg;
-    Rgb8 pink;            // escapes / special punctuation
-    Rgb8 mint;            // emphasis / attribute
-    Rgb8 cyan;            // function / link
-    Rgb8 cyan_soft;       // type
-    Rgb8 cyan_bg;         // type tint
-    Rgb8 regex;           // regex teal
-    Rgb8 green;           // keyword
-    Rgb8 green_bg;        // keyword tint
-    Rgb8 green_bright;    // tag / selector / diff+
-    Rgb8 doc_orange;      // doc comment
-    Rgb8 chocolate;       // variable
-    Rgb8 chocolate_soft;  // property / parameter
-    Rgb8 navy;            // accent (minibuffer prompt etc.)
+    /// Escapes and special punctuation.
+    Rgb8 pink;
+    /// Emphasis or attribute color.
+    Rgb8 mint;
+    /// Function and link color.
+    Rgb8 cyan;
+    /// Type color.
+    Rgb8 cyan_soft;
+    /// Type tint background.
+    Rgb8 cyan_bg;
+    /// Regex teal.
+    Rgb8 regex;
+    /// Keyword color.
+    Rgb8 green;
+    /// Keyword tint background.
+    Rgb8 green_bg;
+    /// Tag, selector, and added-diff color.
+    Rgb8 green_bright;
+    /// Documentation-comment color.
+    Rgb8 doc_orange;
+    /// Variable color.
+    Rgb8 chocolate;
+    /// Property/parameter color.
+    Rgb8 chocolate_soft;
+    /// Accent color.
+    Rgb8 navy;
 
-    // Interaction and diff backgrounds.
+    /// Selection background.
     Rgb8 sel_bg;
+    /// Search match background.
     Rgb8 match_bg;
+    /// Symbol highlight background.
     Rgb8 symbol_hl;
+    /// Added-line diff background.
     Rgb8 added_bg;
+    /// Added-line highlighted diff background.
     Rgb8 added_hl_bg;
+    /// Removed-line diff background.
     Rgb8 removed_bg;
+    /// Removed-line highlighted diff background.
     Rgb8 removed_hl_bg;
 };
 

@@ -15,12 +15,12 @@ paths = [
 ]
 recursive_paths = [
     '../src/nxt',
+    '../src/nxtai',
     '../src/nxtio',
 ]
 patterns = [
     '*.h',
     '*.hpp',
-    '*.cpp',
 ]
 strip_paths = [
     '../src',

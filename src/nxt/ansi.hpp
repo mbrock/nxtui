@@ -26,6 +26,7 @@ void init();
 /// Check if stdout is connected to a real TTY
 [[nodiscard]] bool is_tty();
 
+/// ANSI 16-color SGR foreground codes.
 enum class TerminalColor : int {
     black = 30,
     red = 31,
@@ -179,16 +180,21 @@ void scroll_down(height_t n = 1 * ln);
 /// screen.
 struct TerminalGuard
 {
+    /// Enter application-friendly terminal state.
     TerminalGuard();
+    /// Restore cursor, scroll region, and screen state.
     ~TerminalGuard();
 
     TerminalGuard(const TerminalGuard &) = delete;
     TerminalGuard & operator=(const TerminalGuard &) = delete;
 };
 
+/// RAII wrapper for terminal synchronized update mode.
 struct SynchronizedUpdate
 {
+    /// Begin synchronized update mode when enabled.
     explicit SynchronizedUpdate(bool enabled = true);
+    /// End synchronized update mode when it was enabled.
     ~SynchronizedUpdate();
 
     SynchronizedUpdate(const SynchronizedUpdate &) = delete;

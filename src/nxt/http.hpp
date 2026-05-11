@@ -11,45 +11,67 @@
 
 namespace nxt::http {
 
+/// HTTP header name/value pair.
 struct header
 {
+    /// Header field name.
     std::string name;
+    /// Header field value.
     std::string value;
 };
 
+/// Parsed HTTP response start line and headers.
 struct response_head
 {
+    /// HTTP version string, such as `HTTP/1.1`.
     std::string version;
+    /// Numeric status code.
     int status = 0;
+    /// Reason phrase.
     std::string reason;
+    /// Response headers in wire order.
     std::vector<header> headers;
 };
 
+/// Minimal HTTP request representation.
 struct request
 {
+    /// Request method.
     std::string method = "GET";
+    /// Request target path and query.
     std::string target = "/";
+    /// Host header value.
     std::string host;
+    /// Extra request headers.
     std::vector<header> headers;
+    /// Request body bytes.
     std::string body;
 };
 
+/// Parsed server-sent event.
 struct server_sent_event
 {
+    /// Event type; defaults to `message`.
     std::string type = "message";
+    /// Event data payload.
     std::string data;
+    /// Last event id.
     std::string id;
+    /// Optional retry delay in milliseconds.
     std::optional<int> retry_ms;
 };
 
+/// Error raised for malformed HTTP or SSE data.
 struct parse_error : std::runtime_error
 {
     using std::runtime_error::runtime_error;
 };
 
+/// Incremental parser for server-sent event text.
 class server_sent_event_parser
 {
 public:
+    /// Feed a body chunk and return complete events.
     [[nodiscard]] std::vector<server_sent_event> feed(std::string_view body)
     {
         std::vector<server_sent_event> events;
@@ -79,6 +101,7 @@ public:
         return events;
     }
 
+    /// Finish the stream and return any final pending event.
     [[nodiscard]] std::vector<server_sent_event> close()
     {
         std::vector<server_sent_event> events;
@@ -158,6 +181,7 @@ private:
     std::string last_id_;
 };
 
+/// Serialize a request to HTTP/1.1 bytes.
 [[nodiscard]] inline std::string serialize(const request & req)
 {
     std::string out;

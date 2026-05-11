@@ -18,33 +18,52 @@
 
 namespace nxt::ai::responses {
 
+/// Error raised for malformed Responses requests, HTTP failures, and stream
+/// parse errors.
 struct protocol_error : std::runtime_error
 {
     using std::runtime_error::runtime_error;
 };
 
+/// Parameters for one OpenAI Responses API request.
 struct openai_responses_request
 {
+    /// Bearer token used for the Authorization header.
     std::string api_key;
+    /// Model identifier sent as the `model` field.
     std::string model = "gpt-5-mini";
+    /// Plain text prompt used when `input_items` is empty.
     std::string input;
+    /// Structured Responses `input` array for multi-turn/stateless calls.
     nlohmann::json input_items = nlohmann::json::array();
+    /// Tool definitions in Responses function-tool schema.
     nlohmann::json tools = nlohmann::json::array();
+    /// Extra response fields requested through the `include` option.
     nlohmann::json include = nlohmann::json::array();
+    /// Server-side response id to continue when `store` is true.
     std::string previous_response_id;
+    /// Upper bound for generated output tokens.
     std::size_t max_output_tokens = 6000;
+    /// Reasoning effort string accepted by the selected model.
     std::string reasoning_effort = "medium";
+    /// Optional reasoning summary mode.
     std::string reasoning_summary;
+    /// Whether OpenAI should persist the response for server-side continuity.
     bool store = false;
 };
 
+/// One decoded server-sent event from a streaming Responses request.
 struct stream_event
 {
+    /// SSE event type, such as `response.output_item.added`.
     std::string type;
+    /// Parsed JSON payload from the event's `data` field.
     nlohmann::json payload;
+    /// Original unparsed `data` field text.
     std::string raw;
 };
 
+/// Return the structured input array represented by a request.
 [[nodiscard]] inline nlohmann::json
 input_items_from_request(const openai_responses_request & request)
 {
@@ -60,6 +79,7 @@ input_items_from_request(const openai_responses_request & request)
     return input;
 }
 
+/// Extract a response id from events that carry one.
 [[nodiscard]] inline std::optional<std::string>
 response_id_from_event(const stream_event & event)
 {
@@ -76,6 +96,7 @@ response_id_from_event(const stream_event & event)
     return std::nullopt;
 }
 
+/// Serialize a request into a JSON body for `POST /v1/responses`.
 [[nodiscard]] inline nlohmann::json
 openai_responses_body(const openai_responses_request & request)
 {
@@ -113,6 +134,7 @@ openai_responses_body(const openai_responses_request & request)
     return body;
 }
 
+/// Build the HTTP request envelope for the OpenAI Responses endpoint.
 [[nodiscard]] inline nxt::http::request
 openai_responses_http_request(const openai_responses_request & request)
 {
@@ -133,14 +155,16 @@ openai_responses_http_request(const openai_responses_request & request)
     };
 }
 
-// Pull-shaped OpenAI Responses SSE stream.  Construct with a transport,
-// call connect() once to send the request and read the response head, then
-// drive the stream by calling next() until it returns nullopt.  Errors
-// propagate as exceptions from connect() or next().
+/// Pull-shaped OpenAI Responses SSE stream.
+///
+/// Construct with a connected transport, call `connect()` once to send the
+/// request and validate the response head, then drive the stream by calling
+/// `next()` until it returns `std::nullopt`.
 template<typename Transport>
 class openai_response_stream
 {
 public:
+    /// Bind the stream to an already-connected byte transport.
     explicit openai_response_stream(
         Transport & transport, std::stop_token stop = {})
         : transport_(&transport)
@@ -154,6 +178,7 @@ public:
     openai_response_stream(openai_response_stream &&) = delete;
     openai_response_stream & operator=(openai_response_stream &&) = delete;
 
+    /// Send the request and prepare to read its `text/event-stream` body.
     nxt::task<> connect(const openai_responses_request & request)
     {
         if (request.api_key.empty())
@@ -187,6 +212,7 @@ public:
         body_reader_.emplace(*body_, std::span{body_buffer_}, stop_);
     }
 
+    /// Read the next decoded event, or `std::nullopt` after stream end.
     nxt::task<std::optional<stream_event>> next()
     {
         if (done_ || !body_reader_)

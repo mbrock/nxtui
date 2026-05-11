@@ -1,5 +1,5 @@
-// nxt - Terminal UI Library
-// Convenience header including the main public API
+/// @file
+/// Convenience header including the main public API.
 
 #pragma once
 

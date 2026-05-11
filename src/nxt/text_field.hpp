@@ -68,6 +68,7 @@ struct TextField
         return true;
     }
 
+    /// Move the cursor one UTF-8 cell left.
     bool move_left() noexcept
     {
         cursor_byte = utf8::floor_boundary(text, cursor_byte);
@@ -77,6 +78,7 @@ struct TextField
         return true;
     }
 
+    /// Move the cursor one UTF-8 cell right.
     bool move_right() noexcept
     {
         cursor_byte = utf8::floor_boundary(text, cursor_byte);
@@ -86,6 +88,7 @@ struct TextField
         return true;
     }
 
+    /// Move the cursor to the beginning of the field.
     bool move_home() noexcept
     {
         if (cursor_byte.count() == 0)
@@ -94,6 +97,7 @@ struct TextField
         return true;
     }
 
+    /// Move the cursor to the end of the field.
     bool move_end() noexcept
     {
         if (cursor_byte.count() >= text.size())
@@ -102,12 +106,14 @@ struct TextField
         return true;
     }
 
+    /// Clear the field and reset the cursor to the beginning.
     void clear() noexcept
     {
         text.clear();
         cursor_byte = utf8::byte_offset(0);
     }
 
+    /// True when the field contains no text.
     [[nodiscard]] bool empty() const noexcept { return text.empty(); }
 
     /// Display column count.
@@ -125,12 +131,17 @@ struct TextField
 
 struct TextFieldStyle
 {
+    /// Foreground color for entered text.
     Rgba8 fg = Rgba8::terminal_default();
+    /// Background color for the full field row.
     Rgba8 bg = Rgba8::terminal_default();
+    /// Foreground color for the static prefix.
     Rgba8 prefix_fg = Rgba8::terminal_default();
+    /// Foreground color for placeholder text.
     Rgba8 placeholder_fg = Rgba8::terminal_default();
 };
 
+/// Rendering options for `text_field`.
 struct TextFieldOptions
 {
     /// Static prefix (e.g. "> ").  Always visible at column 0.

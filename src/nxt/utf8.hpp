@@ -17,10 +17,13 @@
 
 namespace nxt::utf8 {
 
+/// Byte offset into a UTF-8 string.
 struct byte_offset_t
 {
+    /// Raw byte offset.
     std::size_t v{};
 
+    /// Return the raw byte offset.
     [[nodiscard]] constexpr std::size_t count() const noexcept
     {
         return v;
@@ -38,10 +41,13 @@ struct byte_offset_t
         byte_offset_t, byte_offset_t) noexcept = default;
 };
 
+/// Grapheme-cluster index into a UTF-8 string.
 struct grapheme_index_t
 {
+    /// Raw cluster index.
     std::size_t v{};
 
+    /// Return the raw cluster index.
     [[nodiscard]] constexpr std::size_t count() const noexcept
     {
         return v;
@@ -59,17 +65,20 @@ struct grapheme_index_t
         grapheme_index_t, grapheme_index_t) noexcept = default;
 };
 
+/// Construct a byte offset.
 [[nodiscard]] constexpr byte_offset_t byte_offset(std::size_t n) noexcept
 {
     return {n};
 }
 
+/// Construct a grapheme index.
 [[nodiscard]] constexpr grapheme_index_t
 grapheme_index(std::size_t n) noexcept
 {
     return {n};
 }
 
+/// Difference between two byte offsets.
 [[nodiscard]] constexpr std::size_t
 operator-(byte_offset_t a, byte_offset_t b) noexcept
 {
@@ -116,6 +125,7 @@ decode(std::string_view text, byte_offset_t byte) noexcept
 
 }  // namespace detail
 
+/// True when a grapheme cluster should separate words.
 [[nodiscard]] inline bool is_word_separator(
     std::string_view cluster) noexcept
 {
@@ -151,6 +161,7 @@ decode(std::string_view text, byte_offset_t byte) noexcept
     return false;
 }
 
+/// True when a grapheme cluster is a line break.
 [[nodiscard]] inline bool is_line_break(std::string_view cluster) noexcept
 {
     return cluster == "\n" || cluster == "\r\n" || cluster == "\r";
@@ -288,34 +299,46 @@ floor_boundary(std::string_view text, byte_offset_t byte) noexcept
     return width;
 }
 
+/// One non-separator word and its display width.
 struct word
 {
+    /// View into the source text.
     std::string_view text;
+    /// Display width in terminal cells.
     width_t width{};
 };
 
+/// Word or line-break segment used for streaming/wrapping text.
 struct text_segment
 {
+    /// Segment category.
     enum class kind_t {
         word,
         line_break,
     };
 
+    /// Category of this segment.
     kind_t kind = kind_t::word;
+    /// View into the source text for word segments.
     std::string_view text;
+    /// Display width in terminal cells.
     width_t width{};
 };
 
+/// Forward range over non-separator words in a string view.
 class word_view : public std::ranges::view_interface<word_view>
 {
 public:
+    /// Construct an empty view.
     word_view() = default;
 
+    /// Construct a word view over borrowed text.
     explicit word_view(std::string_view text)
         : text_(text)
     {
     }
 
+    /// Iterator over words.
     class iterator
     {
     public:
@@ -323,14 +346,17 @@ public:
         using value_type = word;
         using difference_type = std::ptrdiff_t;
 
+        /// Construct a default sentinel-comparable iterator.
         iterator() = default;
 
+        /// Construct an iterator at the first word in `text`.
         explicit iterator(std::string_view text)
             : text_(text)
         {
             scan();
         }
 
+        /// Current word.
         [[nodiscard]] word operator*() const noexcept
         {
             return {
@@ -339,6 +365,7 @@ public:
             };
         }
 
+        /// Advance to the next word.
         iterator & operator++() noexcept
         {
             start_ = end_;
@@ -346,6 +373,7 @@ public:
             return *this;
         }
 
+        /// Advance to the next word, returning the previous iterator.
         iterator operator++(int) noexcept
         {
             auto copy = *this;
@@ -389,11 +417,13 @@ public:
         width_t width_{};
     };
 
+    /// Begin iterating words.
     [[nodiscard]] iterator begin() const noexcept
     {
         return iterator{text_};
     }
 
+    /// End sentinel.
     [[nodiscard]] std::default_sentinel_t end() const noexcept
     {
         return {};
@@ -403,21 +433,26 @@ private:
     std::string_view text_;
 };
 
+/// Return a word range over borrowed text.
 [[nodiscard]] inline word_view words(std::string_view text) noexcept
 {
     return word_view{text};
 }
 
+/// Forward range over words and line breaks in a string view.
 class segment_view : public std::ranges::view_interface<segment_view>
 {
 public:
+    /// Construct an empty view.
     segment_view() = default;
 
+    /// Construct a segment view over borrowed text.
     explicit segment_view(std::string_view text)
         : text_(text)
     {
     }
 
+    /// Iterator over text segments.
     class iterator
     {
     public:
@@ -425,19 +460,23 @@ public:
         using value_type = text_segment;
         using difference_type = std::ptrdiff_t;
 
+        /// Construct a default sentinel-comparable iterator.
         iterator() = default;
 
+        /// Construct an iterator at the first segment in `text`.
         explicit iterator(std::string_view text)
             : text_(text)
         {
             scan();
         }
 
+        /// Current segment.
         [[nodiscard]] text_segment operator*() const noexcept
         {
             return current_;
         }
 
+        /// Advance to the next segment.
         iterator & operator++() noexcept
         {
             start_ = end_;
@@ -445,6 +484,7 @@ public:
             return *this;
         }
 
+        /// Advance to the next segment, returning the previous iterator.
         iterator operator++(int) noexcept
         {
             auto copy = *this;
@@ -469,6 +509,8 @@ public:
                     end_ = next_byte;
                     current_ = text_segment{
                         .kind = text_segment::kind_t::line_break,
+                        .text = {},
+                        .width = 0 * ch,
                     };
                     return;
                 }
@@ -500,11 +542,13 @@ public:
         text_segment current_{};
     };
 
+    /// Begin iterating segments.
     [[nodiscard]] iterator begin() const noexcept
     {
         return iterator{text_};
     }
 
+    /// End sentinel.
     [[nodiscard]] std::default_sentinel_t end() const noexcept
     {
         return {};
@@ -514,11 +558,13 @@ private:
     std::string_view text_;
 };
 
+/// Return a segment range over borrowed text.
 [[nodiscard]] inline segment_view segments(std::string_view text) noexcept
 {
     return segment_view{text};
 }
 
+/// Size in bytes of the prefix that ends on a word boundary.
 [[nodiscard]] inline std::size_t
 complete_words_prefix_size(std::string_view text) noexcept
 {

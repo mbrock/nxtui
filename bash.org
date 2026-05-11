@@ -1,0 +1,242 @@
+#+title: Adequate Shell Execution Semantics
+#+date: 2026-05-11
+
+This is a practical semantics sketch for someone building a new shell without
+trying to memorize every POSIX edge case first. The useful framing is: a shell
+is an interpreter whose weirdness mostly comes from deciding which process owns
+each side effect.
+
+* Core model
+
+A shell reads text into a command tree, then executes that tree in an execution
+context.
+
+Common command nodes:
+
+- Simple command: =VAR=x echo hi >out=
+- Pipeline: =a | b | c=
+- List: =a; b=, =a && b=, =a || b=, =a &=
+- Compound command: ={ ...; }=, =( ... )=, =if=, =while=, =for=
+- Function definition
+
+In Bash, the main command structs live around:
+
+- =/home/mbrock/src/bash-5.3/command.h=
+- =COMMAND=
+- =CONNECTION=
+- =SIMPLE_COM=
+
+Execution dispatch starts in:
+
+- =/home/mbrock/src/bash-5.3/execute_cmd.c:execute_command=
+- =/home/mbrock/src/bash-5.3/execute_cmd.c:execute_command_internal=
+
+* Simple commands
+
+A simple command roughly does this:
+
+1. Identify assignments and redirections.
+2. Expand words.
+3. Decide what kind of command it is:
+   - shell function
+   - builtin
+   - external program
+   - no command name, only assignments/redirections
+4. Apply redirections.
+5. Execute the command.
+6. Return an integer status.
+
+The important semantic rule is: if a command must affect the current shell, do
+not fork.
+
+Examples of effects that usually need the current shell:
+
+- =cd=
+- =export=
+- =unset=
+- variable assignments
+- function definitions
+- many builtins
+
+But if those commands appear in a pipeline or background job, they usually run
+in a child/subshell, so their mutations disappear afterward.
+
+Bash's main path for this is:
+
+- =/home/mbrock/src/bash-5.3/execute_cmd.c:execute_simple_command=
+
+* Pipelines
+
+A pipeline is not merely "connect stdout to stdin." It is a small process graph
+with status rules.
+
+For:
+
+#+begin_src sh
+a | b | c
+#+end_src
+
+the shell generally:
+
+1. Creates a pipe between =a= and =b=.
+2. Starts =a= with stdout attached to the pipe write end.
+3. Starts =b= with stdin from the previous pipe and stdout to the next pipe.
+4. Starts =c= with stdin from the previous pipe.
+5. Closes unused pipe fds in both parent and children.
+6. Waits for the pipeline if it is foreground.
+7. Reports the pipeline status.
+
+Pipeline status:
+
+- Normally, the pipeline's status is the status of the last command.
+- With =pipefail=, the status is the rightmost failing command, or zero if all
+  commands succeeded.
+- =$PIPESTATUS= records all statuses from the most recent foreground pipeline.
+
+Bash source landmarks:
+
+- =/home/mbrock/src/bash-5.3/execute_cmd.c:execute_pipeline=
+- =/home/mbrock/src/bash-5.3/jobs.c:make_child=
+- =/home/mbrock/src/bash-5.3/jobs.c:stop_pipeline=
+- =/home/mbrock/src/bash-5.3/jobs.c:setjstatus=
+
+* Current shell vs subshell
+
+This is the central design distinction.
+
+Commands run either in the current shell environment or in a child/subshell
+environment.
+
+Current-shell effects persist:
+
+#+begin_src sh
+cd /tmp
+x=1
+export x
+#+end_src
+
+Subshell effects do not:
+
+#+begin_src sh
+(cd /tmp)
+x=1 | cat
+echo hi &
+#+end_src
+
+The classic pipeline trap:
+
+#+begin_src sh
+echo hi | read x
+echo "$x"
+#+end_src
+
+In most shells, this does not set =x= in the parent shell, because =read= ran in
+a pipeline child. Bash has a =lastpipe= option that can run the last pipeline
+element in the current shell under restricted conditions.
+
+* Lists
+
+Lists compose command statuses.
+
+#+begin_src sh
+a; b     # run a, then b
+a && b   # run b only if a succeeded
+a || b   # run b only if a failed
+a &      # run a asynchronously; shell does not wait
+#+end_src
+
+An async command returns status 0 to the parent shell immediately while the
+child continues in the background.
+
+Bash handles this around:
+
+- =/home/mbrock/src/bash-5.3/execute_cmd.c:execute_connection=
+
+* Redirections
+
+Redirections are part of command execution, not separate commands.
+
+Examples:
+
+#+begin_src sh
+echo hi >out
+cat <in
+cmd 2>&1
+#+end_src
+
+For a builtin or function running in the current shell, the shell must:
+
+1. Save old fds.
+2. Apply redirects.
+3. Run the command.
+4. Restore old fds.
+
+For an external command, redirections happen in the child before =execve=.
+
+This distinction matters. =exec >out= intentionally changes the current shell's
+fd state; ordinary =echo >out= should not.
+
+* External commands
+
+External command execution is approximately:
+
+#+begin_src c
+pid = fork();
+if (pid == 0) {
+  setup_signals();
+  setup_process_group_if_needed();
+  apply_pipes();
+  apply_redirections();
+  execve(path, argv, env);
+  _exit(127);
+} else {
+  remember_pid(pid);
+  maybe_wait(pid);
+}
+#+end_src
+
+Bash's external-command path:
+
+- =/home/mbrock/src/bash-5.3/execute_cmd.c:execute_disk_command=
+
+* Status
+
+Every command returns an integer status.
+
+Conventions:
+
+- =0= means success.
+- Nonzero means failure.
+- Signal death usually reports =128 + signal=.
+- =$?= is the last command or pipeline status.
+- =$PIPESTATUS= is the vector of statuses from the last foreground pipeline.
+
+Bash computes status around:
+
+- =/home/mbrock/src/bash-5.3/jobs.c:job_exit_status=
+- =/home/mbrock/src/bash-5.3/jobs.c:process_exit_status=
+- =/home/mbrock/src/bash-5.3/jobs.c:setjstatus=
+
+* Adequate implementation order
+
+For a new shell, a sane build order is:
+
+1. Parser to AST: simple commands, =;=, =&&=, =||=, =|=, =&=, parentheses.
+2. Expansion engine: variables and quotes first; command substitution and
+   globbing later.
+3. Redirection engine with save/restore.
+4. Parent-affecting builtins: =cd=, =export=, =unset=, =exit=.
+5. External command fork/exec.
+6. Pipelines with correct fd closing.
+7. Foreground waiting and exit statuses.
+8. Background jobs.
+9. Signals and job control.
+
+The architecture gets much easier if every execution path answers two questions
+explicitly:
+
+1. Does this command run in the current shell or a child?
+2. Which side effects should survive after it finishes?
+
+Get those right, and the rest becomes a long series of details instead of a
+fog bank.

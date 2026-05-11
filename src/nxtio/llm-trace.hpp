@@ -2,6 +2,7 @@
 
 #include <nxtai/trace.hpp>
 
+/// Compatibility aliases for the old `nxt::io::nxtllm` trace namespace.
 namespace nxt::io::nxtllm {
 
 using trace_row = nxt::ai::trace::trace_row;

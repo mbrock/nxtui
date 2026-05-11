@@ -1,8 +1,11 @@
 #pragma once
 
-// Small C++ wrapper for libvterm. It owns a VTerm screen model, accepts raw
-// PTY bytes, exposes screen cells for rendering, and can encode terminal input
-// events back into bytes for the child side of the PTY.
+/// @file
+/// Small C++ wrapper for libvterm.
+///
+/// The wrapper owns a `VTerm` screen model, accepts raw PTY bytes, exposes
+/// decoded cells for rendering, and can encode keyboard input back into bytes
+/// for the child side of a PTY.
 
 #include <vterm.h>
 
@@ -18,15 +21,19 @@
 
 namespace nxt::vterm {
 
+/// Terminal color as reported by libvterm.
 struct Color
 {
+    /// Raw libvterm color value.
     VTermColor c;
 
+    /// Construct a default foreground/background color sentinel.
     Color() noexcept
     {
         c.type = VTERM_COLOR_DEFAULT_FG | VTERM_COLOR_DEFAULT_BG;
     }
 
+    /// Construct a true-color RGB value.
     static Color
     rgb(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept
     {
@@ -35,6 +42,7 @@ struct Color
         return col;
     }
 
+    /// Construct an indexed terminal-palette color.
     static Color indexed(std::uint8_t idx) noexcept
     {
         Color col;
@@ -42,33 +50,43 @@ struct Color
         return col;
     }
 
+    /// True when the color carries explicit RGB components.
     [[nodiscard]] bool is_rgb() const noexcept
     {
         return VTERM_COLOR_IS_RGB(&c);
     }
 
+    /// True when the color refers to the terminal palette.
     [[nodiscard]] bool is_indexed() const noexcept
     {
         return VTERM_COLOR_IS_INDEXED(&c);
     }
 
+    /// True when the color requests the terminal default foreground.
     [[nodiscard]] bool is_default_fg() const noexcept
     {
         return VTERM_COLOR_IS_DEFAULT_FG(&c);
     }
 
+    /// True when the color requests the terminal default background.
     [[nodiscard]] bool is_default_bg() const noexcept
     {
         return VTERM_COLOR_IS_DEFAULT_BG(&c);
     }
 };
 
+/// One terminal screen cell decoded from libvterm.
 struct Cell
 {
+    /// Unicode codepoints stored in the cell.
     std::u32string chars;
+    /// Foreground color.
     Color fg;
+    /// Background color.
     Color bg;
+    /// Display-cell width. Continuation cells are represented by callers.
     int width = 1;
+    /// Text attributes carried by the terminal cell.
     bool bold:1 = false;
     bool italic:1 = false;
     bool underline:1 = false;
@@ -76,6 +94,7 @@ struct Cell
     bool reverse:1 = false;
     bool strike:1 = false;
 
+    /// Convert a libvterm cell into the wrapper representation.
     static Cell from_vterm(const VTermScreenCell & cell) noexcept
     {
         Cell c;
@@ -97,23 +116,31 @@ struct Cell
     }
 };
 
+/// Cursor shape requested by the terminal application.
 enum class CursorShape {
     block,
     underline,
     bar_left,
 };
 
+/// Current cursor position and presentation state.
 struct Cursor
 {
+    /// Zero-based row in terminal cells.
     int row = 0;
+    /// Zero-based column in terminal cells.
     int col = 0;
+    /// Whether the cursor should be rendered.
     bool visible = true;
+    /// Shape requested by the terminal state.
     CursorShape shape = CursorShape::block;
 };
 
+/// Owning libvterm terminal screen model.
 class Terminal
 {
 public:
+    /// Create a terminal screen with the given row/column size.
     Terminal(int rows, int cols)
         : vt_(vterm_new(rows, cols), &vterm_free)
     {
@@ -159,11 +186,13 @@ public:
         return *this;
     }
 
+    /// Feed raw bytes from the child PTY into libvterm.
     void write(std::string_view data) const
     {
         vterm_input_write(vt_.get(), data.data(), data.size());
     }
 
+    /// Encode a Unicode keypress through libvterm's keyboard encoder.
     void keyboard_unichar(
         std::uint32_t codepoint,
         VTermModifier modifiers = VTERM_MOD_NONE) const
@@ -171,6 +200,7 @@ public:
         vterm_keyboard_unichar(vt_.get(), codepoint, modifiers);
     }
 
+    /// Encode a special keypress through libvterm's keyboard encoder.
     void keyboard_key(
         VTermKey key,
         VTermModifier modifiers = VTERM_MOD_NONE) const
@@ -178,6 +208,7 @@ public:
         vterm_keyboard_key(vt_.get(), key, modifiers);
     }
 
+    /// Read bytes libvterm wants to send back to the child PTY.
     [[nodiscard]] std::string read_pending_output() const
     {
         std::string out;
@@ -190,6 +221,7 @@ public:
         return out;
     }
 
+    /// Return the cell at a zero-based row/column position.
     [[nodiscard]] std::optional<Cell>
     get_cell(int row, int col) const
     {
@@ -202,6 +234,7 @@ public:
         return Cell::from_vterm(cell);
     }
 
+    /// Return visible cells from one terminal row.
     [[nodiscard]] std::vector<Cell> get_row(int row) const
     {
         auto [rows, cols] = get_size();
@@ -222,6 +255,7 @@ public:
         return result;
     }
 
+    /// Extract UTF-8 text from an inclusive rectangular cell range.
     [[nodiscard]] std::string get_text(
         int start_row,
         int start_col,
@@ -242,12 +276,14 @@ public:
         return buffer;
     }
 
+    /// Extract UTF-8 text for the whole screen.
     [[nodiscard]] std::string get_screen_text() const
     {
         auto [rows, cols] = get_size();
         return get_text(0, 0, rows - 1, cols - 1);
     }
 
+    /// Extract UTF-8 text for one row.
     [[nodiscard]] std::string get_row_text(int row) const
     {
         auto [rows, cols] = get_size();
@@ -255,6 +291,7 @@ public:
         return get_text(row, 0, row, cols - 1);
     }
 
+    /// Current terminal size as `{rows, cols}`.
     [[nodiscard]] std::pair<int, int> get_size() const
     {
         int rows, cols;
@@ -262,6 +299,7 @@ public:
         return {rows, cols};
     }
 
+    /// Resize the terminal, clamping both dimensions to at least one cell.
     void set_size(int rows, int cols)
     {
         rows = std::max(1, rows);
@@ -269,11 +307,13 @@ public:
         vterm_set_size(vt_.get(), rows, cols);
     }
 
+    /// Reset the screen; a hard reset clears more terminal state.
     void reset(bool hard = true)
     {
         vterm_screen_reset(screen_, hard ? 1 : 0);
     }
 
+    /// Return the cursor state when the underlying terminal state is valid.
     [[nodiscard]] std::optional<Cursor> cursor() const noexcept
     {
         if (state_ == nullptr)
@@ -291,28 +331,38 @@ public:
             .shape = cursor_shape()};
     }
 
+    /// Raw libvterm handle for low-level integrations.
     [[nodiscard]] VTerm * raw() const noexcept
     {
         return vt_.get();
     }
 
+    /// Raw libvterm screen handle for low-level integrations.
     [[nodiscard]] VTermScreen * screen() const noexcept
     {
         return screen_;
     }
 
+    /// Dense copy of the current screen cells.
     struct ScreenSnapshot
     {
+        /// Row-major cell storage.
         std::vector<Cell> cells;
+        /// Snapshot row count.
         int rows;
+        /// Snapshot column count.
         int cols;
 
+        /// Dynamic extents used by the mdspan views.
         using mdspan_extents = std::experimental::
             extents<int, std::dynamic_extent, std::dynamic_extent>;
+        /// Mutable 2D view over the snapshot cells.
         using cell_view_t = std::experimental::mdspan<Cell, mdspan_extents>;
+        /// Const 2D view over the snapshot cells.
         using const_cell_view_t =
             std::experimental::mdspan<const Cell, mdspan_extents>;
 
+        /// Allocate a snapshot with `r * c` cells.
         ScreenSnapshot(int r, int c)
             : cells(r * c)
             , rows(r)
@@ -320,16 +370,19 @@ public:
         {
         }
 
+        /// Mutable 2D view into `cells`.
         [[nodiscard]] cell_view_t view() noexcept
         {
             return {cells.data(), mdspan_extents{rows, cols}};
         }
 
+        /// Const 2D view into `cells`.
         [[nodiscard]] const_cell_view_t view() const noexcept
         {
             return {cells.data(), mdspan_extents{rows, cols}};
         }
 
+        /// True when every cell satisfies `pred`.
         template<typename Pred>
         [[nodiscard]] bool all_of(Pred && pred) const
         {
@@ -341,6 +394,7 @@ public:
             return true;
         }
 
+        /// True when any cell satisfies `pred`.
         template<typename Pred>
         [[nodiscard]] bool any_of(Pred && pred) const
         {
@@ -352,6 +406,7 @@ public:
             return false;
         }
 
+        /// Count cells satisfying `pred`.
         template<typename Pred>
         [[nodiscard]] int count_if(Pred && pred) const
         {
@@ -365,6 +420,7 @@ public:
         }
     };
 
+    /// Capture the current libvterm screen into a dense snapshot.
     [[nodiscard]] ScreenSnapshot snapshot() const
     {
         auto [rows, cols] = get_size();

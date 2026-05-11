@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "nxt/ansi.hpp"
-#include "nxtio/async.hpp"
+#include "nxtio/async-core.hpp"
 #include "nxt/compositor.hpp"
 #include "nxt/glyph-table.hpp"
 #include "nxtio/input.hpp"
@@ -22,9 +22,10 @@
 
 namespace nxt::ui {
 
+/// Terminal dimensions in nxt cell units.
 using TermSize = nxt::Size;
 
-// Re-export TerminalGuard for convenience
+/// Re-exported terminal cleanup guard for applications.
 using ansi::TerminalGuard;
 
 /// Runtime state for the UI system.
@@ -33,7 +34,9 @@ using ansi::TerminalGuard;
 class UIRuntime
 {
 public:
+    /// Create runtime resources and discover the initial terminal size.
     UIRuntime();
+    /// Release runtime resources.
     ~UIRuntime();
 
     // Non-copyable, non-moveable (owns resources)
@@ -77,6 +80,7 @@ public:
         request_shutdown();
     }
 
+    /// Sleep on the runtime scheduler.
     template<class rep_type, class period_type>
     nxt::task<> sleep(std::chrono::duration<rep_type, period_type> duration)
     {
@@ -86,7 +90,7 @@ public:
     /// Signal that the view has been damaged and needs redraw.
     void signal_damage();
 
-    /// Stop token
+    /// Stop token tied to runtime shutdown.
     std::stop_token get_stop_token() const noexcept
     {
         return stop_source_.get_token();
@@ -97,6 +101,7 @@ public:
     [[nodiscard]] width_t terminal_width() const noexcept;
     [[nodiscard]] height_t terminal_height() const noexcept;
 
+    /// Schedule tasks on the runtime scheduler and await all of them.
     template<typename... Tasks>
     auto run(Tasks &&... tasks)
     {
