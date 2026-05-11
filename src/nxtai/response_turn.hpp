@@ -203,8 +203,6 @@ nxt::task<output_item_result> read_output_item(
     auto item = agent::output_item_from_event(first);
     while (auto event = co_await nxt::next(stream)) {
         if (agent::is_event(*event, "response.output_item.done")) {
-            self.println(" [✓]");
-            self.println("");
             if (auto done_item = agent::output_item_from_event(*event))
                 item = std::move(*done_item);
             break;

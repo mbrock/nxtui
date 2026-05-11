@@ -215,6 +215,8 @@ if get_option('examples')
     include_directories : nxt_inc,
     dependencies : [nxt_dep],
   )
+
+  subdir('demo')
 endif
 
 if get_option('llm_tool')
