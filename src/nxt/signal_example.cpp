@@ -1,5 +1,4 @@
 #include "nxt/any_layout.hpp"
-#include "nxt/signal.hpp"
 #include "nxt/slot.hpp"
 #include "nxt/tui.hpp"
 #include "nxt/units.hpp"
@@ -21,14 +20,14 @@ using KeyPress = std::monostate;
 
 nxt::task<> root(Self & self)
 {
-    auto yes = self.signal<KeyPress>();
-    auto no = self.signal<KeyPress>();
-    auto quit = self.signal<KeyPress>();
+    auto yes = nxt::signal<KeyPress>{};
+    auto no = nxt::signal<KeyPress>{};
+    auto quit = nxt::signal<KeyPress>{};
 
     auto in = self.spawn(
-        [yes = yes.publisher(),
-         no = no.publisher(),
-         quit = quit.publisher()](Self & s) -> nxt::task<> {
+        [yes = nxt::publisher_for(yes),
+         no = nxt::publisher_for(no),
+         quit = nxt::publisher_for(quit)](Self & s) -> nxt::task<> {
             using nxt::input::Key;
             while (!s.cancelled()) {
                 auto ev = co_await s.next_input();
@@ -36,22 +35,22 @@ nxt::task<> root(Self & self)
                     co_return;
 
                 if (ev->type != input::EventType::release)
-                  continue;
+                    continue;
 
                 try {
                     if (ev->key == Key::escape
                         || (ev->key == Key::character
                             && ev->codepoint == 'q'))
                     {
-                        co_await quit.push({});
+                        co_await nxt::publish(quit, {});
                     } else if (
                         ev->key == Key::character && ev->codepoint == 'y')
                     {
-                        co_await yes.push({});
+                        co_await nxt::publish(yes, {});
                     } else if (
                         ev->key == Key::character && ev->codepoint == 'n')
                     {
-                        co_await no.push({});
+                        co_await nxt::publish(no, {});
                     }
                 } catch (const nxt::disconnected &) {
                     co_return;
@@ -65,7 +64,7 @@ nxt::task<> root(Self & self)
             column(text(
                 std::string{"press y, n, or q"}, fg(Rgba8::white())))));
 
-        auto r = co_await self.select(yes, no, quit);
+        auto r = co_await nxt::select(self.scope(), yes, no, quit);
 
         if (r.index() == 2 || !std::visit(
                 [](const auto & press) { return press.has_value(); }, r))
