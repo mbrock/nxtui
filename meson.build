@@ -36,6 +36,28 @@ utf8proc_dep = dependency(
   fallback : ['utf8proc', 'utf8proc_dep'],
   default_options : ['tests=disabled'],
 )
+nanoarrow_ipc_dep = dependency(
+  'nanoarrow-ipc',
+  required : get_option('llm_tool'),
+  fallback : ['nanoarrow', 'nanoarrow_ipc_dep'],
+  default_options : [
+    'ipc=enabled',
+    'apps=disabled',
+    'benchmarks=disabled',
+    'device=disabled',
+    'testing=disabled',
+    'tests=disabled',
+  ],
+)
+arrow_dataset_deps = [
+  dependency('arrow', required : get_option('parquet_dataset_example')),
+  dependency('arrow-dataset', required : get_option('parquet_dataset_example')),
+  dependency('parquet', required : get_option('parquet_dataset_example')),
+]
+arrow_dataset_available = true
+foreach dep : arrow_dataset_deps
+  arrow_dataset_available = arrow_dataset_available and dep.found()
+endforeach
 
 nxt_cairo_dep = dependency('cairo', required : false)
 nxt_pangocairo_dep = dependency('pangocairo', required : false)
@@ -144,6 +166,11 @@ nxt_runtime_sources = files(
   'src/nxtio/subprocess.cpp',
 )
 
+if get_option('llm_tool')
+  nxt_runtime_sources += 'src/nxtio/arrow.cpp'
+  nxt_runtime_deps += nanoarrow_ipc_dep
+endif
+
 nxt_lib = static_library('nxtui',
   nxt_runtime_sources,
   include_directories : nxt_inc,
@@ -215,6 +242,14 @@ if get_option('examples')
     include_directories : nxt_inc,
     dependencies : [nxt_dep],
   )
+
+  if arrow_dataset_available
+    executable('parquet_dataset_example',
+      'demo/parquet_dataset.cpp',
+      include_directories : nxt_inc,
+      dependencies : arrow_dataset_deps,
+    )
+  endif
 
   subdir('demo')
 endif

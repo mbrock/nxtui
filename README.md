@@ -205,6 +205,14 @@ off by default because it pulls in nanoarrow IPC support:
 meson setup build -Dllm_tool=true
 ```
 
+When the Arrow C++ Dataset and Parquet development packages are installed,
+the examples also include `parquet_dataset_example`, which can scan a Parquet
+file or Hive-partitioned directory:
+
+```sh
+build/parquet_dataset_example ~/otel-archive
+```
+
 The API is still in motion, but the intended direction is stable: small
 composable layout values, a typed raster underneath, and a runtime that works
 well for both full-screen TUIs and partial HUD-style displays.

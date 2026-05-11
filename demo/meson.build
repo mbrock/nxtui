@@ -3,3 +3,11 @@ executable('build_sim',
   include_directories : nxt_inc,
   dependencies : [nxt_dep],
 )
+
+if arrow_dataset_available
+  executable('span_browser',
+    'span_browser.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_dep] + arrow_dataset_deps,
+  )
+endif

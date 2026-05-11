@@ -6,3 +6,6 @@ option('tests', type : 'boolean', value : true,
 
 option('llm_tool', type : 'boolean', value : false,
   description : 'Build nxtllm trace/debug tool, requires nanoarrow IPC')
+
+option('parquet_dataset_example', type : 'feature', value : 'auto',
+  description : 'Build the Parquet dataset example when Arrow Dataset and Parquet are available')
