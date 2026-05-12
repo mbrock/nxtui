@@ -194,6 +194,19 @@ void UIRuntime::update_hud_height(height_t hud_h)
     if (!has_terminal_surface())
         return;
 
+    // When the HUD region changes size, the scroll region's bottom
+    // row moves, so the cached scrollback cursor position is no
+    // longer valid. Forcing the next println/print to reposition
+    // keeps subsequent log output aligned with the new region —
+    // without this, after a smoothing-driven HUD shrink we'd
+    // continue writing to the OLD scroll_bottom row, which is now
+    // inside the new HUD area, smooshing successive lines on top
+    // of each other.
+    if (hud_h != last_hud_height_) {
+        last_hud_height_ = hud_h;
+        scrollback_cursor_initialized_ = false;
+    }
+
     compositor_->set_hud_height(hud_h, terminal_height());
 }
 

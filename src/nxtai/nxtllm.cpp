@@ -1,8 +1,10 @@
 #include <nxt/text_field.hpp>
 #include <nxt/tui.hpp>
+#include <nxtai/agent_tools.hpp>
 #include <nxtai/builtin_tools.hpp>
 #include <nxtai/response_turn.hpp>
 #include <nxtai/responses.hpp>
+#include <nxtai/tool_ui.hpp>
 #include <nxtio/input.hpp>
 #include <nxtio/process.hpp>
 #include <nxtio/text_field.hpp>
@@ -133,8 +135,7 @@ nxt::task<> run_agent_worker(
             co_return;
         }
 
-        self.draw(nxt::tui::text("Tooling..."));
-        auto outputs = co_await nxt::ai::response_turn::run_requested_tools(
+        auto outputs = co_await nxt::ai::tool_ui::run_all(
             self, turn.tools(), response.tool_calls());
 
         turn.continue_after_tools(std::move(response), std::move(outputs));
@@ -159,6 +160,10 @@ nxt::task<> run_submitted_prompt(nxt::ui::yard & self, llm_request request)
     }
 
     auto tools = nxt::ai::builtin_tools::for_runtime(self.runtime());
+    auto extra = nxt::ai::agent_tools::for_agent(
+        self.runtime().scheduler());
+    for (auto & t : extra)
+        tools.push_back(std::move(t));
     co_await run_agent_turn(
         self,
         nxt::ai::agent::response_continuation{

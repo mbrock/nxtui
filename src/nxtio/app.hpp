@@ -300,6 +300,7 @@ private:
     std::atomic<nxt::height_t> term_height_{24 * ln};
     std::atomic<std::uint64_t> damage_counter_{0};
     bool scrollback_cursor_initialized_{false};
+    nxt::height_t last_hud_height_{0 * ln};
     bool has_smoothed_hud_height_{false};
     double smoothed_hud_rows_{0.0};
     double hud_shrink_alpha_{0.05};

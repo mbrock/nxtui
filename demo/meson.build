@@ -11,3 +11,15 @@ if arrow_dataset_available
     dependencies : [nxt_dep] + arrow_dataset_deps,
   )
 endif
+
+executable('cgroup_browser',
+  'cgroup_browser.cpp',
+  include_directories : nxt_inc,
+  dependencies : [nxt_dep],
+)
+
+executable('shell_scope',
+  'shell_scope.cpp',
+  include_directories : nxt_inc,
+  dependencies : [nxt_dep],
+)
