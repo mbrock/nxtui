@@ -198,20 +198,18 @@ meson compile -C build
 meson test -C build
 ```
 
-The default build includes examples and tests. The `nxtllm` trace/debug tool is
-off by default because it pulls in nanoarrow IPC support:
+The default build includes the `nxtdemo` UI demo binary and the test suite. The
+`nxtllm` trace/debug tool is off by default because it pulls in nanoarrow IPC
+support:
 
 ```sh
 meson setup build -Dllm_tool=true
 ```
 
-When the Arrow C++ Dataset and Parquet development packages are installed,
-the examples also include `parquet_dataset_example`, which can scan a Parquet
-file or Hive-partitioned directory:
-
-```sh
-build/parquet_dataset_example ~/otel-archive
-```
+`nxtdemo` bundles all UI demos behind subcommands (`nxtdemo build_sim`,
+`nxtdemo cgroup_browser`, `nxtdemo shell_scope`). When the Arrow C++ Dataset and
+Parquet development packages are installed, `nxtdemo span_browser` is also
+available for browsing a Hive-partitioned span archive.
 
 The API is still in motion, but the intended direction is stable: small
 composable layout values, a typed raster underneath, and a runtime that works

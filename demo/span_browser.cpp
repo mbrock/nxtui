@@ -1642,12 +1642,8 @@ root(yard & self, std::shared_ptr<Dataset> data)
     }
 }
 
-} // namespace nxt::span_browser
-
-int main(int argc, char ** argv)
+int run(int argc, char ** argv)
 {
-    using namespace nxt::span_browser;
-
     auto path = std::string{
         argc > 1 ? argv[1] : "/home/mbrock/otel-archive"};
 
@@ -1676,6 +1672,8 @@ int main(int argc, char ** argv)
 
     return nxt::ui::run2(
         [data = std::move(data)](yard & self) -> nxt::task<> {
-            co_await nxt::span_browser::root(self, data);
+            co_await root(self, data);
         });
 }
+
+} // namespace nxt::span_browser

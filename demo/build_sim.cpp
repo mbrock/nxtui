@@ -1450,9 +1450,9 @@ inline nxt::task<> root(yard & self)
     self.draw(AnyLayout{});
 }
 
-} // namespace nxt::build_sim
-
-int main()
+int run(int /*argc*/, char ** /*argv*/)
 {
-    return nxt::ui::run2(nxt::build_sim::root);
+    return nxt::ui::run2(root);
 }
+
+} // namespace nxt::build_sim

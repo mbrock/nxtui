@@ -1243,9 +1243,9 @@ inline nxt::task<> root(yard & self)
     self.draw(AnyLayout{});
 }
 
-} // namespace nxt::shell_scope
-
-int main()
+int run(int /*argc*/, char ** /*argv*/)
 {
-    return nxt::ui::run2(nxt::shell_scope::root);
+    return nxt::ui::run2(root);
 }
+
+} // namespace nxt::shell_scope

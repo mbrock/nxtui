@@ -49,9 +49,9 @@ nanoarrow_ipc_dep = dependency(
   ],
 )
 arrow_dataset_deps = [
-  dependency('arrow', required : get_option('parquet_dataset_example')),
-  dependency('arrow-dataset', required : get_option('parquet_dataset_example')),
-  dependency('parquet', required : get_option('parquet_dataset_example')),
+  dependency('arrow', required : false),
+  dependency('arrow-dataset', required : false),
+  dependency('parquet', required : false),
 ]
 arrow_dataset_available = true
 foreach dep : arrow_dataset_deps
@@ -184,71 +184,7 @@ nxt_dep = declare_dependency(
   compile_args : nxt_runtime_cpp_args,
 )
 
-if get_option('examples')
-  if nxt_png_available
-    executable('nxtshot',
-      'src/nxt/nxtshot.cpp',
-      include_directories : nxt_inc,
-      dependencies : [nxt_dep, nxt_png_dep],
-    )
-  endif
-
-  executable('tui_example',
-    'src/nxt/tui_example.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('input_hud_example',
-    'src/nxt/input_hud_example.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('shell_column_example',
-    'src/nxt/shell_column_example.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('slot_example',
-    'src/nxt/slot_example.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('process_example',
-    'src/nxt/process_example.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('signal_example',
-    'src/nxt/signal_example.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('nxthttp',
-    'src/nxtio/nxthttp.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  executable('nxtchat',
-    'src/nxtio/nxtchat.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep],
-  )
-
-  if arrow_dataset_available
-    executable('parquet_dataset_example',
-      'demo/parquet_dataset.cpp',
-      include_directories : nxt_inc,
-      dependencies : arrow_dataset_deps,
-    )
-  endif
-
+if get_option('demo')
   subdir('demo')
 endif
 
@@ -260,12 +196,6 @@ if get_option('llm_tool')
     cpp_args : ['-Wno-unused-parameter'],
   )
 endif
-
-executable('nxttrace',
-  'src/nxtai/nxttrace.cpp',
-  include_directories : nxt_inc,
-  dependencies : [nxt_dep],
-)
 
 if get_option('tests')
   nxt_test_inc = include_directories('test')

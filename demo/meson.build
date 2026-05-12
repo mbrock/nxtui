@@ -1,25 +1,21 @@
-executable('build_sim',
+nxtdemo_sources = [
+  'main.cpp',
   'build_sim.cpp',
-  include_directories : nxt_inc,
-  dependencies : [nxt_dep],
-)
+  'cgroup_browser.cpp',
+  'shell_scope.cpp',
+]
+nxtdemo_dependencies = [nxt_dep]
+nxtdemo_cpp_args = []
 
 if arrow_dataset_available
-  executable('span_browser',
-    'span_browser.cpp',
-    include_directories : nxt_inc,
-    dependencies : [nxt_dep] + arrow_dataset_deps,
-  )
+  nxtdemo_sources += 'span_browser.cpp'
+  nxtdemo_dependencies += arrow_dataset_deps
+  nxtdemo_cpp_args += '-DNXTDEMO_HAVE_SPAN_BROWSER'
 endif
 
-executable('cgroup_browser',
-  'cgroup_browser.cpp',
+executable('nxtdemo',
+  nxtdemo_sources,
   include_directories : nxt_inc,
-  dependencies : [nxt_dep],
-)
-
-executable('shell_scope',
-  'shell_scope.cpp',
-  include_directories : nxt_inc,
-  dependencies : [nxt_dep],
+  dependencies : nxtdemo_dependencies,
+  cpp_args : nxtdemo_cpp_args,
 )

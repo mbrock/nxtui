@@ -1,7 +1,7 @@
 // trace-smoke-test — exercise the span/trace plumbing without needing
 // a TTY. Spawns two children that work briefly, then exits. With
-// `NXT_TRACE=auto` set, this leaves a trace under `traces/` that the
-// nxttrace tool can pretty-print.
+// `NXT_TRACE=auto` set, this leaves an Arrow IPC trace under `traces/`
+// that downstream tooling (cassette renderer, duckdb) can inspect.
 
 #include <nxtio/app.hpp>
 #include <nxtio/async.hpp>

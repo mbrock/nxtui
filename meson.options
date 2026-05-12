@@ -1,11 +1,8 @@
-option('examples', type : 'boolean', value : true,
-  description : 'Build example programs')
+option('demo', type : 'boolean', value : true,
+  description : 'Build the bundled nxtdemo UI demo binary')
 
 option('tests', type : 'boolean', value : true,
   description : 'Build and register tests')
 
 option('llm_tool', type : 'boolean', value : false,
   description : 'Build nxtllm trace/debug tool, requires nanoarrow IPC')
-
-option('parquet_dataset_example', type : 'feature', value : 'auto',
-  description : 'Build the Parquet dataset example when Arrow Dataset and Parquet are available')

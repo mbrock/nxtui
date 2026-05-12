@@ -955,12 +955,8 @@ root(yard & self, std::shared_ptr<Ctx> ctx)
     self.draw(AnyLayout{});
 }
 
-} // namespace nxt::cgroup_browser
-
-int main(int argc, char ** argv)
+int run(int argc, char ** argv)
 {
-    using namespace nxt::cgroup_browser;
-
     auto root_path = std::filesystem::path{
         argc > 1 ? argv[1] : "/sys/fs/cgroup"};
 
@@ -981,6 +977,8 @@ int main(int argc, char ** argv)
 
     return nxt::ui::run2(
         [ctx = std::move(ctx)](yard & self) -> nxt::task<> {
-            co_await nxt::cgroup_browser::root(self, ctx);
+            co_await root(self, ctx);
         });
 }
+
+} // namespace nxt::cgroup_browser
