@@ -272,6 +272,12 @@ if get_option('tests')
     dependencies : [nxt_dep],
   )
 
+  nxt_yardtask_test = executable('yardtask-test',
+    'test/yardtask-test.cpp',
+    include_directories : [nxt_inc, nxt_test_inc],
+    dependencies : [nxt_dep],
+  )
+
   test('raster-test', nxt_raster_test)
   test('arrow-test', nxt_arrow_test)
   test('http-test', nxt_http_test)
@@ -283,4 +289,5 @@ if get_option('tests')
   test('terminal-test', nxt_terminal_test)
   test('subprocess-test', nxt_subprocess_test)
   test('text-field-test', nxt_text_field_test)
+  test('yardtask-test', nxt_yardtask_test)
 endif

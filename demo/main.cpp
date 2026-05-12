@@ -7,6 +7,9 @@
 namespace nxt::build_sim {
 int run(int argc, char ** argv);
 }
+namespace nxt::cassette {
+int run(int argc, char ** argv);
+}
 namespace nxt::cgroup_browser {
 int run(int argc, char ** argv);
 }
@@ -28,6 +31,7 @@ void print_usage(const char * program)
         "usage: %s <demo> [args...]\n"
         "demos:\n"
         "  build_sim       fake parallel build progress\n"
+        "  cassette        render an agent trace as cassette cards\n"
         "  cgroup_browser  walk /sys/fs/cgroup\n"
         "  shell_scope     spawn a shell session\n"
 #ifdef NXTDEMO_HAVE_SPAN_BROWSER
@@ -54,6 +58,8 @@ int main(int argc, char ** argv)
 
     if (std::strcmp(name, "build_sim") == 0)
         return nxt::build_sim::run(sub_argc, sub_argv);
+    if (std::strcmp(name, "cassette") == 0)
+        return nxt::cassette::run(sub_argc, sub_argv);
     if (std::strcmp(name, "cgroup_browser") == 0)
         return nxt::cgroup_browser::run(sub_argc, sub_argv);
     if (std::strcmp(name, "shell_scope") == 0)

@@ -358,6 +358,10 @@ inline width_t utf8_width(std::string_view s)
 }
 
 /// Create a one-line text leaf using default style.
+///
+/// Channels at their default (fg/bg = `DEFAULT_COLOR`, em = `DEFAULT_EMPHASIS`)
+/// are left untouched on the underlying cells — they inherit whatever the
+/// parent painted. Only explicitly-set channels are written.
 inline auto text(std::string s)
 {
     auto w = utf8_width(s);
@@ -365,15 +369,15 @@ inline auto text(std::string s)
         WidthHint::fixed(w),
         HeightHint::fixed(1 * ln),
         [=](RasterView & r, Size) {
-            std::ranges::fill(r.fgs(), DEFAULT_COLOR);
-            std::ranges::fill(r.bgs(), DEFAULT_COLOR);
-            std::ranges::fill(r.ems(), DEFAULT_EMPHASIS);
             std::ranges::fill(r.glyphs(), 32);
             render_span(r, Pos::origin(), Span{s, {}});
         });
 }
 
 /// Create a one-line text leaf using `style`.
+///
+/// Channels at their default in `style` inherit from the parent surface;
+/// explicitly-set channels are filled across the leaf's rectangle.
 inline auto text(std::string s, Style style)
 {
     auto w = utf8_width(s);
@@ -381,10 +385,13 @@ inline auto text(std::string s, Style style)
         WidthHint::fixed(w),
         HeightHint::fixed(1 * ln),
         [=](RasterView & r, Size) {
-            std::ranges::fill(r.fgs(), style.fg);
-            std::ranges::fill(r.bgs(), style.bg);
-            std::ranges::fill(r.ems(), style.em);
             std::ranges::fill(r.glyphs(), 32);
+            if (style.fg != DEFAULT_COLOR)
+                std::ranges::fill(r.fgs(), style.fg);
+            if (style.bg != DEFAULT_COLOR)
+                std::ranges::fill(r.bgs(), style.bg);
+            if (style.em != DEFAULT_EMPHASIS)
+                std::ranges::fill(r.ems(), style.em);
             render_span(r, Pos::origin(), Span{s, style});
         });
 }
@@ -408,9 +415,12 @@ inline auto styled_lines(std::vector<std::vector<Span>> lines, Style clear = {})
         HeightHint::fixed(height),
         [lines = std::move(lines), clear](RasterView & r, Size size) {
             std::ranges::fill(r.glyphs(), 32);
-            std::ranges::fill(r.fgs(), clear.fg);
-            std::ranges::fill(r.bgs(), clear.bg);
-            std::ranges::fill(r.ems(), clear.em);
+            if (clear.fg != DEFAULT_COLOR)
+                std::ranges::fill(r.fgs(), clear.fg);
+            if (clear.bg != DEFAULT_COLOR)
+                std::ranges::fill(r.bgs(), clear.bg);
+            if (clear.em != DEFAULT_EMPHASIS)
+                std::ranges::fill(r.ems(), clear.em);
 
             auto row = 0 * ln;
             for (const auto & line : lines) {
@@ -461,24 +471,16 @@ inline auto spinner(
 {
     using namespace std::string_view_literals;
     constexpr auto frames = std::to_array({
-        // "⠋"sv,
-        // "⠙"sv,
-        // "⠹"sv,
-        // "⠸"sv,
-        // "⠼"sv,
-        // "⠴"sv,
-        // "⠦"sv,
-        // "⠧"sv,
-        // "⠇"sv,
-        // "⠏"sv,
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "8",
+         "⠋"sv,
+         "⠙"sv,
+         "⠹"sv,
+         "⠸"sv,
+         "⠼"sv,
+         "⠴"sv,
+         "⠦"sv,
+         "⠧"sv,
+         "⠇"sv,
+         "⠏"sv,
     });
 
     auto frame = frames[tick % frames.size()];

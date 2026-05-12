@@ -30,10 +30,9 @@ xsl_params=()
 cols="$(tput cols 2>/dev/null || echo 100)"
 
 recent_runs() {
-    find "$repo/traces" -maxdepth 1 -type f -name 'nxtllm-*.arrow' \
-        -printf '%T@ %f\n' 2>/dev/null \
-        | sort -nr \
-        | sed -E 's/^[^ ]+ nxtllm-([^.]+)\.arrow$/\1/' \
+    # ls -t is portable across BSD (macOS) and GNU; find -printf is not.
+    ls -t "$repo/traces"/nxtllm-*.arrow 2>/dev/null \
+        | sed -E 's|.*/nxtllm-([^.]+)\.arrow|\1|' \
         | head -n "$recent"
 }
 

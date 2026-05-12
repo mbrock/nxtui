@@ -1,6 +1,7 @@
 nxtdemo_sources = [
   'main.cpp',
   'build_sim.cpp',
+  'cassette.cpp',
   'cgroup_browser.cpp',
   'shell_scope.cpp',
 ]

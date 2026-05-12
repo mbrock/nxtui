@@ -3,6 +3,7 @@
 // Public async facade.
 
 #include "nxtio/async-core.hpp"
+#include "nxtio/yardtask.hpp"
 
 #include "nxt/signal.hpp"
 #include "nxtio/event-queue.hpp"
