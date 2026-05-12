@@ -14,7 +14,7 @@
     migration path.</thought>
 
   <call name="rg_search" status="ok" elapsed_ms="83">
-    <args>/(?i)(parquet|arrow|duckdb)/</args>
+    <args><path>.</path><pattern>(?i)(parquet|arrow|duckdb)</pattern></args>
     <result kind="matches" total_lines="309" bytes="22528">
       <line>./meson.build:39:nanoarrow_ipc_dep = dependency(</line>
       <line>./meson.build:40:  'nanoarrow-ipc',</line>
@@ -29,7 +29,7 @@
   </call>
 
   <call name="read_file" status="ok" elapsed_ms="81">
-    <args>src/nxtio/arrow.hpp</args>
+    <args><path>src/nxtio/arrow.hpp</path></args>
     <result kind="document" bytes="3072" lines="109">
       <line>#pragma once</line>
       <line>#include &lt;chrono&gt;</line>
@@ -39,7 +39,7 @@
   </call>
 
   <call name="bash" status="ok" elapsed_ms="240">
-    <args>duckdb -c "SELECT count(*) FROM read_arrow('traces/*.arrow')"</args>
+    <args><command>duckdb -c "SELECT count(*) FROM read_arrow('traces/*.arrow')"</command></args>
     <result kind="process" exit="0" bytes="48">
       <stream channel="stdout">
         <line>┌──────────────┐</line>
@@ -51,21 +51,23 @@
   </call>
 
   <call name="nxt_current_time" status="ok" elapsed_ms="2">
-    <args>{}</args>
+    <args/>
     <result kind="fact">
       <field name="local_time">2026-05-12 14:32:07 +0200</field>
     </result>
   </call>
 
   <call name="bash" status="error" elapsed_ms="35">
-    <args>cat > /tmp/explore.sql &lt;&lt; EOF\nSELECT * FROM ...\nEOF</args>
+    <args><command>cat &gt; /tmp/explore.sql &lt;&lt; EOF
+SELECT * FROM ...
+EOF</command></args>
     <result kind="error">
       <message>tool execution failed: heredoc inside argument</message>
     </result>
   </call>
 
   <call name="web_fetch" status="pending_approval">
-    <args>https://duckdb.org/docs/stable/data/parquet/overview</args>
+    <args><url>https://duckdb.org/docs/stable/data/parquet/overview</url></args>
   </call>
 
 </turn>

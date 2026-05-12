@@ -120,9 +120,15 @@ WITH
     SELECT turn_id, seq,
       '<call name="' || html_escape(tool)
         || '" status="ok" elapsed_ms="' || duration_ms || '">'
-        || '<args>' || html_escape(
-             case when length(args) > 140 then substr(args, 1, 138) || '…' else args end
-           ) || '</args>'
+        || '<args>'
+        || coalesce(
+             case when args is null or args = '' or args = '{}' then ''
+                  else regexp_replace(
+                         regexp_replace(json_to_xml(args)::VARCHAR,
+                                        '^<\?xml[^>]*\?>\s*', ''),
+                         '^<root>(.*)</root>\s*$', '\1')
+             end, '')
+        || '</args>'
         || xml
         || '</call>' AS xml
     FROM result_xml

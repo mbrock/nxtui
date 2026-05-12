@@ -82,39 +82,79 @@
        ================================================================ -->
   <xsl:template match="call" mode="rack">
     <div class="flex flex-col bg-slate-900">
-      <!-- Row 1: spine | tool name | timing -->
+      <!-- Row 1: spine | tool name + primary arg as one sentence -->
       <div class="flex flex-row items-center">
         <xsl:apply-templates select="." mode="rack-spine"/>
-        <box class="flex-1 px-2">
+        <box>
           <xsl:attribute name="class">
-            <xsl:text>flex-1 px-2 </xsl:text>
+            <xsl:text>px-2 </xsl:text>
             <xsl:apply-templates select="." mode="tool-color"/>
           </xsl:attribute>
           <xsl:apply-templates select="." mode="display-name"/>
         </box>
-        <box class="text-slate-500 px-2">
-          <xsl:if test="@elapsed_ms">
-            <xsl:value-of select="@elapsed_ms"/><xsl:text>ms</xsl:text>
-          </xsl:if>
-        </box>
-      </div>
-      <!-- Row 2: spine | args (single-line, ellipsized) | outcome stats -->
-      <div class="flex flex-row items-center">
-        <xsl:apply-templates select="." mode="rack-spine"/>
-        <box class="text-slate-400 flex-1 px-2 overflow-x-hidden">
+        <box class="text-amber-50 flex-1 overflow-x-hidden">
+          <xsl:variable name="payload">
+            <xsl:apply-templates select="." mode="args-rack"/>
+          </xsl:variable>
           <xsl:choose>
-            <xsl:when test="string-length(args) &gt; 60">
-              <xsl:value-of select="concat(substring(args, 1, 58), '…')"/>
+            <xsl:when test="string-length($payload) &gt; 70">
+              <xsl:value-of select="concat(substring($payload, 1, 68), '…')"/>
             </xsl:when>
-            <xsl:otherwise><xsl:value-of select="args"/></xsl:otherwise>
+            <xsl:otherwise><xsl:value-of select="$payload"/></xsl:otherwise>
           </xsl:choose>
         </box>
-        <box class="px-2">
-          <xsl:apply-templates select="result" mode="rack-meta"/>
+      </div>
+      <!-- Row 2: spine | metrics receipt (latency · result-counts) -->
+      <div class="flex flex-row items-center">
+        <xsl:apply-templates select="." mode="rack-spine"/>
+        <box class="text-slate-500 px-2 flex-1">
+          <xsl:apply-templates select="." mode="rack-metrics"/>
         </box>
       </div>
     </div>
   </xsl:template>
+
+  <!-- ================================================================
+       Row-2 metrics receipt: latency, then kind-specific outcome
+       numbers separated by a centered dot. Reads like the printed
+       facts on the underside of a cassette: "C-60  IEC-I  Type I".
+       ================================================================ -->
+  <xsl:template match="call" mode="rack-metrics">
+    <xsl:if test="@elapsed_ms">
+      <xsl:value-of select="@elapsed_ms"/><xsl:text>ms</xsl:text>
+    </xsl:if>
+    <xsl:apply-templates select="result" mode="rack-metric-detail"/>
+    <xsl:if test="@status='error'">
+      <xsl:text> · error</xsl:text>
+    </xsl:if>
+    <xsl:if test="@status='pending_approval'">
+      <xsl:text> · pending approval</xsl:text>
+    </xsl:if>
+    <xsl:if test="@status='denied'">
+      <xsl:text> · denied</xsl:text>
+    </xsl:if>
+  </xsl:template>
+
+  <xsl:template match="result[@kind='matches']" mode="rack-metric-detail">
+    <xsl:text> · </xsl:text><xsl:value-of select="@total_lines"/><xsl:text> matches · </xsl:text><xsl:value-of select="round(@bytes div 1024)"/><xsl:text>K</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="result[@kind='document']" mode="rack-metric-detail">
+    <xsl:text> · </xsl:text><xsl:value-of select="@lines"/><xsl:text> lines · </xsl:text><xsl:value-of select="round(@bytes div 1024)"/><xsl:text>K</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="result[@kind='process']" mode="rack-metric-detail">
+    <xsl:text> · exit </xsl:text><xsl:value-of select="@exit"/>
+    <xsl:if test="@bytes &gt; 0">
+      <xsl:text> · </xsl:text><xsl:value-of select="round(@bytes div 1024)"/><xsl:text>K</xsl:text>
+    </xsl:if>
+  </xsl:template>
+
+  <xsl:template match="result[@kind='fact']" mode="rack-metric-detail"/>
+  <xsl:template match="result[@kind='error']" mode="rack-metric-detail">
+    <xsl:text> · error</xsl:text>
+  </xsl:template>
+  <xsl:template match="result" mode="rack-metric-detail"/>
 
   <!-- Rack spine: 2-cell colored block. Explicit non-breaking-space
        content so xtc gives it actual cells; w-2 fixes the width.
@@ -176,13 +216,76 @@
         <xsl:apply-templates select="." mode="display-name"/>
       </box>
       <box class="text-slate-600 flex-1 overflow-hidden">
-        <xsl:value-of select="args"/>
+        <xsl:apply-templates select="." mode="args-inline"/>
       </box>
       <xsl:if test="@elapsed_ms">
         <box class="text-slate-600 px-2"><xsl:value-of select="@elapsed_ms"/>ms</box>
       </xsl:if>
       <xsl:apply-templates select="result" mode="meta"/>
     </div>
+  </xsl:template>
+
+  <!-- ================================================================
+       Per-tool args display. The trace XML carries args as structured
+       children (json_to_xml converts {"path":"."} to <path>.</path>),
+       so each tool can pick its most informative field.
+
+         args-inline → full-mode header strip, key=value style
+         args-rack   → rack-mode row, just the primary field
+       ================================================================ -->
+
+  <xsl:template match="call[@name='rg_search']" mode="args-rack">
+    <xsl:value-of select="args/pattern"/>
+  </xsl:template>
+  <xsl:template match="call[@name='rg_search']" mode="args-inline">
+    <xsl:value-of select="args/pattern"/>
+  </xsl:template>
+
+  <xsl:template match="call[@name='read_file']" mode="args-rack">
+    <xsl:value-of select="args/path"/>
+  </xsl:template>
+  <xsl:template match="call[@name='read_file']" mode="args-inline">
+    <xsl:value-of select="args/path"/>
+  </xsl:template>
+
+  <xsl:template match="call[@name='bash']" mode="args-rack">
+    <xsl:choose>
+      <xsl:when test="contains(args/command, '&#10;')">
+        <xsl:value-of select="substring-before(args/command, '&#10;')"/>
+        <xsl:text> …</xsl:text>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:value-of select="args/command"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:template>
+  <xsl:template match="call[@name='bash']" mode="args-inline">
+    <xsl:apply-templates select="." mode="args-rack"/>
+  </xsl:template>
+
+  <xsl:template match="call[@name='web_fetch']" mode="args-rack">
+    <xsl:value-of select="args/url"/>
+  </xsl:template>
+  <xsl:template match="call[@name='web_fetch']" mode="args-inline">
+    <xsl:value-of select="args/url"/>
+  </xsl:template>
+
+  <xsl:template match="call[@name='nxt_echo']" mode="args-rack">
+    <xsl:value-of select="args/text"/>
+  </xsl:template>
+  <xsl:template match="call[@name='nxt_echo']" mode="args-inline">
+    <xsl:value-of select="args/text"/>
+  </xsl:template>
+
+  <!-- Fallback for unknown tools: iterate args/* as key=value pairs. -->
+  <xsl:template match="call" mode="args-rack">
+    <xsl:for-each select="args/*">
+      <xsl:if test="position() &gt; 1"><xsl:text>  </xsl:text></xsl:if>
+      <xsl:value-of select="local-name()"/><xsl:text>=</xsl:text><xsl:value-of select="."/>
+    </xsl:for-each>
+  </xsl:template>
+  <xsl:template match="call" mode="args-inline">
+    <xsl:apply-templates select="." mode="args-rack"/>
   </xsl:template>
 
   <!-- ================================================================
