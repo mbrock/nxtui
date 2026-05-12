@@ -1,6 +1,13 @@
 #include <nxtio/short_id.hpp>
 
+#if defined(__linux__)
 #include <sys/random.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) ||    \
+    defined(__NetBSD__)
+#include <stdlib.h>
+#else
+#include <random>
+#endif
 
 #include <array>
 #include <cerrno>
@@ -19,6 +26,7 @@ static_assert(sizeof(crockford) - 1 == 32);
 
 void fill_random(std::uint8_t * out, std::size_t n)
 {
+#if defined(__linux__)
     std::size_t filled = 0;
     while (filled < n) {
         auto got = ::getrandom(out + filled, n - filled, 0);
@@ -30,6 +38,14 @@ void fill_random(std::uint8_t * out, std::size_t n)
         }
         filled += static_cast<std::size_t>(got);
     }
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) ||    \
+    defined(__NetBSD__)
+    ::arc4random_buf(out, n);
+#else
+    std::random_device rng;
+    for (std::size_t i = 0; i < n; ++i)
+        out[i] = static_cast<std::uint8_t>(rng());
+#endif
 }
 
 } // namespace

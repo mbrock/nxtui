@@ -18,8 +18,8 @@ namespace nxt::tui {
 /// slot by value each frame while a coroutine elsewhere keeps publishing
 /// fresh layouts into the same cell.
 ///
-/// Publishing is lock-free (atomic shared_ptr swap) and invokes an
-/// optional on-publish callback — typically `UIRuntime::signal_damage`.
+/// Publishing uses the standard atomic shared_ptr operations and invokes
+/// an optional on-publish callback — typically `UIRuntime::signal_damage`.
 template<Layout L>
 class Slot
 {
@@ -33,7 +33,8 @@ public:
         : cell_(std::make_shared<Cell>())
     {
         cell_->on_publish = std::move(on_publish);
-        cell_->current.store(
+        std::atomic_store_explicit(
+            &cell_->current,
             std::make_shared<const L>(std::move(initial)),
             std::memory_order_release);
     }
@@ -41,7 +42,8 @@ public:
     /// Replace the current layout. Thread-safe.
     void publish(L layout) const
     {
-        cell_->current.store(
+        std::atomic_store_explicit(
+            &cell_->current,
             std::make_shared<const L>(std::move(layout)),
             std::memory_order_release);
         if (cell_->on_publish)
@@ -73,13 +75,14 @@ public:
 private:
     struct Cell
     {
-        std::atomic<std::shared_ptr<const L>> current;
+        std::shared_ptr<const L> current;
         std::function<void()> on_publish;
     };
 
     std::shared_ptr<const L> load() const
     {
-        return cell_->current.load(std::memory_order_acquire);
+        return std::atomic_load_explicit(
+            &cell_->current, std::memory_order_acquire);
     }
 
     std::shared_ptr<Cell> cell_;

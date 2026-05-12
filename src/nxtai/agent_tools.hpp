@@ -59,6 +59,39 @@ inline std::string read_file_to_string(
     return out;
 }
 
+inline bool set_fd_flag(int fd, int flag)
+{
+    auto flags = ::fcntl(fd, F_GETFD);
+    return flags >= 0 && ::fcntl(fd, F_SETFD, flags | flag) == 0;
+}
+
+inline bool set_status_flag(int fd, int flag)
+{
+    auto flags = ::fcntl(fd, F_GETFL);
+    return flags >= 0 && ::fcntl(fd, F_SETFL, flags | flag) == 0;
+}
+
+inline bool make_nonblocking_cloexec_pipe(int pipefd[2])
+{
+#if defined(__linux__)
+    return ::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0;
+#else
+    if (::pipe(pipefd) != 0)
+        return false;
+    if (!set_status_flag(pipefd[0], O_NONBLOCK)
+        || !set_status_flag(pipefd[1], O_NONBLOCK)
+        || !set_fd_flag(pipefd[0], FD_CLOEXEC)
+        || !set_fd_flag(pipefd[1], FD_CLOEXEC)) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        pipefd[0] = -1;
+        pipefd[1] = -1;
+        return false;
+    }
+    return true;
+#endif
+}
+
 // Spawn `argv[0]` with the rest as arguments, redirecting both
 // stdout and stderr into a non-blocking pipe. Read from the pipe
 // asynchronously via `scheduler.poll` so the coroutine yields to
@@ -77,7 +110,7 @@ run_subprocess_async(
         co_return std::string{};
 
     int pipefd[2] = {-1, -1};
-    if (::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) != 0)
+    if (!make_nonblocking_cloexec_pipe(pipefd))
         co_return std::string{"<pipe() failed>"};
 
     posix_spawn_file_actions_t actions;
