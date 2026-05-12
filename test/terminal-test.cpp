@@ -13,6 +13,17 @@ namespace nxt::test {
 using namespace boost::ut;
 namespace tui = nxt::tui;
 
+template<typename Exception, typename Fn>
+bool throws_exception(Fn fn)
+{
+    try {
+        fn();
+    } catch (const Exception &) {
+        return true;
+    }
+    return false;
+}
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -200,6 +211,16 @@ suite compositor_tests = [] {
         expect(cell.has_value() && cell->bold);
     };
 
+    "rejects control characters before terminal output"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 3 * ln}, glyphs);
+
+        expect(throws_exception<std::logic_error>([&] {
+            (void) render_to_string(
+                compositor, tui::text("A\nB"), {20 * ch, 3 * ln});
+        }));
+    };
+
     "combines emphasis styles"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
@@ -310,7 +331,7 @@ suite hud_tests = [] {
         vterm::Terminal term(6, 20);
 
         set_hud_height(compositor, term, 2 * ln, 6 * ln);
-        write_at(term, terminal_origin_v + 3 * ln, "BOTTOM");
+        write_at(term, terminal_origin_v + 2 * ln, "BOTTOM");
 
         set_hud_height(compositor, term, 3 * ln, 6 * ln);
 
@@ -318,21 +339,21 @@ suite hud_tests = [] {
             term,
             {
                 "",
-                "",
                 "BOTTOM",
+                "",
                 "",
                 "",
                 "",
             });
     };
 
-    "shrinking HUD moves log content into freed rows"_test = [] {
+    "output after shrinking HUD scrolls up to existing log content"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
         vterm::Terminal term(6, 20);
 
         set_hud_height(compositor, term, 3 * ln, 6 * ln);
-        write_at(term, terminal_origin_v + 2 * ln, "BOTTOM");
+        write_at(term, terminal_origin_v + 1 * ln, "BOTTOM");
 
         set_hud_height(compositor, term, 2 * ln, 6 * ln);
 
@@ -340,9 +361,22 @@ suite hud_tests = [] {
             term,
             {
                 "",
-                "",
-                "",
                 "BOTTOM",
+                "",
+                "",
+                "",
+                "",
+            });
+
+        println_at(term, terminal_origin_v + 2 * ln, "NEXT");
+
+        check_display(
+            term,
+            {
+                "BOTTOM",
+                "NEXT",
+                "",
+                "",
                 "",
                 "",
             });

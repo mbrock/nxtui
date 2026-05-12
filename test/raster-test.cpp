@@ -96,6 +96,28 @@ suite layout_tests = [] {
         renders(row(text("A"), text(" "), text("B"))) | "A B";
     };
 
+    "text_lines renders multiple rows"_test = [] {
+        auto layout = text_lines("alpha\nbeta");
+        expect(layout.height_hint().min == 2 * ln);
+        expect(layout.width_hint().min == 5 * ch);
+        renders(layout) | "alpha" | "beta";
+    };
+
+    "text_lines preserves blank lines"_test = [] {
+        auto layout = text_lines("alpha\n\nbeta");
+        expect(layout.height_hint().min == 3 * ln);
+        renders(layout) | "alpha" | "" | "beta";
+    };
+
+    "text_lines preserves spaces inside lines"_test = [] {
+        renders(text_lines("alpha beta")) | "alpha beta";
+    };
+
+    "text_lines measures terminal cell width"_test = [] {
+        auto layout = text_lines("\xe7\x95\x8c\nabc");
+        expect(layout.width_hint().min == 3 * ch);
+    };
+
     "either renders selected branch"_test = [] {
         renders(either(false, text("off"), text("on"))) | "off";
         renders(either(true, text("off"), text("on"))) | "on";

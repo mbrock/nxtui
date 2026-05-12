@@ -223,6 +223,26 @@ suite utf8_helpers = [] {
         expect(segments[3].text == "wide");
         expect(segments[4].text == "world");
     };
+
+    "paragraphs split on blank lines"_test = [] {
+        auto text = std::string{"hello\nwide world\n\nnext"};
+        auto paragraphs = std::vector<std::string_view>{};
+        for (auto paragraph : nxt::utf8::paragraphs(text))
+            paragraphs.push_back(paragraph.text);
+
+        expect(
+            paragraphs
+            == std::vector<std::string_view>{"hello\nwide world", "next"});
+    };
+
+    "paragraphs treat whitespace-only lines as breaks"_test = [] {
+        auto text = std::string{"\n  \nfirst\n\t \nsecond\n"};
+        auto paragraphs = std::vector<std::string_view>{};
+        for (auto paragraph : nxt::utf8::paragraphs(text))
+            paragraphs.push_back(paragraph.text);
+
+        expect(paragraphs == std::vector<std::string_view>{"first", "second"});
+    };
 };
 
 // ============================================================================

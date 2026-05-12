@@ -1,10 +1,13 @@
 #include <nxtai/responses.hpp>
+#include <nxtai/response_turn.hpp>
+#include <nxtai/tool_ui.hpp>
 #include <nxtai/tools.hpp>
 
 #include <boost/ut.hpp>
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <chrono>
 #include <span>
 #include <string>
 #include <string_view>
@@ -13,6 +16,57 @@
 namespace nxt::test {
 
 using namespace boost::ut;
+
+template<typename Layout>
+std::vector<std::string> render_lines(const Layout & layout)
+{
+    auto width = std::max<std::size_t>(
+        1, static_cast<std::size_t>(layout.width_hint().min.count()));
+    auto height = std::max<std::size_t>(
+        1, static_cast<std::size_t>(layout.height_hint().min.count()));
+
+    GlyphTable glyphs;
+    Raster raster(width * ch, height * ln, glyphs);
+    auto view = raster.view();
+    layout.render(view, Size{width * ch, height * ln});
+
+    auto out = std::vector<std::string>{};
+    for (auto row = std::size_t{0}; row < height; ++row) {
+        auto line = std::string{};
+        for (auto x = std::size_t{0}; x < width; ++x) {
+            auto cell = view.get_cell(Pos::at(x * ch, row * ln));
+            if (cell) {
+                if (auto glyph = raster.glyph_table().get(cell->glyph))
+                    line += *glyph;
+                else
+                    line += ' ';
+            } else {
+                line += ' ';
+            }
+        }
+        while (!line.empty() && line.back() == ' ')
+            line.pop_back();
+        out.push_back(std::move(line));
+    }
+    return out;
+}
+
+template<typename Layout>
+Emphasis rendered_emphasis(const Layout & layout, std::size_t row, std::size_t col)
+{
+    auto width = std::max<std::size_t>(
+        1, static_cast<std::size_t>(layout.width_hint().min.count()));
+    auto height = std::max<std::size_t>(
+        1, static_cast<std::size_t>(layout.height_hint().min.count()));
+
+    GlyphTable glyphs;
+    Raster raster(width * ch, height * ln, glyphs);
+    auto view = raster.view();
+    layout.render(view, Size{width * ch, height * ln});
+
+    auto cell = view.get_cell(Pos::at(col * ch, row * ln));
+    return cell ? cell->em : Emphasis::none;
+}
 
 suite llm_tests = [] {
     using namespace std::literals;
@@ -165,6 +219,100 @@ suite llm_tests = [] {
         auto error =
             nxt::sync_wait(nxt::ai::tools::run_function_tool(tools, missing));
         expect(nlohmann::json::parse(error)["error"] == "unknown tool");
+    };
+
+    "response text wrapping preserves paragraph breaks"_test = [] {
+        auto lines = nxt::ai::response_turn::wrap_stream_text(
+            "alpha beta\n\nsecond paragraph", 80);
+
+        expect(
+            lines
+            == std::vector<std::string>{
+                "alpha beta",
+                "",
+                "second paragraph"});
+    };
+
+    "response text wrapping uses terminal cell widths"_test = [] {
+        auto lines = nxt::ai::response_turn::wrap_stream_text(
+            "aa \xe7\x95\x8c bb", 5);
+
+        expect(
+            lines
+            == std::vector<std::string>{"aa \xe7\x95\x8c", "bb"});
+    };
+
+    "response text wrapping indents markdown list continuations"_test = [] {
+        auto lines = nxt::ai::response_turn::wrap_stream_text(
+            "- alpha beta gamma", 10);
+
+        expect(
+            lines
+            == std::vector<std::string>{"- alpha", "  beta", "  gamma"});
+    };
+
+    "inline markdown parses bold and code spans"_test = [] {
+        auto spans = nxt::ai::response_turn::parse_inline_markdown(
+            "plain **bold** `code`", {});
+
+        expect(spans.size() == 4_ul);
+        expect(spans[0].text == "plain ");
+        expect(spans[1].text == "bold");
+        expect(has_emphasis(spans[1].style.em, Emphasis::bold));
+        expect(spans[2].text == " ");
+        expect(spans[3].text == "code");
+        expect(!has_emphasis(spans[3].style.em, Emphasis::reverse));
+    };
+
+    "markdown bold paragraph strips markers and pads vertically"_test = [] {
+        auto layout = nxt::ai::response_turn::markdown_text_block(
+            "**Foo bar**", {}, 80);
+
+        expect(layout.height_hint().min == 3 * ln);
+        expect(
+            render_lines(layout)
+            == std::vector<std::string>{"", "Foo bar", ""});
+        expect(has_emphasis(
+            rendered_emphasis(layout, 1, 0), Emphasis::bold));
+    };
+
+    "finished thought block folds to heading"_test = [] {
+        auto layout = nxt::ai::response_turn::folded_thought_block();
+
+        expect(layout.height_hint().min == 1 * ln);
+        expect(
+            render_lines(layout)
+            == std::vector<std::string>{"▸ thought     folded"});
+    };
+
+    "hud block state renders folded rows above active work"_test = [] {
+        auto hud = nxt::ai::hud_blocks::State{};
+        hud.add(nxt::ai::response_turn::folded_thought_block());
+
+        auto layout = hud.view(nxt::tui::text("working"));
+
+        expect(layout.height_hint().min == 2 * ln);
+        expect(
+            render_lines(layout)
+            == std::vector<std::string>{"▸ thought     folded", "working"});
+    };
+
+    "output separator is one horizontal rule line"_test = [] {
+        auto layout = nxt::ai::response_turn::output_separator();
+
+        expect(layout.height_hint().min == 1 * ln);
+        expect(render_lines(layout) == std::vector<std::string>{"─"});
+    };
+
+    "finished tool result block folds to done card"_test = [] {
+        auto layout = nxt::ai::tool_ui::folded_result_card(
+            "rg_search",
+            "/needle/ in .",
+            std::chrono::milliseconds{80},
+            "3 matches",
+            false);
+
+        expect(layout.height_hint().min == 1 * ln);
     };
 
     "openai responses stream emits parsed sse json events"_test = [] {
