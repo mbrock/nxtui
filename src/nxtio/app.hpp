@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "nxt/ansi.hpp"
+#include "nxtio/arrow.hpp"
 #include "nxtio/async-core.hpp"
 #include "nxt/compositor.hpp"
 #include "nxt/glyph-table.hpp"
@@ -18,6 +19,11 @@
 #include "nxt/raster.hpp"
 #include "nxtio/signal-pipe.hpp"
 #include "nxt/units.hpp"
+#include "nxt/vterm.hpp"
+
+#include <mutex>
+#include <streambuf>
+#include <string>
 
 namespace nxt::ui {
 
@@ -138,6 +144,12 @@ public:
     /// Clean up before exit - clears HUD region.
     void cleanup();
 
+    /// Capture the current back buffer to `img/<short-id>.png` and
+    /// print the path to scrollback. Returns the saved path, or an
+    /// empty string if no image was written (no PNG support, no
+    /// terminal surface, or filesystem failure).
+    std::string snapshot();
+
     /// Run a render loop until shutdown.
     /// BuildUI is called each frame to produce the layout.
     /// Waits for damage signal, but rate-limits to frame_time.
@@ -228,6 +240,84 @@ public:
     /// Direct access to compositor (for testing or advanced use).
     [[nodiscard]] TerminalCompositor & compositor() noexcept;
 
+    // ---- Tracing -------------------------------------------------------
+
+    /// The active trace writer for this run. Always present, but only
+    /// emits rows when an output path was resolved (env `NXT_TRACE` or
+    /// the default `traces/<run_id>.arrow`). Safe to call from any
+    /// thread that holds the runtime alive.
+    [[nodiscard]] nxt::io::arrow::ipc_trace & trace() noexcept
+    {
+        return trace_;
+    }
+
+    /// Stable run id used as a tag for traces, screenshots, and any
+    /// other artifacts that should be associated with this process
+    /// invocation.
+    [[nodiscard]] std::string_view run_id() const noexcept
+    {
+        return run_id_;
+    }
+
+    /// Id of the implicit "root" span — used as the parent for every
+    /// top-level `yard::spawn` and for non-yard producers (compositor,
+    /// input pump) that emit rows outside any user span.
+    [[nodiscard]] std::string_view root_span_id() const noexcept
+    {
+        return root_span_id_;
+    }
+
+    /// Mint a fresh span id. Each id is independently random; no
+    /// coordination is needed across threads.
+    [[nodiscard]] std::string allocate_span_id() const;
+
+    /// Emit a `span_begin` row. Called by `nxt::ui::spawn` and the
+    /// `yard::span` RAII helper.
+    void emit_span_begin(
+        std::string_view span_id,
+        std::string_view parent_span_id,
+        std::string_view name);
+
+    /// Emit a `span_end` row.
+    void emit_span_end(
+        std::string_view span_id,
+        std::string_view parent_span_id,
+        std::string_view name,
+        std::string_view status = {});
+
+    /// Emit a `frame` row carrying the current back-buffer raster as a
+    /// packed binary payload. Skips emission when the raster is byte-
+    /// identical to the previous frame (so an idle HUD does not flood
+    /// the trace).
+    void record_frame_snapshot(const Raster & back);
+
+    /// Emit an `input` row describing one decoded key event.
+    void record_input_event(const nxt::input::KeyEvent & event);
+
+    /// Emit a `tty init` row capturing the terminal geometry at run
+    /// start. Required for a replayer to size its vterm correctly.
+    void record_tty_init();
+
+    /// Emit a `tty resize` row when SIGWINCH changes the geometry.
+    void record_tty_resize();
+
+    /// Emit a `tty bytes` row carrying raw bytes written to stdout.
+    /// Called from `TeeStreambuf` so the replay sees the same byte
+    /// stream the real terminal saw (HUD frames + scrollback).
+    void record_tty_bytes(std::string_view bytes);
+
+    /// Mutex serializing writes to `std::cout`. Held by `print` /
+    /// `println` and by the `TerminalCompositor` around its frame
+    /// flushes, so the render loop and the body coroutines (which can
+    /// run on different libcoro worker threads) cannot interleave
+    /// half-written ANSI sequences. Exposed so other call sites that
+    /// emit ANSI to stdout from inside the runtime (e.g. the HUD
+    /// compositor) can participate.
+    [[nodiscard]] std::mutex & output_mutex() noexcept
+    {
+        return output_mutex_;
+    }
+
 private:
     bool refresh_terminal_size() noexcept;
     void render_impl(std::function<void(RasterView &, Size)> render_fn);
@@ -285,6 +375,11 @@ private:
         });
     }
 
+    // Output mutex declared before compositor_ so it is constructed
+    // first; the compositor is given a pointer to it during runtime
+    // setup and must be able to use it across its whole lifetime.
+    std::mutex output_mutex_;
+
     std::unique_ptr<nxt::scheduler> scheduler_;
     bool terminal_surface_{false};
     GlyphTable glyphs_;
@@ -305,13 +400,35 @@ private:
     double smoothed_hud_rows_{0.0};
     double hud_shrink_alpha_{0.05};
 
+    // Trace stream: run id + root span id are minted up front so any
+    // producer can emit a row before the first body coroutine runs.
+    // Declared before screenshot_session_tag_ because the latter is
+    // derived from run_id_ in the initializer list.
+    std::string run_id_;
+    std::string root_span_id_;
+    nxt::io::arrow::ipc_trace trace_;
+    std::int64_t next_frame_seq_{0};
+    std::uint64_t last_frame_hash_{0};
+    bool has_last_frame_hash_{false};
+
     // Auto-screenshot (only does work when NXT_HAVE_PNG is defined).
     std::chrono::steady_clock::time_point screenshot_start_{
         std::chrono::steady_clock::now()};
     std::size_t screenshot_milestone_index_{0};
     std::string screenshot_session_tag_;
+    std::vector<std::string> snapshot_paths_;
     void maybe_screenshot() noexcept;
     void capture_screenshot(std::string_view milestone) noexcept;
+
+    // Mirror of everything written to stdout, fed into a headless
+    // libvterm. `vt_` models the same screen the real terminal sees,
+    // so snapshot() captures HUD + scrollback exactly as the user
+    // does. Tee installed in the constructor for TTY runs only; cout
+    // is restored in the destructor before vt_ goes away.
+    std::unique_ptr<nxt::vterm::Terminal> vt_;
+    std::unique_ptr<std::streambuf> tee_buf_;
+    std::streambuf * saved_cout_buf_{nullptr};
+    void sync_vterm_size() noexcept;
 
     std::stop_source stop_source_;
 };

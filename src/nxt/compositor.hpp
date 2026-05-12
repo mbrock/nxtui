@@ -5,6 +5,7 @@
 #include "nxt/units.hpp"
 
 #include <iosfwd>
+#include <mutex>
 
 namespace nxt::ui {
 
@@ -38,6 +39,17 @@ public:
     /// Present changed back-buffer cells to an output stream.
     void present_frame(std::ostream & out);
 
+    /// Install the runtime's stdout serialization mutex. When set, the
+    /// compositor's `present_frame()`, `resize()`, and `set_hud_height()`
+    /// overloads that write to `std::cout` acquire this lock around
+    /// their write+flush so they cannot interleave with concurrent
+    /// `UIRuntime::print` calls running on other libcoro threads. The
+    /// ostream-taking overloads (used by tests) are unaffected.
+    void set_output_mutex(std::mutex * mutex) noexcept
+    {
+        output_mutex_ = mutex;
+    }
+
 private:
     Raster front_;
     Raster back_;
@@ -46,6 +58,9 @@ private:
     height_t term_height_{0 * ln};
     row_t hud_start_row_{
         terminal_origin_v + 0 * ln}; // row where HUD starts
+    // Non-owning; supplied by `set_output_mutex`. Null means callers
+    // chose not to participate (tests with their own ostream).
+    std::mutex * output_mutex_ = nullptr;
 };
 
 } // namespace nxt::ui

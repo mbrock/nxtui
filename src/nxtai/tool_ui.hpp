@@ -13,6 +13,7 @@
 
 #include <nxt/any_layout.hpp>
 #include <nxt/tui.hpp>
+#include <nxtai/agent_trace.hpp>
 #include <nxtai/tools.hpp>
 #include <nxtio/input.hpp>
 #include <nxtio/process.hpp>
@@ -487,6 +488,8 @@ inline nxt::task<std::string> run_one_animated(
     auto args_short = args_summary(call.name, call.arguments);
     auto start = std::chrono::steady_clock::now();
 
+    agent_trace::record_tool_call(self, call);
+
     std::string result;
     auto worker = [&result, tool_list_ptr = &tool_list,
                    call](nxt::ui::yard & s) -> nxt::task<> {
@@ -500,12 +503,24 @@ inline nxt::task<std::string> run_one_animated(
          args_short,
          start](nxt::ui::yard & s) -> nxt::task<> {
         int tick = 0;
+        bool mid_snapped = false;
         while (!s.cancelled()) {
             auto elapsed = std::chrono::duration_cast<
                 std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start);
             s.draw(running_card(
                 tool_name, args_short, tick, elapsed));
+            // Once the tool has been spinning long enough to look
+            // like a tool call (elapsed counter visible, spinner
+            // cycled), grab a trophy shot of the live HUD. Sleep
+            // briefly first so the just-drawn frame is presented.
+            if (!mid_snapped && elapsed >= 600ms) {
+                co_await s.sleep(50ms);
+                if (!s.cancelled())
+                    s.snapshot();
+                mid_snapped = true;
+                continue;
+            }
             co_await s.sleep(80ms);
             ++tick;
         }
@@ -532,10 +547,11 @@ inline nxt::task<std::string> run_one_animated(
     } catch (...) {
         is_error = false;
     }
+    agent_trace::record_tool_result(self, call, result, is_error);
     auto summary = result_summary(call.name, result);
 
     self.print(done_card(
-        call.name, args_short, elapsed, summary, is_error));
+       call.name, args_short, elapsed, summary, is_error));
     self.print("\n");
     auto preview = preview_lines(result, 4);
     auto total = result_total_lines(result);
@@ -574,11 +590,14 @@ inline nxt::task<std::string> run_one_or_deny(
         self.print(denied_card(call.name, args_short));
         self.print("\n");
         self.draw(nxt::tui::AnyLayout{});
-        co_return nlohmann::json{
+        agent_trace::record_tool_call(self, call);
+        auto denial = nlohmann::json{
             {"error", "denied by user"},
             {"tool", call.name},
             {"args", call.arguments},
         }.dump();
+        agent_trace::record_tool_result(self, call, denial, true);
+        co_return denial;
     }
     co_return co_await run_one_animated(
         self, tool_list, std::move(call));

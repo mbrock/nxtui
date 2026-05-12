@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -32,6 +33,9 @@ struct cli_options
     std::size_t max_output_tokens = default_max_output_tokens;
     std::string reasoning_effort = "medium";
     std::string reasoning_summary = "auto";
+    // When set, run one agent turn against this prompt with tools
+    // enabled and exit. Otherwise open the interactive HUD.
+    std::optional<std::string> oneshot_prompt;
 };
 
 cli_options parse_args(int argc, char ** argv)
@@ -41,6 +45,12 @@ cli_options parse_args(int argc, char ** argv)
 
     for (int i = 1; i < argc; ++i) {
         auto arg = std::string_view{argv[i]};
+        if (arg == "--model" || arg == "-m") {
+            if (i + 1 >= argc)
+                throw std::runtime_error{"--model requires a value"};
+            options.model = argv[++i];
+            continue;
+        }
         if (arg == "--max-output-tokens") {
             if (i + 1 >= argc)
                 throw std::runtime_error{
@@ -64,21 +74,33 @@ cli_options parse_args(int argc, char ** argv)
         }
         if (arg == "--help" || arg == "-h") {
             std::cout
-                << "usage: nxtllm [options] [model]\n"
-                   "  stdout TTY              opens the prompt HUD\n"
-                   "  redirected stdout       runs one prompt in plain CLI mode\n"
+                << "usage: nxtllm [options] [prompt...]\n"
+                   "  with prompt:            runs one agent turn with tools, then exits\n"
+                   "  without prompt:         opens the interactive HUD (TTY only)\n"
+                   "\n"
+                   "  -m, --model MODEL                 (default: gpt-5.4-mini)\n"
                    "  --max-output-tokens N\n"
                    "  --reasoning-effort minimal|low|medium|high|xhigh\n"
-                   "  --reasoning-summary auto|concise|detailed|none\n";
+                   "  --reasoning-summary auto|concise|detailed|none\n"
+                   "\n"
+                   "  NXT_TRACE=auto         emit an Arrow trace under traces/\n";
             std::exit(EXIT_SUCCESS);
         }
         positionals.emplace_back(arg);
     }
 
-    if (positionals.size() > 0)
-        options.model = std::move(positionals[0]);
-    if (positionals.size() > 1)
-        throw std::runtime_error{"too many positional arguments"};
+    // Join all positionals into the one-shot prompt so callers can
+    // write `nxtllm what is in the readme` without quoting. Quoting
+    // still works — quoted args land as single positionals.
+    if (!positionals.empty()) {
+        auto joined = std::string{};
+        for (std::size_t i = 0; i < positionals.size(); ++i) {
+            if (i > 0)
+                joined += ' ';
+            joined += positionals[i];
+        }
+        options.oneshot_prompt = std::move(joined);
+    }
 
     return options;
 }
@@ -131,7 +153,7 @@ nxt::task<> run_agent_worker(
             co_return;
 
         if (auto problem = turn.continuation_problem(response)) {
-            self.println(*problem);
+//            self.println(*problem);
             co_return;
         }
 
@@ -222,14 +244,31 @@ int main(int argc, char ** argv)
         auto options = parse_args(argc, argv);
         auto request = make_request(options, {});
 
-        auto status = nxt::ui::run2(
+        if (options.oneshot_prompt) {
+            // One-shot mode: run a single agent turn (LLM + tools) and
+            // exit. This works whether stdout is a TTY or not; the
+            // HUD is unused but `self.println` still routes output to
+            // stdout. Pair with `NXT_TRACE=auto` to capture the full
+            // request/response/tool flow for inspection.
+            request.input = std::move(*options.oneshot_prompt);
+            return nxt::ui::run2(
+                [request = std::move(request)](
+                    nxt::ui::yard & self) mutable -> nxt::task<> {
+                    co_await run_submitted_prompt(self, std::move(request));
+                });
+        }
+
+        return nxt::ui::run2(
             [request = std::move(request)](
                 nxt::ui::yard & self) mutable -> nxt::task<> {
                 if (self.runtime().has_terminal_surface()) {
                     co_await run_prompt_loop(self, std::move(request));
+                } else {
+                    self.println(
+                        "error: nxtllm without a prompt requires a TTY;\n"
+                        "pass a prompt as positional args for one-shot mode");
                 }
             });
-        return status;
 
     } catch (const std::exception & e) {
         std::cerr << "nxtllm error: " << e.what() << '\n';

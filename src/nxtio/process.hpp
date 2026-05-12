@@ -61,11 +61,20 @@ struct OutputPublisher
     }
 };
 
+class span_guard;
+
 struct ProcessContext
 {
     UIRuntime * runtime;
     tui::Slot<tui::AnyLayout> surface;
     OutputPublisher output;
+    // Span attribution travels with the scope: every row emitted from
+    // inside this process can pull its `span_id` from here. Inherited
+    // by value when spawning children — `nxt::ui::spawn` overwrites
+    // `parent_span_id` / `span_id` for the child before its body runs.
+    std::string span_id;
+    std::string parent_span_id;
+    std::string span_name;
 };
 
 inline OutputPublisher runtime_output(UIRuntime & runtime)
@@ -115,6 +124,17 @@ public:
     /// body)` for the implementation; this is the canonical entry point.
     template<typename Body>
     [[nodiscard]] ProcessHandle spawn(Body body) const;
+
+    /// Spawn a child process with an explicit span name. The name shows
+    /// up on every trace row originating inside the child and on its
+    /// `span_begin` / `span_end` markers.
+    template<typename Body>
+    [[nodiscard]] ProcessHandle spawn(std::string name, Body body) const;
+
+    /// Open an RAII trace span around a region of code without
+    /// introducing a new coroutine. Returns a guard that emits
+    /// `span_end` on destruction.
+    [[nodiscard]] span_guard span(std::string name) const;
 
     // ---- Time ----------------------------------------------------------
 
@@ -173,6 +193,14 @@ public:
     void set_output(OutputPublisher output) const
     {
         scope_->context().output = std::move(output);
+    }
+
+    /// Snapshot the current back buffer to `img/<short-id>.png` and
+    /// print the path to scrollback. Returns the saved path. Useful as
+    /// a "trophy" capture at interesting moments in a flow.
+    std::string snapshot() const
+    {
+        return runtime().snapshot();
     }
 
     // ---- Lifecycle ----------------------------------------------------
@@ -270,7 +298,10 @@ public:
     ProcessState(
         UIRuntime & rt,
         std::stop_token parent_token,
-        OutputPublisher output)
+        OutputPublisher output,
+        std::string span_id,
+        std::string parent_span_id,
+        std::string span_name)
         : surface_(tui::AnyLayout{}, [&rt] { rt.signal_damage(); })
         , scope_(
               rt.scheduler(),
@@ -279,6 +310,9 @@ public:
                   .runtime = &rt,
                   .surface = surface_,
                   .output = std::move(output),
+                  .span_id = std::move(span_id),
+                  .parent_span_id = std::move(parent_span_id),
+                  .span_name = std::move(span_name),
               })
         , self_(scope_)
     {
@@ -381,15 +415,23 @@ namespace detail {
 template<typename Body>
 nxt::task<> run_body(std::shared_ptr<ProcessState> state, Body body)
 {
+    auto & ctx = state->scope().context();
+    auto & rt = *ctx.runtime;
+    rt.emit_span_begin(ctx.span_id, ctx.parent_span_id, ctx.span_name);
+
+    std::string_view status = "ok";
     try {
         co_await body(state->self());
     } catch (const nxt::cancelled &) {
-        // Normal scope teardown.
+        status = "cancelled";
     } catch (...) {
+        rt.emit_span_end(
+            ctx.span_id, ctx.parent_span_id, ctx.span_name, "error");
         state->scope().cancel();
         state->complete();
         throw;
     }
+    rt.emit_span_end(ctx.span_id, ctx.parent_span_id, ctx.span_name, status);
     state->scope().cancel();
     state->complete();
 }
@@ -401,16 +443,25 @@ inline nxt::task<> join_body(std::shared_ptr<ProcessState> state)
 
 } // namespace detail
 
-/// Spawn a child process within `parent`'s cancellation scope.
+/// Spawn a child process within `parent`'s cancellation scope. The
+/// optional `name` becomes the child's `span_name` and is emitted on
+/// every trace row that originates inside the child.
 template<typename Body>
-[[nodiscard]] ProcessHandle spawn(const yard & parent, Body body)
+[[nodiscard]] ProcessHandle
+spawn(const yard & parent, std::string name, Body body)
 {
+    auto & rt = parent.runtime();
+    auto & parent_ctx = parent.scope().context();
+    auto child_span = rt.allocate_span_id();
     auto state = std::make_shared<ProcessState>(
-        parent.runtime(),
+        rt,
         parent.scope().stop_token(),
-        parent.scope().context().output);
+        parent_ctx.output,
+        std::move(child_span),
+        parent_ctx.span_id,
+        std::move(name));
 
-    parent.runtime().scheduler().spawn_detached(
+    rt.scheduler().spawn_detached(
         detail::run_body(state, std::move(body)));
 
     parent.scope().spawn(detail::join_body(state));
@@ -418,10 +469,66 @@ template<typename Body>
     return ProcessHandle{state};
 }
 
+/// Backwards-compatible `spawn` without an explicit name.
+template<typename Body>
+[[nodiscard]] ProcessHandle spawn(const yard & parent, Body body)
+{
+    return spawn(parent, std::string{}, std::move(body));
+}
+
 template<typename Body>
 [[nodiscard]] ProcessHandle yard::spawn(Body body) const
 {
-    return nxt::ui::spawn(*this, std::move(body));
+    return nxt::ui::spawn(*this, std::string{}, std::move(body));
+}
+
+template<typename Body>
+[[nodiscard]] ProcessHandle
+yard::spawn(std::string name, Body body) const
+{
+    return nxt::ui::spawn(*this, std::move(name), std::move(body));
+}
+
+/// RAII guard that brackets a region of work with `span_begin` /
+/// `span_end` rows in the trace. Useful for naming phases inside a
+/// single process body without introducing a new coroutine.
+class [[nodiscard]] span_guard
+{
+public:
+    span_guard(const yard & y, std::string name)
+        : runtime_(&y.runtime())
+        , parent_span_id_(y.scope().context().span_id)
+        , span_id_(runtime_->allocate_span_id())
+        , name_(std::move(name))
+    {
+        runtime_->emit_span_begin(span_id_, parent_span_id_, name_);
+    }
+
+    span_guard(const span_guard &) = delete;
+    span_guard & operator=(const span_guard &) = delete;
+    span_guard(span_guard &&) = delete;
+    span_guard & operator=(span_guard &&) = delete;
+
+    ~span_guard()
+    {
+        runtime_->emit_span_end(span_id_, parent_span_id_, name_, "ok");
+    }
+
+    [[nodiscard]] std::string_view span_id() const noexcept
+    {
+        return span_id_;
+    }
+
+private:
+    UIRuntime * runtime_;
+    std::string parent_span_id_;
+    std::string span_id_;
+    std::string name_;
+};
+
+inline span_guard yard::span(std::string name) const
+{
+    return span_guard{*this, std::move(name)};
 }
 
 inline auto spinner(
@@ -479,8 +586,18 @@ int run2(Body body)
         TerminalGuard guard;
         nxt::input::InputModeGuard input_guard;
 
+        // Wire the root yard's context to the runtime's root span so
+        // every `self.spawn(...)` inside `body` becomes a child of
+        // `runtime` in the trace. The root yard itself shares the
+        // runtime span — `run2` doesn't emit its own span_begin/end
+        // because UIRuntime already brackets the run.
         auto root_state = std::make_shared<ProcessState>(
-            runtime, std::stop_token{}, runtime_output(runtime));
+            runtime,
+            std::stop_token{},
+            runtime_output(runtime),
+            std::string{runtime.root_span_id()},
+            std::string{},
+            "runtime");
 
         tasks.push_back(runtime.signal_loop());
         tasks.push_back(runtime.input_loop());
@@ -491,16 +608,36 @@ int run2(Body body)
                             root_state,
                             body =
                                 std::move(body)]() mutable -> nxt::task<> {
+            // Capture any body exception outside the catch so the
+            // drain step below (which co_awaits) can run before
+            // propagation. co_await inside a catch handler is
+            // disallowed by the language, so we use this trampoline.
+            std::exception_ptr eptr;
             try {
                 co_await body(root_state->self());
             } catch (const nxt::cancelled &) {
-                runtime.request_shutdown();
-                co_return;
+                // Treat cancellation as a normal exit; we still want
+                // children to drain so their span_end rows land in
+                // the trace.
             } catch (...) {
-                runtime.request_shutdown();
-                throw;
+                eptr = std::current_exception();
+            }
+            // Cancel any still-running children so they exit promptly,
+            // then await every `join_body` task spawned into the
+            // root scope. Without this, detached child coroutines may
+            // be torn down by the scheduler before `run_body` reaches
+            // the line that emits their `span_end`.
+            root_state->scope().cancel();
+            try {
+                co_await root_state->scope().all();
+            } catch (const nxt::cancelled &) {
+            } catch (...) {
+                // Suppress: we're already winding down. The body's
+                // exception (if any) is the one that matters.
             }
             runtime.request_shutdown();
+            if (eptr)
+                std::rethrow_exception(eptr);
         };
         tasks.push_back(root_runner());
 

@@ -23,8 +23,9 @@ public:
 
     response_trace(const response_trace &) = delete;
     response_trace & operator=(const response_trace &) = delete;
-    response_trace(response_trace &&) noexcept;
-    response_trace & operator=(response_trace &&) noexcept;
+    // Non-movable: the underlying ipc_trace holds a mutex.
+    response_trace(response_trace &&) = delete;
+    response_trace & operator=(response_trace &&) = delete;
 
     /// True when rows will be collected and written.
     [[nodiscard]] bool enabled() const noexcept;

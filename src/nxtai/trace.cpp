@@ -1,5 +1,7 @@
 #include <nxtai/trace.hpp>
 
+#include <nxtio/short_id.hpp>
+
 #include <nlohmann/json.hpp>
 
 #include <utility>
@@ -7,13 +9,11 @@
 namespace nxt::ai::trace {
 
 response_trace::response_trace(std::optional<std::string> output_path)
-    : trace_(std::move(output_path), "nxtllm")
+    : trace_(std::move(output_path), "nxtllm-" + nxt::io::make_short_id())
 {
 }
 
 response_trace::~response_trace() = default;
-response_trace::response_trace(response_trace &&) noexcept = default;
-response_trace & response_trace::operator=(response_trace &&) noexcept = default;
 
 bool response_trace::enabled() const noexcept
 {

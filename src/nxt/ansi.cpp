@@ -205,13 +205,23 @@ Writer & Writer::end_synchronized_update()
 
 Writer & Writer::save_cursor()
 {
-    csi("", 's');
+    // DECSC (`ESC 7`) saves cursor + attributes. We previously emitted
+    // SCO save (`ESC [ s`), which xterm-family terminals accept too,
+    // but libvterm interprets `CSI s` as DECSLRM (set left/right
+    // margins) — which silently corrupts the screen state when this
+    // is used to bookmark a scrollback cursor across HUD updates. The
+    // companion `ESC [ u` (SCO restore) has no libvterm handler at
+    // all, so the cursor was never being restored on snapshot/replay.
+    buf_.push_back('\x1b');
+    buf_.push_back('7');
     return *this;
 }
 
 Writer & Writer::restore_cursor()
 {
-    csi("", 'u');
+    // DECRC (`ESC 8`) — see save_cursor for why we don't use SCO `u`.
+    buf_.push_back('\x1b');
+    buf_.push_back('8');
     return *this;
 }
 

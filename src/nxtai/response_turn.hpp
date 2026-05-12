@@ -2,8 +2,10 @@
 
 #include "nxt/tui.hpp"
 #include <nxtai/agent.hpp>
+#include <nxtai/agent_trace.hpp>
 #include <nxtai/responses.hpp>
 #include <nxtai/tools.hpp>
+#include <nxtio/arrow.hpp>
 #include <nxtio/async.hpp>
 #include <nxtio/net.hpp>
 #include <nxtio/process.hpp>
@@ -37,6 +39,7 @@ inline nxt::io::net::endpoint openai_responses_endpoint()
     };
 }
 
+
 inline std::size_t stream_wrap_width(nxt::ui::yard & self)
 {
     auto columns = self.runtime().terminal_width().count();
@@ -56,12 +59,15 @@ inline void for_complete_words(std::string & text, bool finish, auto fn)
 }
 
 template<typename Stream>
-auto response_event_source(Stream & stream)
+auto response_event_source(nxt::ui::yard & self, Stream & stream)
 {
     return nxt::make_source<stream_event>(
-        [&stream](
+        [&self, &stream](
             std::stop_token) -> nxt::task<std::optional<stream_event>> {
-            co_return co_await stream.next();
+            auto event = co_await stream.next();
+            if (event)
+                agent_trace::record_llm_event(self, *event);
+            co_return event;
         });
 }
 
@@ -111,15 +117,11 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
         if (agent::is_event(*event, "response.output_item.done")) {
             auto item = agent::output_item_from_event(*event);
             for_complete_words(text, true, print_segment);
-            self.print("\n");
             co_return item;
         }
     }
 
     for_complete_words(text, true, print_segment);
-    if (wrote) {
-        self.print("\n");
-    }
 
     co_return std::nullopt;
 }
@@ -232,6 +234,7 @@ nxt::task<response_stream_result> with_openai_response_stream(
     auto result = response_stream_result{};
     auto failure = std::exception_ptr{};
     try {
+        agent_trace::record_llm_request(self, request);
         co_await stream.connect(request);
         result = co_await read_stream(stream);
     } catch (...) {
@@ -251,7 +254,7 @@ read_openai_response_stream(nxt::ui::yard & self, Stream & stream)
 {
     self.draw(nxt::tui::text("Streaming..."));
 
-    auto events = response_event_source(stream);
+    auto events = response_event_source(self, stream);
     auto result = response_stream_result{};
 
     while (auto event = co_await nxt::next(events)) {
@@ -261,7 +264,6 @@ read_openai_response_stream(nxt::ui::yard & self, Stream & stream)
         if (agent::is_event(*event, "response.output_item.added")) {
             auto output_item =
                 co_await read_output_item(events, self, *event);
-
             self.print("\n\n");
 
             if (output_item.item)
@@ -311,10 +313,12 @@ inline nxt::task<std::vector<nlohmann::json>> run_requested_tools(
     for (const auto & call : calls) {
         self.println(
             std::format("tool: {}({})", call.name, call.arguments));
+        agent_trace::record_tool_call(self, call);
 
         auto output =
             co_await tools::run_function_tool(tool_list, call);
         self.println(std::format("tool result: {}", output));
+        agent_trace::record_tool_result(self, call, output, false);
         outputs.push_back(
             tools::function_call_output(call.call_id, std::move(output)));
     }

@@ -14,7 +14,7 @@
 namespace nxt::io::arrow {
 namespace {
 
-constexpr int trace_field_count = 7;
+constexpr int trace_field_count = 13;
 
 struct nanoarrow_error
 {
@@ -65,6 +65,14 @@ void check(ArrowErrorCode code, std::string_view operation)
 {
     return ArrowStringView{
         .data = value.data(),
+        .size_bytes = static_cast<int64_t>(value.size()),
+    };
+}
+
+[[nodiscard]] ArrowBufferView buffer_view(const std::vector<std::uint8_t> & value)
+{
+    return ArrowBufferView{
+        .data = {.as_uint8 = value.data()},
         .size_bytes = static_cast<int64_t>(value.size()),
     };
 }
@@ -281,6 +289,12 @@ void set_child(
     set_child(schema.get(), 4, "event_type", NANOARROW_TYPE_STRING);
     set_child(schema.get(), 5, "data", NANOARROW_TYPE_STRING);
     set_child(schema.get(), 6, "payload_json", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 7, "span_id", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 8, "parent_span_id", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 9, "span_name", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 10, "frame_seq", NANOARROW_TYPE_INT64);
+    set_child(schema.get(), 11, "payload_kind", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 12, "payload_bin", NANOARROW_TYPE_BINARY);
     return schema;
 }
 
@@ -319,6 +333,34 @@ void set_child(
             batch.get()->children[6],
             string_view(row.payload_json)),
         "append payload_json");
+    check(
+        ArrowArrayAppendString(
+            batch.get()->children[7],
+            string_view(row.span_id)),
+        "append span_id");
+    check(
+        ArrowArrayAppendString(
+            batch.get()->children[8],
+            string_view(row.parent_span_id)),
+        "append parent_span_id");
+    check(
+        ArrowArrayAppendString(
+            batch.get()->children[9],
+            string_view(row.span_name)),
+        "append span_name");
+    check(
+        ArrowArrayAppendInt(batch.get()->children[10], row.frame_seq),
+        "append frame_seq");
+    check(
+        ArrowArrayAppendString(
+            batch.get()->children[11],
+            string_view(row.payload_kind)),
+        "append payload_kind");
+    check(
+        ArrowArrayAppendBytes(
+            batch.get()->children[12],
+            buffer_view(row.payload_bin)),
+        "append payload_bin");
     check(ArrowArrayFinishElement(batch.get()), "finish trace row");
     check(
         ArrowArrayFinishBuildingDefault(batch.get(), &error.value),
@@ -329,6 +371,13 @@ void set_child(
 
 [[nodiscard]] trace_row row_from_view(const ArrowArrayView * view, int64_t index)
 {
+    auto bin_view = ArrowArrayViewGetBytesUnsafe(view->children[12], index);
+    auto payload_bin = std::vector<std::uint8_t>{};
+    if (bin_view.size_bytes > 0 && bin_view.data.as_uint8 != nullptr)
+        payload_bin.assign(
+            bin_view.data.as_uint8,
+            bin_view.data.as_uint8
+                + static_cast<std::size_t>(bin_view.size_bytes));
     return trace_row{
         .run_id = to_string(
             ArrowArrayViewGetStringUnsafe(view->children[0], index)),
@@ -342,6 +391,16 @@ void set_child(
             ArrowArrayViewGetStringUnsafe(view->children[5], index)),
         .payload_json = to_string(
             ArrowArrayViewGetStringUnsafe(view->children[6], index)),
+        .span_id = to_string(
+            ArrowArrayViewGetStringUnsafe(view->children[7], index)),
+        .parent_span_id = to_string(
+            ArrowArrayViewGetStringUnsafe(view->children[8], index)),
+        .span_name = to_string(
+            ArrowArrayViewGetStringUnsafe(view->children[9], index)),
+        .frame_seq = ArrowArrayViewGetIntUnsafe(view->children[10], index),
+        .payload_kind = to_string(
+            ArrowArrayViewGetStringUnsafe(view->children[11], index)),
+        .payload_bin = std::move(payload_bin),
     };
 }
 
@@ -473,20 +532,22 @@ private:
 
 ipc_trace::ipc_trace(
     std::optional<std::string> output_path,
-    std::string run_id_prefix)
+    std::string run_id)
     : output_path_(std::move(output_path))
+    , run_id_(std::move(run_id))
     , start_(std::chrono::steady_clock::now())
 {
     if (output_path_) {
-        auto now = std::chrono::system_clock::now().time_since_epoch().count();
-        run_id_ = std::move(run_id_prefix) + "-" + std::to_string(now);
+        // Don't synthesize a run id here: callers pass one in so the
+        // same id can be used as a tag for sibling artifacts (PNGs,
+        // logs, etc.) before the trace is even opened.
+        if (run_id_.empty())
+            run_id_ = "nxt-trace";
         writer_ = std::make_unique<writer>(*output_path_, run_id_);
     }
 }
 
 ipc_trace::~ipc_trace() = default;
-ipc_trace::ipc_trace(ipc_trace &&) noexcept = default;
-ipc_trace & ipc_trace::operator=(ipc_trace &&) noexcept = default;
 
 bool ipc_trace::enabled() const noexcept
 {
@@ -498,8 +559,14 @@ const std::optional<std::string> & ipc_trace::output_path() const
     return output_path_;
 }
 
+std::string_view ipc_trace::run_id() const noexcept
+{
+    return run_id_;
+}
+
 void ipc_trace::write()
 {
+    auto lock = std::scoped_lock{mutex_};
     if (writer_ != nullptr)
         writer_->close();
 }
@@ -510,21 +577,26 @@ void ipc_trace::add(
     std::string data,
     std::string payload_json)
 {
+    trace_row row;
+    row.phase = std::move(phase);
+    row.event_type = std::move(event_type);
+    row.data = std::move(data);
+    row.payload_json = std::move(payload_json);
+    add(std::move(row));
+}
+
+void ipc_trace::add(trace_row row)
+{
+    auto lock = std::scoped_lock{mutex_};
     if (writer_ == nullptr)
         return;
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - start_);
-    auto row = trace_row{
-        .run_id = run_id_,
-        .seq = next_seq_++,
-        .elapsed_ms = elapsed.count(),
-        .phase = std::move(phase),
-        .event_type = std::move(event_type),
-        .data = std::move(data),
-        .payload_json = std::move(payload_json),
-    };
+    row.run_id = run_id_;
+    row.seq = next_seq_++;
+    row.elapsed_ms = elapsed.count();
     writer_->append(row);
 }
 

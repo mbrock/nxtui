@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -45,6 +46,16 @@ namespace {
 [[nodiscard]] row_t scroll_bottom_for(
     const height_t hud_height, const height_t term_height)
 {
+    // Leave a 1-row "quiet zone" between the scroll region and the
+    // HUD. Without it, streaming `print()` text accumulates on the
+    // row directly above the HUD; the freshest characters land
+    // millimeters away from the HUD spinner and the line scrolls
+    // upward each time a `\n` arrives, which reads as flicker. With
+    // the gap, the bottom of the scroll region always has at least
+    // one blank row above the HUD so newly arriving text feels
+    // anchored to a stable position rather than nudging the HUD.
+    if (has_windowed_hud(hud_height, term_height))
+        return hud_start_row_for(hud_height, term_height) - 2 * ln;
     return hud_start_row_for(hud_height, term_height) - 1 * ln;
 }
 
@@ -107,13 +118,23 @@ void TerminalCompositor::resize(nxt::Size size)
     }
 
     w.restore_cursor();
-    std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-    std::cout.flush();
+    {
+        // Serialize against UIRuntime::print/println etc.; the lock
+        // is null in test/ostream-only contexts where the compositor
+        // never sees stdout from another thread.
+        auto guard = output_mutex_
+                         ? std::unique_lock{*output_mutex_}
+                         : std::unique_lock<std::mutex>{};
+        std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+        std::cout.flush();
+    }
 }
 
 void TerminalCompositor::set_hud_height(
     height_t hud_height, height_t term_height)
 {
+    auto guard = output_mutex_ ? std::unique_lock{*output_mutex_}
+                               : std::unique_lock<std::mutex>{};
     set_hud_height(hud_height, term_height, std::cout);
 }
 
@@ -235,6 +256,8 @@ nxt::Size TerminalCompositor::size() const noexcept
 
 void TerminalCompositor::present_frame()
 {
+    auto guard = output_mutex_ ? std::unique_lock{*output_mutex_}
+                               : std::unique_lock<std::mutex>{};
     present_frame(std::cout);
 }
 

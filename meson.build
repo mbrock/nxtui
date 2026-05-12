@@ -38,7 +38,6 @@ utf8proc_dep = dependency(
 )
 nanoarrow_ipc_dep = dependency(
   'nanoarrow-ipc',
-  required : get_option('llm_tool'),
   fallback : ['nanoarrow', 'nanoarrow_ipc_dep'],
   default_options : [
     'ipc=enabled',
@@ -159,17 +158,16 @@ endif
 
 nxt_runtime_sources = files(
   'src/nxtio/app.cpp',
+  'src/nxtio/arrow.cpp',
   'src/nxtio/http.cpp',
   'src/nxtio/input.cpp',
   'src/nxtio/net.cpp',
+  'src/nxtio/short_id.cpp',
   'src/nxtio/signal-pipe.cpp',
   'src/nxtio/subprocess.cpp',
 )
 
-if get_option('llm_tool')
-  nxt_runtime_sources += 'src/nxtio/arrow.cpp'
-  nxt_runtime_deps += nanoarrow_ipc_dep
-endif
+nxt_runtime_deps += nanoarrow_ipc_dep
 
 nxt_lib = static_library('nxtui',
   nxt_runtime_sources,
@@ -263,6 +261,12 @@ if get_option('llm_tool')
   )
 endif
 
+executable('nxttrace',
+  'src/nxtai/nxttrace.cpp',
+  include_directories : nxt_inc,
+  dependencies : [nxt_dep],
+)
+
 if get_option('tests')
   nxt_test_inc = include_directories('test')
 
@@ -322,6 +326,12 @@ if get_option('tests')
 
   nxt_text_field_test = executable('text-field-test',
     'test/text-field-test.cpp',
+    include_directories : [nxt_inc, nxt_test_inc],
+    dependencies : [nxt_dep],
+  )
+
+  nxt_trace_smoke_test = executable('trace-smoke-test',
+    'test/trace-smoke-test.cpp',
     include_directories : [nxt_inc, nxt_test_inc],
     dependencies : [nxt_dep],
   )

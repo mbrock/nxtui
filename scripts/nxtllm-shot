@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#
+# Run nxtllm one-shot under a pty with tracing on, then render the
+# resulting trace as a contact-sheet PNG plus a final-state PNG.
+# Prints paths in a Claude-readable order: the SHEET first, FINAL
+# second, then the raw TRACE. Read the PNGs with the Read tool to
+# see what the tool cycle looked like.
+#
+# usage:
+#   scripts/nxtllm-shot "prompt to send to the agent"
+#
+# environment:
+#   NXTLLM_SHOT_FRAMES=12   how many panes in the contact sheet
+#   NXTLLM_SHOT_KEEP=1      keep old traces (default: trim to last 20)
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [[ $# -eq 0 ]]; then
+    echo "usage: $0 <prompt...>" >&2
+    echo "example: $0 'list a few files in /tmp and tell me how many there are'" >&2
+    exit 2
+fi
+
+PROMPT="$*"
+FRAMES="${NXTLLM_SHOT_FRAMES:-12}"
+
+# Make sure the binaries are up to date with the source. Builds are
+# incremental, so this is cheap when nothing has changed.
+meson compile -C build nxtllm nxttrace >/dev/null
+
+mkdir -p traces shots
+
+# Escape the prompt for the `script -c` shell expansion. printf %q
+# emits a representation that's safe to paste between single quotes
+# OR as a bare arg — we keep it unquoted in the command line so
+# nxtllm receives it as a positional.
+QUOTED=$(printf %q "$PROMPT")
+
+# `script -qe` allocates a pty so nxtllm sees an isatty(stdout) and
+# enters its TTY codepath (HUD render loop, scrollback). Without the
+# pty, nxtllm in one-shot mode would still produce a trace but the
+# trace wouldn't contain any `tty bytes` rows — and the renderer
+# needs those to reconstruct what the user saw.
+echo "$PROMPT" >&2
+echo "running..." >&2
+NXT_TRACE=auto script -qec "./build/nxtllm $QUOTED" /dev/null \
+    >/tmp/nxtllm-shot.stdout 2>/tmp/nxtllm-shot.stderr || true
+
+# The trace file is named nxtllm-<short_id>.arrow; the freshest one
+# under traces/ is ours.
+TRACE=$(ls -t traces/nxtllm-*.arrow 2>/dev/null | head -1 || true)
+if [[ -z "$TRACE" ]]; then
+    echo "error: no trace produced; check /tmp/nxtllm-shot.stderr" >&2
+    exit 1
+fi
+
+RUN_ID=$(basename "$TRACE" .arrow | sed 's/^nxtllm-//')
+SHEET="shots/${RUN_ID}-sheet.png"
+FINAL="shots/${RUN_ID}-final.png"
+
+./build/nxttrace sheet "$TRACE" "$SHEET" "$FRAMES" >&2
+
+# Last `seq` in the trace = post-cleanup final frame.
+LAST_SEQ=$(./build/nxttrace list "$TRACE" 2>/dev/null \
+    | tail -1 | sed -E 's/^seq=([0-9]+).*/\1/')
+./build/nxttrace render "$TRACE" "$LAST_SEQ" "$FINAL" >&2
+
+# Trim ancient traces so the dir doesn't grow without bound.
+if [[ "${NXTLLM_SHOT_KEEP:-0}" != "1" ]]; then
+    # shellcheck disable=SC2012
+    ls -t traces/nxtllm-*.arrow 2>/dev/null | tail -n +21 | xargs -r rm --
+    # shellcheck disable=SC2012
+    ls -t shots/*-sheet.png 2>/dev/null | tail -n +21 | xargs -r rm --
+    # shellcheck disable=SC2012
+    ls -t shots/*-final.png 2>/dev/null | tail -n +21 | xargs -r rm --
+fi
+
+echo
+echo "sheet: $SHEET"
+echo "final: $FINAL"
+echo "trace: $TRACE"
+echo "stdout: /tmp/nxtllm-shot.stdout"

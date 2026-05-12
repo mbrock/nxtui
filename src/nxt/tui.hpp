@@ -396,16 +396,17 @@ inline auto spinner(
 {
     using namespace std::string_view_literals;
     constexpr auto frames = std::to_array({
-        "⠋"sv,
-        "⠙"sv,
-        "⠹"sv,
-        "⠸"sv,
-        "⠼"sv,
-        "⠴"sv,
-        "⠦"sv,
-        "⠧"sv,
-        "⠇"sv,
-        "⠏"sv,
+        // "⠋"sv,
+        // "⠙"sv,
+        // "⠹"sv,
+        // "⠸"sv,
+        // "⠼"sv,
+        // "⠴"sv,
+        // "⠦"sv,
+        // "⠧"sv,
+        // "⠇"sv,
+        // "⠏"sv,
+        "1", "2", "3", "4", "5", "6", "7", "8",
     });
 
     auto frame = frames[tick % frames.size()];
