@@ -21,6 +21,8 @@ struct response_stream_result
     std::vector<tools::function_call> function_calls;
     /// Complete output items that should be preserved for stateless turns.
     std::vector<nlohmann::json> output_items;
+    /// Plain assistant message blocks emitted while rendering the stream.
+    std::vector<std::string> message_blocks;
     /// Most recent response id observed in the stream.
     std::optional<std::string> response_id;
     /// True when the stream reached `response.completed`.
@@ -49,6 +51,8 @@ struct output_item_result
     std::optional<tools::function_call> call;
     /// Complete output item JSON, when one was available.
     std::optional<nlohmann::json> item;
+    /// Plain text emitted for completed message items.
+    std::string text;
 };
 
 /// Test whether an SSE event has the requested Responses event type.
@@ -120,7 +124,7 @@ public:
     response_continuation(
         responses::openai_responses_request request,
         std::vector<tools::function_tool> tools,
-        std::size_t max_steps = 6)
+        std::size_t max_steps = 256)
         : original_request_(std::move(request))
         , request_(original_request_)
         , tools_(std::move(tools))

@@ -24,6 +24,7 @@
 #include <mutex>
 #include <streambuf>
 #include <string>
+#include <vector>
 
 namespace nxt::ui {
 
@@ -132,16 +133,22 @@ public:
         render_frame(layout);
     }
 
-    /// Print a line to the scroll region (only works when HUD
+    /// Queue a line for the scroll region (only works when HUD
     /// height < terminal). In full-screen mode, this is a no-op.
     void println(std::string_view line);
 
-    /// Write text to the scroll region cursor. HUD rendering preserves this
-    /// cursor, so long-running streams can emit incremental text while the HUD
-    /// keeps redrawing below.
+    /// Queue text for the scroll region cursor. Output is drained during frame
+    /// presentation so it cannot interleave with HUD rendering.
     void print(std::string_view text);
 
-    /// Clean up before exit - clears HUD region.
+    /// Queue a complete block of scrollback output. The block is emitted as one
+    /// coherent terminal write during the next frame presentation.
+    void print_block(std::string_view text);
+
+    /// Queue text to print after TerminalGuard restores the terminal.
+    void print_after_exit(std::string text);
+
+    /// Flush queued output before exit, preserving the final rendered HUD.
     void cleanup();
 
     /// Capture the current back buffer to `img/<short-id>.png` and
@@ -185,7 +192,8 @@ public:
 
                 std::optional<TermSize> resize_to;
                 if (refresh_terminal_size()) {
-                    scrollback_cursor_initialized_ = false;
+                    scrollback_cursor_row_.reset();
+                    scrollback_cursor_needs_move_ = true;
                     resize_to = terminal_size();
                 }
 
@@ -306,22 +314,33 @@ public:
     /// stream the real terminal saw (HUD frames + scrollback).
     void record_tty_bytes(std::string_view bytes);
 
-    /// Mutex serializing writes to `std::cout`. Held by `print` /
-    /// `println` and by the `TerminalCompositor` around its frame
-    /// flushes, so the render loop and the body coroutines (which can
-    /// run on different libcoro worker threads) cannot interleave
-    /// half-written ANSI sequences. Exposed so other call sites that
-    /// emit ANSI to stdout from inside the runtime (e.g. the HUD
-    /// compositor) can participate.
+    /// Mutex serializing access to queued scrollback output and writes to
+    /// `std::cout`. Body coroutines enqueue output under this lock; the render
+    /// loop drains it and presents the HUD while holding the same lock.
     [[nodiscard]] std::mutex & output_mutex() noexcept
     {
         return output_mutex_;
     }
 
 private:
+    struct QueuedOutput
+    {
+        enum class Kind {
+            text,
+            line,
+            block,
+        };
+
+        Kind kind = Kind::text;
+        std::string text;
+    };
+
     bool refresh_terminal_size() noexcept;
     void render_impl(std::function<void(RasterView &, Size)> render_fn);
     void update_hud_height(height_t hud_h);
+    void enqueue_output(QueuedOutput output);
+    void flush_output_queue(std::ostream & out);
+    void write_output(std::ostream & out, const QueuedOutput & output);
 
     template<typename Layout>
     void render_frame(const Layout & layout)
@@ -346,24 +365,12 @@ private:
             }
         }
 
-        auto target_rows = static_cast<double>(
-            target_h.count());
-
-        // Grow immediately so new content is visible, but shrink gradually to
-        // avoid jitter when transient rows disappear between frames.
-        if (wants_fullscreen || !has_smoothed_hud_height_) {
-            smoothed_hud_rows_ = target_rows;
-            has_smoothed_hud_height_ = true;
-        } else if (target_rows > smoothed_hud_rows_) {
-            smoothed_hud_rows_ = target_rows;
-        } else {
-            smoothed_hud_rows_ =
-                hud_shrink_alpha_ * target_rows
-                + (1.0 - hud_shrink_alpha_) * smoothed_hud_rows_;
-        }
-
-        auto hud_rows = static_cast<std::size_t>(
-            std::round(smoothed_hud_rows_));
+        // Snap HUD height to the layout's current target. A previous low-pass
+        // filter made shrink transitions pleasant, but it also moved the
+        // scroll-region bottom across several frames. Queued scrollback output
+        // could then be emitted against an intermediate bottom row and appear
+        // to gain extra blank lines as the HUD continued shrinking.
+        auto hud_rows = static_cast<std::size_t>(target_h.count());
         hud_rows = std::min(
             hud_rows,
             static_cast<std::size_t>(term_h.count()));
@@ -394,11 +401,11 @@ private:
     std::atomic<nxt::width_t> term_width_{80 * ch};
     std::atomic<nxt::height_t> term_height_{24 * ln};
     std::atomic<std::uint64_t> damage_counter_{0};
-    bool scrollback_cursor_initialized_{false};
+    std::optional<int> scrollback_cursor_row_;
+    bool scrollback_cursor_needs_move_{true};
+    std::vector<QueuedOutput> output_queue_;
+    std::vector<std::string> post_exit_blocks_;
     nxt::height_t last_hud_height_{0 * ln};
-    bool has_smoothed_hud_height_{false};
-    double smoothed_hud_rows_{0.0};
-    double hud_shrink_alpha_{0.05};
 
     // Trace stream: run id + root span id are minted up front so any
     // producer can emit a row before the first body coroutine runs.

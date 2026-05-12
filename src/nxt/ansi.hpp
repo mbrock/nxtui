@@ -11,16 +11,17 @@ namespace nxt::ansi {
 
 /// ANSI output modes
 enum class Mode {
-    disabled,  // No ANSI output at all (default for non-TTY)
-    debug,     // Readable debug format like ⟨CSI:0m⟩
+    disabled,  // No ANSI output at all
+    debug,     // Readable debug format like ⟨CSI:0m⟩ (default for non-TTY)
     enabled    // Real ANSI escape sequences (default for TTY)
 };
 
 /// Current ANSI output mode
 extern Mode mode;
 
-/// Initialize the ANSI module. Sets mode based on TTY detection.
-/// Call this early in main().
+/// Initialize the ANSI module. Sets mode based on TTY detection,
+/// then applies the NXT_ANSI env var override if set
+/// (values: disabled|off|0, debug, enabled|on|1). Call early in main().
 void init();
 
 /// Check if stdout is connected to a real TTY

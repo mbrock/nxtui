@@ -41,10 +41,10 @@ public:
 
     /// Install the runtime's stdout serialization mutex. When set, the
     /// compositor's `present_frame()`, `resize()`, and `set_hud_height()`
-    /// overloads that write to `std::cout` acquire this lock around
-    /// their write+flush so they cannot interleave with concurrent
-    /// `UIRuntime::print` calls running on other libcoro threads. The
-    /// ostream-taking overloads (used by tests) are unaffected.
+    /// overloads that write to `std::cout` acquire this lock around their
+    /// write+flush. The runtime render loop uses the ostream-taking
+    /// `present_frame(std::cout)` while already holding the same lock so queued
+    /// scrollback output and HUD diffs are emitted as one presentation step.
     void set_output_mutex(std::mutex * mutex) noexcept
     {
         output_mutex_ = mutex;

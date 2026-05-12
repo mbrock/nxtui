@@ -32,6 +32,7 @@ struct OutputMessage
     enum class Kind {
         print,
         line,
+        block,
     };
 
     Kind kind = Kind::print;
@@ -59,6 +60,15 @@ struct OutputPublisher
                 .text = std::string{line},
             });
     }
+
+    void print_block(std::string_view text) const
+    {
+        publish(
+            OutputMessage{
+                .kind = OutputMessage::Kind::block,
+                .text = std::string{text},
+            });
+    }
 };
 
 class span_guard;
@@ -84,6 +94,8 @@ inline OutputPublisher runtime_output(UIRuntime & runtime)
             [&runtime](OutputMessage message) {
                 if (message.kind == OutputMessage::Kind::line)
                     runtime.println(message.text);
+                else if (message.kind == OutputMessage::Kind::block)
+                    runtime.print_block(message.text);
                 else
                     runtime.print(message.text);
             },
@@ -166,6 +178,12 @@ public:
     void print(std::string_view text) const
     {
         scope_->context().output.print(text);
+    }
+
+    /// Print a complete block to the scrollback as one coherent output.
+    void print_block(std::string_view text) const
+    {
+        scope_->context().output.print_block(text);
     }
 
     template<typename L>

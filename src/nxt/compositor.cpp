@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -77,6 +78,25 @@ namespace {
     if (hud_height > 0 * ln)
         return 0;
     return row_count(term_height);
+}
+
+void write_terminal_text(ansi::Writer & w, std::string_view text)
+{
+    for (auto ch : text) {
+        switch (ch) {
+        case '\n':
+        case '\r':
+        case '\t':
+        case '\v':
+        case '\f':
+        case '\x1b':
+            throw std::logic_error{
+                "terminal raster contains control character glyph"};
+        default:
+            w.text(ch);
+            break;
+        }
+    }
 }
 
 } // namespace
@@ -197,22 +217,11 @@ void TerminalCompositor::set_hud_height(
             wr.reset_scroll_region();
         }
 
-        if (old_has_windowed_hud && new_has_windowed_hud
-            && new_scroll_bottom > old_scroll_bottom) {
-            auto scroll_diff = new_scroll_bottom - old_scroll_bottom;
-            wr.move_to(Pos::origin());
-            wr.scroll_down(lines(scroll_diff));
-        }
-
         // Diff rendering will not write cells that are blank in both buffers,
         // so explicitly clear rows entering or leaving HUD ownership.
         int clear_start = std::min(
             chrome_start_row_for(old_hud_height, old_term_height),
             chrome_start_row_for(new_hud_height, term_height));
-        if (old_has_windowed_hud && new_has_windowed_hud
-            && new_scroll_bottom != old_scroll_bottom)
-            clear_start =
-                row_index(hud_start_row_for(new_hud_height, term_height));
         if (old_term_height == 0 * ln)
             clear_start = chrome_start_row_for(new_hud_height, term_height);
         clear_start = std::clamp(clear_start, 0, row_count(term_height));
@@ -332,7 +341,7 @@ void TerminalCompositor::present_frame(std::ostream & out)
 
         for (const auto gid : run.glyphs)
             if (auto text = glyphs_.get(gid))
-                w.text(*text);
+                write_terminal_text(w, *text);
     });
 
     // Restore cursor to where it was before HUD render

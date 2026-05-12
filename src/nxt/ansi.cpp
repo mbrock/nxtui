@@ -3,6 +3,7 @@
 #include "nxt/units.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <iostream>
 #include <iterator>
@@ -22,7 +23,16 @@ bool is_tty()
 
 void init()
 {
-    mode = is_tty() ? Mode::enabled : Mode::disabled;
+    mode = is_tty() ? Mode::enabled : Mode::debug;
+    if (const char * env = std::getenv("NXT_ANSI")) {
+        const std::string_view v{env};
+        if (v == "disabled" || v == "off" || v == "0")
+            mode = Mode::disabled;
+        else if (v == "debug")
+            mode = Mode::debug;
+        else if (v == "enabled" || v == "on" || v == "1")
+            mode = Mode::enabled;
+    }
 }
 
 namespace {

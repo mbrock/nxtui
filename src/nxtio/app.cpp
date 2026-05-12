@@ -26,7 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #ifdef NXT_HAVE_PNG
-#include "nxt/png.hpp"
+#  include "nxt/png.hpp"
 #endif
 
 #if defined(__linux__)
@@ -202,11 +202,68 @@ resolve_trace_path(std::string_view run_id) noexcept
     return value;
 }
 
-}  // namespace
+[[nodiscard]] bool is_line_blank(std::string_view line) noexcept
+{
+    for (auto ch : line)
+        if (ch != ' ' && ch != '\t' && ch != '\r')
+            return false;
+    return true;
+}
+
+[[nodiscard]] std::string trim_blank_boundary_lines(std::string_view text)
+{
+    while (!text.empty()) {
+        auto end = text.find('\n');
+        auto line =
+            end == std::string_view::npos ? text : text.substr(0, end);
+        if (!is_line_blank(line))
+            break;
+        if (end == std::string_view::npos)
+            return {};
+        text.remove_prefix(end + 1);
+    }
+
+    while (!text.empty()) {
+        auto end = text.size();
+        if (text.back() == '\n')
+            --end;
+        auto begin = text.rfind('\n', end == 0 ? 0 : end - 1);
+        begin = begin == std::string_view::npos ? 0 : begin + 1;
+        auto line = text.substr(begin, end - begin);
+        if (!is_line_blank(line))
+            break;
+        text = text.substr(0, begin == 0 ? 0 : begin - 1);
+    }
+
+    return std::string{text};
+}
+
+[[nodiscard]] std::string horizontal_rule(std::size_t width)
+{
+    std::string out;
+    out.reserve(width * std::string_view{"─"}.size());
+    for (std::size_t i = 0; i < width; ++i)
+        out += "─";
+    return out;
+}
+
+[[nodiscard]] int
+scrollback_bottom_row(const height_t hud_h, const height_t term_h)
+{
+    if (hud_h > 0 * ln && hud_h < term_h)
+        return static_cast<int>((term_h - hud_h - 2 * ln).count());
+    return static_cast<int>((term_h - 1 * ln).count());
+}
+
+[[nodiscard]] int count_newlines(std::string_view text) noexcept
+{
+    return static_cast<int>(std::ranges::count(text, '\n'));
+}
+
+} // namespace
 
 UIRuntime::UIRuntime()
-    : scheduler_(
-          nxt::scheduler::make_unique(nxt::scheduler::options{}))
+    : scheduler_(nxt::scheduler::make_unique(nxt::scheduler::options{}))
     , terminal_surface_(isatty(STDOUT_FILENO) != 0)
     , run_id_(make_short_id())
     , root_span_id_(make_short_id())
@@ -336,8 +393,8 @@ void UIRuntime::record_frame_snapshot(const Raster & back)
     nxt::io::arrow::trace_row row;
     row.phase = "frame";
     row.event_type = "ansi";
-    row.data = std::format("{}x{} bytes={} hash={:016x}",
-                           cols, rows, bytes.size(), hash);
+    row.data = std::format(
+        "{}x{} bytes={} hash={:016x}", cols, rows, bytes.size(), hash);
     row.payload_json = payload.dump();
     row.span_id = root_span_id_;
     row.span_name = "runtime";
@@ -486,8 +543,13 @@ UIRuntime::~UIRuntime()
 
     // Fires after the run()-scope TerminalGuard has destructed and
     // restored the terminal, so plain stdout writes land in normal
-    // scrollback. Printing snapshot paths here keeps them out of the
-    // live HUD (and out of the auto t2s/t5s shots).
+    // scrollback. These summaries stay out of the live HUD and out of
+    // the auto t2s/t5s shots.
+    for (const auto & block : post_exit_blocks_)
+        std::cout << block;
+    if (!post_exit_blocks_.empty())
+        std::cout.flush();
+
     if (!snapshot_paths_.empty()) {
         std::cout << "\nsnapshots:\n";
         for (const auto & path : snapshot_paths_)
@@ -584,7 +646,9 @@ void UIRuntime::render_impl(
     // copies it over the front: we want what the user is about to see,
     // not the previous frame.
     record_frame_snapshot(buffer);
-    compositor_->present_frame();
+    auto guard = std::scoped_lock{output_mutex_};
+    flush_output_queue(std::cout);
+    compositor_->present_frame(std::cout);
 }
 
 void UIRuntime::maybe_screenshot() noexcept
@@ -608,8 +672,10 @@ void UIRuntime::maybe_screenshot() noexcept
         return;
 
     auto elapsed = std::chrono::steady_clock::now() - screenshot_start_;
-    while (screenshot_milestone_index_ < n
-           && elapsed >= screenshot_milestones[screenshot_milestone_index_].at) {
+    while (
+        screenshot_milestone_index_ < n
+        && elapsed
+               >= screenshot_milestones[screenshot_milestone_index_].at) {
         capture_screenshot(
             screenshot_milestones[screenshot_milestone_index_].name);
         ++screenshot_milestone_index_;
@@ -630,7 +696,8 @@ void UIRuntime::capture_screenshot(std::string_view milestone) noexcept
             return;
 
         auto path = dir
-            / (screenshot_session_tag_ + "-" + std::string{milestone} + ".png");
+                    / (screenshot_session_tag_ + "-"
+                       + std::string{milestone} + ".png");
 
         // Same vterm-driven render as snapshot(): the auto-shots also
         // need to see HUD + scrollback, not just the HUD raster.
@@ -685,31 +752,44 @@ void UIRuntime::update_hud_height(height_t hud_h)
     if (!has_terminal_surface())
         return;
 
-    // When the HUD region changes size, the scroll region's bottom
-    // row moves, so the cached scrollback cursor position is no
-    // longer valid. Forcing the next println/print to reposition
-    // keeps subsequent log output aligned with the new region —
-    // without this, after a smoothing-driven HUD shrink we'd
-    // continue writing to the OLD scroll_bottom row, which is now
-    // inside the new HUD area, smooshing successive lines on top
-    // of each other.
+    // Keep a logical scrollback cursor row across HUD-height changes. When
+    // the HUD grows, the compositor scrolls visible log rows upward, so the
+    // cursor follows. When the HUD shrinks, leave the cursor where it was:
+    // subsequent output fills newly exposed rows from the top instead of
+    // teleporting to the new bottom and leaving a blank pocket.
     if (hud_h != last_hud_height_) {
+        auto old_hud_h = last_hud_height_;
+        auto term_h = terminal_height();
+        if (scrollback_cursor_row_ && old_hud_h > 0 * ln
+            && old_hud_h < term_h && hud_h > 0 * ln && hud_h < term_h) {
+            auto old_bottom = scrollback_bottom_row(old_hud_h, term_h);
+            auto new_bottom = scrollback_bottom_row(hud_h, term_h);
+            if (new_bottom < old_bottom)
+                *scrollback_cursor_row_ = std::max(
+                    0, *scrollback_cursor_row_ - (old_bottom - new_bottom));
+            *scrollback_cursor_row_ =
+                std::min(*scrollback_cursor_row_, new_bottom);
+        } else {
+            scrollback_cursor_row_.reset();
+        }
+        scrollback_cursor_needs_move_ = true;
         last_hud_height_ = hud_h;
-        scrollback_cursor_initialized_ = false;
     }
 
     compositor_->set_hud_height(hud_h, terminal_height());
 }
 
+void UIRuntime::enqueue_output(QueuedOutput output)
+{
+    {
+        auto guard = std::scoped_lock{output_mutex_};
+        output_queue_.push_back(std::move(output));
+    }
+    signal_damage();
+}
+
 void UIRuntime::println(std::string_view line)
 {
-    // Single output_mutex_ acquisition spans the entire function so
-    // each call emits one indivisible chunk to the terminal — the
-    // cursor positioning, the text, the clear-to-EOL, and the
-    // trailing newline can never be interleaved with another
-    // coroutine's writes. Also guards `scrollback_cursor_initialized_`.
-    auto guard = std::scoped_lock{output_mutex_};
-
     if (!has_terminal_surface()) {
         std::cout << line;
         if (line.empty() || line.back() != '\n')
@@ -718,49 +798,81 @@ void UIRuntime::println(std::string_view line)
         return;
     }
 
-    auto hud_h = compositor_->hud_height();
-    auto term_h = terminal_height();
+    enqueue_output(
+        QueuedOutput{
+            .kind = QueuedOutput::Kind::line,
+            .text = std::string{line},
+        });
+}
 
-    if (hud_h == 0 * ln) {
-        std::cout << line;
-        if (line.empty() || line.back() != '\n')
-            std::cout << '\n';
-        std::cout.flush();
-        return;
-    }
-
-    // No scroll region in full-screen mode.
-    if (hud_h > 0 * ln && hud_h >= term_h)
-        return;
-
-    // Match `compositor::scroll_bottom_for`: keep a 1-row gap between
-    // the scrollback writing line and the HUD when there is a HUD.
-    auto scroll_bottom = hud_h > 0 * ln && hud_h < term_h
-        ? term_h - hud_h - 2 * ln
-        : term_h - 1 * ln;
-    auto has_trailing_newline = !line.empty() && line.back() == '\n';
-
-    std::string buf;
-    ansi::Writer w(buf);
-    w.move_to(Pos::at(0 * ch, scroll_bottom));
-    w.reset(); // Avoid HUD styling leaking into log output
-    w.text(line);
-    w.clear_line_from_cursor();
-    if (!has_trailing_newline)
-        w.text("\n");
-
-    std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-    std::cout.flush();
-    scrollback_cursor_initialized_ = true;
+void UIRuntime::print_after_exit(std::string text)
+{
+    auto guard = std::scoped_lock{output_mutex_};
+    post_exit_blocks_.push_back(std::move(text));
 }
 
 void UIRuntime::print(std::string_view text)
 {
-    auto guard = std::scoped_lock{output_mutex_};
-
     if (!has_terminal_surface()) {
         std::cout << text;
         std::cout.flush();
+        return;
+    }
+
+    enqueue_output(
+        QueuedOutput{
+            .kind = QueuedOutput::Kind::text,
+            .text = std::string{text},
+        });
+}
+
+void UIRuntime::print_block(std::string_view text)
+{
+    if (!has_terminal_surface()) {
+        std::cout << text;
+        if (text.empty() || text.back() != '\n')
+            std::cout << '\n';
+        std::cout.flush();
+        return;
+    }
+
+    enqueue_output(
+        QueuedOutput{
+            .kind = QueuedOutput::Kind::block,
+            .text = std::string{text},
+        });
+}
+
+void UIRuntime::flush_output_queue(std::ostream & out)
+{
+    std::vector<QueuedOutput> pending;
+    pending.swap(output_queue_);
+
+    for (const auto & output : pending)
+        write_output(out, output);
+    out.flush();
+}
+
+void UIRuntime::write_output(
+    std::ostream & out, const QueuedOutput & output)
+{
+    auto block_text = output.kind == QueuedOutput::Kind::block
+                          ? trim_blank_boundary_lines(output.text)
+                          : std::string{};
+
+    if (!has_terminal_surface()) {
+        if (output.kind == QueuedOutput::Kind::block) {
+            if (block_text.empty())
+                return;
+            out << horizontal_rule(72) << '\n' << block_text;
+            if (block_text.back() != '\n')
+                out << '\n';
+        } else {
+            out << output.text;
+        }
+        if (output.kind == QueuedOutput::Kind::line
+            && (output.text.empty() || output.text.back() != '\n'))
+            out << '\n';
         return;
     }
 
@@ -768,8 +880,19 @@ void UIRuntime::print(std::string_view text)
     auto term_h = terminal_height();
 
     if (hud_h == 0 * ln) {
-        std::cout << text;
-        std::cout.flush();
+        if (output.kind == QueuedOutput::Kind::block) {
+            if (block_text.empty())
+                return;
+            out << horizontal_rule(terminal_width().count()) << '\n'
+                << block_text;
+            if (block_text.back() != '\n')
+                out << '\n';
+        } else {
+            out << output.text;
+        }
+        if (output.kind == QueuedOutput::Kind::line
+            && (output.text.empty() || output.text.back() != '\n'))
+            out << '\n';
         return;
     }
 
@@ -779,54 +902,61 @@ void UIRuntime::print(std::string_view text)
 
     // Match `compositor::scroll_bottom_for`: keep a 1-row gap between
     // the scrollback writing line and the HUD when there is a HUD.
-    auto scroll_bottom = hud_h > 0 * ln && hud_h < term_h
-        ? term_h - hud_h - 2 * ln
-        : term_h - 1 * ln;
+    auto scroll_bottom = scrollback_bottom_row(hud_h, term_h);
 
     std::string buf;
     ansi::Writer w(buf);
-    if (!scrollback_cursor_initialized_)
-        w.move_to(Pos::at(0 * ch, scroll_bottom));
+    if (!scrollback_cursor_row_)
+        scrollback_cursor_row_ = scroll_bottom;
+    if (scrollback_cursor_needs_move_) {
+        w.move_to(
+            Pos::at(
+                0 * ch,
+                static_cast<std::size_t>(*scrollback_cursor_row_) * ln));
+        scrollback_cursor_needs_move_ = false;
+    }
     w.reset();
-    w.text(text);
+    if (output.kind == QueuedOutput::Kind::block) {
+        if (block_text.empty())
+            return;
+        w.text("\n");
+        w.text(block_text);
+        if (block_text.back() != '\n')
+            w.text("\n");
+        w.text("\n");
+        w.clear_line_from_cursor();
+    } else {
+        w.text(output.text);
+    }
+    if (output.kind == QueuedOutput::Kind::line) {
+        w.clear_line_from_cursor();
+        if (output.text.empty() || output.text.back() != '\n')
+            w.text("\n");
+    }
 
-    std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-    std::cout.flush();
-    scrollback_cursor_initialized_ = true;
+    out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    auto advance_rows = 0;
+    if (output.kind == QueuedOutput::Kind::block) {
+        advance_rows = 1 + count_newlines(block_text);
+        if (block_text.empty() || block_text.back() != '\n')
+            ++advance_rows;
+    } else if (output.kind == QueuedOutput::Kind::line) {
+        advance_rows = std::max(1, count_newlines(output.text));
+    } else {
+        advance_rows = count_newlines(output.text);
+    }
+
+    if (scrollback_cursor_row_)
+        *scrollback_cursor_row_ =
+            std::min(scroll_bottom, *scrollback_cursor_row_ + advance_rows);
 }
 
 void UIRuntime::cleanup()
 {
     auto guard = std::scoped_lock{output_mutex_};
-
-    if (!has_terminal_surface())
-        return;
-
-    auto hud_h = compositor_->hud_height();
-    auto term_h = terminal_height();
-
-    // Nothing to clear in no-HUD or full-screen mode
-    if (hud_h == 0 * ln || hud_h >= term_h)
-        return;
-
-    // Clear HUD region, preserving cursor position
-    std::string buf;
-    ansi::Writer w(buf);
-    w.save_cursor();
-
-    // Clear from HUD area to bottom using raw row numbers to avoid coord
-    // issues
-    auto term_rows = static_cast<int>(term_h.count());
-    auto hud_rows = static_cast<int>(hud_h.count());
-    auto start_row = std::max(0, term_rows - hud_rows);
-    // Clear rows start_row through term_rows-1 (0-indexed)
-    for (int r = start_row; r < term_rows; ++r) {
-        w.move_to(Pos::at(0 * ch, r * ln));
-        w.clear_line();
-    }
-
-    w.restore_cursor();
-    std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    flush_output_queue(std::cout);
+    // Leave the final HUD frame visible after the render loop exits. The
+    // terminal guard restores cursor state and scroll margins separately.
     std::cout.flush();
 }
 
@@ -850,13 +980,15 @@ nxt::task<> UIRuntime::signal_loop()
 
             case SIGINT:
             case SIGTERM:
-                println("CTRL C! CTRL C! CTRL C! CTRL C! CTRL C! CTRL C! CTRL C!");
+                println(
+                    "CTRL C! CTRL C! CTRL C! CTRL C! CTRL C! CTRL C! CTRL C!");
                 request_shutdown();
                 break;
 
             case SIGWINCH:
                 if (refresh_terminal_size()) {
-                    scrollback_cursor_initialized_ = false;
+                    scrollback_cursor_row_.reset();
+                    scrollback_cursor_needs_move_ = true;
                     co_await resize_queue_.push(terminal_size());
                     signal_damage();
                 }
@@ -909,8 +1041,7 @@ nxt::task<> UIRuntime::input_loop()
             auto n = ::read(STDIN_FILENO, buffer.data(), buffer.size());
             if (n > 0) {
                 auto bytes = std::string_view{
-                    buffer.data(),
-                    static_cast<std::size_t>(n)};
+                    buffer.data(), static_cast<std::size_t>(n)};
                 for (auto & event : parser.feed(bytes))
                     co_await publish(std::move(event));
                 continue;

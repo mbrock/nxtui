@@ -564,6 +564,157 @@ private:
     return segment_view{text};
 }
 
+/// One paragraph split from borrowed text.
+struct paragraph
+{
+    /// Paragraph contents, excluding surrounding blank-line separators.
+    std::string_view text;
+};
+
+/// Forward range over paragraphs separated by blank lines.
+class paragraph_view : public std::ranges::view_interface<paragraph_view>
+{
+public:
+    /// Construct an empty view.
+    paragraph_view() = default;
+
+    /// Construct a paragraph view over borrowed text.
+    explicit paragraph_view(std::string_view text)
+        : text_(text)
+    {}
+
+    /// Iterator over paragraphs.
+    class iterator
+    {
+    public:
+        using iterator_concept = std::forward_iterator_tag;
+        using value_type = paragraph;
+        using difference_type = std::ptrdiff_t;
+
+        /// Construct a default sentinel-comparable iterator.
+        iterator() = default;
+
+        /// Construct an iterator at the first paragraph in `text`.
+        explicit iterator(std::string_view text)
+            : text_(text)
+        {
+            scan();
+        }
+
+        /// Current paragraph.
+        [[nodiscard]] paragraph operator*() const noexcept
+        {
+            return {.text = text_.substr(start_.count(), end_ - start_)};
+        }
+
+        /// Advance to the next paragraph.
+        iterator & operator++() noexcept
+        {
+            start_ = next_;
+            scan();
+            return *this;
+        }
+
+        /// Advance to the next paragraph, returning the previous iterator.
+        iterator operator++(int) noexcept
+        {
+            auto copy = *this;
+            ++*this;
+            return copy;
+        }
+
+        friend bool operator==(const iterator & it, std::default_sentinel_t)
+            noexcept
+        {
+            return it.start_.count() >= it.text_.size();
+        }
+
+    private:
+        struct line
+        {
+            byte_offset_t start{};
+            byte_offset_t content_end{};
+            byte_offset_t next{};
+        };
+
+        [[nodiscard]] line next_line(byte_offset_t pos) const noexcept
+        {
+            auto end = pos;
+            while (end.count() < text_.size()) {
+                auto n = next(text_, end);
+                auto cluster = text_.substr(end.count(), n - end);
+                if (is_line_break(cluster))
+                    return {pos, end, n};
+                end = n;
+            }
+            return {pos, end, end};
+        }
+
+        [[nodiscard]] bool blank(line l) const noexcept
+        {
+            auto pos = l.start;
+            while (pos < l.content_end) {
+                auto n = next(text_, pos);
+                auto cluster = text_.substr(pos.count(), n - pos);
+                if (!is_word_separator(cluster))
+                    return false;
+                pos = n;
+            }
+            return true;
+        }
+
+        void scan() noexcept
+        {
+            while (start_.count() < text_.size()) {
+                auto l = next_line(start_);
+                if (!blank(l))
+                    break;
+                start_ = l.next;
+            }
+
+            end_ = start_;
+            next_ = start_;
+            auto pos = start_;
+            while (pos.count() < text_.size()) {
+                auto l = next_line(pos);
+                if (blank(l)) {
+                    next_ = l.next;
+                    return;
+                }
+                end_ = l.content_end;
+                pos = l.next;
+                next_ = pos;
+            }
+        }
+
+        std::string_view text_;
+        byte_offset_t start_{};
+        byte_offset_t end_{};
+        byte_offset_t next_{};
+    };
+
+    /// Begin iterating paragraphs.
+    [[nodiscard]] iterator begin() const noexcept
+    {
+        return iterator{text_};
+    }
+
+    /// End sentinel.
+    [[nodiscard]] std::default_sentinel_t end() const noexcept
+    {
+        return {};
+    }
+
+private:
+    std::string_view text_;
+};
+
+/// Return a paragraph range over borrowed text.
+[[nodiscard]] inline paragraph_view paragraphs(std::string_view text) noexcept
+{
+    return paragraph_view{text};
+}
+
 /// Size in bytes of the prefix that ends on a word boundary.
 [[nodiscard]] inline std::size_t
 complete_words_prefix_size(std::string_view text) noexcept

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxt/raster.hpp"
+#include "nxt/units.hpp"
 #include "nxt/utf8.hpp"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace nxt::tui {
 
@@ -38,7 +40,7 @@ template<auto Unit>
 struct SizeHint
 {
     hint_extent_t<Unit> min{0 * Unit}; // Minimum size needed
-    ratio_t flex{0.0 * one}; // Flex grow factor (0 = don't grow)
+    ratio_t flex{0.0 * one};           // Flex grow factor (0 = don't grow)
 
     /// Require exactly `n` minimum cells/lines and no growth.
     static constexpr SizeHint fixed(hint_extent_t<Unit> n)
@@ -187,7 +189,8 @@ struct Style
     /// Emphasis bitset.
     Emphasis em = DEFAULT_EMPHASIS;
 
-    /// Merge styles, letting explicit colors in `other` override this style.
+    /// Merge styles, letting explicit colors in `other` override this
+    /// style.
     constexpr Style operator|(const Style & other) const
     {
         return {
@@ -279,9 +282,7 @@ struct Surface
 template<Layout Child>
 auto surface(Style style, Child && child)
 {
-    return Surface<std::decay_t<Child>>{
-        style,
-        std::forward<Child>(child)};
+    return Surface<std::decay_t<Child>>{style, std::forward<Child>(child)};
 }
 
 /// Layout decorator that forces a fixed height hint.
@@ -317,8 +318,7 @@ template<Layout Child>
 auto fixed_height(height_t height, Child && child)
 {
     return FixedHeight<std::decay_t<Child>>{
-        height,
-        std::forward<Child>(child)};
+        height, std::forward<Child>(child)};
 }
 
 /// Render one styled span and return the column after the written text.
@@ -389,6 +389,71 @@ inline auto text(std::string s, Style style)
         });
 }
 
+inline auto styled_lines(std::vector<std::vector<Span>> lines, Style clear = {})
+{
+    if (lines.empty())
+        lines.push_back({});
+
+    auto width = 0 * ch;
+    for (const auto & line : lines) {
+        auto line_width = 0 * ch;
+        for (const auto & span : line)
+            line_width += utf8_width(span.text);
+        width = std::max(width, line_width);
+    }
+
+    auto height = lines.size() * ln;
+    return leaf(
+        WidthHint::fixed(width),
+        HeightHint::fixed(height),
+        [lines = std::move(lines), clear](RasterView & r, Size size) {
+            std::ranges::fill(r.glyphs(), 32);
+            std::ranges::fill(r.fgs(), clear.fg);
+            std::ranges::fill(r.bgs(), clear.bg);
+            std::ranges::fill(r.ems(), clear.em);
+
+            auto row = 0 * ln;
+            for (const auto & line : lines) {
+                if (row >= size.h)
+                    break;
+
+                auto col = Pos::origin().x;
+                for (const auto & span : line)
+                    col = render_span(
+                        r, Pos{col, terminal_origin_v + row}, span);
+                row += 1 * ln;
+            }
+        });
+}
+
+inline auto text_lines(std::string s, Style style = {})
+{
+    std::vector<std::vector<Span>> lines;
+    auto current = std::string{};
+
+    auto finish_line = [&] {
+        lines.push_back({span(std::move(current), style)});
+        current = {};
+    };
+
+    for (auto pos = utf8::byte_offset(0); pos.count() < s.size();) {
+        auto next = utf8::next(s, pos);
+        auto cluster = std::string_view{s}.substr(pos.count(), next - pos);
+        if (utf8::is_line_break(cluster)) {
+            finish_line();
+            pos = next;
+            continue;
+        }
+        current += cluster;
+        pos = next;
+    }
+
+    if (!current.empty() || lines.empty())
+        finish_line();
+
+    return styled_lines(std::move(lines), style);
+}
+
 /// Create a compact one-line spinner frame.
 inline auto spinner(
     std::size_t tick,
@@ -406,7 +471,14 @@ inline auto spinner(
         // "⠧"sv,
         // "⠇"sv,
         // "⠏"sv,
-        "1", "2", "3", "4", "5", "6", "7", "8",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
     });
 
     auto frame = frames[tick % frames.size()];
@@ -470,8 +542,7 @@ inline std::string bar_string(percent_t pct, width_t width)
         "", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"};
 
     auto w = width.count();
-    auto fraction =
-        std::clamp(pct.value(), 0.0, 100.0) / 100.0;
+    auto fraction = std::clamp(pct.value(), 0.0, 100.0) / 100.0;
     double fill = fraction * w;
     std::size_t full = static_cast<std::size_t>(fill);
     std::size_t partial = static_cast<std::size_t>((fill - full) * 8 + 0.5);
@@ -533,8 +604,7 @@ struct Row
             },
             children);
         return HeightHint::fixed(
-            max_min.count() > 0 ? max_min
-                                               : height_t{1 * ln});
+            max_min.count() > 0 ? max_min : height_t{1 * ln});
     }
 
     /// Divide width among children and render them left to right.
@@ -595,9 +665,9 @@ private:
                 auto flex_val = hints[i].flex;
                 auto total_flex_val = total_flex;
                 if (flex_val > 0)
-                    result[i] += remaining
-                                 * (flex_val.value()
-                                    / total_flex_val.value());
+                    result[i] +=
+                        remaining
+                        * (flex_val.value() / total_flex_val.value());
             }
         }
 
@@ -705,9 +775,9 @@ private:
                 auto flex_val = hints[i].flex;
                 auto total_flex_val = total_flex;
                 if (flex_val > 0)
-                    result[i] += remaining
-                                 * (flex_val.value()
-                                    / total_flex_val.value());
+                    result[i] +=
+                        remaining
+                        * (flex_val.value() / total_flex_val.value());
             }
         }
 
@@ -770,7 +840,8 @@ List<T, ViewFn> list(std::span<const T> items, ViewFn && view)
     return {items, std::forward<ViewFn>(view)};
 }
 
-/// Create a list from a vector, borrowing it for the lifetime of the layout.
+/// Create a list from a vector, borrowing it for the lifetime of the
+/// layout.
 template<typename T, typename ViewFn>
 auto list(const std::vector<T> & items, ViewFn && view)
 {

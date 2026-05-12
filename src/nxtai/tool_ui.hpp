@@ -11,9 +11,12 @@
 // When the tool finishes, a styled-text "done" card is committed to
 // scrollback so it leaves a permanent visible record of what ran.
 
+#include "nxt/baltics.hpp"
+#include <nxt/ansi.hpp>
 #include <nxt/any_layout.hpp>
 #include <nxt/tui.hpp>
 #include <nxtai/agent_trace.hpp>
+#include <nxtai/hud_blocks.hpp>
 #include <nxtai/tools.hpp>
 #include <nxtio/input.hpp>
 #include <nxtio/process.hpp>
@@ -26,7 +29,6 @@
 #include <cstddef>
 #include <format>
 #include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -43,37 +45,38 @@ using namespace std::chrono_literals;
 inline std::string_view tool_icon(std::string_view name)
 {
     if (name == "read_file")
-        return "▸ file";
+        return "read";
     if (name == "rg_search")
-        return "▸ grep";
+        return "grep";
     if (name == "web_fetch")
-        return "▸ http";
+        return "look";
     if (name == "bash")
-        return "▸ bash";
+        return "bash";
     if (name == "nxt_echo")
-        return "▸ echo";
+        return "echo";
     if (name == "nxt_current_time")
-        return "▸ time";
+        return "time";
     if (name == "nxt_terminal_size")
-        return "▸ size";
-    return "▸ tool";
+        return "size";
+    return "tool";
 }
 
 inline nxt::Rgba8 tool_color(std::string_view name)
 {
     if (name == "read_file")
-        return {120, 180, 220};   // sky
+        return {120, 180, 220}; // sky
     if (name == "rg_search")
-        return {230, 200, 90};    // amber
+        return {230, 200, 90}; // amber
     if (name == "web_fetch")
-        return {180, 140, 220};   // violet
+        return {180, 140, 220}; // violet
     if (name == "bash")
-        return {240, 140, 90};    // orange (warning hue)
-    return {160, 200, 110};       // green
+        return {240, 140, 90}; // orange (warning hue)
+    return {160, 200, 110};    // green
 }
 
 inline bool tool_needs_approval(std::string_view name)
 {
+    (void) name;
     return false; // name == "bash";
 }
 
@@ -97,9 +100,8 @@ args_summary(std::string_view name, const std::string & args_json)
             return j.value("command", std::string{});
         if (name == "nxt_echo")
             return j.value("text", std::string{});
-        return args_json.size() > 50
-                   ? args_json.substr(0, 47) + "..."
-                   : args_json;
+        return args_json.size() > 50 ? args_json.substr(0, 47) + "..."
+                                     : args_json;
     } catch (...) {
         return args_json;
     }
@@ -110,7 +112,16 @@ args_summary(std::string_view name, const std::string & args_json)
 // ============================================================================
 
 constexpr std::array<std::string_view, 10> spinner_frames = {
-    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+    "⠋",
+    "⠙",
+    "⠹",
+    "⠸",
+    "⠼",
+    "⠴",
+    "⠦",
+    "⠧",
+    "⠇",
+    "⠏",
 };
 
 inline auto running_card(
@@ -121,23 +132,24 @@ inline auto running_card(
 {
     using namespace nxt::tui;
     auto color = tool_color(tool_name);
-    auto frame =
-        std::string{spinner_frames[
-            static_cast<std::size_t>(tick) % spinner_frames.size()]};
+    auto frame = std::string{
+        spinner_frames
+            [static_cast<std::size_t>(tick) % spinner_frames.size()]};
     auto label = std::string{tool_icon(tool_name)};
     auto args_str = std::string{args};
     if (args_str.size() > 60)
         args_str = args_str.substr(0, 58) + "…";
-    auto elapsed_str = elapsed.count() >= 100
-                           ? std::format(
-                                 "  {:.1f}s",
-                                 elapsed.count() / 1000.0)
-                           : std::string{};
-    return styled_text(
-        span(" " + frame + "  ", fg(color) | bold),
-        span(label + "  ", fg(color) | bold),
-        span(args_str, faint),
-        span(elapsed_str, fg(color)));
+    auto elapsed_str =
+        elapsed.count() >= 100
+            ? std::format("{:.1f}s", elapsed.count() / 1000.0)
+            : std::string{};
+    return hud_blocks::header_row(
+        frame,
+        label,
+        args_str,
+        elapsed_str,
+        color,
+        faint);
 }
 
 inline auto done_card(
@@ -148,30 +160,39 @@ inline auto done_card(
     bool error)
 {
     using namespace nxt::tui;
-    auto color =
-        error ? nxt::Rgba8{230, 110, 110} : tool_color(tool_name);
-    auto mark = std::string{error ? " N  " : " Y  "};
+    auto color = error ? nxt::Rgba8{230, 110, 110} : tool_color(tool_name);
     auto label = std::string{tool_icon(tool_name)};
     auto args_str = std::string{args};
     if (args_str.size() > 60)
         args_str = args_str.substr(0, 58) + "…";
-    auto time_str =
-        elapsed.count() < 1000
-            ? std::format("  {}ms", elapsed.count())
-            : std::format("  {:.2f}s", elapsed.count() / 1000.0);
-    return styled_text(
-        span(mark, fg(color) | bold),
-        span(label + "  ", fg(color) | bold),
-        span(args_str, faint),
-        span(time_str, fg(color)),
-        span("  " + std::string{summary},
-             fg(nxt::Rgba8{160, 165, 180})));
+    auto time_str = elapsed.count() < 1000
+        ? std::format("{}ms", elapsed.count())
+        : std::format("{:.2f}s", elapsed.count() / 1000.0);
+    auto meta = std::string{time_str};
+    if (!summary.empty())
+        meta += "  " + std::string{summary};
+    return hud_blocks::header_row(
+        error ? "!" : "✓",
+        label,
+        args_str,
+        meta,
+        color,
+        faint);
+}
+
+inline auto folded_result_card(
+    std::string_view tool_name,
+    std::string_view args,
+    std::chrono::milliseconds elapsed,
+    std::string_view summary,
+    bool error)
+{
+    return done_card(tool_name, args, elapsed, summary, error);
 }
 
 // Two-line card for approval prompts. Line 1 names the tool and its
 // args; line 2 shows the key hints.
-inline auto approval_card(
-    std::string_view tool_name, std::string_view args)
+inline auto approval_card(std::string_view tool_name, std::string_view args)
 {
     using namespace nxt::tui;
     auto warn = nxt::Rgba8{240, 200, 90};
@@ -198,8 +219,7 @@ inline auto approval_card(
             span(" cancel batch", faint)));
 }
 
-inline auto denied_card(
-    std::string_view tool_name, std::string_view args)
+inline auto denied_card(std::string_view tool_name, std::string_view args)
 {
     using namespace nxt::tui;
     auto color = nxt::Rgba8{200, 130, 130};
@@ -207,18 +227,13 @@ inline auto denied_card(
     auto args_str = std::string{args};
     if (args_str.size() > 70)
         args_str = args_str.substr(0, 68) + "…";
-    return styled_text(
-        span(" N  ", fg(color) | bold),
-        span(label + "  ", fg(color) | bold),
-        span(args_str, faint),
-        span("  denied by user",
-             fg(nxt::Rgba8{160, 165, 180})));
+    return hud_blocks::header_row(
+        "N", label, args_str, "denied", color, faint);
 }
 
 // Compact "queued" indicator drawn into each child's surface while
 // approvals are still being collected for the batch.
-inline auto queued_card(
-    std::string_view tool_name, std::string_view args)
+inline auto queued_card(std::string_view tool_name, std::string_view args)
 {
     using namespace nxt::tui;
     auto color = nxt::Rgba8{120, 130, 150};
@@ -226,47 +241,35 @@ inline auto queued_card(
     auto args_str = std::string{args};
     if (args_str.size() > 70)
         args_str = args_str.substr(0, 68) + "…";
-    return styled_text(
-        span(" ·  ", fg(color)),
-        span(label + "  ", fg(color)),
-        span(args_str, faint),
-        span("  queued", fg(color)));
+    return hud_blocks::header_row(
+        "·", label, args_str, "queued", color, faint);
 }
 
 // One-line summary of the JSON result (matches/bytes/error).
 inline std::string
-result_summary(
-    std::string_view tool_name, const std::string & result_json)
+result_summary(std::string_view tool_name, const std::string & result_json)
 {
-    try {
-        auto j = nlohmann::json::parse(result_json);
-        if (j.contains("error"))
-            return std::string{"error: "}
-                   + j["error"].get<std::string>();
-        auto bytes = j.value("bytes", std::size_t{0});
-        if (tool_name == "rg_search") {
-            auto out = j.value("output", std::string{});
-            auto lines = static_cast<std::size_t>(
-                std::count(out.begin(), out.end(), '\n'));
-            return std::format(
-                "{} matches · {} bytes", lines, bytes);
-        }
-        if (tool_name == "read_file")
-            return std::format("{} bytes", bytes);
-        if (tool_name == "web_fetch") {
-            auto out = j.value("output", std::string{});
-            auto lines = static_cast<std::size_t>(
-                std::count(out.begin(), out.end(), '\n'));
-            return std::format(
-                "{} lines · {} bytes", lines, bytes);
-        }
-        if (bytes > 0)
-            return std::format("{} bytes", bytes);
-        return "";
-    } catch (...) {
-        return std::format(
-            "{} bytes", result_json.size());
+    auto j = nlohmann::json::parse(result_json);
+    if (j.contains("error"))
+        return std::string{"error: "} + j["error"].get<std::string>();
+    auto bytes = j.value("bytes", std::size_t{0});
+    if (tool_name == "rg_search") {
+        auto out = j.value("output", std::string{});
+        auto lines = static_cast<std::size_t>(
+            std::count(out.begin(), out.end(), '\n'));
+        return std::format("⨉{} {}K", lines, bytes / 1024);
     }
+    if (tool_name == "read_file")
+        return std::format("{} K", bytes / 1024);
+    if (tool_name == "web_fetch") {
+        auto out = j.value("output", std::string{});
+        auto lines = static_cast<std::size_t>(
+            std::count(out.begin(), out.end(), '\n'));
+        return std::format("{}K", lines, bytes / 1024);
+    }
+    if (bytes > 0)
+        return std::format("{} bytes", bytes);
+    return "";
 }
 
 // Strip terminal control characters from a line before we
@@ -330,8 +333,7 @@ inline std::string sanitize_line(std::string_view line)
 // and sanitized so embedded terminal controls can't escape into the
 // outer terminal state.
 inline std::vector<std::string>
-preview_lines(
-    const std::string & result_json, std::size_t max_lines = 4)
+preview_lines(const std::string & result_json, std::size_t max_lines = 4)
 {
     std::vector<std::string> out;
     try {
@@ -339,19 +341,15 @@ preview_lines(
         std::string content;
         if (j.contains("output") && j["output"].is_string())
             content = j["output"].get<std::string>();
-        else if (
-            j.contains("contents")
-            && j["contents"].is_string())
+        else if (j.contains("contents") && j["contents"].is_string())
             content = j["contents"].get<std::string>();
         else
             return out;
         std::size_t pos = 0;
-        while (pos < content.size()
-               && out.size() < max_lines) {
+        while (pos < content.size() && out.size() < max_lines) {
             auto nl = content.find('\n', pos);
             auto end = nl == std::string::npos ? content.size() : nl;
-            auto raw = std::string_view{
-                content.data() + pos, end - pos};
+            auto raw = std::string_view{content.data() + pos, end - pos};
             auto line = sanitize_line(raw);
             if (line.size() > 120)
                 line = line.substr(0, 118) + "…";
@@ -366,8 +364,8 @@ preview_lines(
     return out;
 }
 
-// Total number of newlines in the result's content (for the "and N
-// more lines" hint when preview is truncated).
+// Total number of payload lines (for the "and N more lines" hint
+// when preview is truncated).
 inline std::size_t result_total_lines(const std::string & result_json)
 {
     try {
@@ -375,23 +373,46 @@ inline std::size_t result_total_lines(const std::string & result_json)
         std::string content;
         if (j.contains("output") && j["output"].is_string())
             content = j["output"].get<std::string>();
-        else if (
-            j.contains("contents")
-            && j["contents"].is_string())
+        else if (j.contains("contents") && j["contents"].is_string())
             content = j["contents"].get<std::string>();
+        if (content.empty())
+            return 0;
         return static_cast<std::size_t>(
-            std::count(content.begin(), content.end(), '\n'));
+                   std::count(content.begin(), content.end(), '\n'))
+               + (content.back() == '\n' ? 0 : 1);
     } catch (...) {
         return 0;
     }
+}
+
+inline std::vector<nxt::tui::Span>
+preview_spans(const std::string & result_json, std::size_t max_lines = 4)
+{
+    using namespace nxt::tui;
+    auto preview = preview_lines(result_json, max_lines);
+    auto total = result_total_lines(result_json);
+    std::vector<Span> out;
+    out.reserve(preview.size() + 1);
+
+    auto preview_color = nxt::Rgba8{120, 130, 150};
+    for (auto & line : preview)
+        out.push_back(span(std::move(line), fg(preview_color)));
+
+    if (preview.size() < total && !preview.empty()) {
+        auto more = total - preview.size();
+        out.push_back(span(
+            std::format("...{} more lines.", more),
+            fg(nxt::Rgba8{100, 110, 130}) | faint));
+    }
+
+    return out;
 }
 
 // ============================================================================
 // Approval flow
 // ============================================================================
 
-enum class ApprovalDecision
-{
+enum class ApprovalDecision {
     yes,
     no,
     all,
@@ -399,8 +420,8 @@ enum class ApprovalDecision
     cancel,
 };
 
-inline nxt::task<ApprovalDecision> request_approval(
-    nxt::ui::yard & self, const tools::function_call & call)
+inline nxt::task<ApprovalDecision>
+request_approval(nxt::ui::yard & self, const tools::function_call & call)
 {
     auto args_short = args_summary(call.name, call.arguments);
     self.draw(approval_card(call.name, args_short));
@@ -448,8 +469,7 @@ struct DynColumn
         return nxt::tui::HeightHint::fixed(total);
     }
 
-    void
-    render(nxt::RasterView & raster, nxt::Size size) const
+    void render(nxt::RasterView & raster, nxt::Size size) const
     {
         nxt::Pos cursor = nxt::Pos::origin();
         for (const auto & c : children) {
@@ -459,8 +479,7 @@ struct DynColumn
             if ((cursor.y - nxt::Pos::origin().y) + h > size.h)
                 break;
             auto child_size = nxt::Size{size.w, h};
-            auto sub =
-                nxt::tui::subraster(raster, cursor, child_size);
+            auto sub = nxt::tui::subraster(raster, cursor, child_size);
             c.render(sub, child_size);
             cursor = cursor + h;
         }
@@ -473,6 +492,51 @@ auto dyn_column(std::vector<L> children)
     return DynColumn<L>{std::move(children)};
 }
 
+template<typename L>
+    requires nxt::tui::Layout<std::decay_t<L>>
+std::string render_for_scrollback(nxt::ui::yard & self, L && layout)
+{
+    auto height = layout.height_hint().min;
+    if (height.count() == 0)
+        height = 1 * nxt::ln;
+
+    nxt::Raster raster(
+        self.runtime().terminal_width(), height, self.runtime().glyphs());
+    auto view = raster.view();
+    layout.render(view, raster.extent());
+    return nxt::ansi::render_raster(raster);
+}
+
+inline void commit_tool_result(
+    nxt::ui::yard & self,
+    const tools::function_call & call,
+    const std::string & result,
+    bool is_error,
+    std::chrono::milliseconds elapsed,
+    hud_blocks::State * hud = nullptr)
+{
+    using namespace nxt::tui;
+    auto args_short = args_summary(call.name, call.arguments);
+    auto summary = result_summary(call.name, result);
+    auto preview = preview_spans(result, 4);
+    self.print_block(render_for_scrollback(
+        self,
+        column(
+            done_card(call.name, args_short, elapsed, summary, is_error),
+            list(preview, [](const Span & line) {
+                return styled_text(line);
+            }))));
+
+    auto folded = folded_result_card(
+        call.name, args_short, elapsed, summary, is_error);
+    if (hud) {
+        hud->add(folded);
+        self.draw(hud->view());
+    } else {
+        self.draw(folded);
+    }
+}
+
 // ============================================================================
 // Per-tool execution (already-decided): animated card + commit.
 // Returns the result string (the JSON output from run_function_tool
@@ -482,7 +546,8 @@ auto dyn_column(std::vector<L> children)
 inline nxt::task<std::string> run_one_animated(
     nxt::ui::yard & self,
     const std::vector<tools::function_tool> & tool_list,
-    tools::function_call call)
+    tools::function_call call,
+    hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
     auto args_short = args_summary(call.name, call.arguments);
@@ -491,53 +556,39 @@ inline nxt::task<std::string> run_one_animated(
     agent_trace::record_tool_call(self, call);
 
     std::string result;
-    auto worker = [&result, tool_list_ptr = &tool_list,
-                   call](nxt::ui::yard & s) -> nxt::task<> {
+    auto worker = [&result, tool_list_ptr = &tool_list, call](
+                      nxt::ui::yard & s) -> nxt::task<> {
         (void) s;
-        result = co_await tools::run_function_tool(
-            *tool_list_ptr, call);
+        result = co_await tools::run_function_tool(*tool_list_ptr, call);
     };
 
-    auto companion =
-        [tool_name = std::string{call.name},
-         args_short,
-         start](nxt::ui::yard & s) -> nxt::task<> {
+    auto companion = [tool_name = std::string{call.name},
+                      args_short,
+                      start](nxt::ui::yard & s) -> nxt::task<> {
         int tick = 0;
-        bool mid_snapped = false;
+
         while (!s.cancelled()) {
-            auto elapsed = std::chrono::duration_cast<
-                std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start);
-            s.draw(running_card(
-                tool_name, args_short, tick, elapsed));
-            // Once the tool has been spinning long enough to look
-            // like a tool call (elapsed counter visible, spinner
-            // cycled), grab a trophy shot of the live HUD. Sleep
-            // briefly first so the just-drawn frame is presented.
-            if (!mid_snapped && elapsed >= 600ms) {
-                co_await s.sleep(50ms);
-                if (!s.cancelled())
-                    s.snapshot();
-                mid_snapped = true;
-                continue;
-            }
-            co_await s.sleep(80ms);
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start);
+            s.draw(running_card(tool_name, args_short, tick, elapsed));
             ++tick;
+            co_await s.sleep(80ms);
         }
+
+        co_return;
     };
 
     co_await nxt::ui::accompany(
         self,
         worker,
         companion,
-        [](const auto & comp_surface,
-           const auto & worker_surface) {
+        [](const auto & comp_surface, const auto & worker_surface) {
             (void) worker_surface;
             return comp_surface;
         });
 
-    auto elapsed = std::chrono::duration_cast<
-        std::chrono::milliseconds>(
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
 
     bool is_error = false;
@@ -548,32 +599,8 @@ inline nxt::task<std::string> run_one_animated(
         is_error = false;
     }
     agent_trace::record_tool_result(self, call, result, is_error);
-    auto summary = result_summary(call.name, result);
 
-    self.print(done_card(
-       call.name, args_short, elapsed, summary, is_error));
-    self.print("\n");
-    auto preview = preview_lines(result, 4);
-    auto total = result_total_lines(result);
-    auto preview_color = nxt::Rgba8{120, 130, 150};
-    for (const auto & line : preview) {
-        self.print(styled_text(
-            span("     │ ",
-                 fg(nxt::Rgba8{80, 90, 110})),
-            span(line, fg(preview_color))));
-        self.print("\n");
-    }
-    if (preview.size() < total && preview.size() > 0) {
-        auto more = total - preview.size();
-        self.print(styled_text(
-            span("     │ ",
-                 fg(nxt::Rgba8{80, 90, 110})),
-            span(std::format("… and {} more lines", more),
-                 fg(nxt::Rgba8{100, 110, 130}) | faint)));
-        self.print("\n");
-    }
-
-    self.draw(nxt::tui::AnyLayout{});
+    commit_tool_result(self, call, result, is_error, elapsed, hud);
     co_return result;
 }
 
@@ -581,26 +608,36 @@ inline nxt::task<std::string> run_one_or_deny(
     nxt::ui::yard & self,
     const std::vector<tools::function_tool> & tool_list,
     tools::function_call call,
-    bool approved)
+    bool approved,
+    hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
     if (!approved) {
-        auto args_short =
-            args_summary(call.name, call.arguments);
-        self.print(denied_card(call.name, args_short));
-        self.print("\n");
-        self.draw(nxt::tui::AnyLayout{});
+        auto args_short = args_summary(call.name, call.arguments);
+        auto denied = denied_card(call.name, args_short);
+        auto block =
+            render_for_scrollback(self, denied);
+        block += "\n";
+        self.print_block(block);
+        if (hud) {
+            hud->add(denied);
+            self.draw(denied);
+        } else {
+            self.draw(nxt::tui::AnyLayout{});
+        }
         agent_trace::record_tool_call(self, call);
-        auto denial = nlohmann::json{
-            {"error", "denied by user"},
-            {"tool", call.name},
-            {"args", call.arguments},
-        }.dump();
+        auto denial =
+            nlohmann::json{
+                {"error", "denied by user"},
+                {"tool", call.name},
+                {"args", call.arguments},
+            }
+                .dump();
         agent_trace::record_tool_result(self, call, denial, true);
         co_return denial;
     }
     co_return co_await run_one_animated(
-        self, tool_list, std::move(call));
+        self, tool_list, std::move(call), hud);
 }
 
 // ============================================================================
@@ -611,7 +648,8 @@ inline nxt::task<std::string> run_one_or_deny(
 inline nxt::task<std::vector<nlohmann::json>> run_all(
     nxt::ui::yard & self,
     const std::vector<tools::function_tool> & tool_list,
-    const std::vector<tools::function_call> & calls)
+    const std::vector<tools::function_call> & calls,
+    hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
     if (calls.empty())
@@ -657,15 +695,16 @@ inline nxt::task<std::vector<nlohmann::json>> run_all(
         }
     }
 
-    self.draw(nxt::tui::AnyLayout{});
+    if (hud)
+        self.draw(hud->view());
+    else
+        self.draw(nxt::tui::AnyLayout{});
 
     // Phase 2: spawn each call as its own child process. Each child
     // animates its card via `accompany`, runs (or denies), commits
     // to scrollback. Results land in a shared vector indexed by
     // slot — single scheduler thread so no data race.
-    auto results =
-        std::make_shared<std::vector<std::string>>(
-            calls.size());
+    auto results = std::make_shared<std::vector<std::string>>(calls.size());
 
     std::vector<nxt::ui::ProcessHandle> handles;
     handles.reserve(calls.size());
@@ -677,13 +716,10 @@ inline nxt::task<std::vector<nlohmann::json>> run_all(
              i,
              call_copy = std::move(call_copy),
              approved_i,
-             tool_list_ptr =
-                 &tool_list](nxt::ui::yard & s) -> nxt::task<> {
+             hud,
+             tool_list_ptr = &tool_list](nxt::ui::yard & s) -> nxt::task<> {
                 auto r = co_await run_one_or_deny(
-                    s,
-                    *tool_list_ptr,
-                    call_copy,
-                    approved_i);
+                    s, *tool_list_ptr, call_copy, approved_i, hud);
                 (*results)[i] = std::move(r);
             }));
     }
@@ -693,22 +729,30 @@ inline nxt::task<std::vector<nlohmann::json>> run_all(
     surfaces.reserve(handles.size());
     for (const auto & h : handles)
         surfaces.emplace_back(h.surface());
-    self.draw(dyn_column(std::move(surfaces)));
+    auto active_tools = dyn_column(std::move(surfaces));
+    if (hud)
+        self.draw(hud->view(std::move(active_tools)));
+    else
+        self.draw(std::move(active_tools));
 
     // Wait for all children to finish (each commits its own card to
     // scrollback as it completes; the HUD column shrinks as cards
     // self-erase).
     co_await self.scope().all();
 
-    self.draw(nxt::tui::AnyLayout{});
+    if (hud)
+        self.draw(hud->view());
+    else
+        self.draw(nxt::tui::AnyLayout{});
 
     // Wrap each child's result string as a function_call_output for
     // the LLM's next turn.
     std::vector<nlohmann::json> out;
     out.reserve(calls.size());
     for (std::size_t i = 0; i < calls.size(); ++i)
-        out.push_back(tools::function_call_output(
-            calls[i].call_id, std::move((*results)[i])));
+        out.push_back(
+            tools::function_call_output(
+                calls[i].call_id, std::move((*results)[i])));
     co_return out;
 }
 

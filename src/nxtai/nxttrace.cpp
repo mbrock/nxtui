@@ -20,7 +20,11 @@
 #include <nxt/tui_terminal.hpp>
 #include <nxt/units.hpp>
 #include <nxt/vterm.hpp>
+#include <nxtai/hud_blocks.hpp>
+#include <nxtai/response_turn.hpp>
+#include <nxtai/tool_ui.hpp>
 #include <nxtio/arrow.hpp>
+#include <nxtio/process.hpp>
 
 #ifdef NXT_HAVE_PNG
 #include <nxt/png.hpp>
@@ -29,6 +33,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -106,7 +111,17 @@ int cmd_tree(const std::string & path)
     auto touch = [&](const std::string & id,
                      const std::string & parent,
                      const std::string & name) -> SpanRollup & {
-        auto [it, inserted] = spans.try_emplace(id, SpanRollup{id, parent, name});
+        auto [it, inserted] = spans.try_emplace(
+            id,
+            SpanRollup{
+                .id = id,
+                .parent = parent,
+                .name = name,
+                .begin_ms = -1,
+                .end_ms = -1,
+                .rows = 0,
+                .status = {},
+            });
         if (inserted && !parent.empty())
             children[parent].push_back(id);
         return it->second;
@@ -412,8 +427,8 @@ int cmd_sheet(
     constexpr auto gutter_bg = nxt::Rgba8{52, 56, 64};
     {
         auto view = sheet.view();
-        for (std::size_t y = 0; y < sheet_rows_cells; ++y) {
-            for (std::size_t x = 0; x < sheet_cols_cells; ++x) {
+        for (int y = 0; y < sheet_rows_cells; ++y) {
+            for (int x = 0; x < sheet_cols_cells; ++x) {
                 view.set_bg(
                     nxt::Pos::at(x * nxt::ch, y * nxt::ln),
                     gutter_bg);
@@ -477,12 +492,313 @@ int cmd_sheet(
 
 #endif // NXT_HAVE_PNG
 
+struct ReplayEventStream
+{
+    std::vector<nxt::ai::responses::stream_event> events;
+    std::size_t cursor = 0;
+
+    nxt::task<std::optional<nxt::ai::responses::stream_event>> next()
+    {
+        if (cursor >= events.size())
+            co_return std::nullopt;
+        co_return events[cursor++];
+    }
+};
+
+[[nodiscard]] bool is_llm_stream_end(std::string_view type)
+{
+    return type == "response.completed" || type == "response.failed"
+           || type == "response.incomplete";
+}
+
+[[nodiscard]] std::optional<nxt::ai::responses::stream_event>
+llm_event_from_row(const nxt::io::arrow::trace_row & row)
+{
+    if (row.phase != "llm" || row.event_type == "request")
+        return std::nullopt;
+    try {
+        return nxt::ai::responses::stream_event{
+            .type = row.event_type,
+            .payload = row.payload_json.empty()
+                ? nlohmann::json::object()
+                : nlohmann::json::parse(row.payload_json),
+            .raw = row.payload_json,
+        };
+    } catch (const nlohmann::json::exception & e) {
+        std::cerr << "warning: skipped malformed llm row seq=" << row.seq
+                  << ": " << e.what() << "\n";
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::string json_string_or_dump(
+    const nlohmann::json & j,
+    std::string_view key)
+{
+    auto it = j.find(key);
+    if (it == j.end())
+        return {};
+    if (it->is_string())
+        return it->get<std::string>();
+    return it->dump();
+}
+
+[[nodiscard]] std::optional<nxt::ai::tools::function_call>
+tool_call_from_payload(const nlohmann::json & payload)
+{
+    auto call_id = json_string_or_dump(payload, "call_id");
+    auto name = json_string_or_dump(payload, "name");
+    if (call_id.empty() || name.empty())
+        return std::nullopt;
+
+    return nxt::ai::tools::function_call{
+        .id = {},
+        .call_id = std::move(call_id),
+        .name = std::move(name),
+        .arguments = json_string_or_dump(payload, "arguments"),
+        .item = nlohmann::json::object(),
+    };
+}
+
+struct RecordedToolCall
+{
+    nxt::ai::tools::function_call call;
+    std::int64_t elapsed_ms = 0;
+};
+
+[[nodiscard]] nlohmann::json payload_json_from_row(
+    const nxt::io::arrow::trace_row & row)
+{
+    if (row.payload_json.empty())
+        return nlohmann::json::object();
+    return nlohmann::json::parse(row.payload_json);
+}
+
+nxt::task<> replay_semantic_trace(
+    nxt::ui::yard & self,
+    const std::vector<nxt::io::arrow::trace_row> & rows)
+{
+    using namespace std::chrono_literals;
+    auto hud = nxt::ai::hud_blocks::State{};
+    auto pending_tools =
+        std::unordered_map<std::string, RecordedToolCall>{};
+    auto pending_order = std::vector<std::string>{};
+    auto message_blocks = std::vector<std::string>{};
+
+    auto draw_pending_tools = [&] {
+        auto surfaces = std::vector<nxt::tui::AnyLayout>{};
+        surfaces.reserve(pending_order.size());
+        for (const auto & call_id : pending_order) {
+            auto it = pending_tools.find(call_id);
+            if (it == pending_tools.end())
+                continue;
+            const auto & call = it->second.call;
+            surfaces.emplace_back(nxt::ai::tool_ui::running_card(
+                call.name,
+                nxt::ai::tool_ui::args_summary(call.name, call.arguments),
+                0,
+                0ms));
+        }
+
+        if (surfaces.empty())
+            self.draw(hud.view());
+        else
+            self.draw(hud.view(nxt::ai::tool_ui::dyn_column(
+                std::move(surfaces))));
+    };
+
+    auto handle_tool_row = [&](const nxt::io::arrow::trace_row & row) {
+        nlohmann::json payload;
+        try {
+            payload = payload_json_from_row(row);
+        } catch (const nlohmann::json::exception & e) {
+            std::cerr << "warning: skipped malformed tool row seq="
+                      << row.seq << ": " << e.what() << "\n";
+            return;
+        }
+
+        if (row.event_type == "call") {
+            auto call = tool_call_from_payload(payload);
+            if (!call)
+                return;
+            auto call_id = call->call_id;
+            pending_tools[call_id] = RecordedToolCall{
+                .call = std::move(*call),
+                .elapsed_ms = row.elapsed_ms,
+            };
+            if (std::ranges::find(pending_order, call_id)
+                == pending_order.end())
+                pending_order.push_back(std::move(call_id));
+            draw_pending_tools();
+            return;
+        }
+
+        if (row.event_type != "result" && row.event_type != "error")
+            return;
+
+        auto call_id = json_string_or_dump(payload, "call_id");
+        auto found = pending_tools.find(call_id);
+        auto call = found == pending_tools.end()
+            ? tool_call_from_payload(payload)
+                  .value_or(nxt::ai::tools::function_call{
+                      .id = {},
+                      .call_id = std::move(call_id),
+                      .name = row.data,
+                      .arguments = {},
+                      .item = nlohmann::json::object(),
+                  })
+            : found->second.call;
+
+        auto elapsed = std::chrono::milliseconds{0};
+        if (found != pending_tools.end())
+            elapsed = std::chrono::milliseconds{
+                std::max<std::int64_t>(
+                    0, row.elapsed_ms - found->second.elapsed_ms)};
+
+        auto output = json_string_or_dump(payload, "output");
+        auto is_error =
+            row.event_type == "error" || payload.value("error", false);
+
+        if (found != pending_tools.end())
+            pending_tools.erase(found);
+        pending_order.erase(
+            std::ranges::remove(pending_order, call.call_id).begin(),
+            pending_order.end());
+
+        nxt::ai::tool_ui::commit_tool_result(
+            self, call, output, is_error, elapsed, &hud);
+    };
+
+    self.draw(hud.view(
+        nxt::ai::response_turn::status_row("replaying trace")));
+
+    for (std::size_t i = 0; i < rows.size();) {
+        const auto & row = rows[i];
+        if (row.phase == "llm" && row.event_type == "request") {
+            try {
+                auto payload = payload_json_from_row(row);
+                auto model = payload.value("model", std::string{});
+                if (!model.empty()) {
+                    self.draw(hud.view(nxt::ai::response_turn::status_row(
+                        "replaying " + model)));
+                }
+            } catch (...) {
+            }
+
+            ++i;
+            auto events =
+                std::vector<nxt::ai::responses::stream_event>{};
+            while (i < rows.size()) {
+                if (rows[i].phase == "llm"
+                    && rows[i].event_type == "request")
+                    break;
+
+                auto event = llm_event_from_row(rows[i]);
+                if (event) {
+                    auto done = is_llm_stream_end(event->type);
+                    events.push_back(std::move(*event));
+                    ++i;
+                    if (done)
+                        break;
+                    continue;
+                }
+
+                ++i;
+            }
+
+            if (!events.empty()) {
+                auto stream =
+                    ReplayEventStream{.events = std::move(events)};
+                auto response =
+                    co_await nxt::ai::response_turn::read_openai_response_stream(
+                    self, stream, &hud);
+                for (auto & message : response.message_blocks)
+                    message_blocks.push_back(std::move(message));
+            }
+            continue;
+        }
+
+        if (row.phase == "llm") {
+            auto events =
+                std::vector<nxt::ai::responses::stream_event>{};
+            while (i < rows.size()) {
+                if (rows[i].phase == "llm"
+                    && rows[i].event_type == "request")
+                    break;
+
+                auto event = llm_event_from_row(rows[i]);
+                if (event) {
+                    auto done = is_llm_stream_end(event->type);
+                    events.push_back(std::move(*event));
+                    ++i;
+                    if (done)
+                        break;
+                    continue;
+                }
+                ++i;
+            }
+            if (!events.empty()) {
+                auto stream =
+                    ReplayEventStream{.events = std::move(events)};
+                auto response =
+                    co_await nxt::ai::response_turn::read_openai_response_stream(
+                    self, stream, &hud);
+                for (auto & message : response.message_blocks)
+                    message_blocks.push_back(std::move(message));
+            }
+            continue;
+        }
+
+        if (row.phase == "tool")
+            handle_tool_row(row);
+        ++i;
+    }
+
+    self.draw(hud.view());
+    auto block = std::string{};
+    auto wrap_width = nxt::ai::response_turn::stream_wrap_width(self);
+    auto message_style = nxt::tui::fg(nxt::Rgba8::yellow());
+    for (const auto & message : message_blocks) {
+        if (message.empty())
+            continue;
+        if (!block.empty())
+            block += "\n";
+        block += nxt::ai::tool_ui::render_for_scrollback(
+            self,
+            nxt::ai::response_turn::markdown_text_block(
+                message, message_style, wrap_width));
+        block += "\n";
+    }
+    if (!hud.rows.empty()) {
+        if (!block.empty())
+            block += "\n";
+        block += nxt::ai::tool_ui::render_for_scrollback(self, hud.view());
+        block += "\n";
+    }
+    if (!block.empty()) {
+        block.insert(block.begin(), '\n');
+        self.runtime().print_after_exit(std::move(block));
+    }
+    co_await self.sleep(80ms);
+}
+
+int cmd_replay(const std::string & path)
+{
+    auto rows = nxt::io::arrow::read_trace_ipc(path);
+    return nxt::ui::run2(
+        [rows = std::move(rows)](
+            nxt::ui::yard & self) -> nxt::task<> {
+            co_await replay_semantic_trace(self, rows);
+        });
+}
+
 void usage(const char * prog)
 {
     std::cerr
         << "usage:\n"
         << "  " << prog << " list   <trace.arrow>\n"
         << "  " << prog << " tree   <trace.arrow>\n"
+        << "  " << prog << " replay <trace.arrow>\n"
         << "  " << prog << " frame  <trace.arrow> <frame_seq>\n"
         << "  " << prog << " dump   <trace.arrow> <seq>\n"
 #ifdef NXT_HAVE_PNG
@@ -507,6 +823,8 @@ int main(int argc, char ** argv)
             return cmd_list(path);
         if (cmd == "tree")
             return cmd_tree(path);
+        if (cmd == "replay")
+            return cmd_replay(path);
         if (cmd == "frame") {
             if (argc < 4) {
                 usage(argv[0]);
