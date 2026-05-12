@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sample agent turn rendered as XML. This is the canonical narrative
+  form: each turn has a thought and a sequence of tool calls; each call
+  has args, a result of a particular kind, and optionally affordances
+  the next consumer (human or model) can act on.
+
+  Render with: ./cassette/render
+-->
+<turn>
+
+  <thought>I need to find where Arrow IPC files are read and figure out
+    how the schema is structured before deciding on the Parquet
+    migration path.</thought>
+
+  <call name="rg_search" status="ok" elapsed_ms="83">
+    <args>/(?i)(parquet|arrow|duckdb)/</args>
+    <result kind="matches" total_lines="309" bytes="22528">
+      <line>./meson.build:39:nanoarrow_ipc_dep = dependency(</line>
+      <line>./meson.build:40:  'nanoarrow-ipc',</line>
+      <line>./meson.build:41:  fallback : ['nanoarrow', 'nanoarrow_ipc_dep'],</line>
+      <line>./meson.build:51:arrow_dataset_deps = [</line>
+    </result>
+    <affordances>
+      <affordance key="A">see all 309</affordance>
+      <affordance key="P">by path</affordance>
+      <affordance key="C">context for #1</affordance>
+    </affordances>
+  </call>
+
+  <call name="read_file" status="ok" elapsed_ms="81">
+    <args>src/nxtio/arrow.hpp</args>
+    <result kind="document" bytes="3072" lines="109">
+      <line>#pragma once</line>
+      <line>#include &lt;chrono&gt;</line>
+      <line>#include &lt;cstdint&gt;</line>
+      <line>#include &lt;memory&gt;</line>
+    </result>
+  </call>
+
+  <call name="bash" status="ok" elapsed_ms="240">
+    <args>duckdb -c "SELECT count(*) FROM read_arrow('traces/*.arrow')"</args>
+    <result kind="process" exit="0" bytes="48">
+      <stream channel="stdout">
+        <line>┌──────────────┐</line>
+        <line>│ count_star() │</line>
+        <line>│    141285    │</line>
+        <line>└──────────────┘</line>
+      </stream>
+    </result>
+  </call>
+
+  <call name="nxt_current_time" status="ok" elapsed_ms="2">
+    <args>{}</args>
+    <result kind="fact">
+      <field name="local_time">2026-05-12 14:32:07 +0200</field>
+    </result>
+  </call>
+
+  <call name="bash" status="error" elapsed_ms="35">
+    <args>cat > /tmp/explore.sql &lt;&lt; EOF\nSELECT * FROM ...\nEOF</args>
+    <result kind="error">
+      <message>tool execution failed: heredoc inside argument</message>
+    </result>
+  </call>
+
+  <call name="web_fetch" status="pending_approval">
+    <args>https://duckdb.org/docs/stable/data/parquet/overview</args>
+  </call>
+
+</turn>

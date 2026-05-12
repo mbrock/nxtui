@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Render a real agent run from traces/nxtllm.parquet through the
+# cassette stylesheet. The whole pipeline:
+#
+#   parquet  ─[duckdb]─►  trace.xml  ─[xsltproc]─►  xtc xml  ─[xtc]─►  ansi
+#
+# Usage:
+#   ./cassette/trace-render                         # default: 1VGR6SG2, 2 turns
+#   ./cassette/trace-render RUN_ID [TURNS [LINES]]  # pick a session
+#   ./cassette/trace-render --intermediate ...      # print trace XML, don't render
+#   ./cassette/trace-render --list                  # list available run_ids
+
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+parquet="$(cd "$here/.." && pwd)/traces/nxtllm.parquet"
+
+if [ ! -f "$parquet" ]; then
+    echo "missing $parquet — run scripts/compact-traces or duckdb COPY first" >&2
+    exit 1
+fi
+
+if [ "${1:-}" = "--list" ]; then
+    duckdb -c "
+      LOAD nanoarrow;
+      SELECT run_id, count(*) AS events
+      FROM read_parquet('$parquet')
+      GROUP BY run_id ORDER BY events DESC
+    " 2>&1 | grep -v WARNING | grep -v lambda
+    exit 0
+fi
+
+show_intermediate=0
+if [ "${1:-}" = "--intermediate" ]; then
+    show_intermediate=1
+    shift
+fi
+
+run="${1:-1VGR6SG2}"
+turns="${2:-2}"
+lines="${3:-3}"
+
+xml="$(
+  NO_COLOR=1 duckdb --noheader -list \
+    -cmd "SET VARIABLE run='$run'; SET VARIABLE turns=$turns; SET VARIABLE lines=$lines;" \
+    < "$here/trace-to-xml.sql" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | grep '^<?xml'
+)"
+
+if [ -z "$xml" ]; then
+    echo "no events for run_id=$run" >&2
+    exit 1
+fi
+
+xtc_xml="$(printf '%s' "$xml" | xsltproc "$here/baltic-birch-v1.xsl" -)"
+
+if [ "$show_intermediate" = 1 ]; then
+    printf '%s\n' "$xtc_xml"
+    exit 0
+fi
+
+cols="$(tput cols 2>/dev/null || echo 100)"
+# Generous height — multi-turn runs stack ~5-15 rows per turn.
+xtc --width "$cols" --height 60 --ansi --xml "$xtc_xml"

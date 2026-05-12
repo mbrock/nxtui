@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Render a cassette trace XML to ANSI via the Baltic Birch stylesheet.
+#
+# Usage:
+#   ./cassette/render                       # default sample + v1 stylesheet
+#   ./cassette/render TRACE.xml             # custom trace, v1 stylesheet
+#   ./cassette/render TRACE.xml STYLE.xsl   # both custom
+#   ./cassette/render --intermediate ...    # print the xtc XML, don't render
+
+set -euo pipefail
+
+show_intermediate=0
+if [ "${1:-}" = "--intermediate" ]; then
+    show_intermediate=1
+    shift
+fi
+
+here="$(cd "$(dirname "$0")" && pwd)"
+trace="${1:-$here/trace-sample.xml}"
+style="${2:-$here/baltic-birch-v1.xsl}"
+
+xml="$(xsltproc "$style" "$trace")"
+
+if [ "$show_intermediate" = 1 ]; then
+    echo "$xml"
+    exit 0
+fi
+
+cols="$(tput cols 2>/dev/null || echo 100)"
+# Generous row budget — cassettes stack vertically and the sample turn
+# has ~7 calls, each 2-6 rows.
+xtc --width "$cols" --height 40 --ansi --xml "$xml"
