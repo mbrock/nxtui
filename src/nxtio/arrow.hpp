@@ -24,6 +24,8 @@ struct trace_row
     std::int64_t seq = 0;
     /// Milliseconds elapsed since the trace was created.
     std::int64_t elapsed_ms = 0;
+    /// Unix epoch milliseconds when this row was recorded.
+    std::int64_t unix_ms = 0;
     /// Coarse phase, such as `span_begin`, `frame`, `sse_event`, or an
     /// app marker.
     std::string phase;
@@ -98,6 +100,7 @@ private:
     std::optional<std::string> output_path_;
     std::string run_id_;
     std::chrono::steady_clock::time_point start_;
+    std::chrono::system_clock::time_point wall_start_;
     std::int64_t next_seq_ = 0;
     std::unique_ptr<writer> writer_;
     // Serializes append() and close(). Producers run on libcoro's

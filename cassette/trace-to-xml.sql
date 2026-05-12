@@ -1,4 +1,4 @@
--- Convert one agent run from traces/nxtllm.parquet into a trace XML
+-- Convert one agent run from traces/all.parquet into a trace XML
 -- document the baltic-birch cassette stylesheet can render.
 --
 -- Parameters (set via SET VARIABLE before running):
@@ -11,7 +11,7 @@ LOAD webbed;
 
 WITH
   events AS (
-    SELECT * FROM read_parquet('traces/nxtllm.parquet')
+    SELECT * FROM read_parquet('traces/all.parquet')
     WHERE run_id = getvariable('run')
       AND length(coalesce(payload_json, '')) > 0
   ),
@@ -31,7 +31,7 @@ WITH
     WHERE event_type = 'response.reasoning_summary_text.done'
   ),
   raw_calls AS (
-    SELECT turn_id, seq,
+    SELECT turn_id, seq, elapsed_ms AS call_ms,
       json_extract_string(payload_json, '$.name')      AS tool,
       json_extract_string(payload_json, '$.call_id')   AS call_id,
       json_extract_string(payload_json, '$.arguments') AS args
@@ -40,6 +40,7 @@ WITH
   ),
   raw_results AS (
     SELECT
+      elapsed_ms AS result_ms,
       json_extract_string(payload_json, '$.call_id') AS call_id,
       json_extract_string(payload_json, '$.output')  AS inner_json
     FROM turned
@@ -51,6 +52,7 @@ WITH
     SELECT
       c.turn_id, c.seq, c.tool, c.args, c.call_id,
       r.inner_json,
+      greatest(coalesce(r.result_ms - c.call_ms, 0), 0) AS duration_ms,
       case c.tool
         when 'rg_search'         then 'matches'
         when 'read_file'         then 'document'
@@ -94,7 +96,7 @@ WITH
     FROM call_results
   ),
   result_xml AS (
-    SELECT call_id, turn_id, seq, tool, args, kind, total_lines, bytes,
+    SELECT call_id, turn_id, seq, tool, args, duration_ms, kind, total_lines, bytes,
       case kind
         when 'matches' then
           '<result kind="matches" total_lines="' || total_lines
@@ -117,9 +119,9 @@ WITH
   call_xml AS (
     SELECT turn_id, seq,
       '<call name="' || html_escape(tool)
-        || '" status="ok" elapsed_ms="80">'
+        || '" status="ok" elapsed_ms="' || duration_ms || '">'
         || '<args>' || html_escape(
-             case when length(args) > 50 then substr(args, 1, 48) || '…' else args end
+             case when length(args) > 140 then substr(args, 1, 138) || '…' else args end
            ) || '</args>'
         || xml
         || '</call>' AS xml

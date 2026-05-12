@@ -32,6 +32,7 @@ struct state
     std::string model = "gpt-5.3";
     std::string status = "ready";
     std::string error;
+    std::string previous_response_id;
     bool busy = false;
 };
 
@@ -56,6 +57,22 @@ std::string prompt_for(const state & s)
     }
     prompt += "assistant:";
     return prompt;
+}
+
+std::string latest_user_input(const state & s)
+{
+    for (auto it = s.messages.rbegin(); it != s.messages.rend(); ++it) {
+        if (it->role == "user")
+            return it->text;
+    }
+    return {};
+}
+
+std::string input_for(const state & s)
+{
+    if (!s.previous_response_id.empty())
+        return latest_user_input(s);
+    return prompt_for(s);
 }
 
 auto input_field(const state & s)
@@ -133,14 +150,15 @@ nxt::task<> ask_model(nxt::ui::UIRuntime & runtime, state & s, std::string api_k
         auto request = nxt::ai::responses::openai_responses_request{
             .api_key = std::move(api_key),
             .model = s.model,
-            .input = prompt_for(s),
+            .input = input_for(s),
             .input_items = nlohmann::json::array(),
             .tools = nlohmann::json::array(),
             .include = nlohmann::json::array(),
-            .previous_response_id = {},
+            .previous_response_id = s.previous_response_id,
             .max_output_tokens = 1200,
             .reasoning_effort = "low",
             .reasoning_summary = {},
+            .store = true,
         };
 
         using transport_t = decltype(transport);
@@ -148,7 +166,11 @@ nxt::task<> ask_model(nxt::ui::UIRuntime & runtime, state & s, std::string api_k
             transport, runtime.get_stop_token()};
         co_await stream.connect(request);
 
+        auto response_id = std::string{};
         while (auto event = co_await stream.next()) {
+            if (auto id = nxt::ai::responses::response_id_from_event(*event))
+                response_id = std::move(*id);
+
             auto delta = text_delta(*event, "response.output_text.delta");
             if (!delta.empty()) {
                 reply += delta;
@@ -160,6 +182,7 @@ nxt::task<> ask_model(nxt::ui::UIRuntime & runtime, state & s, std::string api_k
         if (!reply.empty() && reply.back() != '\n')
             runtime.print("\n");
         s.messages.push_back(message{.role = "assistant", .text = reply});
+        s.previous_response_id = std::move(response_id);
         s.status = "ready";
     } catch (const std::exception & e) {
         if (!runtime.shutdown_requested()) {

@@ -17,7 +17,7 @@ fi
 
 here="$(cd "$(dirname "$0")" && pwd)"
 trace="${1:-$here/trace-sample.xml}"
-style="${2:-$here/baltic-birch-v1.xsl}"
+style="${2:-$here/baltic-linen-glow-night.xsl}"
 
 xml="$(xsltproc "$style" "$trace")"
 

@@ -294,6 +294,12 @@ if get_option('tests')
     dependencies : [nxt_dep],
   )
 
+  nxt_arrow_test = executable('arrow-test',
+    'test/arrow-test.cpp',
+    include_directories : [nxt_inc, nxt_test_inc],
+    dependencies : [nxt_dep],
+  )
+
   nxt_input_test = executable('input-test',
     'test/input-test.cpp',
     include_directories : [nxt_inc, nxt_test_inc],
@@ -337,6 +343,7 @@ if get_option('tests')
   )
 
   test('raster-test', nxt_raster_test)
+  test('arrow-test', nxt_arrow_test)
   test('http-test', nxt_http_test)
   test('http-io-test', nxt_http_io_test)
   test('buffers-test', nxt_buffers_test)

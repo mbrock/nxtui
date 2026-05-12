@@ -52,6 +52,36 @@ std::vector<std::string> render_lines(const Layout & layout)
 }
 
 template<typename Layout>
+std::vector<std::string>
+render_lines(const Layout & layout, std::size_t width, std::size_t height)
+{
+    GlyphTable glyphs;
+    Raster raster(width * ch, height * ln, glyphs);
+    auto view = raster.view();
+    layout.render(view, Size{width * ch, height * ln});
+
+    auto out = std::vector<std::string>{};
+    for (auto row = std::size_t{0}; row < height; ++row) {
+        auto line = std::string{};
+        for (auto x = std::size_t{0}; x < width; ++x) {
+            auto cell = view.get_cell(Pos::at(x * ch, row * ln));
+            if (cell) {
+                if (auto glyph = raster.glyph_table().get(cell->glyph))
+                    line += *glyph;
+                else
+                    line += ' ';
+            } else {
+                line += ' ';
+            }
+        }
+        while (!line.empty() && line.back() == ' ')
+            line.pop_back();
+        out.push_back(std::move(line));
+    }
+    return out;
+}
+
+template<typename Layout>
 Emphasis rendered_emphasis(const Layout & layout, std::size_t row, std::size_t col)
 {
     auto width = std::max<std::size_t>(
@@ -295,6 +325,34 @@ suite llm_tests = [] {
         expect(
             render_lines(layout)
             == std::vector<std::string>{"▸ thought     folded", "working"});
+    };
+
+    "hud block state tail-scrolls when constrained"_test = [] {
+        auto hud = nxt::ai::hud_blocks::State{};
+        hud.add(nxt::tui::text("old"));
+        hud.add(nxt::tui::text("new"));
+
+        auto layout = hud.view(nxt::tui::text("working"));
+
+        expect(layout.height_hint().min == 3 * ln);
+        expect(
+            render_lines(layout, 20, 2)
+            == std::vector<std::string>{"new", "working"});
+    };
+
+    "hud block state clips oversized newest row instead of hiding it"_test = [] {
+        auto hud = nxt::ai::hud_blocks::State{};
+        hud.add(nxt::tui::text("old"));
+
+        auto layout = hud.view(nxt::tui::column(
+            nxt::tui::text("active-1"),
+            nxt::tui::text("active-2"),
+            nxt::tui::text("active-3")));
+
+        expect(layout.height_hint().min == 4 * ln);
+        expect(
+            render_lines(layout, 20, 2)
+            == std::vector<std::string>{"active-1", "active-2"});
     };
 
     "output separator is one horizontal rule line"_test = [] {

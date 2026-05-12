@@ -34,6 +34,7 @@ struct cli_options
     std::size_t max_output_tokens = default_max_output_tokens;
     std::string reasoning_effort = "medium";
     std::string reasoning_summary = "auto";
+    bool store = true;
     // When set, run one agent turn against this prompt with tools
     // enabled and exit. Otherwise open the interactive HUD.
     std::optional<std::string> oneshot_prompt;
@@ -73,6 +74,10 @@ cli_options parse_args(int argc, char ** argv)
             options.reasoning_summary = argv[++i];
             continue;
         }
+        if (arg == "--stateless") {
+            options.store = false;
+            continue;
+        }
         if (arg == "--help" || arg == "-h") {
             std::cout
                 << "usage: nxtllm [options] [prompt...]\n"
@@ -83,6 +88,7 @@ cli_options parse_args(int argc, char ** argv)
                    "  --max-output-tokens N\n"
                    "  --reasoning-effort minimal|low|medium|high|xhigh\n"
                    "  --reasoning-summary auto|concise|detailed|none\n"
+                   "  --stateless                       resend local transcript instead of using stored response ids\n"
                    "\n"
                    "  NXT_TRACE=auto         emit an Arrow trace under traces/\n";
             std::exit(EXIT_SUCCESS);
@@ -118,6 +124,7 @@ llm_request make_request(const cli_options & options, std::string api_key)
         .reasoning_summary = options.reasoning_summary == "none"
                                  ? std::string{}
                                  : options.reasoning_summary,
+        .store = options.store,
     };
 }
 

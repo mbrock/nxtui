@@ -1,4 +1,4 @@
-.PHONY: all setup build test docs docs-publish clean
+.PHONY: all setup build test docs docs-publish clean traces
 
 all: build
 

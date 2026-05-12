@@ -143,22 +143,53 @@ struct Column
 
     void render(nxt::RasterView & raster, nxt::Size size) const
     {
-        auto cursor = nxt::Pos::origin();
-        auto render_one = [&](const nxt::tui::AnyLayout & row) {
-            auto h = row.height_hint().min;
-            if (h.count() == 0)
-                return;
-            if ((cursor.y - nxt::Pos::origin().y) + h > size.h)
-                return;
-            auto child_size = nxt::Size{size.w, h};
-            auto sub = nxt::tui::subraster(raster, cursor, child_size);
-            row.render(sub, child_size);
-            cursor = cursor + h;
+        struct RowRef
+        {
+            const nxt::tui::AnyLayout * layout{};
+            nxt::height_t height{0 * nxt::ln};
         };
 
-        for (const auto & row : rows)
-            render_one(row);
-        render_one(active);
+        auto render_rows = std::vector<RowRef>{};
+        render_rows.reserve(rows.size() + 1);
+        for (const auto & row : rows) {
+            auto h = row.height_hint().min;
+            if (h.count() > 0)
+                render_rows.push_back({&row, h});
+        }
+        auto active_h = active.height_hint().min;
+        if (active_h.count() > 0)
+            render_rows.push_back({&active, active_h});
+
+        auto start = render_rows.size();
+        auto visible_h = 0 * nxt::ln;
+        while (start > 0) {
+            auto next_h = render_rows[start - 1].height;
+            if (visible_h + next_h > size.h) {
+                if (visible_h == 0 * nxt::ln)
+                    --start;
+                break;
+            }
+            visible_h = visible_h + next_h;
+            --start;
+        }
+
+        auto cursor = nxt::Pos::origin();
+        auto render_one = [&](const RowRef & row) {
+            auto h = row.height;
+            if (h.count() == 0)
+                return;
+            auto used = cursor.y - nxt::Pos::origin().y;
+            if (used >= size.h)
+                return;
+            auto child_h = std::min(h, size.h - used);
+            auto child_size = nxt::Size{size.w, child_h};
+            auto sub = nxt::tui::subraster(raster, cursor, child_size);
+            row.layout->render(sub, child_size);
+            cursor = cursor + child_h;
+        };
+
+        for (auto i = start; i < render_rows.size(); ++i)
+            render_one(render_rows[i]);
     }
 };
 

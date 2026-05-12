@@ -14,7 +14,8 @@
 namespace nxt::io::arrow {
 namespace {
 
-constexpr int trace_field_count = 13;
+constexpr int trace_field_count = 14;
+constexpr int legacy_trace_field_count = 13;
 
 struct nanoarrow_error
 {
@@ -285,16 +286,17 @@ void set_child(
     set_child(schema.get(), 0, "run_id", NANOARROW_TYPE_STRING);
     set_child(schema.get(), 1, "seq", NANOARROW_TYPE_INT64);
     set_child(schema.get(), 2, "elapsed_ms", NANOARROW_TYPE_INT64);
-    set_child(schema.get(), 3, "phase", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 4, "event_type", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 5, "data", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 6, "payload_json", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 7, "span_id", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 8, "parent_span_id", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 9, "span_name", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 10, "frame_seq", NANOARROW_TYPE_INT64);
-    set_child(schema.get(), 11, "payload_kind", NANOARROW_TYPE_STRING);
-    set_child(schema.get(), 12, "payload_bin", NANOARROW_TYPE_BINARY);
+    set_child(schema.get(), 3, "unix_ms", NANOARROW_TYPE_INT64);
+    set_child(schema.get(), 4, "phase", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 5, "event_type", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 6, "data", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 7, "payload_json", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 8, "span_id", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 9, "parent_span_id", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 10, "span_name", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 11, "frame_seq", NANOARROW_TYPE_INT64);
+    set_child(schema.get(), 12, "payload_kind", NANOARROW_TYPE_STRING);
+    set_child(schema.get(), 13, "payload_bin", NANOARROW_TYPE_BINARY);
     return schema;
 }
 
@@ -318,47 +320,50 @@ void set_child(
         ArrowArrayAppendInt(batch.get()->children[2], row.elapsed_ms),
         "append elapsed_ms");
     check(
-        ArrowArrayAppendString(batch.get()->children[3], string_view(row.phase)),
+        ArrowArrayAppendInt(batch.get()->children[3], row.unix_ms),
+        "append unix_ms");
+    check(
+        ArrowArrayAppendString(batch.get()->children[4], string_view(row.phase)),
         "append phase");
     check(
         ArrowArrayAppendString(
-            batch.get()->children[4],
+            batch.get()->children[5],
             string_view(row.event_type)),
         "append event_type");
     check(
-        ArrowArrayAppendString(batch.get()->children[5], string_view(row.data)),
+        ArrowArrayAppendString(batch.get()->children[6], string_view(row.data)),
         "append data");
     check(
         ArrowArrayAppendString(
-            batch.get()->children[6],
+            batch.get()->children[7],
             string_view(row.payload_json)),
         "append payload_json");
     check(
         ArrowArrayAppendString(
-            batch.get()->children[7],
+            batch.get()->children[8],
             string_view(row.span_id)),
         "append span_id");
     check(
         ArrowArrayAppendString(
-            batch.get()->children[8],
+            batch.get()->children[9],
             string_view(row.parent_span_id)),
         "append parent_span_id");
     check(
         ArrowArrayAppendString(
-            batch.get()->children[9],
+            batch.get()->children[10],
             string_view(row.span_name)),
         "append span_name");
     check(
-        ArrowArrayAppendInt(batch.get()->children[10], row.frame_seq),
+        ArrowArrayAppendInt(batch.get()->children[11], row.frame_seq),
         "append frame_seq");
     check(
         ArrowArrayAppendString(
-            batch.get()->children[11],
+            batch.get()->children[12],
             string_view(row.payload_kind)),
         "append payload_kind");
     check(
         ArrowArrayAppendBytes(
-            batch.get()->children[12],
+            batch.get()->children[13],
             buffer_view(row.payload_bin)),
         "append payload_bin");
     check(ArrowArrayFinishElement(batch.get()), "finish trace row");
@@ -371,7 +376,10 @@ void set_child(
 
 [[nodiscard]] trace_row row_from_view(const ArrowArrayView * view, int64_t index)
 {
-    auto bin_view = ArrowArrayViewGetBytesUnsafe(view->children[12], index);
+    auto legacy = view->n_children == legacy_trace_field_count;
+    auto phase_index = legacy ? 3 : 4;
+    auto bin_index = legacy ? 12 : 13;
+    auto bin_view = ArrowArrayViewGetBytesUnsafe(view->children[bin_index], index);
     auto payload_bin = std::vector<std::uint8_t>{};
     if (bin_view.size_bytes > 0 && bin_view.data.as_uint8 != nullptr)
         payload_bin.assign(
@@ -383,23 +391,26 @@ void set_child(
             ArrowArrayViewGetStringUnsafe(view->children[0], index)),
         .seq = ArrowArrayViewGetIntUnsafe(view->children[1], index),
         .elapsed_ms = ArrowArrayViewGetIntUnsafe(view->children[2], index),
+        .unix_ms = legacy ? 0 : ArrowArrayViewGetIntUnsafe(
+                                  view->children[3], index),
         .phase = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[3], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index], index)),
         .event_type = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[4], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 1], index)),
         .data = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[5], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 2], index)),
         .payload_json = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[6], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 3], index)),
         .span_id = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[7], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 4], index)),
         .parent_span_id = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[8], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 5], index)),
         .span_name = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[9], index)),
-        .frame_seq = ArrowArrayViewGetIntUnsafe(view->children[10], index),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 6], index)),
+        .frame_seq = ArrowArrayViewGetIntUnsafe(
+            view->children[phase_index + 7], index),
         .payload_kind = to_string(
-            ArrowArrayViewGetStringUnsafe(view->children[11], index)),
+            ArrowArrayViewGetStringUnsafe(view->children[phase_index + 8], index)),
         .payload_bin = std::move(payload_bin),
     };
 }
@@ -536,6 +547,7 @@ ipc_trace::ipc_trace(
     : output_path_(std::move(output_path))
     , run_id_(std::move(run_id))
     , start_(std::chrono::steady_clock::now())
+    , wall_start_(std::chrono::system_clock::now())
 {
     if (output_path_) {
         // Don't synthesize a run id here: callers pass one in so the
@@ -594,9 +606,13 @@ void ipc_trace::add(trace_row row)
     auto now = std::chrono::steady_clock::now();
     auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - start_);
+    auto wall_time = wall_start_ + (now - start_);
+    auto unix_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        wall_time.time_since_epoch());
     row.run_id = run_id_;
     row.seq = next_seq_++;
     row.elapsed_ms = elapsed.count();
+    row.unix_ms = unix_ms.count();
     writer_->append(row);
 }
 
@@ -632,7 +648,8 @@ std::vector<trace_row> read_trace_ipc(std::string_view path)
         ArrowArrayStreamGetSchema(stream.get(), schema.get(), &error.value),
         "read trace schema",
         error.value);
-    if (schema.get()->n_children != trace_field_count)
+    if (schema.get()->n_children != trace_field_count
+        && schema.get()->n_children != legacy_trace_field_count)
         throw std::runtime_error{"trace IPC schema has unexpected field count"};
 
     auto view = array_view_handle{};

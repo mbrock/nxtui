@@ -1,65 +1,214 @@
 #!/usr/bin/env bash
-# Render a real agent run from traces/nxtllm.parquet through the
+# Render a real agent run from traces/all.parquet through the
 # cassette stylesheet. The whole pipeline:
 #
 #   parquet  ─[duckdb]─►  trace.xml  ─[xsltproc]─►  xtc xml  ─[xtc]─►  ansi
 #
 # Usage:
-#   ./cassette/trace-render                         # default: 1VGR6SG2, 2 turns
+#   ./cassette/trace-render                         # recent run gallery
 #   ./cassette/trace-render RUN_ID [TURNS [LINES]]  # pick a session
-#   ./cassette/trace-render --intermediate ...      # print trace XML, don't render
-#   ./cassette/trace-render --list                  # list available run_ids
+#   ./cassette/trace-render --recent N              # gallery size (default: 5)
+#   ./cassette/trace-render --intermediate RUN_ID   # print xtc XML, don't render
+#   ./cassette/trace-render --list                  # list recent run_ids
 
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-parquet="$(cd "$here/.." && pwd)/traces/nxtllm.parquet"
+repo="$(cd "$here/.." && pwd)"
+parquet="$repo/traces/all.parquet"
+recent=5
+gallery_turns=1
+gallery_lines=2
 
 if [ ! -f "$parquet" ]; then
     echo "missing $parquet — run scripts/compact-traces or duckdb COPY first" >&2
     exit 1
 fi
 
-if [ "${1:-}" = "--list" ]; then
-    duckdb -c "
-      LOAD nanoarrow;
-      SELECT run_id, count(*) AS events
-      FROM read_parquet('$parquet')
-      GROUP BY run_id ORDER BY events DESC
-    " 2>&1 | grep -v WARNING | grep -v lambda
+show_intermediate=0
+xsl_params=()
+cols="$(tput cols 2>/dev/null || echo 100)"
+
+recent_runs() {
+    find "$repo/traces" -maxdepth 1 -type f -name 'nxtllm-*.arrow' \
+        -printf '%T@ %f\n' 2>/dev/null \
+        | sort -nr \
+        | sed -E 's/^[^ ]+ nxtllm-([^.]+)\.arrow$/\1/' \
+        | head -n "$recent"
+}
+
+render_run_xml() {
+    local run="$1"
+    local turns="$2"
+    local lines="$3"
+
+    (
+        cd "$repo"
+        NO_COLOR=1 duckdb --noheader -list \
+            -cmd "SET VARIABLE run='$run'; SET VARIABLE turns=$turns; SET VARIABLE lines=$lines;" \
+            < "$here/trace-to-xml.sql" 2>/dev/null \
+            | sed 's/\x1b\[[0-9;]*m//g' \
+            | grep '^<?xml' || true
+    )
+}
+
+render_run() {
+    local run="$1"
+    local turns="$2"
+    local lines="$3"
+    local xml
+    local xtc_xml
+
+    xml="$(render_run_xml "$run" "$turns" "$lines")"
+    if [ -z "$xml" ]; then
+        return 1
+    fi
+
+    xtc_xml="$(printf '%s' "$xml" | xsltproc "${xsl_params[@]}" "$here/baltic-linen-glow-night.xsl" -)"
+    if [ "$show_intermediate" = 1 ]; then
+        printf '%s\n' "$xtc_xml"
+    else
+        # xtc auto-fits height to content when --height is omitted.
+        xtc --width "$cols" --ansi --xml "$xtc_xml"
+    fi
+}
+
+# Header line printed between renders in gallery mode so each run
+# is clearly bounded. Slate-on-amber spine matches the cassette
+# language: the band looks like a cassette label inserted into
+# the rack.
+print_run_header() {
+    local run="$1"
+    local stats
+    stats="$(
+        NO_COLOR=1 duckdb --noheader -csv -c "
+            LOAD nanoarrow;
+            WITH e AS (
+              SELECT * FROM read_parquet('$parquet')
+              WHERE run_id = '$run'
+            )
+            SELECT
+              count(*),
+              coalesce(max(elapsed_ms), 0),
+              count(*) FILTER (WHERE event_type='response.created'),
+              coalesce(strftime(
+                to_timestamp(min(try_cast(
+                  json_extract_string(nullif(payload_json, ''), '\$.response.created_at')
+                  AS BIGINT))),
+                '%Y-%m-%d %H:%M'), '')
+            FROM e
+        " 2>/dev/null | tail -1
+    )"
+    # CSV: events,ms,turns,started_at  (started_at field may contain a space,
+    # so use field splitting on the first three commas only)
+    local events="${stats%%,*}"; stats="${stats#*,}"
+    local ms="${stats%%,*}";     stats="${stats#*,}"
+    local turns="${stats%%,*}";  stats="${stats#*,}"
+    local started="$stats"
+    local seconds
+    seconds=$(awk -v ms="$ms" 'BEGIN { printf "%.1fs", ms/1000.0 }')
+    local meta
+    if [ -n "$started" ]; then
+        meta=" $started  $events events  $seconds  $turns turns"
+    else
+        meta=" $events events  $seconds  $turns turns"
+    fi
+    local pad=$(( cols - ${#run} - ${#meta} - 4 ))
+    [ "$pad" -lt 0 ] && pad=0
+    printf '\033[48;2;15;23;43m\033[38;2;254;230;133m  %s  \033[38;2;148;163;184m%s%*s\033[0m\n' \
+        "$run" "$meta" "$pad" ""
+}
+
+print_recent_list() {
+    printf 'recent nxtllm runs from traces/*.arrow\n\n'
+    printf '%-10s %-19s %8s %8s\n' run_id modified events ms
+    for run in $(recent_runs); do
+        file="$repo/traces/nxtllm-$run.arrow"
+        modified="$(date -r "$file" '+%Y-%m-%d %H:%M:%S')"
+        stats="$(
+            duckdb --noheader -csv -c "
+              SELECT count(*), coalesce(max(elapsed_ms), 0)
+              FROM read_parquet('$parquet')
+              WHERE run_id = '$run'
+            " 2>/dev/null
+        )"
+        events="${stats%,*}"
+        ms="${stats#*,}"
+        printf '%-10s %-19s %8s %8s\n' "$run" "$modified" "$events" "$ms"
+    done
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --list)
+            print_recent_list
+            exit 0
+            ;;
+        --recent)
+            if [ $# -lt 2 ]; then
+                echo "--recent requires a value" >&2
+                exit 2
+            fi
+            recent="$2"
+            shift 2
+            ;;
+        --intermediate)
+            show_intermediate=1
+            shift
+            ;;
+        --rack)
+            xsl_params+=(--stringparam mode rack)
+            shift
+            ;;
+        --help|-h)
+            sed -n '7,12p' "$0" | sed 's/^# //'
+            exit 0
+            ;;
+        --*)
+            echo "unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [ $# -gt 0 ]; then
+    run="$1"
+    if [ $# -eq 1 ]; then
+        # No numbers: render the whole run, generous preview.
+        # xtc auto-fits height to content.
+        print_run_header "$run"
+        if ! render_run "$run" 9999 8; then
+            echo "no events for run_id=$run" >&2
+            exit 1
+        fi
+    else
+        turns="${2:-2}"
+        lines="${3:-3}"
+        if ! render_run "$run" "$turns" "$lines"; then
+            echo "no events for run_id=$run" >&2
+            exit 1
+        fi
+    fi
     exit 0
 fi
 
-show_intermediate=0
-if [ "${1:-}" = "--intermediate" ]; then
-    show_intermediate=1
-    shift
-fi
+rendered=0
+for run in $(recent_runs); do
+    if [ "$rendered" -gt 0 ]; then
+        printf '\n'
+    fi
+    print_run_header "$run"
+    if render_run "$run" "$gallery_turns" "$gallery_lines"; then
+        rendered=$((rendered + 1))
+    else
+        printf '  no compacted events in %s yet\n' "$parquet"
+    fi
+done
 
-run="${1:-1VGR6SG2}"
-turns="${2:-2}"
-lines="${3:-3}"
-
-xml="$(
-  NO_COLOR=1 duckdb --noheader -list \
-    -cmd "SET VARIABLE run='$run'; SET VARIABLE turns=$turns; SET VARIABLE lines=$lines;" \
-    < "$here/trace-to-xml.sql" 2>/dev/null \
-    | sed 's/\x1b\[[0-9;]*m//g' \
-    | grep '^<?xml'
-)"
-
-if [ -z "$xml" ]; then
-    echo "no events for run_id=$run" >&2
+if [ "$rendered" -eq 0 ]; then
+    echo "no recent runs with compacted events in $parquet" >&2
     exit 1
 fi
-
-xtc_xml="$(printf '%s' "$xml" | xsltproc "$here/baltic-birch-v1.xsl" -)"
-
-if [ "$show_intermediate" = 1 ]; then
-    printf '%s\n' "$xtc_xml"
-    exit 0
-fi
-
-cols="$(tput cols 2>/dev/null || echo 100)"
-# Generous height — multi-turn runs stack ~5-15 rows per turn.
-xtc --width "$cols" --height 60 --ansi --xml "$xtc_xml"
