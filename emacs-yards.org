@@ -1,0 +1,582 @@
+* Emacs-Hosted Yards and Structured Coroutine Commands
+[2026-05-13 Wed]
+
+** Thesis
+
+The interesting integration between Emacs and =nxt= is not only that an
+agent, TUI, or subprocess can talk to Emacs.  It is that Emacs can host
+small, structured, asynchronous =nxt= habitats inside ordinary editor
+state.
+
+An interactive command such as =M-x nxt-llm-ask= can become the root of a
+structured coroutine tree.  Every status view, tool call, subprocess,
+streaming response, overlay, trace span, and temporary display belongs to
+that command.  If the command returns, fails, or is cancelled with =C-g=,
+the whole tree has a well-defined fate.
+
+This suggests a native Emacs embedding where =nxt::yardtask= coroutines
+run cooperatively with Emacs Lisp execution, preserving yard/editor
+context across =co_await= suspension points.
+
+** Brief introduction to nxt UI
+
+=nxt= is a C++ coroutine-driven terminal UI system.  Its basic programming
+model is that concurrent coroutine processes run inside =yard= contexts.
+A yard can draw a layout, spawn child yards, print to scrollback, read
+input, observe cancellation, and carry trace/span context.
+
+The visual layer is built from small composable layout values rather than
+from retained widget objects.  Code constructs rows, columns, text,
+spacers, slots, styled spans, and other layout values, then =draw= publishes
+the current value into that yard's surface.  The layout system is
+flexbox-like in spirit: nested values negotiate size and render into a
+terminal raster.
+
+#+begin_src cpp
+self.draw(
+    column(
+        title,
+        row(left.surface(), right.surface()),
+        footer));
+#+end_src
+
+Child yards have their own live surfaces.  A parent can embed those
+surfaces in its layout while the children continue updating
+independently.  This makes responsive terminal interfaces feel like a
+tree of concurrent visual processes instead of a single callback mutating
+one global screen.
+
+The current =yard= and =scope= system already provides bounded child
+lifetimes, cancellation tokens, live surfaces, output routing, and trace
+span attribution.  The newer =yardtask= experiment pushes this toward a
+real structured-concurrency substrate by making the coroutine promise own
+an ambient frame: context, parent/child relations, stop propagation, and
+context restoration across arbitrary awaits.
+
+One concrete demonstration is the =nxtllm= OpenAI agent harness.  It
+streams model responses, shows live HUD/status updates, asks for tool
+approval, runs multiple tool calls concurrently, animates progress, and
+records request/tool/trace events.  It is a useful proof that the model
+can support a responsive agent UI where streaming I/O, concurrent tools,
+status displays, and trace capture all remain visible and coordinated.
+
+** Core intuition
+
+Emacs already has rich notions of place and dynamic extent:
+
+- current buffer
+- point and mark
+- markers
+- overlays
+- narrowing
+- windows
+- buffer-local variables
+- dynamic =let= bindings
+- =save-excursion=
+- =save-restriction=
+- interactive command invocation
+- =C-g= quit
+
+=nxt= is growing a parallel set of notions:
+
+- =yard=
+- =yard::draw=
+- =yard::spawn=
+- child surfaces
+- cancellation scopes
+- trace spans
+- =yardtask= frames
+- ambient =yard_context=
+- =yard_var<T>=
+- stop propagation through a frame tree
+
+The integration should map place to place, not command to command.
+
+#+begin_src text
+Emacs buffer / overlay / marker region
+        <==>
+nxt yard / surface / coroutine frame
+#+end_src
+
+** Rectangular regions as active habitats
+
+A normal Emacs buffer could contain a marker-bounded rectangular region
+owned by a =nxt= yard.  That region is not inert output.  It is an active
+subworld with its own structured children.
+
+#+begin_src text
+ordinary Emacs text
+ordinary Emacs text
+
++--------------------------------------+
+| parent yard surface                  |
+|                                      |
+|  +---------------+ +---------------+ |
+|  | child yard A  | | child yard B  | |
+|  | spinner       | | streaming log | |
+|  +---------------+ +---------------+ |
+|                                      |
++--------------------------------------+
+
+ordinary Emacs text
+#+end_src
+
+On the Emacs side, this region might be represented by:
+
+- a start marker
+- an end marker
+- an overlay carrying the =nxt= region id
+- modification hooks
+- cleanup hooks
+- cached width and height
+- a pointer to a native =yard= or surface object
+
+On the =nxt= side, the task sees a drawable rectangular surface:
+
+#+begin_src cpp
+self.draw(
+    column(
+        header,
+        row(left_child.surface(), right_child.surface()),
+        footer));
+#+end_src
+
+Children update their own surfaces concurrently.  The parent decides where
+those live child projections appear.
+
+** Structured concurrency as command soundness
+
+An Emacs command should be able to start async work without leaving behind
+orphaned process filters, timers, overlays, buffers, or native tasks.
+
+For example:
+
+#+begin_src text
+M-x nxt-llm-ask
+  yard frame: command root
+    prompt/input region
+    response stream task
+    status display task
+    tool group
+      rg task
+      read-file task
+      shell task
+    overlay renderer task
+    trace writer task
+#+end_src
+
+The command root owns every child.
+
+Normal return:
+
+- join children
+- commit final display
+- finish trace spans
+- return a Lisp value or update the buffer
+
+Error:
+
+- cancel children
+- unwind temporary overlays
+- finish trace spans with error status
+- signal a Lisp error
+
+=C-g= quit:
+
+- request stop on the command root
+- propagate cancellation down the yard stack
+- let destructors/final suspend/cleanup run
+- remove, fade, or mark transient regions
+- return control to Emacs promptly
+
+This is the practical value of structured concurrency: every spawned
+activity has an owner and a bounded lifetime.
+
+** Emacs-cooperative coroutine execution
+
+The native runtime does not have to be message-passing-only.  If =nxt=
+coroutines are resumed synchronously from an Emacs Lisp thread, they can
+directly use the Emacs dynamic module API while that call is active.
+
+The key invariant:
+
+#+begin_src text
+Emacs state is single-thread-affine, but not necessarily message-only.
+
+nxt coroutines may operate directly on Emacs state when and only when
+they are running under the Emacs scheduler, on an Emacs Lisp thread, with
+a live emacs_env and a restored yard frame.
+#+end_src
+
+This creates two execution worlds.
+
+*** Emacs-synchronous coroutines
+
+These run cooperatively on an Emacs Lisp thread.
+
+They may:
+
+- call Emacs Lisp through =emacs_env=
+- read and mutate buffers
+- create or update overlays
+- inspect markers
+- respect narrowing
+- draw into Emacs-hosted yard regions
+- observe =C-g= cancellation
+
+They must:
+
+- yield promptly
+- avoid long blocking work
+- preserve editor context across awaits
+- unwind cleanly on quit/error
+
+*** Native parallel work
+
+These run on a C++ thread pool or other native executor.
+
+They may:
+
+- parse
+- render
+- compute layouts
+- perform CPU-heavy analysis
+- prepare display lists
+- do thread-safe native I/O where appropriate
+
+They must not:
+
+- call Emacs Lisp
+- touch buffers
+- mutate overlays
+- use stale =emacs_env= pointers
+
+The safe pattern is:
+
+#+begin_src cpp
+auto result = co_await background([snapshot] {
+    return expensive_native_work(snapshot);
+});
+
+// Resumed back on the Emacs scheduler here.
+co_await emacs_apply_result(result);
+#+end_src
+
+Crossing to background work is allowed, but touching Emacs requires
+resuming on the Emacs-synchronous scheduler.
+
+** The scheduler shape
+
+The Emacs embedding wants a pumpable scheduler, not a permanently-owned
+foreign event loop.
+
+Possible native API:
+
+#+begin_src cpp
+class emacs_scheduler {
+public:
+    void spawn(yardtask<> task);
+    void run_ready(emacs_env *env);
+    void request_quit();
+    void resume_timer(timer_id id);
+    void resume_process(process_id id);
+};
+#+end_src
+
+Possible Elisp facade:
+
+#+begin_src elisp
+(nxt-runtime-create)
+(nxt-runtime-pump runtime)
+(nxt-command-root runtime name function)
+(nxt-region-create beg end &rest properties)
+(nxt-region-cancel region)
+#+end_src
+
+Emacs can pump ready work from:
+
+- an interactive command
+- a timer
+- a process filter
+- a module callback
+- a wakeup pipe/event fd bridge
+
+The pump resumes ready =yardtask= coroutines.  Suspension returns control
+to Emacs.
+
+** Awaiting Emacs
+
+Calling Emacs from C++ should feel synchronous when the coroutine is
+currently running on the Emacs scheduler:
+
+#+begin_src cpp
+auto name = emacs.call<std::string>("buffer-name");
+emacs.call<void>("message", "rendering...");
+#+end_src
+
+But long-running interactions should be awaitable:
+
+#+begin_src cpp
+co_await emacs_yield{};
+co_await emacs_sleep{std::chrono::milliseconds{50}};
+auto event = co_await emacs_next_input{};
+#+end_src
+
+The coroutine promise is responsible for restoring the current yard frame
+around every await seam, much like =save-excursion= restores point after
+temporary buffer motion.
+
+** Context preservation
+
+The existing =yardtask= experiment already points in the right direction:
+the promise owns a =yard_frame=, and =await_transform= wraps awaited
+objects so that ambient context is restored around =await_ready=,
+=await_suspend=, and =await_resume=.
+
+For Emacs-hosted tasks, the frame can grow editor capabilities:
+
+#+begin_src text
+yard_frame
+  id
+  name
+  parent
+  children
+  yard_context
+  stop_source
+  current Emacs thread/scheduler affinity
+  current buffer reference
+  current region reference
+  current narrowing/restriction
+  current trace span
+  current output publisher
+#+end_src
+
+The effect is:
+
+#+begin_src text
+before await:
+  save yard/editor context
+
+during suspension:
+  Emacs may run other commands or tasks
+
+after resume:
+  restore yard/editor context
+  check quit/cancellation
+  continue
+#+end_src
+
+** Markers, overlays, excursions, narrowing
+
+*** Markers
+
+C++ code should avoid raw buffer positions.  Edits make integer positions
+stale.  Native tasks should hold opaque references to Emacs markers or
+marker-backed regions.
+
+#+begin_src text
+bad:
+  region starts at char 1024 and ends at char 1400
+
+good:
+  region has start marker and end marker
+#+end_src
+
+Markers provide identity across edits.
+
+*** Overlays
+
+Overlays are natural mount points for yard surfaces.  They can carry:
+
+- a region id
+- visual properties
+- read-only or intangible behavior
+- modification hooks
+- cleanup behavior
+- display properties
+
+A first implementation can update actual text inside a guarded region.
+A later version can render through overlay/display properties when that is
+more appropriate.
+
+*** Excursions
+
+Emacs-side rendering should be polite:
+
+#+begin_src elisp
+(save-excursion
+  (save-restriction
+    (with-current-buffer buffer
+      ;; update marker-bounded region
+      )))
+#+end_src
+
+The symmetry is important:
+
+#+begin_src text
+C++ yardtask preserves current yard across co_await.
+Elisp save-excursion preserves editor position across buffer mutation.
+#+end_src
+
+*** Narrowing
+
+Narrowing is an operational boundary, not just a visual one.  A child
+yard can correspond to a narrowed subregion of a larger buffer or trace.
+
+Examples:
+
+- a tool-call child sees only that tool call's transcript
+- a repair child sees only one diagnostic region
+- a summarizer child sees only the current Org subtree
+- a terminal observer child sees only the current prompt block
+
+This can be represented as ambient context:
+
+#+begin_src cpp
+yard_var<emacs_region> current_region{"emacs-region"};
+yard_var<trace_filter> current_trace_filter{"trace-filter"};
+yard_var<emacs_buffer> current_buffer{"emacs-buffer"};
+#+end_src
+
+** C-g and cancellation
+
+=C-g= should become structured cancellation.
+
+#+begin_src text
+user presses C-g
+  Emacs reports quit to active nxt command root
+  root yard frame requests stop
+  child frames receive stop
+  blocked awaiters resume or throw nxt::cancelled
+  cleanup runs
+  transient displays are removed or marked cancelled
+  trace spans close
+#+end_src
+
+The cancellation tree should mirror the task tree and the trace tree.
+
+#+begin_src text
+command span
+  response stream span
+  tool rg span
+  tool shell span
+  renderer span
+#+end_src
+
+That gives post-hoc observability: trace rows are not just events, they
+belong to a structured command execution.
+
+** Relationship to Emacs threads
+
+Emacs Lisp threads are mostly cooperative.  Thread switching happens at
+well-defined points such as =thread-yield=, waiting for keyboard input,
+waiting for async process output, mutex locking, condition waits, and
+=thread-join=.  Global variables are shared, but dynamic =let= bindings
+are thread-local.  Each thread has its own current buffer and match data.
+
+This is close in spirit to an Emacs-hosted =nxt= coroutine scheduler.
+
+Useful references:
+
+- [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Threads.html][Emacs Lisp Manual: Threads]]
+- [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Basic-Thread-Functions.html][Basic Thread Functions]]
+- [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Mutexes.html][Mutexes]]
+- [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Condition-Variables.html][Condition Variables]]
+
+The goal is not to make arbitrary native threads mutate Emacs state.
+Instead, =nxt= should provide a coroutine scheduler that cooperates with
+Emacs's existing synchronous execution model.
+
+** Minimal experiment
+
+1. Build a tiny Emacs dynamic module exposing one native runtime object.
+
+2. Expose a pump function:
+
+   #+begin_src elisp
+   (nxt-pump runtime)
+   #+end_src
+
+3. Implement an Emacs-hosted =yardtask= scheduler with:
+
+   - ready queue
+   - timer awaiter
+   - explicit yield awaiter
+   - cancellation token
+   - current frame restoration
+
+4. Add a marker-bounded region primitive:
+
+   #+begin_src elisp
+   (setq region (nxt-region-create (point) (+ (point) 1)))
+   #+end_src
+
+5. Let a C++ coroutine draw a counter into that region:
+
+   #+begin_src cpp
+   nxt::yardtask<> counter(yard self)
+   {
+       for (int i = 0; !yard_stop_requested(); ++i) {
+           self.draw(text("tick " + std::to_string(i)));
+           co_await emacs_sleep{100ms};
+       }
+   }
+   #+end_src
+
+6. Verify:
+
+   - =C-g= cancels the task
+   - killing the buffer cancels the task
+   - edits before the region do not detach it
+   - the region cleans up on normal return and error
+   - child yard surfaces can be embedded in the parent region
+
+** Later experiments
+
+- render a child surface as an overlay inside a parent region
+- bridge =yard::spawn= to marker-backed subregions
+- add =save-excursion=-style rendering helpers
+- add narrowing-aware region tasks
+- map trace spans to Org subtrees
+- allow background C++ thread pool work that resumes on the Emacs scheduler
+- expose =nxt= task trees in a thread-list-like Emacs buffer
+- integrate terminal/vterm screen models as yard surfaces
+- make process filters resume specific coroutine awaiters
+- attach structured command traces to =command-history=
+
+** Design rule
+
+The native side may be powerful, concurrent, and async, but editor state
+remains a scoped capability.
+
+#+begin_src text
+If a coroutine has the Emacs capability, it is running synchronously under
+Emacs and may touch editor state.
+
+If it does not have that capability, it may compute in parallel but must
+return through an await boundary before touching Emacs.
+#+end_src
+
+This keeps the programming model pleasant without pretending that Emacs
+state is freely thread-safe.
+
+** Summary
+
+Emacs supplies interactive dynamic extent: commands, buffers, markers,
+overlays, narrowing, and =C-g=.
+
+=nxt= supplies structured coroutine concurrency: yards, child surfaces,
+ambient context, cancellation, and trace spans.
+
+An Emacs-hosted yard runtime would combine them:
+
+#+begin_src text
+interactive command
+  -> root yard frame
+    -> marker-bounded active region
+      -> concurrent child surfaces
+        -> scoped tools, processes, renderers, traces
+#+end_src
+
+That turns async editor extensions from loose collections of timers and
+process filters into structured, observable, cancellable command trees.
