@@ -4,6 +4,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <string>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -346,6 +347,7 @@ inline void deck::enqueue(
     std::coroutine_handle<> handle,
     detail::promise_base * promise)
 {
+    trace("deck enqueue task");
     ready_.push_back(
         deck::ready_item{
             .handle = handle,
@@ -358,21 +360,19 @@ inline void deck::ready_item::resume_if_ready() const
     if (!handle || handle.done())
         return;
 
+    trace("deck resume task");
     auto promise_guard = current_promise_guard{promise};
     handle.resume();
 }
 
 inline void parked_task::resume(deck & d) const
 {
+    trace("wand fulfill parked task");
     d.enqueue(handle, promise);
 }
 
-inline waiter<void>::waiter(wand & source, wait_token token) noexcept
-    : source_(&source)
-    , token_(token)
-{}
-
-inline void waiter<void>::await_suspend(
+template<typename T>
+inline void waiter<T>::await_suspend(
     std::coroutine_handle<> awaiting) const
 {
     auto * active_wand = source_;
@@ -381,6 +381,7 @@ inline void waiter<void>::await_suspend(
         throw std::runtime_error{
             "nxt::rt waiter awaited without a prepared wand"};
 
+    trace("waiter suspend token=" + std::to_string(token_));
     active_wand->suspend(
         token_,
         parked_task{
@@ -398,6 +399,34 @@ inline waiter<void> manual_wish::operator co_await() const
         throw std::runtime_error{
             "nxt::rt manual wish awaited without a running wand"};
 
+    trace("wish manual prepare token=" + std::to_string(token));
+    return active_wand->prepare(*active_deck, *running, *this);
+}
+
+inline waiter<int> openat_wish::operator co_await() const
+{
+    auto * active_deck = detail::current_deck;
+    auto * active_wand = detail::current_wand;
+    auto * running = detail::current_promise;
+    if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
+        throw std::runtime_error{
+            "nxt::rt openat wish awaited without a running wand"};
+
+    trace("wish openat prepare path=" + path);
+    return active_wand->prepare(*active_deck, *running, *this);
+}
+
+inline waiter<std::size_t> read_some_wish::operator co_await() const
+{
+    auto * active_deck = detail::current_deck;
+    auto * active_wand = detail::current_wand;
+    auto * running = detail::current_promise;
+    if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
+        throw std::runtime_error{
+            "nxt::rt read wish awaited without a running wand"};
+
+    trace("wish read prepare fd=" + std::to_string(fd)
+        + " bytes=" + std::to_string(buffer.size()));
     return active_wand->prepare(*active_deck, *running, *this);
 }
 

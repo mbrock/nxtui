@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -19,7 +20,25 @@ struct manual_wand final : nxt::rt::wand
         nxt::rt::manual_wish wish) override
     {
         prepared.push_back(wish.token);
-        return nxt::rt::waiter<void>{*this, wish.token};
+        auto state = std::make_shared<nxt::rt::wait_state<void>>();
+        states.push_back(state);
+        return nxt::rt::waiter<void>{*this, wish.token, state};
+    }
+
+    nxt::rt::waiter<int> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::openat_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement openat"};
+    }
+
+    nxt::rt::waiter<std::size_t> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::read_some_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement read"};
     }
 
     void suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
@@ -43,6 +62,7 @@ struct manual_wand final : nxt::rt::wand
                 continue;
 
             auto task = it->task;
+            states.front()->set_value();
             parked.erase(it);
             task.resume(deck);
             return;
@@ -57,6 +77,7 @@ struct manual_wand final : nxt::rt::wand
 
     std::vector<nxt::rt::wait_token> prepared;
     std::vector<parked_entry> parked;
+    std::vector<std::shared_ptr<nxt::rt::wait_state<void>>> states;
     int waves = 0;
 };
 

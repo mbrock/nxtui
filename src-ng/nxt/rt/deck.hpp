@@ -1,12 +1,14 @@
 #pragma once
 
 #include "nxt/rt/ids.hpp"
+#include "nxt/rt/trace.hpp"
 #include "nxt/rt/wish.hpp"
 
 #include <concepts>
 #include <coroutine>
 #include <deque>
 #include <functional>
+#include <string>
 #include <stdexcept>
 #include <type_traits>
 
@@ -108,6 +110,7 @@ public:
     void run_ready(wand & w)
     {
         run_ready_with(&w);
+        trace("deck wave wand");
         w.wave(*this);
     }
 
@@ -137,11 +140,13 @@ private:
 
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
+        trace("deck round begin size=" + std::to_string(round.size()));
 
         auto deck_guard = current_deck_guard{*this};
         auto wand_guard = current_wand_guard{w};
         for (auto const & item : round)
             item.resume_if_ready();
+        trace("deck round end ready=" + std::to_string(ready_.size()));
     }
 
 public:

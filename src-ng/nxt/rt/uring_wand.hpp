@@ -9,10 +9,12 @@
 #endif
 
 #include <cerrno>
+#include <exception>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #if NXT_RT_HAS_LIBURING
@@ -27,10 +29,9 @@ inline constexpr bool has_liburing_wand = NXT_RT_HAS_LIBURING != 0;
 
 /// Minimal io_uring-backed wand.
 ///
-/// This first version only knows how to turn `manual_wish` into staged NOP
-/// SQEs. That is enough to exercise the intended rhythm: prepare while the
-/// coroutine runs, park the coroutine at suspension, wave the wand to submit,
-/// then poll completions and requeue fulfilled tasks onto the deck.
+/// This early version turns closed wish objects into staged SQEs. `wave()`
+/// submits staged work, and `poll()` drains completions, stores typed results,
+/// and requeues fulfilled tasks onto the deck.
 class uring_wand final : public wand
 {
 public:
@@ -61,27 +62,101 @@ public:
         if (token == 0)
             token = next_token_++;
 
-        staged_manual_.push_back(token);
-        return waiter<void>{*this, token};
+        auto state = std::make_shared<wait_state<void>>();
+        operations_.emplace(
+            token,
+            operation{
+                .what = operation_kind::manual,
+                .void_result = state,
+            });
+        staged_.push_back(token);
+        trace("uring prepare manual token=" + std::to_string(token));
+        return waiter<void>{*this, token, state};
+    }
+
+    waiter<int> prepare(
+        deck &,
+        detail::promise_base &,
+        openat_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<int>>();
+        operations_.emplace(
+            token,
+            operation{
+                .what = operation_kind::openat,
+                .open_result = state,
+                .dirfd = wish.dirfd,
+                .path = std::move(wish.path),
+                .flags = wish.flags,
+                .mode = wish.mode,
+            });
+        staged_.push_back(token);
+        trace("uring prepare openat token=" + std::to_string(token));
+        return waiter<int>{*this, token, state};
+    }
+
+    waiter<std::size_t> prepare(
+        deck &,
+        detail::promise_base &,
+        read_some_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<std::size_t>>();
+        operations_.emplace(
+            token,
+            operation{
+                .what = operation_kind::read,
+                .size_result = state,
+                .fd = wish.fd,
+                .buffer = wish.buffer,
+                .offset = wish.offset,
+            });
+        staged_.push_back(token);
+        trace("uring prepare read token=" + std::to_string(token));
+        return waiter<std::size_t>{*this, token, state};
     }
 
     void suspend(wait_token token, parked_task task) override
     {
+        trace("uring park token=" + std::to_string(token));
         waiters_.emplace(token, task);
     }
 
     void wave(deck &) override
     {
-        for (auto token : staged_manual_) {
+        trace("uring wave staged=" + std::to_string(staged_.size()));
+        for (auto token : staged_) {
             auto * sqe = io_uring_get_sqe(&ring_);
             if (sqe == nullptr)
                 throw std::runtime_error{"io_uring submission queue is full"};
 
-            io_uring_prep_nop(sqe);
+            auto & op = operations_.at(token);
+            switch (op.what) {
+            case operation_kind::manual:
+                io_uring_prep_nop(sqe);
+                break;
+            case operation_kind::openat:
+                io_uring_prep_openat(
+                    sqe,
+                    op.dirfd,
+                    op.path.c_str(),
+                    op.flags,
+                    op.mode);
+                break;
+            case operation_kind::read:
+                io_uring_prep_read(
+                    sqe,
+                    op.fd,
+                    op.buffer.data(),
+                    op.buffer.size(),
+                    op.offset);
+                break;
+            }
             io_uring_sqe_set_data64(sqe, static_cast<std::uint64_t>(token));
         }
 
-        staged_manual_.clear();
+        staged_.clear();
 
         auto rc = io_uring_submit(&ring_);
         if (rc < 0)
@@ -108,12 +183,32 @@ public:
             auto result = cqe->res;
             io_uring_cqe_seen(&ring_, cqe);
 
-            if (result < 0)
-                throw std::runtime_error{
-                    "io_uring operation failed: " + std::to_string(-result)};
+            trace("uring complete token=" + std::to_string(token)
+                + " result=" + std::to_string(result));
 
-            fulfill(d, token);
+            complete(d, token, result);
         }
+    }
+
+    void complete(deck & d, wait_token token, int result)
+    {
+        auto found = operations_.find(token);
+        if (found == operations_.end())
+            return;
+
+        auto & op = found->second;
+        if (result < 0) {
+            auto exception = std::make_exception_ptr(
+                std::runtime_error{
+                    "io_uring operation failed: "
+                    + std::to_string(-result)});
+            set_exception(op, exception);
+        } else {
+            set_value(op, result);
+        }
+
+        operations_.erase(found);
+        fulfill(d, token);
     }
 
     void fulfill(deck & d, wait_token token)
@@ -122,15 +217,66 @@ public:
         if (found == waiters_.end())
             return;
 
+        trace("uring fulfill token=" + std::to_string(token));
         auto task = found->second;
         waiters_.erase(found);
         task.resume(d);
     }
 
 private:
+    enum class operation_kind
+    {
+        manual,
+        openat,
+        read,
+    };
+
+    struct operation
+    {
+        operation_kind what = operation_kind::manual;
+        std::shared_ptr<wait_state<void>> void_result;
+        std::shared_ptr<wait_state<int>> open_result;
+        std::shared_ptr<wait_state<std::size_t>> size_result;
+        int dirfd = AT_FDCWD;
+        std::string path;
+        int flags = O_RDONLY;
+        mode_t mode = 0;
+        int fd = -1;
+        std::span<std::byte> buffer;
+        off_t offset = -1;
+    };
+
+    static void set_exception(
+        operation & op,
+        std::exception_ptr exception) noexcept
+    {
+        if (op.void_result)
+            op.void_result->set_exception(exception);
+        if (op.open_result)
+            op.open_result->set_exception(exception);
+        if (op.size_result)
+            op.size_result->set_exception(exception);
+    }
+
+    static void set_value(operation & op, int result)
+    {
+        switch (op.what) {
+        case operation_kind::manual:
+            op.void_result->set_value();
+            break;
+        case operation_kind::openat:
+            op.open_result->set_value(result);
+            break;
+        case operation_kind::read:
+            op.size_result->set_value(static_cast<std::size_t>(result));
+            break;
+        }
+    }
+
     io_uring ring_{};
     wait_token next_token_ = 1;
-    std::vector<wait_token> staged_manual_;
+    std::vector<wait_token> staged_;
+    std::unordered_map<wait_token, operation> operations_;
     std::unordered_map<wait_token, parked_task> waiters_;
 };
 

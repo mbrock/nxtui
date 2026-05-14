@@ -1,7 +1,18 @@
 #pragma once
 
 #include <coroutine>
+#include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <fcntl.h>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <sys/types.h>
+#include <type_traits>
+#include <utility>
 
 namespace nxt::rt {
 
@@ -29,17 +40,79 @@ struct parked_task
 template<typename T>
 class waiter;
 
-/// Void-result waiter returned by a wand after preparing an operation.
-///
-/// For now the runtime only has `manual_wish`, whose result type is `void`.
-/// Non-void waiters can later own or reference a typed result slot and return
-/// that value from `await_resume()`.
-template<>
-class waiter<void>
+template<typename T>
+class wait_state
 {
 public:
+    using stored_type = std::remove_cv_t<T>;
+
+    void set_value(T value)
+    {
+        value_.emplace(std::move(value));
+    }
+
+    void set_exception(std::exception_ptr exception) noexcept
+    {
+        exception_ = exception;
+    }
+
+    T take()
+    {
+        if (exception_)
+            std::rethrow_exception(exception_);
+        if (!value_)
+            throw std::runtime_error{"nxt::rt waiter result was never set"};
+        return std::move(*value_);
+    }
+
+private:
+    std::optional<stored_type> value_;
+    std::exception_ptr exception_;
+};
+
+template<>
+class wait_state<void>
+{
+public:
+    void set_value() noexcept
+    {
+        done_ = true;
+    }
+
+    void set_exception(std::exception_ptr exception) noexcept
+    {
+        exception_ = exception;
+    }
+
+    void take()
+    {
+        if (exception_)
+            std::rethrow_exception(exception_);
+        if (!done_)
+            throw std::runtime_error{"nxt::rt waiter result was never set"};
+    }
+
+private:
+    bool done_ = false;
+    std::exception_ptr exception_;
+};
+
+/// Typed waiter returned by a wand after preparing an operation.
+template<typename T>
+class waiter
+{
+public:
+    using result_type = T;
+
     waiter() = default;
-    waiter(wand & source, wait_token token) noexcept;
+    waiter(
+        wand & source,
+        wait_token token,
+        std::shared_ptr<wait_state<T>> state) noexcept
+        : source_(&source)
+        , token_(token)
+        , state_(std::move(state))
+    {}
 
     [[nodiscard]] bool await_ready() const noexcept
     {
@@ -47,12 +120,36 @@ public:
     }
 
     void await_suspend(std::coroutine_handle<> awaiting) const;
-    void await_resume() const noexcept {}
+    T await_resume()
+    {
+        if (state_ == nullptr)
+            throw std::runtime_error{"nxt::rt waiter has no result state"};
+        return state_->take();
+    }
+
+    [[nodiscard]] wait_token token() const noexcept
+    {
+        return token_;
+    }
+
+    [[nodiscard]] std::shared_ptr<wait_state<T>> state() const noexcept
+    {
+        return state_;
+    }
 
 private:
     wand * source_ = nullptr;
     wait_token token_ = 0;
+    std::shared_ptr<wait_state<T>> state_;
 };
+
+template<>
+inline void waiter<void>::await_resume()
+{
+    if (state_ == nullptr)
+        throw std::runtime_error{"nxt::rt waiter has no result state"};
+    state_->take();
+}
 
 /// Closed operation type for deterministic/manual tests.
 ///
@@ -65,6 +162,29 @@ struct manual_wish
     wait_token token = 0;
 
     waiter<void> operator co_await() const;
+};
+
+struct openat_wish
+{
+    using result_type = int;
+
+    int dirfd = AT_FDCWD;
+    std::string path;
+    int flags = O_RDONLY;
+    mode_t mode = 0;
+
+    waiter<int> operator co_await() const;
+};
+
+struct read_some_wish
+{
+    using result_type = std::size_t;
+
+    int fd = -1;
+    std::span<std::byte> buffer;
+    off_t offset = -1;
+
+    waiter<std::size_t> operator co_await() const;
 };
 
 /// Backend interface for staged platform/event-loop machinery.
@@ -82,6 +202,16 @@ public:
         deck & d,
         detail::promise_base & promise,
         manual_wish wish) = 0;
+
+    virtual waiter<int> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        openat_wish wish) = 0;
+
+    virtual waiter<std::size_t> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        read_some_wish wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void wave(deck & d) = 0;
