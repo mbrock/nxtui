@@ -12,6 +12,18 @@ namespace nxt::rt {
 template<typename T = void>
 class task;
 class scheduler;
+struct yield_awaiter;
+
+/// Token used with `co_yield nxt::rt::yield`.
+///
+/// C++ has no bare `co_yield;` syntax: `co_yield` always takes an expression.
+/// The compiler lowers `co_yield expr` to
+/// `co_await promise.yield_value(expr)`, so this token lets a `task<T>`
+/// promise interpret `co_yield nxt::rt::yield` as "yield to my scheduler".
+struct yield_token
+{};
+
+inline constexpr yield_token yield{};
 
 namespace detail {
 

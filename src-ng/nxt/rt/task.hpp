@@ -77,6 +77,14 @@ struct promise_base
         return final_awaitable{};
     }
 
+    /// Called by the compiler for `co_yield nxt::rt::yield`.
+    ///
+    /// `co_yield expr` is not special to generators only. For any coroutine,
+    /// the compiler asks the promise to translate `expr` via `yield_value`.
+    /// Here we translate our token into the same scheduler-yield awaiter that
+    /// `co_await sched.yield()` uses.
+    [[nodiscard]] yield_awaiter yield_value(yield_token) noexcept;
+
     /// Remember the coroutine that should continue after this task completes.
     void set_continuation(
         std::coroutine_handle<> handle,
@@ -394,9 +402,16 @@ struct yield_awaiter
         sched->enqueue(awaiting, running);
     }
 
-    /// No value is produced by `co_await sched.yield()`.
+    /// No value is produced by `co_await sched.yield()` or
+    /// `co_yield nxt::rt::yield`.
     void await_resume() const noexcept {}
 };
+
+inline yield_awaiter detail::promise_base::yield_value(
+    yield_token) noexcept
+{
+    return yield_awaiter{sched};
+}
 
 inline auto scheduler::yield() noexcept
 {
