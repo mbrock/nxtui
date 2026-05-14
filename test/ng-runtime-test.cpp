@@ -13,12 +13,9 @@ suite ng_runtime_tests = [] {
     "sync_wait returns a completed root task value"_test = [] {
         auto sched = nxt::rt::scheduler{};
 
-        auto root = []() -> nxt::rt::task<int> {
+        expect(sched.sync_wait([]() -> nxt::rt::task<int> {
             co_return 7;
-        };
-
-        expect(sched.sync_wait(root()) == 7_i);
-        expect(sched.sync_wait(root) == 7_i);
+        }) == 7_i);
     };
 
     "awaited child is adopted by the current task"_test = [] {
@@ -29,7 +26,7 @@ suite ng_runtime_tests = [] {
             co_return 4;
         };
 
-        auto parent_body = [&sched, child_body]() -> nxt::rt::task<int> {
+        expect(sched.sync_wait([&sched, child_body]() -> nxt::rt::task<int> {
             auto parent_id = sched.current_task_id();
             auto child = child_body();
             auto child_id = child.id();
@@ -40,9 +37,7 @@ suite ng_runtime_tests = [] {
             expect(child.parent_id().has_value());
             expect(*child.parent_id() == parent_id);
             co_return value + 1;
-        };
-
-        expect(sched.sync_wait(parent_body()) == 5_i);
+        }) == 5_i);
     };
 
     "yield re-enters through the scheduler pump"_test = [] {
@@ -56,29 +51,26 @@ suite ng_runtime_tests = [] {
             out.push_back(tag * 10 + 2);
         };
 
-        auto parent_body = [&]() -> nxt::rt::task<void> {
+        sched.sync_wait([&]() -> nxt::rt::task<void> {
             auto first = child_body(1);
             auto second = child_body(2);
 
             co_await first;
             co_await second;
-        };
-
-        sched.sync_wait(parent_body());
+        });
 
         expect(out == std::vector<int>{11, 12, 21, 22});
     };
 
     "exceptions propagate through sync_wait"_test = [] {
         auto sched = nxt::rt::scheduler{};
-        auto root = []() -> nxt::rt::task<void> {
-            co_yield nxt::rt::yield;
-            throw std::runtime_error{"boom"};
-        };
 
         auto threw = false;
         try {
-            sched.sync_wait(root());
+            sched.sync_wait([]() -> nxt::rt::task<void> {
+                co_yield nxt::rt::yield;
+                throw std::runtime_error{"boom"};
+            });
         } catch (const std::runtime_error &) {
             threw = true;
         }
