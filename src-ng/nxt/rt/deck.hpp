@@ -101,14 +101,9 @@ public:
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
 
-        for (auto const & item : round) {
-            if (!item.handle || item.handle.done())
-                continue;
-
-            auto deck_guard = current_deck_guard{*this};
-            auto promise_guard = current_promise_guard{item.promise};
-            item.handle.resume();
-        }
+        auto deck_guard = current_deck_guard{*this};
+        for (auto const & item : round)
+            item.resume_if_ready();
     }
 
     /// Keep pumping ready rounds until no work is queued.
@@ -160,15 +155,6 @@ private:
     friend class task;
     friend struct yield_awaiter;
 
-    struct ready_item
-    {
-        // The compiler/runtime handle used to resume the coroutine frame.
-        std::coroutine_handle<> handle;
-        // The promise belonging to `handle`, used only to restore ambient
-        // current-task context while resuming.
-        detail::promise_base * promise = nullptr;
-    };
-
     /// Temporarily marks `d` as the deck currently resuming code.
     class current_deck_guard
     {
@@ -205,6 +191,30 @@ private:
 
     private:
         detail::promise_base * previous_;
+    };
+
+    struct ready_item
+    {
+        /// Resume this coroutine frame if it still has work to do.
+        ///
+        /// The deck context is established once per pump round by
+        /// `run_ready()`. Each item only needs to restore its own promise as
+        /// the ambient current task before transferring control to the
+        /// compiler/runtime handle.
+        void resume_if_ready() const
+        {
+            if (!handle || handle.done())
+                return;
+
+            auto promise_guard = current_promise_guard{promise};
+            handle.resume();
+        }
+
+        // The compiler/runtime handle used to resume the coroutine frame.
+        std::coroutine_handle<> handle;
+        // The promise belonging to `handle`, used only to restore ambient
+        // current-task context while resuming.
+        detail::promise_base * promise = nullptr;
     };
 
     /// Put a coroutine handle on the ready queue for a later pump step.
