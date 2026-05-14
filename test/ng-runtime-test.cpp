@@ -18,26 +18,30 @@ suite ng_runtime_tests = [] {
         }) == 7_i);
     };
 
-    "awaited child is adopted by the current task"_test = [] {
+    "awaited child resumes its awaiting task"_test = [] {
         auto sched = nxt::rt::scheduler{};
+        auto events = std::vector<int>{};
 
-        auto child_body = []() -> nxt::rt::task<int> {
+        auto child_body = [&events]() -> nxt::rt::task<int> {
+            events.push_back(2);
             co_yield nxt::rt::yield;
+            events.push_back(3);
             co_return 4;
         };
 
-        expect(sched.sync_wait([&sched, child_body]() -> nxt::rt::task<int> {
-            auto parent_id = sched.current_task_id();
+        expect(sched.sync_wait([&events, child_body]() -> nxt::rt::task<int> {
+            events.push_back(1);
             auto child = child_body();
             auto child_id = child.id();
 
             auto value = co_await child;
 
             expect(child.id() == child_id);
-            expect(child.parent_id().has_value());
-            expect(*child.parent_id() == parent_id);
+            events.push_back(4);
             co_return value + 1;
         }) == 5_i);
+
+        expect(events == std::vector<int>{1, 2, 3, 4});
     };
 
     "yield re-enters through the scheduler pump"_test = [] {

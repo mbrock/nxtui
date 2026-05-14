@@ -29,7 +29,7 @@ struct promise_base
 {
     /// Awaited by the compiler when the coroutine body reaches its end.
     ///
-    /// We use final suspend to enqueue the awaiting parent/continuation instead
+    /// We use final suspend to enqueue the awaiting continuation instead
     /// of resuming it inline. That preserves the scheduler rule: coroutines run
     /// when the pump resumes a ready handle.
     struct final_awaitable
@@ -98,11 +98,9 @@ struct promise_base
     task_id id;
     /// Scheduler currently responsible for resuming this task.
     nxt::rt::scheduler * sched = nullptr;
-    /// Parent task id, set when a running task awaits this task.
-    std::optional<task_id> parent;
-    /// Raw coroutine handle for the awaiting parent.
+    /// Raw coroutine handle for the awaiting task.
     std::coroutine_handle<> continuation;
-    /// Parent promise, used to restore ambient context when continuation runs.
+    /// Awaiting task promise, used to restore ambient context when continuation runs.
     promise_base * continuation_promise = nullptr;
 };
 
@@ -200,9 +198,8 @@ public:
 
     /// Awaiter used when another coroutine does `co_await some_task`.
     ///
-    /// Awaiting wires parent -> child: the child records the current task as
-    /// its parent, the parent becomes the child's continuation, and the child is
-    /// enqueued on the same scheduler.
+    /// Awaiting wires child -> continuation: the awaiting task becomes the
+    /// child's continuation, and the child is enqueued on the same scheduler.
     class awaiter
     {
     public:
@@ -219,24 +216,23 @@ public:
 
         /// Called by the compiler when the awaiting coroutine suspends.
         ///
-        /// `awaiting` is the parent coroutine handle. We store it as the
+        /// `awaiting` is the awaiting coroutine handle. We store it as the
         /// child's continuation and enqueue the child for the pump.
         void await_suspend(std::coroutine_handle<> awaiting)
         {
             auto * sched = detail::current_scheduler;
-            auto * parent = detail::current_promise;
-            if (sched == nullptr || parent == nullptr)
+            auto * awaiting_promise = detail::current_promise;
+            if (sched == nullptr || awaiting_promise == nullptr)
                 throw std::runtime_error{
                     "nxt::rt task awaited without a running scheduler"};
 
             auto & promise = coroutine_.promise();
             sched->bind(promise);
-            promise.parent = parent->id;
-            promise.set_continuation(awaiting, parent);
+            promise.set_continuation(awaiting, awaiting_promise);
             sched->enqueue(coroutine_, &promise);
         }
 
-        /// Called when the parent resumes after the child reaches final suspend.
+        /// Called when the awaiting task resumes after the child reaches final suspend.
         decltype(auto) await_resume()
         {
             return coroutine_.promise().result();
@@ -289,14 +285,6 @@ public:
         if (!coroutine_)
             return {};
         return coroutine_.promise().id;
-    }
-
-    /// Parent id recorded when another task awaited this one.
-    [[nodiscard]] std::optional<task_id> parent_id() const noexcept
-    {
-        if (!coroutine_)
-            return std::nullopt;
-        return coroutine_.promise().parent;
     }
 
     /// Raw coroutine handle. Low-level scheduler plumbing only.
