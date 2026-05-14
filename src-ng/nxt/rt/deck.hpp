@@ -82,10 +82,15 @@ public:
         return ready_.empty();
     }
 
-    /// Resume all handles that are currently or subsequently enqueued.
+    /// Resume the handles that are ready at the start of this pump turn.
     ///
-    /// This is the "pump". It does not own a thread or block for external I/O;
-    /// hosts such as a terminal UI or Emacs module can decide when to call it.
+    /// This is one "pump" round. It first takes a snapshot of the current
+    /// ready queue and leaves the deck empty. Any tasks enqueued by resumed
+    /// work land in the next round's queue instead of mutating the collection
+    /// currently being iterated.
+    ///
+    /// The deck does not own a thread or block for external I/O; hosts such as
+    /// a terminal UI or Emacs module can decide when to call it.
     /// Re-entering it from a running task is rejected so one coroutine cannot
     /// unexpectedly resume sibling work in the middle of its own turn.
     void run_ready()
@@ -93,9 +98,12 @@ public:
         if (detail::current_promise != nullptr)
             throw std::runtime_error{"nxt::rt deck pump is not reentrant"};
 
-        while (!ready_.empty()) {
-            auto item = ready_.front();
-            ready_.pop_front();
+        auto round = std::deque<ready_item>{};
+        round.swap(ready_);
+
+        while (!round.empty()) {
+            auto item = round.front();
+            round.pop_front();
             if (!item.handle || item.handle.done())
                 continue;
 
@@ -103,6 +111,13 @@ public:
             auto promise_guard = current_promise_guard{item.promise};
             item.handle.resume();
         }
+    }
+
+    /// Keep pumping ready rounds until no work is queued.
+    void run_until_idle()
+    {
+        while (!empty())
+            run_ready();
     }
 
     template<typename T>

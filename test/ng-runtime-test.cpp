@@ -41,7 +41,8 @@ suite ng_runtime_tests = [] {
             co_return value + 1;
         }) == 5_i);
 
-        expect(events == std::vector<int>{1, 2, 3, 4});
+        expect(events == std::vector<int>{1, 2, 3, 4})
+            << "child/continuation event order changed";
     };
 
     "yield re-enters through the deck pump"_test = [] {
@@ -63,7 +64,56 @@ suite ng_runtime_tests = [] {
             co_await second;
         });
 
-        expect(out == std::vector<int>{11, 12, 21, 22});
+        expect(out == std::vector<int>{11, 12, 21, 22})
+            << "yield event order changed";
+    };
+
+    "run_ready only plays the initially ready round"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto events = std::vector<int>{};
+
+        // Pass state as a coroutine parameter instead of capturing it in a
+        // temporary coroutine lambda; captures live in the lambda object, while
+        // parameters live in the coroutine frame.
+        auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
+            events.push_back(1);
+            co_await nxt::rt::yield();
+            events.push_back(2);
+        };
+
+        auto task = task_body(events);
+        deck.start(task);
+        deck.run_ready();
+
+        expect(events == std::vector<int>{1})
+            << "run_ready should only play the first ready round";
+        expect(!deck.empty()) << "yielded task should be queued for next round";
+
+        deck.run_ready();
+
+        expect(events == std::vector<int>{1, 2})
+            << "second run_ready should play the yielded task";
+        expect(deck.empty()) << "deck should be empty after second round";
+    };
+
+    "run_until_idle keeps playing rounds until quiescence"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto events = std::vector<int>{};
+
+        // Same lifetime rule as above: coroutine parameters are frame state.
+        auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
+            events.push_back(1);
+            co_await nxt::rt::yield();
+            events.push_back(2);
+        };
+
+        auto task = task_body(events);
+        deck.start(task);
+        deck.run_until_idle();
+
+        expect(events == std::vector<int>{1, 2})
+            << "run_until_idle should play all rounds";
+        expect(deck.empty()) << "deck should be empty after run_until_idle";
     };
 
     "exceptions propagate through sync_wait"_test = [] {
