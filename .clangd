@@ -1,0 +1,4 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -I/home/mbrock/nxtui/src-ng

@@ -543,7 +543,7 @@ cgroup_sampler(yard & self, std::shared_ptr<SessionCtx> ctx)
             ctx->push(read_snapshot(ctx->cgroup_path));
             self.runtime().signal_damage();
         }
-        co_await self.sleep(500ms);
+        co_await self.sleep(60ms);
     }
 }
 
