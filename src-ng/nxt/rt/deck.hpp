@@ -43,17 +43,6 @@ template<typename Fn>
 concept task_factory =
     std::invocable<Fn> && is_task_v<std::invoke_result_t<Fn>>;
 
-/// Token used with `co_yield nxt::rt::yield`.
-///
-/// C++ has no bare `co_yield;` syntax: `co_yield` always takes an expression.
-/// The compiler lowers `co_yield expr` to
-/// `co_await promise.yield_value(expr)`, so this token lets a `task<T>`
-/// promise interpret `co_yield nxt::rt::yield` as "yield to my deck".
-struct yield_token
-{};
-
-inline constexpr yield_token yield{};
-
 namespace detail {
 
 struct promise_base;
@@ -63,7 +52,7 @@ struct promise_base;
 // A C++ coroutine frame stores its own promise object, but ordinary functions
 // called from inside the coroutine do not automatically receive that promise.
 // These thread-local pointers are the minimal "ambient" hook that lets
-// `co_await deck.yield()` and `co_await child_task` discover the currently
+// `co_await nxt::rt::yield()` and `co_await child_task` discover the currently
 // running task while the deck pump is resuming it.
 inline thread_local deck * current_deck = nullptr;
 inline thread_local promise_base * current_promise = nullptr;
@@ -92,13 +81,6 @@ public:
     {
         return ready_.empty();
     }
-
-    /// Awaitable that moves the current coroutine to the back of the ready
-    /// queue, giving sibling ready tasks a chance to run.
-    ///
-    /// This uses the deck that is actively pumping the coroutine, so
-    /// `co_yield nxt::rt::yield` is usually the clearer spelling.
-    [[nodiscard]] auto yield() noexcept;
 
     /// Resume all handles that are currently or subsequently enqueued.
     ///
@@ -212,5 +194,8 @@ private:
 
     std::deque<ready_item> ready_;
 };
+
+/// Awaitable that moves the current coroutine to the back of the active deck.
+[[nodiscard]] yield_awaiter yield() noexcept;
 
 } // namespace nxt::rt

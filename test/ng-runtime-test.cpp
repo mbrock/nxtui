@@ -24,7 +24,7 @@ suite ng_runtime_tests = [] {
 
         auto child_body = [&events]() -> nxt::rt::task<int> {
             events.push_back(2);
-            co_yield nxt::rt::yield;
+            co_await nxt::rt::yield();
             events.push_back(3);
             co_return 4;
         };
@@ -51,7 +51,7 @@ suite ng_runtime_tests = [] {
         auto child_body =
             [&out](int tag) -> nxt::rt::task<void> {
             out.push_back(tag * 10 + 1);
-            co_yield nxt::rt::yield;
+            co_await nxt::rt::yield();
             out.push_back(tag * 10 + 2);
         };
 
@@ -72,7 +72,7 @@ suite ng_runtime_tests = [] {
         auto threw = false;
         try {
             deck.sync_wait([]() -> nxt::rt::task<void> {
-                co_yield nxt::rt::yield;
+                co_await nxt::rt::yield();
                 throw std::runtime_error{"boom"};
             });
         } catch (const std::runtime_error &) {
