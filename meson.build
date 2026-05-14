@@ -102,6 +102,10 @@ nxt_inc = include_directories(
   'vendor/mdspan/include',
 )
 
+nxt_ng_inc = include_directories(
+  'src-ng',
+)
+
 nxt_core_deps = []
 nxt_core_deps += utf8proc_dep
 nxt_core_deps += nxt_libvterm_dep
@@ -278,6 +282,11 @@ if get_option('tests')
     dependencies : [nxt_dep],
   )
 
+  nxt_ng_runtime_test = executable('ng-runtime-test',
+    'test/ng-runtime-test.cpp',
+    include_directories : [nxt_ng_inc, nxt_test_inc],
+  )
+
   test('raster-test', nxt_raster_test)
   test('arrow-test', nxt_arrow_test)
   test('http-test', nxt_http_test)
@@ -290,4 +299,5 @@ if get_option('tests')
   test('subprocess-test', nxt_subprocess_test)
   test('text-field-test', nxt_text_field_test)
   test('yardtask-test', nxt_yardtask_test)
+  test('ng-runtime-test', nxt_ng_runtime_test)
 endif
