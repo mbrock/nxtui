@@ -80,6 +80,19 @@ suite ng_runtime_tests = [] {
         }
         expect(threw);
     };
+
+    "deck pump rejects reentrant calls from a running task"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        expect(deck.sync_wait([&deck]() -> nxt::rt::task<bool> {
+            try {
+                deck.run_ready();
+            } catch (const std::runtime_error &) {
+                co_return true;
+            }
+            co_return false;
+        }));
+    };
 };
 
 } // namespace nxt::test

@@ -86,8 +86,13 @@ public:
     ///
     /// This is the "pump". It does not own a thread or block for external I/O;
     /// hosts such as a terminal UI or Emacs module can decide when to call it.
+    /// Re-entering it from a running task is rejected so one coroutine cannot
+    /// unexpectedly resume sibling work in the middle of its own turn.
     void run_ready()
     {
+        if (detail::current_promise != nullptr)
+            throw std::runtime_error{"nxt::rt deck pump is not reentrant"};
+
         while (!ready_.empty()) {
             auto item = ready_.front();
             ready_.pop_front();
