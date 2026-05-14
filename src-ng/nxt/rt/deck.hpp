@@ -101,9 +101,7 @@ public:
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
 
-        while (!round.empty()) {
-            auto item = round.front();
-            round.pop_front();
+        for (auto const & item : round) {
             if (!item.handle || item.handle.done())
                 continue;
 
