@@ -6,65 +6,41 @@
 namespace nxt::rt {
 
 class deck;
+class wand;
 
 namespace detail {
 struct promise_base;
 }
 
-/// A value describing something outside the deck that a task wants.
+using wait_token = std::uint64_t;
+
+/// A suspended coroutine parked inside a wand.
 ///
-/// The wish itself is intentionally plain data. Later versions can add timer
-/// deadlines, file descriptors, subprocess ids, socket operations, or other
-/// platform facts without making the wish own coroutine lifetime machinery.
-struct wish
+/// Operation-specific wands store these records by token. When the platform
+/// completion arrives, `resume()` puts the task back onto the deck.
+struct parked_task
 {
-    enum class kind
-    {
-        manual,
-    };
+    void resume(deck & d) const;
 
-    /// Test-shaped wish: a wand may fulfill it whenever it chooses.
-    [[nodiscard]] static wish manual(std::uint64_t token = 0) noexcept
-    {
-        return wish{
-            .what = kind::manual,
-            .token = token,
-        };
-    }
-
-    kind what = kind::manual;
-    std::uint64_t token = 0;
-};
-
-/// A wish paired with the suspended task that made it.
-///
-/// This is the bridge object a wand sees. The `desired` field is the
-/// platform-shaped value; `fulfill()` puts the suspended coroutine back into a
-/// deck when the platform event has happened.
-struct wish_request
-{
-    void fulfill(deck & d) const;
-
-    wish desired;
     std::coroutine_handle<> handle;
     detail::promise_base * promise = nullptr;
 };
 
-/// Backend interface for platform/event-loop machinery.
+template<typename T>
+class waiter;
+
+/// Void-result waiter returned by a wand after preparing an operation.
 ///
-/// A wand receives wishes discovered by a deck pump. Concrete wands can map
-/// them onto epoll/kqueue/io_uring/Emacs/timers/tests, then eventually fulfill
-/// the request back into a deck.
-class wand
+/// For now the runtime only has `manual_wish`, whose result type is `void`.
+/// Non-void waiters can later own or reference a typed result slot and return
+/// that value from `await_resume()`.
+template<>
+class waiter<void>
 {
 public:
-    virtual ~wand() = default;
+    waiter() = default;
+    waiter(wand & source, wait_token token) noexcept;
 
-    virtual void post(deck & d, wish_request request) = 0;
-};
-
-struct wish_awaiter
-{
     [[nodiscard]] bool await_ready() const noexcept
     {
         return false;
@@ -73,13 +49,42 @@ struct wish_awaiter
     void await_suspend(std::coroutine_handle<> awaiting) const;
     void await_resume() const noexcept {}
 
-    wish desired;
+private:
+    wand * source_ = nullptr;
+    wait_token token_ = 0;
 };
 
-/// Await a platform wish through the active deck/wand plumbing.
-[[nodiscard]] inline wish_awaiter wait_for(wish desired) noexcept
+/// Closed operation type for deterministic/manual tests.
+///
+/// This is deliberately more like a tiny SQE recipe than a generic variant:
+/// the operation owns its input parameters and names its result type.
+struct manual_wish
 {
-    return wish_awaiter{.desired = desired};
-}
+    using result_type = void;
+
+    wait_token token = 0;
+
+    waiter<void> operator co_await() const;
+};
+
+/// Backend interface for staged platform/event-loop machinery.
+///
+/// `prepare()` is called synchronously while a coroutine is running. It can
+/// allocate backend state, stage submission records, and return a typed waiter.
+/// The waiter parks the coroutine at `await_suspend()`. After a deck round,
+/// `wave()` lets the wand submit whatever it staged during that round.
+class wand
+{
+public:
+    virtual ~wand() = default;
+
+    virtual waiter<void> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        manual_wish wish) = 0;
+
+    virtual void suspend(wait_token token, parked_task task) = 0;
+    virtual void wave(deck & d) = 0;
+};
 
 } // namespace nxt::rt

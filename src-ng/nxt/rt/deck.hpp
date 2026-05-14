@@ -9,7 +9,6 @@
 #include <functional>
 #include <stdexcept>
 #include <type_traits>
-#include <vector>
 
 namespace nxt::rt {
 
@@ -58,6 +57,7 @@ struct promise_base;
 // running task while the deck pump is resuming it.
 inline thread_local deck * current_deck = nullptr;
 inline thread_local promise_base * current_promise = nullptr;
+inline thread_local wand * current_wand = nullptr;
 
 } // namespace detail
 
@@ -97,17 +97,18 @@ public:
     /// unexpectedly resume sibling work in the middle of its own turn.
     void run_ready()
     {
-        if (detail::current_promise != nullptr)
-            throw std::runtime_error{"nxt::rt deck pump is not reentrant"};
+        run_ready_with(nullptr);
+    }
 
-        auto round = std::deque<ready_item>{};
-        round.swap(ready_);
-
-        auto deck_guard = current_deck_guard{*this};
-        for (auto const & item : round) {
-            item.resume_if_ready();
-            item.collect_wishes_into(wishes_);
-        }
+    /// Pump one ready round with `w` as the active backend, then wave it.
+    ///
+    /// Awaiting a closed wish operation synchronously asks the active wand to
+    /// prepare a typed waiter. Once the round ends, `wave()` lets the wand
+    /// submit whatever platform work it staged during coroutine execution.
+    void run_ready(wand & w)
+    {
+        run_ready_with(&w);
+        w.wave(*this);
     }
 
     /// Keep pumping ready rounds until no work is queued.
@@ -117,45 +118,33 @@ public:
             run_ready();
     }
 
-    /// Hand newly discovered wishes to a wand.
+    /// Keep pumping currently ready work, waving the wand after each round.
     ///
-    /// Pumping resumes coroutines. If a coroutine suspends on `wait_for(wish)`,
-    /// the wish is collected here after the pump returns to the deck. Posting
-    /// remains a separate step so embedders can decide exactly when platform
-    /// registrations happen.
-    void post_wishes(wand & w)
-    {
-        auto wishes = take_wishes();
-        for (auto const & request : wishes)
-            w.post(*this, request);
-    }
-
-    /// Pump one ready round, then post any wishes produced by that round.
-    void run_ready(wand & w)
-    {
-        run_ready();
-        post_wishes(w);
-    }
-
-    /// Keep pumping currently ready work, posting wishes after each round.
-    ///
-    /// This still does not block for platform events. If posting a wish causes
-    /// the wand to fulfill something immediately, the next loop iteration will
-    /// see that newly-ready task.
+    /// This still does not block for platform events. If waving the wand
+    /// immediately fulfills something, the next loop iteration will see that
+    /// newly-ready task.
     void run_until_idle(wand & w)
     {
         while (!empty())
             run_ready(w);
     }
 
-    /// Move out wishes produced by the most recent pump work.
-    [[nodiscard]] std::vector<wish_request> take_wishes()
+private:
+    void run_ready_with(wand * w)
     {
-        auto wishes = std::vector<wish_request>{};
-        wishes.swap(wishes_);
-        return wishes;
+        if (detail::current_promise != nullptr)
+            throw std::runtime_error{"nxt::rt deck pump is not reentrant"};
+
+        auto round = std::deque<ready_item>{};
+        round.swap(ready_);
+
+        auto deck_guard = current_deck_guard{*this};
+        auto wand_guard = current_wand_guard{w};
+        for (auto const & item : round)
+            item.resume_if_ready();
     }
 
+public:
     template<typename T>
     void start(task<T> & t);
 
@@ -196,7 +185,7 @@ private:
     friend struct detail::promise_base;
     template<typename T>
     friend class task;
-    friend struct wish_request;
+    friend struct parked_task;
     friend struct yield_awaiter;
 
     /// Temporarily marks `d` as the deck currently resuming code.
@@ -237,6 +226,25 @@ private:
         detail::promise_base * previous_;
     };
 
+    /// Temporarily marks `w` as the wand currently available to operations.
+    class current_wand_guard
+    {
+    public:
+        explicit current_wand_guard(wand * w) noexcept
+            : previous_(detail::current_wand)
+        {
+            detail::current_wand = w;
+        }
+
+        ~current_wand_guard()
+        {
+            detail::current_wand = previous_;
+        }
+
+    private:
+        wand * previous_;
+    };
+
     struct ready_item
     {
         /// Resume this coroutine frame if it still has work to do.
@@ -246,7 +254,6 @@ private:
         /// the ambient current task before transferring control to the
         /// compiler/runtime handle.
         void resume_if_ready() const;
-        void collect_wishes_into(std::vector<wish_request> & wishes) const;
 
         // The compiler/runtime handle used to resume the coroutine frame.
         std::coroutine_handle<> handle;
@@ -259,7 +266,6 @@ private:
     void enqueue(std::coroutine_handle<> handle, detail::promise_base * promise);
 
     std::deque<ready_item> ready_;
-    std::vector<wish_request> wishes_;
 };
 
 /// Awaitable that moves the current coroutine to the back of the active deck.

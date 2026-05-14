@@ -11,6 +11,55 @@ namespace nxt::test {
 
 using namespace boost::ut;
 
+struct manual_wand final : nxt::rt::wand
+{
+    nxt::rt::waiter<void> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::manual_wish wish) override
+    {
+        prepared.push_back(wish.token);
+        return nxt::rt::waiter<void>{*this, wish.token};
+    }
+
+    void suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
+    {
+        parked.push_back(
+            parked_entry{
+                .token = token,
+                .task = task,
+            });
+    }
+
+    void wave(nxt::rt::deck &) override
+    {
+        ++waves;
+    }
+
+    void fulfill(nxt::rt::deck & deck, nxt::rt::wait_token token)
+    {
+        for (auto it = parked.begin(); it != parked.end(); ++it) {
+            if (it->token != token)
+                continue;
+
+            auto task = it->task;
+            parked.erase(it);
+            task.resume(deck);
+            return;
+        }
+    }
+
+    struct parked_entry
+    {
+        nxt::rt::wait_token token = 0;
+        nxt::rt::parked_task task;
+    };
+
+    std::vector<nxt::rt::wait_token> prepared;
+    std::vector<parked_entry> parked;
+    int waves = 0;
+};
+
 suite ng_runtime_tests = [] {
     "sync_wait returns a completed root task value"_test = [] {
         auto deck = nxt::rt::deck{};
@@ -118,55 +167,45 @@ suite ng_runtime_tests = [] {
         expect(deck.empty()) << "deck should be empty after run_until_idle";
     };
 
-    "wish await records a resumable platform request"_test = [] {
+    "manual wish prepares and parks a typed waiter"_test = [] {
         auto deck = nxt::rt::deck{};
+        auto wand = manual_wand{};
         auto events = std::vector<int>{};
 
         auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
             events.push_back(1);
-            co_await nxt::rt::wait_for(nxt::rt::wish::manual(42));
+            co_await nxt::rt::manual_wish{.token = 42};
             events.push_back(2);
         };
 
         auto task = task_body(events);
         deck.start(task);
-        deck.run_ready();
+        deck.run_ready(wand);
 
         expect(events == std::vector<int>{1})
-            << "task should suspend before wish fulfillment";
-        expect(deck.empty()) << "wish await should not requeue itself";
+            << "task should suspend before manual wish fulfillment";
+        expect(deck.empty()) << "manual wish should not requeue itself";
+        expect(wand.prepared == std::vector<nxt::rt::wait_token>{42})
+            << "wand should synchronously prepare the wish";
+        expect(wand.parked.size() == std::size_t{1})
+            << "waiter should park the suspended coroutine";
+        expect(wand.parked.front().token == std::uint64_t{42});
 
-        auto wishes = deck.take_wishes();
-        expect(wishes.size() == std::size_t{1})
-            << "one wish should be collected";
-        expect(wishes.front().desired.what == nxt::rt::wish::kind::manual);
-        expect(wishes.front().desired.token == std::uint64_t{42});
-
-        wishes.front().fulfill(deck);
-        deck.run_ready();
+        wand.fulfill(deck, 42);
+        deck.run_ready(wand);
 
         expect(events == std::vector<int>{1, 2})
-            << "fulfilled wish should resume the suspended task";
+            << "fulfilled manual wish should resume the suspended task";
     };
 
-    "run_ready can post collected wishes to a wand"_test = [] {
-        struct recording_wand final : nxt::rt::wand
-        {
-            void post(nxt::rt::deck &, nxt::rt::wish_request request) override
-            {
-                posted.push_back(request);
-            }
-
-            std::vector<nxt::rt::wish_request> posted;
-        };
-
+    "run_ready waves the wand after staged wish preparation"_test = [] {
         auto deck = nxt::rt::deck{};
-        auto wand = recording_wand{};
+        auto wand = manual_wand{};
         auto events = std::vector<int>{};
 
         auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
             events.push_back(1);
-            co_await nxt::rt::wait_for(nxt::rt::wish::manual(7));
+            co_await nxt::rt::manual_wish{.token = 7};
             events.push_back(2);
         };
 
@@ -175,16 +214,18 @@ suite ng_runtime_tests = [] {
         deck.run_ready(wand);
 
         expect(events == std::vector<int>{1});
-        expect(wand.posted.size() == std::size_t{1})
-            << "run_ready(wand) should post collected wishes";
-        expect(wand.posted.front().desired.token == std::uint64_t{7});
+        expect(wand.prepared == std::vector<nxt::rt::wait_token>{7});
+        expect(wand.parked.size() == std::size_t{1});
+        expect(wand.waves == 1_i)
+            << "run_ready(wand) should wave after the pump round";
 
-        wand.posted.front().fulfill(deck);
+        wand.fulfill(deck, 7);
         deck.run_ready(wand);
 
         expect(events == std::vector<int>{1, 2});
-        expect(wand.posted.size() == std::size_t{1})
-            << "resuming after fulfillment should not post a second wish";
+        expect(wand.prepared.size() == std::size_t{1})
+            << "resuming after fulfillment should not prepare a second wish";
+        expect(wand.waves == 2_i);
     };
 
     "exceptions propagate through sync_wait"_test = [] {

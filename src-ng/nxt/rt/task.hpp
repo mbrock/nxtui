@@ -4,12 +4,10 @@
 
 #include <coroutine>
 #include <exception>
-#include <iterator>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace nxt::rt {
 
@@ -87,34 +85,12 @@ struct promise_base
         continuation_promise = promise;
     }
 
-    /// Remember that this task suspended on a platform wish.
-    ///
-    /// `await_suspend` runs while the coroutine is still the current task. The
-    /// deck later drains these requests after control returns from `resume()`,
-    /// which keeps wish posting out of the coroutine body itself.
-    void record_wish(wish_request request)
-    {
-        wishes.push_back(request);
-    }
-
-    /// Move pending wishes out of this promise into the deck's outgoing list.
-    void drain_wishes_into(std::vector<wish_request> & out)
-    {
-        out.insert(
-            out.end(),
-            std::make_move_iterator(wishes.begin()),
-            std::make_move_iterator(wishes.end()));
-        wishes.clear();
-    }
-
     /// Identity assigned when the coroutine frame is created.
     task_id id;
     /// Raw coroutine handle for the awaiting task.
     std::coroutine_handle<> continuation;
     /// Awaiting task promise, used to restore ambient context when continuation runs.
     promise_base * continuation_promise = nullptr;
-    /// Platform wishes produced by the most recent resume of this task.
-    std::vector<wish_request> wishes;
 };
 
 /// Promise for non-void task results.
@@ -386,32 +362,43 @@ inline void deck::ready_item::resume_if_ready() const
     handle.resume();
 }
 
-inline void deck::ready_item::collect_wishes_into(
-    std::vector<wish_request> & wishes) const
-{
-    if (promise != nullptr)
-        promise->drain_wishes_into(wishes);
-}
-
-inline void wish_request::fulfill(deck & d) const
+inline void parked_task::resume(deck & d) const
 {
     d.enqueue(handle, promise);
 }
 
-inline void wish_awaiter::await_suspend(
+inline waiter<void>::waiter(wand & source, wait_token token) noexcept
+    : source_(&source)
+    , token_(token)
+{}
+
+inline void waiter<void>::await_suspend(
     std::coroutine_handle<> awaiting) const
 {
+    auto * active_wand = source_;
     auto * running = detail::current_promise;
-    if (detail::current_deck == nullptr || running == nullptr)
+    if (active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
-            "nxt::rt wish awaited without a running deck"};
+            "nxt::rt waiter awaited without a prepared wand"};
 
-    running->record_wish(
-        wish_request{
-            .desired = desired,
+    active_wand->suspend(
+        token_,
+        parked_task{
             .handle = awaiting,
             .promise = running,
         });
+}
+
+inline waiter<void> manual_wish::operator co_await() const
+{
+    auto * active_deck = detail::current_deck;
+    auto * active_wand = detail::current_wand;
+    auto * running = detail::current_promise;
+    if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
+        throw std::runtime_error{
+            "nxt::rt manual wish awaited without a running wand"};
+
+    return active_wand->prepare(*active_deck, *running, *this);
 }
 
 struct yield_awaiter
