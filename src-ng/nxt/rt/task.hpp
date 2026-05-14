@@ -1,10 +1,9 @@
 #pragma once
 
-#include "nxt/rt/scheduler.hpp"
+#include "nxt/rt/deck.hpp"
 
 #include <coroutine>
 #include <exception>
-#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -30,7 +29,7 @@ struct promise_base
     /// Awaited by the compiler when the coroutine body reaches its end.
     ///
     /// We use final suspend to enqueue the awaiting continuation instead
-    /// of resuming it inline. That preserves the scheduler rule: coroutines run
+    /// of resuming it inline. That preserves the deck rule: coroutines run
     /// when the pump resumes a ready handle.
     struct final_awaitable
     {
@@ -48,8 +47,8 @@ struct promise_base
         void await_suspend(std::coroutine_handle<Promise> coroutine) noexcept
         {
             auto & promise = coroutine.promise();
-            if (promise.continuation && promise.sched != nullptr)
-                promise.sched->enqueue(
+            if (promise.continuation && detail::current_deck != nullptr)
+                detail::current_deck->enqueue(
                     promise.continuation,
                     promise.continuation_promise);
         }
@@ -64,7 +63,7 @@ struct promise_base
     /// Called by the compiler before running the coroutine body.
     ///
     /// `suspend_always` makes tasks lazy: constructing a `task<T>` only creates
-    /// the coroutine frame. The scheduler starts it later by enqueueing the
+    /// the coroutine frame. The deck starts it later by enqueueing the
     /// handle.
     [[nodiscard]] auto initial_suspend() noexcept
     {
@@ -81,8 +80,8 @@ struct promise_base
     ///
     /// `co_yield expr` is not special to generators only. For any coroutine,
     /// the compiler asks the promise to translate `expr` via `yield_value`.
-    /// Here we translate our token into the same scheduler-yield awaiter that
-    /// `co_await sched.yield()` uses.
+    /// Here we translate our token into the same deck-yield awaiter that
+    /// `co_await deck.yield()` uses.
     [[nodiscard]] yield_awaiter yield_value(yield_token) noexcept;
 
     /// Remember the coroutine that should continue after this task completes.
@@ -96,8 +95,6 @@ struct promise_base
 
     /// Identity assigned when the coroutine frame is created.
     task_id id;
-    /// Scheduler currently responsible for resuming this task.
-    nxt::rt::scheduler * sched = nullptr;
     /// Raw coroutine handle for the awaiting task.
     std::coroutine_handle<> continuation;
     /// Awaiting task promise, used to restore ambient context when continuation runs.
@@ -199,7 +196,7 @@ public:
     /// Awaiter used when another coroutine does `co_await some_task`.
     ///
     /// Awaiting wires child -> continuation: the awaiting task becomes the
-    /// child's continuation, and the child is enqueued on the same scheduler.
+    /// child's continuation, and the child is enqueued on the same deck.
     class awaiter
     {
     public:
@@ -220,16 +217,15 @@ public:
         /// child's continuation and enqueue the child for the pump.
         void await_suspend(std::coroutine_handle<> awaiting)
         {
-            auto * sched = detail::current_scheduler;
+            auto * active_deck = detail::current_deck;
             auto * awaiting_promise = detail::current_promise;
-            if (sched == nullptr || awaiting_promise == nullptr)
+            if (active_deck == nullptr || awaiting_promise == nullptr)
                 throw std::runtime_error{
-                    "nxt::rt task awaited without a running scheduler"};
+                    "nxt::rt task awaited without a running deck"};
 
             auto & promise = coroutine_.promise();
-            sched->bind(promise);
             promise.set_continuation(awaiting, awaiting_promise);
-            sched->enqueue(coroutine_, &promise);
+            active_deck->enqueue(coroutine_, &promise);
         }
 
         /// Called when the awaiting task resumes after the child reaches final suspend.
@@ -287,7 +283,7 @@ public:
         return coroutine_.promise().id;
     }
 
-    /// Raw coroutine handle. Low-level scheduler plumbing only.
+    /// Raw coroutine handle. Low-level deck plumbing only.
     [[nodiscard]] coroutine_handle handle() const noexcept
     {
         return coroutine_;
@@ -347,24 +343,19 @@ inline auto promise<void>::get_return_object() noexcept -> task_type
 
 } // namespace detail
 
-inline task_id scheduler::current_task_id() const noexcept
+inline task_id deck::current_task_id() const noexcept
 {
-    if (detail::current_scheduler != this || detail::current_promise == nullptr)
+    if (detail::current_deck != this || detail::current_promise == nullptr)
         return {};
     return detail::current_promise->id;
 }
 
-inline void scheduler::bind(detail::promise_base & promise)
-{
-    promise.sched = this;
-}
-
-inline void scheduler::enqueue(
+inline void deck::enqueue(
     std::coroutine_handle<> handle,
     detail::promise_base * promise)
 {
     ready_.push_back(
-        scheduler::ready_item{
+        deck::ready_item{
             .handle = handle,
             .promise = promise,
         });
@@ -372,8 +363,6 @@ inline void scheduler::enqueue(
 
 struct yield_awaiter
 {
-    scheduler * sched = nullptr;
-
     /// Yielding always suspends so the coroutine returns to the pump.
     [[nodiscard]] bool await_ready() const noexcept
     {
@@ -383,14 +372,15 @@ struct yield_awaiter
     /// Re-enqueue the currently running coroutine.
     void await_suspend(std::coroutine_handle<> awaiting) const
     {
+        auto * active_deck = detail::current_deck;
         auto * running = detail::current_promise;
-        if (sched == nullptr || running == nullptr)
+        if (active_deck == nullptr || running == nullptr)
             throw std::runtime_error{
-                "nxt::rt yield awaited without a running scheduler"};
-        sched->enqueue(awaiting, running);
+                "nxt::rt yield awaited without a running deck"};
+        active_deck->enqueue(awaiting, running);
     }
 
-    /// No value is produced by `co_await sched.yield()` or
+    /// No value is produced by `co_await deck.yield()` or
     /// `co_yield nxt::rt::yield`.
     void await_resume() const noexcept {}
 };
@@ -398,21 +388,20 @@ struct yield_awaiter
 inline yield_awaiter detail::promise_base::yield_value(
     yield_token) noexcept
 {
-    return yield_awaiter{sched};
+    return yield_awaiter{};
 }
 
-inline auto scheduler::yield() noexcept
+inline auto deck::yield() noexcept
 {
-    return yield_awaiter{this};
+    return yield_awaiter{};
 }
 
 template<typename T>
-inline void scheduler::start(task<T> & t)
+inline void deck::start(task<T> & t)
 {
     auto handle = t.handle();
     if (!handle || handle.done())
         return;
-    bind(handle.promise());
     enqueue(handle, &handle.promise());
 }
 

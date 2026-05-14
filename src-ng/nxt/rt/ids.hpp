@@ -27,9 +27,9 @@ class task_id_source
 public:
     /// Allocate the next process-local task id.
     ///
-    /// This is atomic so ids remain unique if future schedulers or background
+    /// This is atomic so ids remain unique if future decks or background
     /// workers create coroutine frames from different threads. It does not imply
-    /// that the current scheduler is thread-safe.
+    /// that the current deck is thread-safe.
     [[nodiscard]] task_id next() noexcept
     {
         return task_id{next_.fetch_add(1, std::memory_order::relaxed)};

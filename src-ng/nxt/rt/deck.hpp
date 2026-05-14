@@ -13,7 +13,7 @@ namespace nxt::rt {
 
 template<typename T = void>
 class task;
-class scheduler;
+class deck;
 struct yield_awaiter;
 
 template<typename>
@@ -48,7 +48,7 @@ concept task_factory =
 /// C++ has no bare `co_yield;` syntax: `co_yield` always takes an expression.
 /// The compiler lowers `co_yield expr` to
 /// `co_await promise.yield_value(expr)`, so this token lets a `task<T>`
-/// promise interpret `co_yield nxt::rt::yield` as "yield to my scheduler".
+/// promise interpret `co_yield nxt::rt::yield` as "yield to my deck".
 struct yield_token
 {};
 
@@ -58,33 +58,33 @@ namespace detail {
 
 struct promise_base;
 
-// Dynamic execution context for code currently being resumed by a scheduler.
+// Dynamic execution context for code currently being resumed by a deck.
 //
 // A C++ coroutine frame stores its own promise object, but ordinary functions
 // called from inside the coroutine do not automatically receive that promise.
 // These thread-local pointers are the minimal "ambient" hook that lets
-// `co_await sched.yield()` and `co_await child_task` discover the currently
-// running task while the scheduler pump is resuming it.
-inline thread_local scheduler * current_scheduler = nullptr;
+// `co_await deck.yield()` and `co_await child_task` discover the currently
+// running task while the deck pump is resuming it.
+inline thread_local deck * current_deck = nullptr;
 inline thread_local promise_base * current_promise = nullptr;
 
 } // namespace detail
 
-class scheduler
+class deck
 {
 public:
-    scheduler() = default;
+    deck() = default;
 
-    scheduler(const scheduler &) = delete;
-    scheduler & operator=(const scheduler &) = delete;
-    scheduler(scheduler &&) = delete;
-    scheduler & operator=(scheduler &&) = delete;
+    deck(const deck &) = delete;
+    deck & operator=(const deck &) = delete;
+    deck(deck &&) = delete;
+    deck & operator=(deck &&) = delete;
 
-    /// Return the id of the task currently being resumed by this scheduler.
+    /// Return the id of the task currently being resumed by this deck.
     ///
     /// Outside `run_ready()` this returns the empty id. This is intentionally
     /// just ambient observation; durable task storage is a separate design
-    /// question and does not live in this seed scheduler.
+    /// question and does not live in this seed deck.
     [[nodiscard]] task_id current_task_id() const noexcept;
 
     /// True when no coroutine handles are queued for the pump.
@@ -95,6 +95,9 @@ public:
 
     /// Awaitable that moves the current coroutine to the back of the ready
     /// queue, giving sibling ready tasks a chance to run.
+    ///
+    /// This uses the deck that is actively pumping the coroutine, so
+    /// `co_yield nxt::rt::yield` is usually the clearer spelling.
     [[nodiscard]] auto yield() noexcept;
 
     /// Resume all handles that are currently or subsequently enqueued.
@@ -109,7 +112,7 @@ public:
             if (!item.handle || item.handle.done())
                 continue;
 
-            auto scheduler_guard = current_scheduler_guard{*this};
+            auto deck_guard = current_deck_guard{*this};
             auto promise_guard = current_promise_guard{item.promise};
             item.handle.resume();
         }
@@ -118,7 +121,7 @@ public:
     template<typename T>
     void start(task<T> & t);
 
-    /// Drive one root task until completion on this scheduler.
+    /// Drive one root task until completion on this deck.
     ///
     /// The deadlock check catches the seed runtime's only current blocking
     /// condition: a task suspended but no future event/timer/fd machinery exists
@@ -129,7 +132,7 @@ public:
         start(t);
         while (!t.done()) {
             if (ready_.empty())
-                throw std::runtime_error{"nxt::rt scheduler deadlock"};
+                throw std::runtime_error{"nxt::rt deck deadlock"};
             run_ready();
         }
 
@@ -166,23 +169,23 @@ private:
         detail::promise_base * promise = nullptr;
     };
 
-    /// Temporarily marks `sched` as the scheduler currently resuming code.
-    class current_scheduler_guard
+    /// Temporarily marks `d` as the deck currently resuming code.
+    class current_deck_guard
     {
     public:
-        explicit current_scheduler_guard(scheduler & sched) noexcept
-            : previous_(detail::current_scheduler)
+        explicit current_deck_guard(deck & d) noexcept
+            : previous_(detail::current_deck)
         {
-            detail::current_scheduler = &sched;
+            detail::current_deck = &d;
         }
 
-        ~current_scheduler_guard()
+        ~current_deck_guard()
         {
-            detail::current_scheduler = previous_;
+            detail::current_deck = previous_;
         }
 
     private:
-        scheduler * previous_;
+        deck * previous_;
     };
 
     /// Temporarily marks `promise` as the current coroutine promise.
@@ -204,8 +207,6 @@ private:
         detail::promise_base * previous_;
     };
 
-    /// Associate a coroutine promise with this scheduler.
-    void bind(detail::promise_base & promise);
     /// Put a coroutine handle on the ready queue for a later pump step.
     void enqueue(std::coroutine_handle<> handle, detail::promise_base * promise);
 

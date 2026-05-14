@@ -11,15 +11,15 @@ using namespace boost::ut;
 
 suite ng_runtime_tests = [] {
     "sync_wait returns a completed root task value"_test = [] {
-        auto sched = nxt::rt::scheduler{};
+        auto deck = nxt::rt::deck{};
 
-        expect(sched.sync_wait([]() -> nxt::rt::task<int> {
+        expect(deck.sync_wait([]() -> nxt::rt::task<int> {
             co_return 7;
         }) == 7_i);
     };
 
     "awaited child resumes its awaiting task"_test = [] {
-        auto sched = nxt::rt::scheduler{};
+        auto deck = nxt::rt::deck{};
         auto events = std::vector<int>{};
 
         auto child_body = [&events]() -> nxt::rt::task<int> {
@@ -29,7 +29,7 @@ suite ng_runtime_tests = [] {
             co_return 4;
         };
 
-        expect(sched.sync_wait([&events, child_body]() -> nxt::rt::task<int> {
+        expect(deck.sync_wait([&events, child_body]() -> nxt::rt::task<int> {
             events.push_back(1);
             auto child = child_body();
             auto child_id = child.id();
@@ -44,8 +44,8 @@ suite ng_runtime_tests = [] {
         expect(events == std::vector<int>{1, 2, 3, 4});
     };
 
-    "yield re-enters through the scheduler pump"_test = [] {
-        auto sched = nxt::rt::scheduler{};
+    "yield re-enters through the deck pump"_test = [] {
+        auto deck = nxt::rt::deck{};
         auto out = std::vector<int>{};
 
         auto child_body =
@@ -55,7 +55,7 @@ suite ng_runtime_tests = [] {
             out.push_back(tag * 10 + 2);
         };
 
-        sched.sync_wait([&]() -> nxt::rt::task<void> {
+        deck.sync_wait([&]() -> nxt::rt::task<void> {
             auto first = child_body(1);
             auto second = child_body(2);
 
@@ -67,11 +67,11 @@ suite ng_runtime_tests = [] {
     };
 
     "exceptions propagate through sync_wait"_test = [] {
-        auto sched = nxt::rt::scheduler{};
+        auto deck = nxt::rt::deck{};
 
         auto threw = false;
         try {
-            sched.sync_wait([]() -> nxt::rt::task<void> {
+            deck.sync_wait([]() -> nxt::rt::task<void> {
                 co_yield nxt::rt::yield;
                 throw std::runtime_error{"boom"};
             });
