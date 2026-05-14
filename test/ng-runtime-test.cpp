@@ -1,16 +1,21 @@
+#include <nxt/rt/buffers.hpp>
 #include <nxt/rt/task.hpp>
 
 #include <boost/ut.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace nxt::test {
 
 using namespace boost::ut;
+using namespace std::literals;
 
 struct manual_wand final : nxt::rt::wand
 {
@@ -247,6 +252,26 @@ suite ng_runtime_tests = [] {
         expect(wand.prepared.size() == std::size_t{1})
             << "resuming after fulfillment should not prepare a second wish";
         expect(wand.waves == 2_i);
+    };
+
+    "rt buffer source visits chunks through reused storage"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
+        auto source = nxt::rt::string_source{std::span{chunks}};
+        auto storage = std::array<std::byte, 3>{};
+        auto visited = std::vector<std::string>{};
+
+        auto total = deck.sync_wait([&]() -> nxt::rt::task<std::size_t> {
+            co_return co_await nxt::rt::for_each_chunk(
+                source,
+                std::span{storage},
+                [&visited](std::span<const std::byte> chunk) {
+                    visited.emplace_back(nxt::rt::as_string_view(chunk));
+                });
+        });
+
+        expect(total == std::size_t{7});
+        expect(visited == std::vector<std::string>{"abc", "def", "g"});
     };
 
     "exceptions propagate through sync_wait"_test = [] {
