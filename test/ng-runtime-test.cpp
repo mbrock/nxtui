@@ -18,12 +18,13 @@ suite ng_runtime_tests = [] {
         };
 
         expect(sched.sync_wait(root()) == 7_i);
+        expect(sched.sync_wait(root) == 7_i);
     };
 
     "awaited child is adopted by the current task"_test = [] {
         auto sched = nxt::rt::scheduler{};
 
-        auto child_body = [&sched]() -> nxt::rt::task<int> {
+        auto child_body = []() -> nxt::rt::task<int> {
             co_yield nxt::rt::yield;
             co_return 4;
         };
@@ -49,7 +50,7 @@ suite ng_runtime_tests = [] {
         auto out = std::vector<int>{};
 
         auto child_body =
-            [&sched, &out](int tag) -> nxt::rt::task<void> {
+            [&out](int tag) -> nxt::rt::task<void> {
             out.push_back(tag * 10 + 1);
             co_yield nxt::rt::yield;
             out.push_back(tag * 10 + 2);
@@ -70,7 +71,7 @@ suite ng_runtime_tests = [] {
 
     "exceptions propagate through sync_wait"_test = [] {
         auto sched = nxt::rt::scheduler{};
-        auto root = [&sched]() -> nxt::rt::task<void> {
+        auto root = []() -> nxt::rt::task<void> {
             co_yield nxt::rt::yield;
             throw std::runtime_error{"boom"};
         };

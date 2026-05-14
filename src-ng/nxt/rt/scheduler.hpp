@@ -2,8 +2,10 @@
 
 #include "nxt/rt/ids.hpp"
 
+#include <concepts>
 #include <coroutine>
 #include <deque>
+#include <functional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -13,6 +15,33 @@ template<typename T = void>
 class task;
 class scheduler;
 struct yield_awaiter;
+
+template<typename>
+struct is_task : std::false_type
+{};
+
+template<typename T>
+struct is_task<task<T>> : std::true_type
+{};
+
+template<typename T>
+inline constexpr bool is_task_v = is_task<std::remove_cvref_t<T>>::value;
+
+template<typename>
+struct task_result;
+
+template<typename T>
+struct task_result<task<T>>
+{
+    using type = T;
+};
+
+template<typename T>
+using task_result_t = typename task_result<std::remove_cvref_t<T>>::type;
+
+template<typename Fn>
+concept task_factory =
+    std::invocable<Fn> && is_task_v<std::invoke_result_t<Fn>>;
 
 /// Token used with `co_yield nxt::rt::yield`.
 ///
@@ -109,6 +138,17 @@ public:
         } else {
             return std::move(t).result();
         }
+    }
+
+    /// Create and drive a task from a nullary task factory.
+    ///
+    /// This is a tiny sender-like convenience: the callable is a lazy recipe
+    /// that produces a fresh task when `sync_wait` starts it.
+    template<task_factory Fn>
+    [[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
+    sync_wait(Fn && fn)
+    {
+        return sync_wait(std::invoke(std::forward<Fn>(fn)));
     }
 
 private:
