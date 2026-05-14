@@ -20,3 +20,14 @@ executable('nxtdemo',
   dependencies : nxtdemo_dependencies,
   cpp_args : nxtdemo_cpp_args,
 )
+
+nxt_liburing_dep = dependency('liburing', required : false)
+if nxt_liburing_dep.found()
+  executable('ng-uring-wand-demo',
+    'ng_uring_wand.cpp',
+    include_directories : nxt_ng_inc,
+    dependencies : [nxt_liburing_dep],
+  )
+else
+  message('liburing not found; skipping ng-uring-wand-demo')
+endif
