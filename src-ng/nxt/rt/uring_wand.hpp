@@ -11,11 +11,12 @@
 #include <cerrno>
 #include <exception>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <vector>
+#include <variant>
 
 #if NXT_RT_HAS_LIBURING
 #include <liburing.h>
@@ -63,13 +64,13 @@ public:
             token = next_token_++;
 
         auto state = std::make_shared<wait_state<void>>();
-        operations_.emplace(
+        auto request = std::make_shared<uring_wish>(wish);
+        auto * sqe = get_sqe();
+        io_uring_prep_nop(sqe);
+        attach_token(sqe, token);
+        completions_.emplace(
             token,
-            operation{
-                .what = operation_kind::manual,
-                .void_result = state,
-            });
-        staged_.push_back(token);
+            std::make_unique<completion<void>>(request, state));
         trace("uring prepare manual token=" + std::to_string(token));
         return waiter<void>{*this, token, state};
     }
@@ -81,17 +82,19 @@ public:
     {
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<int>>();
-        operations_.emplace(
+        auto request = std::make_shared<uring_wish>(std::move(wish));
+        auto const & op = std::get<openat_wish>(*request);
+        auto * sqe = get_sqe();
+        io_uring_prep_openat(
+            sqe,
+            op.dirfd,
+            op.path.c_str(),
+            op.flags,
+            op.mode);
+        attach_token(sqe, token);
+        completions_.emplace(
             token,
-            operation{
-                .what = operation_kind::openat,
-                .open_result = state,
-                .dirfd = wish.dirfd,
-                .path = std::move(wish.path),
-                .flags = wish.flags,
-                .mode = wish.mode,
-            });
-        staged_.push_back(token);
+            std::make_unique<completion<int>>(request, state));
         trace("uring prepare openat token=" + std::to_string(token));
         return waiter<int>{*this, token, state};
     }
@@ -103,16 +106,19 @@ public:
     {
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<std::size_t>>();
-        operations_.emplace(
+        auto request = std::make_shared<uring_wish>(wish);
+        auto const & op = std::get<read_some_wish>(*request);
+        auto * sqe = get_sqe();
+        io_uring_prep_read(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.offset);
+        attach_token(sqe, token);
+        completions_.emplace(
             token,
-            operation{
-                .what = operation_kind::read,
-                .size_result = state,
-                .fd = wish.fd,
-                .buffer = wish.buffer,
-                .offset = wish.offset,
-            });
-        staged_.push_back(token);
+            std::make_unique<completion<std::size_t>>(request, state));
         trace("uring prepare read token=" + std::to_string(token));
         return waiter<std::size_t>{*this, token, state};
     }
@@ -125,39 +131,7 @@ public:
 
     void wave(deck &) override
     {
-        trace("uring wave staged=" + std::to_string(staged_.size()));
-        for (auto token : staged_) {
-            auto * sqe = io_uring_get_sqe(&ring_);
-            if (sqe == nullptr)
-                throw std::runtime_error{"io_uring submission queue is full"};
-
-            auto & op = operations_.at(token);
-            switch (op.what) {
-            case operation_kind::manual:
-                io_uring_prep_nop(sqe);
-                break;
-            case operation_kind::openat:
-                io_uring_prep_openat(
-                    sqe,
-                    op.dirfd,
-                    op.path.c_str(),
-                    op.flags,
-                    op.mode);
-                break;
-            case operation_kind::read:
-                io_uring_prep_read(
-                    sqe,
-                    op.fd,
-                    op.buffer.data(),
-                    op.buffer.size(),
-                    op.offset);
-                break;
-            }
-            io_uring_sqe_set_data64(sqe, static_cast<std::uint64_t>(token));
-        }
-
-        staged_.clear();
-
+        trace("uring wave submit");
         auto rc = io_uring_submit(&ring_);
         if (rc < 0)
             throw std::runtime_error{
@@ -192,22 +166,12 @@ public:
 
     void complete(deck & d, wait_token token, int result)
     {
-        auto found = operations_.find(token);
-        if (found == operations_.end())
+        auto found = completions_.find(token);
+        if (found == completions_.end())
             return;
 
-        auto & op = found->second;
-        if (result < 0) {
-            auto exception = std::make_exception_ptr(
-                std::runtime_error{
-                    "io_uring operation failed: "
-                    + std::to_string(-result)});
-            set_exception(op, exception);
-        } else {
-            set_value(op, result);
-        }
-
-        operations_.erase(found);
+        found->second->complete(result);
+        completions_.erase(found);
         fulfill(d, token);
     }
 
@@ -224,59 +188,78 @@ public:
     }
 
 private:
-    enum class operation_kind
+    using uring_wish = std::variant<
+        manual_wish,
+        openat_wish,
+        read_some_wish>;
+
+    class completion_base
     {
-        manual,
-        openat,
-        read,
+    public:
+        explicit completion_base(std::shared_ptr<uring_wish> request)
+            : request_(std::move(request))
+        {}
+
+        virtual ~completion_base() = default;
+        virtual void complete(int result) = 0;
+
+    protected:
+        std::shared_ptr<uring_wish> request_;
     };
 
-    struct operation
+    template<typename T>
+    class completion final : public completion_base
     {
-        operation_kind what = operation_kind::manual;
-        std::shared_ptr<wait_state<void>> void_result{};
-        std::shared_ptr<wait_state<int>> open_result{};
-        std::shared_ptr<wait_state<std::size_t>> size_result{};
-        int dirfd = AT_FDCWD;
-        std::string path{};
-        int flags = O_RDONLY;
-        mode_t mode = 0;
-        int fd = -1;
-        std::span<std::byte> buffer{};
-        off_t offset = -1;
+    public:
+        completion(
+            std::shared_ptr<uring_wish> request,
+            std::shared_ptr<wait_state<T>> state)
+            : completion_base(std::move(request))
+            , state_(std::move(state))
+        {}
+
+        void complete(int result) override
+        {
+            if (result < 0) {
+                state_->set_exception(
+                    std::make_exception_ptr(
+                        std::runtime_error{
+                            "io_uring operation failed: "
+                            + std::to_string(-result)}));
+                return;
+            }
+
+            if constexpr (std::is_void_v<T>) {
+                state_->set_value();
+            } else if constexpr (std::is_same_v<T, int>) {
+                state_->set_value(result);
+            } else if constexpr (std::is_same_v<T, std::size_t>) {
+                state_->set_value(static_cast<std::size_t>(result));
+            } else {
+                static_assert(std::is_void_v<T>, "unsupported uring result");
+            }
+        }
+
+    private:
+        std::shared_ptr<wait_state<T>> state_;
     };
 
-    static void set_exception(
-        operation & op,
-        std::exception_ptr exception) noexcept
+    io_uring_sqe * get_sqe()
     {
-        if (op.void_result)
-            op.void_result->set_exception(exception);
-        if (op.open_result)
-            op.open_result->set_exception(exception);
-        if (op.size_result)
-            op.size_result->set_exception(exception);
+        auto * sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr)
+            throw std::runtime_error{"io_uring submission queue is full"};
+        return sqe;
     }
 
-    static void set_value(operation & op, int result)
+    static void attach_token(io_uring_sqe * sqe, wait_token token) noexcept
     {
-        switch (op.what) {
-        case operation_kind::manual:
-            op.void_result->set_value();
-            break;
-        case operation_kind::openat:
-            op.open_result->set_value(result);
-            break;
-        case operation_kind::read:
-            op.size_result->set_value(static_cast<std::size_t>(result));
-            break;
-        }
+        io_uring_sqe_set_data64(sqe, static_cast<std::uint64_t>(token));
     }
 
     io_uring ring_{};
     wait_token next_token_ = 1;
-    std::vector<wait_token> staged_;
-    std::unordered_map<wait_token, operation> operations_;
+    std::unordered_map<wait_token, std::unique_ptr<completion_base>> completions_;
     std::unordered_map<wait_token, parked_task> waiters_;
 };
 
