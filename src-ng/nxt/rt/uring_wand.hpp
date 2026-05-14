@@ -63,10 +63,12 @@ public:
             token = next_token_++;
 
         auto state = std::make_shared<wait_state<void>>();
-        auto op = operation{};
-        op.what = operation_kind::manual;
-        op.void_result = state;
-        operations_.emplace(token, std::move(op));
+        operations_.emplace(
+            token,
+            operation{
+                .what = operation_kind::manual,
+                .void_result = state,
+            });
         staged_.push_back(token);
         trace("uring prepare manual token=" + std::to_string(token));
         return waiter<void>{*this, token, state};
@@ -79,14 +81,16 @@ public:
     {
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<int>>();
-        auto op = operation{};
-        op.what = operation_kind::openat;
-        op.open_result = state;
-        op.dirfd = wish.dirfd;
-        op.path = std::move(wish.path);
-        op.flags = wish.flags;
-        op.mode = wish.mode;
-        operations_.emplace(token, std::move(op));
+        operations_.emplace(
+            token,
+            operation{
+                .what = operation_kind::openat,
+                .open_result = state,
+                .dirfd = wish.dirfd,
+                .path = std::move(wish.path),
+                .flags = wish.flags,
+                .mode = wish.mode,
+            });
         staged_.push_back(token);
         trace("uring prepare openat token=" + std::to_string(token));
         return waiter<int>{*this, token, state};
@@ -99,13 +103,15 @@ public:
     {
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<std::size_t>>();
-        auto op = operation{};
-        op.what = operation_kind::read;
-        op.size_result = state;
-        op.fd = wish.fd;
-        op.buffer = wish.buffer;
-        op.offset = wish.offset;
-        operations_.emplace(token, std::move(op));
+        operations_.emplace(
+            token,
+            operation{
+                .what = operation_kind::read,
+                .size_result = state,
+                .fd = wish.fd,
+                .buffer = wish.buffer,
+                .offset = wish.offset,
+            });
         staged_.push_back(token);
         trace("uring prepare read token=" + std::to_string(token));
         return waiter<std::size_t>{*this, token, state};
