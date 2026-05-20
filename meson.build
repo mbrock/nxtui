@@ -30,7 +30,10 @@ nxt_libcoro_dep = declare_dependency(
   ],
 )
 
-nlohmann_json_dep = dependency('nlohmann_json')
+nlohmann_json_dep = dependency(
+  'nlohmann_json',
+  fallback : ['nlohmann_json', 'nlohmann_json_dep'],
+)
 utf8proc_dep = dependency(
   'libutf8proc',
   fallback : ['utf8proc', 'utf8proc_dep'],
