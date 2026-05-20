@@ -144,12 +144,7 @@ inline auto running_card(
             ? std::format("{:.1f}s", elapsed.count() / 1000.0)
             : std::string{};
     return hud_blocks::header_row(
-        frame,
-        label,
-        args_str,
-        elapsed_str,
-        color,
-        faint);
+        frame, label, args_str, elapsed_str, color, faint);
 }
 
 inline auto done_card(
@@ -166,18 +161,13 @@ inline auto done_card(
     if (args_str.size() > 60)
         args_str = args_str.substr(0, 58) + "…";
     auto time_str = elapsed.count() < 1000
-        ? std::format("{}ms", elapsed.count())
-        : std::format("{:.2f}s", elapsed.count() / 1000.0);
+                        ? std::format("{}ms", elapsed.count())
+                        : std::format("{:.2f}s", elapsed.count() / 1000.0);
     auto meta = std::string{time_str};
     if (!summary.empty())
         meta += "  " + std::string{summary};
     return hud_blocks::header_row(
-        error ? "!" : "✓",
-        label,
-        args_str,
-        meta,
-        color,
-        faint);
+        error ? "!" : "✓", label, args_str, meta, color, faint);
 }
 
 inline auto folded_result_card(
@@ -562,31 +552,33 @@ inline nxt::task<std::string> run_one_animated(
         result = co_await tools::run_function_tool(*tool_list_ptr, call);
     };
 
-    auto companion = [tool_name = std::string{call.name},
-                      args_short,
-                      start](nxt::ui::yard & s) -> nxt::task<> {
-        int tick = 0;
+    {
+        auto companion = [tool_name = std::string{call.name},
+                          args_short,
+                          start](nxt::ui::yard & s) -> nxt::task<> {
+            int tick = 0;
 
-        while (!s.cancelled()) {
-            auto elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - start);
-            s.draw(running_card(tool_name, args_short, tick, elapsed));
-            ++tick;
-            co_await s.sleep(80ms);
-        }
+            while (!s.cancelled()) {
+                auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start);
+                s.draw(running_card(tool_name, args_short, tick, elapsed));
+                ++tick;
+                co_await s.sleep(40ms);
+            }
 
-        co_return;
-    };
+            co_return;
+        };
 
-    co_await nxt::ui::accompany(
-        self,
-        worker,
-        companion,
-        [](const auto & comp_surface, const auto & worker_surface) {
-            (void) worker_surface;
-            return comp_surface;
-        });
+        co_await nxt::ui::accompany(
+            self,
+            worker,
+            companion,
+            [](const auto & comp_surface, const auto & worker_surface) {
+                (void) worker_surface;
+                return comp_surface;
+            });
+    }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
@@ -615,8 +607,7 @@ inline nxt::task<std::string> run_one_or_deny(
     if (!approved) {
         auto args_short = args_summary(call.name, call.arguments);
         auto denied = denied_card(call.name, args_short);
-        auto block =
-            render_for_scrollback(self, denied);
+        auto block = render_for_scrollback(self, denied);
         block += "\n";
         self.print_block(block);
         if (hud) {

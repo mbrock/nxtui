@@ -359,9 +359,10 @@ inline width_t utf8_width(std::string_view s)
 
 /// Create a one-line text leaf using default style.
 ///
-/// Channels at their default (fg/bg = `DEFAULT_COLOR`, em = `DEFAULT_EMPHASIS`)
-/// are left untouched on the underlying cells — they inherit whatever the
-/// parent painted. Only explicitly-set channels are written.
+/// Channels at their default (fg/bg = `DEFAULT_COLOR`, em =
+/// `DEFAULT_EMPHASIS`) are left untouched on the underlying cells — they
+/// inherit whatever the parent painted. Only explicitly-set channels are
+/// written.
 inline auto text(std::string s)
 {
     auto w = utf8_width(s);
@@ -396,7 +397,45 @@ inline auto text(std::string s, Style style)
         });
 }
 
-inline auto styled_lines(std::vector<std::vector<Span>> lines, Style clear = {})
+/// Create a one-line text leaf that grows to fill its assigned width
+/// and truncates with an ellipsis when the assigned width is shorter
+/// than the string. Inherit semantics for unset style channels are the
+/// same as `text(s, style)`.
+inline auto flex_text(std::string s, Style style = {})
+{
+    return leaf(
+        WidthHint::grow(),
+        HeightHint::fixed(1 * ln),
+        [s = std::move(s), style](RasterView & r, Size size) {
+            std::ranges::fill(r.glyphs(), 32);
+            if (style.fg != DEFAULT_COLOR)
+                std::ranges::fill(r.fgs(), style.fg);
+            if (style.bg != DEFAULT_COLOR)
+                std::ranges::fill(r.bgs(), style.bg);
+            if (style.em != DEFAULT_EMPHASIS)
+                std::ranges::fill(r.ems(), style.em);
+
+            auto w = size.w.count();
+            if (w == 0)
+                return;
+            // Byte-truncation: callers asking for stretch behavior are
+            // displaying single-line ASCII-ish content (args, headers,
+            // status lines). Cluster-aware truncation can come later.
+            std::string out = s;
+            if (out.size() > w) {
+                if (w > 1) {
+                    out.resize(w - 1);
+                    out += "…";
+                } else {
+                    out.resize(w);
+                }
+            }
+            render_span(r, Pos::origin(), Span{out, style});
+        });
+}
+
+inline auto
+styled_lines(std::vector<std::vector<Span>> lines, Style clear = {})
 {
     if (lines.empty())
         lines.push_back({});
@@ -471,16 +510,16 @@ inline auto spinner(
 {
     using namespace std::string_view_literals;
     constexpr auto frames = std::to_array({
-         "⠋"sv,
-         "⠙"sv,
-         "⠹"sv,
-         "⠸"sv,
-         "⠼"sv,
-         "⠴"sv,
-         "⠦"sv,
-         "⠧"sv,
-         "⠇"sv,
-         "⠏"sv,
+        "⠋"sv,
+        "⠙"sv,
+        "⠹"sv,
+        "⠸"sv,
+        "⠼"sv,
+        "⠴"sv,
+        "⠦"sv,
+        "⠧"sv,
+        "⠇"sv,
+        "⠏"sv,
     });
 
     auto frame = frames[tick % frames.size()];
@@ -516,6 +555,33 @@ inline auto fill(Rgba8 color = Rgba8(60, 60, 60))
 {
     return leaf(
         WidthHint::grow(), HeightHint::grow(), [=](RasterView & r, Size) {
+            std::ranges::fill(r.bgs(), color);
+        });
+}
+
+/// One-line bg-colored strip of `width` cells. Useful as a leading or
+/// trailing pad inside a row.
+inline auto hfill(width_t width, Rgba8 color)
+{
+    return leaf(
+        WidthHint::fixed(width),
+        HeightHint::fixed(1 * ln),
+        [=](RasterView & r, Size) {
+            std::ranges::fill(r.glyphs(), 32);
+            std::ranges::fill(r.bgs(), color);
+        });
+}
+
+/// One-line bg-colored strip that grows to fill remaining horizontal
+/// space. Useful as the trailing element of a row that should read as a
+/// continuous band.
+inline auto flex_fill(Rgba8 color)
+{
+    return leaf(
+        WidthHint::grow(),
+        HeightHint::fixed(1 * ln),
+        [=](RasterView & r, Size) {
+            std::ranges::fill(r.glyphs(), 32);
             std::ranges::fill(r.bgs(), color);
         });
 }

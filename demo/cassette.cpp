@@ -9,8 +9,8 @@
 //       Result is one of: Matches | Document | Process | Fact | Error
 //
 //   render_turn  : Turn -> AnyLayout
-//   render_call  : Call -> AnyLayout            (header + window + affordances)
-//   render_result: Result -> std::optional<AnyLayout>
+//   render_call  : Call -> AnyLayout            (header + window +
+//   affordances) render_result: Result -> std::optional<AnyLayout>
 //
 // Each cassette piece is a small function returning an AnyLayout. The
 // pieces compose with row/column combinators from nxt::tui; the
@@ -51,26 +51,26 @@ using namespace nxt::tui;
 // Sky / Rose families at the shades used by baltic-linen-glow-night.
 // ============================================================================
 
-constexpr Rgba8 slate_950{  2,   6,  23};
-constexpr Rgba8 slate_900{ 15,  23,  42};
-constexpr Rgba8 slate_800{ 30,  41,  59};
-constexpr Rgba8 slate_700{ 51,  65,  85};
+constexpr Rgba8 slate_950{2, 6, 23};
+constexpr Rgba8 slate_900{15, 23, 42};
+constexpr Rgba8 slate_800{30, 41, 59};
+constexpr Rgba8 slate_700{51, 65, 85};
 constexpr Rgba8 slate_500{100, 116, 139};
 constexpr Rgba8 slate_400{148, 163, 184};
 constexpr Rgba8 slate_300{203, 213, 225};
-constexpr Rgba8 amber_50 {255, 251, 235};
+constexpr Rgba8 amber_50{255, 251, 235};
 constexpr Rgba8 amber_200{253, 230, 138};
-constexpr Rgba8 amber_300{252, 211,  77};
+constexpr Rgba8 amber_300{252, 211, 77};
 constexpr Rgba8 emerald_300{110, 231, 183};
 constexpr Rgba8 orange_300{253, 186, 116};
 constexpr Rgba8 violet_300{196, 181, 253};
-constexpr Rgba8 lime_300 {190, 242, 100};
-constexpr Rgba8 teal_300 { 94, 234, 212};
-constexpr Rgba8 sky_300  {125, 211, 252};
-constexpr Rgba8 rose_300 {253, 164, 175};
+constexpr Rgba8 lime_300{190, 242, 100};
+constexpr Rgba8 teal_300{94, 234, 212};
+constexpr Rgba8 sky_300{125, 211, 252};
+constexpr Rgba8 rose_300{253, 164, 175};
 
-constexpr Rgba8 page_bg = slate_950;  // outermost background
-constexpr Rgba8 band_bg = slate_900;  // header / rack band
+constexpr Rgba8 page_bg = slate_950; // outermost background
+constexpr Rgba8 band_bg = slate_900; // header / rack band
 
 // ============================================================================
 // Data model — the canonical shape of an agent turn. The fields here
@@ -125,8 +125,8 @@ struct ErrorResult
 struct NoResult
 {};
 
-using Result = std::variant<
-    NoResult, Matches, Document, Process, Fact, ErrorResult>;
+using Result =
+    std::variant<NoResult, Matches, Document, Process, Fact, ErrorResult>;
 
 struct Affordance
 {
@@ -166,14 +166,22 @@ struct ToolKind
 inline ToolKind classify(std::string_view name)
 {
     using namespace std::literals;
-    if (name == "rg_search"sv)         return {"find",  amber_300};
-    if (name == "read_file"sv)         return {"file",  emerald_300};
-    if (name == "bash"sv)              return {"bash",  orange_300};
-    if (name == "web_fetch"sv)         return {"fetch", violet_300};
-    if (name == "nxt_current_time"sv)  return {"time",  lime_300};
-    if (name == "nxt_terminal_size"sv) return {"size",  lime_300};
-    if (name == "nxt_echo"sv)          return {"echo",  lime_300};
-    if (name.starts_with("nxt_"sv))    return {name.substr(4), lime_300};
+    if (name == "rg_search"sv)
+        return {"find", amber_300};
+    if (name == "read_file"sv)
+        return {"file", emerald_300};
+    if (name == "bash"sv)
+        return {"bash", orange_300};
+    if (name == "web_fetch"sv)
+        return {"fetch", violet_300};
+    if (name == "nxt_current_time"sv)
+        return {"time", lime_300};
+    if (name == "nxt_terminal_size"sv)
+        return {"size", lime_300};
+    if (name == "nxt_echo"sv)
+        return {"echo", lime_300};
+    if (name.starts_with("nxt_"sv))
+        return {name.substr(4), lime_300};
     return {name, teal_300};
 }
 
@@ -187,10 +195,14 @@ inline std::string primary_arg(const Call & c)
                 return f.value;
         return {};
     };
-    if (c.name == "rg_search")  return find("pattern");
-    if (c.name == "read_file")  return find("path");
-    if (c.name == "web_fetch")  return find("url");
-    if (c.name == "nxt_echo")   return find("text");
+    if (c.name == "rg_search")
+        return find("pattern");
+    if (c.name == "read_file")
+        return find("path");
+    if (c.name == "web_fetch")
+        return find("url");
+    if (c.name == "nxt_echo")
+        return find("text");
     if (c.name == "bash") {
         auto cmd = find("command");
         auto nl = cmd.find('\n');
@@ -210,87 +222,24 @@ inline std::string primary_arg(const Call & c)
 }
 
 // ============================================================================
-// Layout helpers. The vector-backed `column` and `row` overloads live in
-// `nxt/any_layout.hpp` — the rest of these helpers are cassette-local
-// for now (could move once a wider widget-collection rethink happens).
+// All layout primitives now come from nxt::tui — text/flex_text for
+// strings, hfill/flex_fill for bg strips, column/row (and their
+// vector-of-AnyLayout overloads in any_layout.hpp) for stacks.
 // ============================================================================
 
-// A bg-filled 1-line strip of `width` cells.
-inline AnyLayout spacer(width_t width, Rgba8 bg_color)
-{
-    return leaf(
-        WidthHint::fixed(width),
-        HeightHint::fixed(1 * ln),
-        [bg_color](RasterView & r, Size) {
-            std::ranges::fill(r.glyphs(), 32);
-            std::ranges::fill(r.bgs(), bg_color);
-        });
-}
-
-// A flex spacer that fills remaining horizontal space with `bg_color`.
-inline AnyLayout flex_spacer(Rgba8 bg_color)
-{
-    return leaf(
-        WidthHint::grow(),
-        HeightHint::fixed(1 * ln),
-        [bg_color](RasterView & r, Size) {
-            std::ranges::fill(r.glyphs(), 32);
-            std::ranges::fill(r.bgs(), bg_color);
-        });
-}
-
-// One-line stretch text on `bg_color`. Truncates with an ellipsis when
-// the assigned width is shorter than the string.
-inline AnyLayout stretch_text(
-    std::string s, Rgba8 fg_color, Rgba8 bg_color, Emphasis em_flags = DEFAULT_EMPHASIS)
-{
-    return leaf(
-        WidthHint::grow(),
-        HeightHint::fixed(1 * ln),
-        [s = std::move(s), fg_color, bg_color, em_flags](
-            RasterView & r, Size sz) {
-            std::ranges::fill(r.glyphs(), 32);
-            std::ranges::fill(r.fgs(), fg_color);
-            std::ranges::fill(r.bgs(), bg_color);
-            std::ranges::fill(r.ems(), em_flags);
-
-            auto w = sz.w.count();
-            if (w == 0)
-                return;
-            // Byte-truncation: the args we render are predominantly
-            // ASCII, and the XSLT version had the same single-line
-            // constraint.
-            std::string out = s;
-            if (out.size() > w) {
-                if (w > 1) {
-                    out.resize(w - 1);
-                    out += "…";
-                } else {
-                    out.resize(w);
-                }
-            }
-            r.write_text(Pos::origin(), out);
-        });
-}
-
-// Fixed-width chip with bg/fg/em set explicitly. text() in tui.hpp does
-// roughly this but its bg=DEFAULT writes a default-color stripe through
-// the surrounding band; this variant always plants its own bg.
+// Shorthand: a fixed-width styled chip. Equivalent to
+// `text(s, fg(...) | bg(...) | em(...))` but reads better at the dense
+// call sites in `spine` and `affordances_strip`.
 inline auto chip(
-    std::string label, Rgba8 fg_color, Rgba8 bg_color, Emphasis em_flags = DEFAULT_EMPHASIS)
+    std::string s,
+    Rgba8 fg_color,
+    Rgba8 bg_color,
+    Emphasis em_flags = DEFAULT_EMPHASIS)
 {
-    auto w = utf8_width(label);
-    return leaf(
-        WidthHint::fixed(w),
-        HeightHint::fixed(1 * ln),
-        [label = std::move(label), fg_color, bg_color, em_flags](
-            RasterView & r, Size) {
-            std::ranges::fill(r.glyphs(), 32);
-            std::ranges::fill(r.fgs(), fg_color);
-            std::ranges::fill(r.bgs(), bg_color);
-            std::ranges::fill(r.ems(), em_flags);
-            r.write_text(Pos::origin(), label);
-        });
+    auto style = fg(fg_color) | bg(bg_color);
+    if (em_flags != DEFAULT_EMPHASIS)
+        style = style | em(em_flags);
+    return text(std::move(s), style);
 }
 
 // ============================================================================
@@ -305,16 +254,16 @@ inline auto spine(const Call & c)
 {
     auto k = classify(c.name);
     switch (c.status) {
-        case Status::ok:
-            return chip(" ✓ ", slate_950, k.accent, Emphasis::bold);
-        case Status::error:
-            return chip(" ! ", slate_950, rose_300, Emphasis::bold);
-        case Status::pending_approval:
-            return chip(" ? ", slate_950, amber_200, Emphasis::bold);
-        case Status::running:
-            return chip(" ⠋ ", amber_200, band_bg);
-        case Status::denied:
-            return chip(" N ", slate_300, slate_500, Emphasis::bold);
+    case Status::ok:
+        return chip(" ✓ ", slate_950, k.accent, Emphasis::bold);
+    case Status::error:
+        return chip(" ! ", slate_950, rose_300, Emphasis::bold);
+    case Status::pending_approval:
+        return chip(" ? ", slate_950, amber_200, Emphasis::bold);
+    case Status::running:
+        return chip(" ⠋ ", amber_200, band_bg);
+    case Status::denied:
+        return chip(" N ", slate_300, slate_500, Emphasis::bold);
     }
     return chip("   ", slate_300, band_bg);
 }
@@ -354,54 +303,43 @@ inline auto call_header(const Call & c)
     std::vector<AnyLayout> pieces;
     pieces.push_back(spine(c));
     pieces.push_back(chip(
-        std::format(" {} ", k.display),
-        k.accent, band_bg, Emphasis::bold));
-    pieces.push_back(stretch_text(args_text, slate_500, band_bg));
+        std::format(" {} ", k.display), k.accent, band_bg, Emphasis::bold));
+    pieces.push_back(flex_text(args_text, fg(slate_500) | bg(band_bg)));
     if (c.elapsed_ms >= 0) {
-        pieces.push_back(chip(
-            std::format(" {}ms ", c.elapsed_ms),
-            slate_500, band_bg));
+        pieces.push_back(
+            chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg));
     }
     if (!meta.empty()) {
-        pieces.push_back(chip(
-            std::format(" {} ", meta),
-            slate_400, band_bg));
+        pieces.push_back(
+            chip(std::format(" {} ", meta), slate_400, band_bg));
     }
 
     return row(std::move(pieces));
 }
 
-// Helper: indent each row by `pad` cells of page background. The XSLT
-// achieved this with `px-2` on the .flex-col container — same effect.
-inline auto window_rows(
-    std::vector<AnyLayout> rows, width_t pad = 2 * ch)
+// Helper: indent each row by `pad` cells of page background and pad
+// the trailing edge with page_bg so the row reads as a continuous band.
+// The XSLT achieved this with `px-2` on the .flex-col container.
+inline auto window_rows(std::vector<AnyLayout> rows, width_t pad = 2 * ch)
 {
     std::vector<AnyLayout> padded;
     padded.reserve(rows.size());
     for (auto & r : rows) {
-        std::vector<AnyLayout> parts;
-        parts.push_back(spacer(pad, page_bg));
-        parts.push_back(std::move(r));
-        parts.push_back(flex_spacer(page_bg));
-        padded.push_back(row(std::move(parts)));
+        padded.push_back(
+            row(std::vector<AnyLayout>{
+                hfill(pad, page_bg),
+                std::move(r),
+                flex_fill(page_bg),
+            }));
     }
     return column(std::move(padded));
 }
 
-// One body line: text on the page background.
+// One body line: text on the page background. The outer `surface()`
+// already paints page_bg, so `text(s, fg(c))` inherits it correctly.
 inline auto body_line(std::string s, Rgba8 fg_color)
 {
-    auto w = utf8_width(s);
-    return leaf(
-        WidthHint::fixed(w),
-        HeightHint::fixed(1 * ln),
-        [s = std::move(s), fg_color](RasterView & r, Size) {
-            std::ranges::fill(r.glyphs(), 32);
-            std::ranges::fill(r.fgs(), fg_color);
-            std::ranges::fill(r.bgs(), page_bg);
-            std::ranges::fill(r.ems(), DEFAULT_EMPHASIS);
-            r.write_text(Pos::origin(), s);
-        });
+    return text(std::move(s), fg(fg_color));
 }
 
 // match-list and document head share the same template: line + an
@@ -416,8 +354,7 @@ linewise_window(const std::vector<std::string> & lines, int total)
     auto shown = static_cast<int>(lines.size());
     if (total > shown) {
         rows.push_back(body_line(
-            std::format("...{} more lines.", total - shown),
-            slate_700));
+            std::format("...{} more lines.", total - shown), slate_700));
     }
     return window_rows(std::move(rows));
 }
@@ -427,8 +364,7 @@ inline auto process_window(const Process & p)
     std::vector<AnyLayout> rows;
     rows.reserve(p.stream.size());
     for (const auto & s : p.stream) {
-        rows.push_back(body_line(
-            s.text, s.stderr_ ? rose_300 : slate_300));
+        rows.push_back(body_line(s.text, s.stderr_ ? rose_300 : slate_300));
     }
     return window_rows(std::move(rows));
 }
@@ -437,7 +373,7 @@ inline AnyLayout fact_window(const Fact & f)
 {
     // Inline `name: value   name: value` row of fields.
     std::vector<AnyLayout> parts;
-    parts.push_back(spacer(2 * ch, page_bg));
+    parts.push_back(hfill(2 * ch, page_bg));
     for (std::size_t i = 0; i < f.fields.size(); ++i) {
         const auto & fld = f.fields[i];
         parts.push_back(body_line(fld.name + ":", slate_500));
@@ -446,16 +382,17 @@ inline AnyLayout fact_window(const Fact & f)
         if (i + 1 < f.fields.size())
             parts.push_back(body_line("  ", slate_300));
     }
-    parts.push_back(flex_spacer(page_bg));
+    parts.push_back(flex_fill(page_bg));
     return row(std::move(parts));
 }
 
 inline AnyLayout error_window(const ErrorResult & e)
 {
-    std::vector<AnyLayout> parts;
-    parts.push_back(spacer(2 * ch, page_bg));
-    parts.push_back(stretch_text(e.message, rose_300, page_bg));
-    return row(std::move(parts));
+    return row(
+        std::vector<AnyLayout>{
+            hfill(2 * ch, page_bg),
+            flex_text(e.message, fg(rose_300)),
+        });
 }
 
 inline std::optional<AnyLayout> render_result(const Result & r)
@@ -486,27 +423,29 @@ inline std::optional<AnyLayout> render_result(const Result & r)
 inline AnyLayout affordances_strip(const std::vector<Affordance> & a)
 {
     std::vector<AnyLayout> parts;
-    parts.push_back(spacer(2 * ch, page_bg));
+    parts.push_back(hfill(2 * ch, page_bg));
     for (std::size_t i = 0; i < a.size(); ++i) {
         parts.push_back(chip(
             std::string(1, a[i].key),
-            amber_200, slate_800, Emphasis::bold));
-        parts.push_back(chip(
-            " " + a[i].label, slate_400, page_bg));
+            amber_200,
+            slate_800,
+            Emphasis::bold));
+        parts.push_back(text(" " + a[i].label, fg(slate_400)));
         if (i + 1 < a.size())
-            parts.push_back(chip("  ", slate_400, page_bg));
+            parts.push_back(text("  "));
     }
-    parts.push_back(flex_spacer(page_bg));
+    parts.push_back(flex_fill(page_bg));
     return row(std::move(parts));
 }
 
-// Thought block: glow-blue prose with a hair of padding above/below.
+// Thought block: glow-blue prose with a hair of leading padding.
 inline AnyLayout thought_block(std::string s)
 {
-    std::vector<AnyLayout> parts;
-    parts.push_back(spacer(1 * ch, page_bg));
-    parts.push_back(stretch_text(std::move(s), sky_300, page_bg));
-    return row(std::move(parts));
+    return row(
+        std::vector<AnyLayout>{
+            hfill(1 * ch, page_bg),
+            flex_text(std::move(s), fg(sky_300)),
+        });
 }
 
 // A full call cassette: header band, optional result window, optional
@@ -635,8 +574,8 @@ inline Turn sample_turn()
             {"command",
              "cat > /tmp/explore.sql << EOF\nSELECT * FROM ...\nEOF"},
         };
-        c.result = ErrorResult{
-            "tool execution failed: heredoc inside argument"};
+        c.result =
+            ErrorResult{"tool execution failed: heredoc inside argument"};
         t.calls.push_back(std::move(c));
     }
 
@@ -645,8 +584,7 @@ inline Turn sample_turn()
         c.name = "web_fetch";
         c.status = Status::pending_approval;
         c.args = {
-            {"url",
-             "https://duckdb.org/docs/stable/data/parquet/overview"},
+            {"url", "https://duckdb.org/docs/stable/data/parquet/overview"},
         };
         c.result = NoResult{};
         t.calls.push_back(std::move(c));

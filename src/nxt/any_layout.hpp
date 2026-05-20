@@ -25,11 +25,13 @@ public:
 
     template<typename L>
         requires Layout<std::decay_t<L>>
-              && (!std::is_same_v<std::decay_t<L>, AnyLayout>)
+                 && (!std::is_same_v<std::decay_t<L>, AnyLayout>)
     AnyLayout(L && layout)
-        : impl_(std::make_shared<Model<std::decay_t<L>>>(
-              std::forward<L>(layout)))
-    {}
+        : impl_(
+              std::make_shared<Model<std::decay_t<L>>>(
+                  std::forward<L>(layout)))
+    {
+    }
 
     WidthHint width_hint() const
     {
@@ -63,7 +65,8 @@ private:
 
         explicit Model(L v)
             : value(std::move(v))
-        {}
+        {
+        }
 
         WidthHint width_hint() const override
         {
@@ -168,9 +171,7 @@ struct HStack
             auto w = h.min;
             if (h.flex > 0.0 * one && size.w > used) {
                 auto remaining = size.w - used;
-                w = w
-                    + remaining
-                          * (h.flex.value() / total_flex.value());
+                w = w + remaining * (h.flex.value() / total_flex.value());
             }
             widths.push_back(w);
         }
