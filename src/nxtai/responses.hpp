@@ -1,5 +1,6 @@
 #pragma once
 
+#include <nxtai/openai_types.hpp>
 #include <nxt/http.hpp>
 #include <nxtio/async.hpp>
 #include <nxtio/http.hpp>
@@ -56,8 +57,8 @@ struct stream_event
 {
     /// SSE event type, such as `response.output_item.added`.
     std::string type;
-    /// Parsed JSON payload from the event's `data` field.
-    nlohmann::json payload;
+    /// Typed view of the JSON payload from the event's `data` field.
+    openai::response_event_payload payload;
     /// Original unparsed `data` field text.
     std::string raw;
 };
@@ -82,16 +83,14 @@ input_items_from_request(const openai_responses_request & request)
 [[nodiscard]] inline std::optional<std::string>
 response_id_from_event(const stream_event & event)
 {
-    if (auto it = event.payload.find("response");
-        it != event.payload.end() && it->is_object()) {
-        auto id = it->value("id", std::string{});
-        if (!id.empty())
-            return id;
+    if (openai::has_json(event.payload.response)) {
+        auto response = openai::parse_response_ref(event.payload.response);
+        if (!response.id.empty())
+            return response.id;
     }
 
-    auto id = event.payload.value("response_id", std::string{});
-    if (!id.empty())
-        return id;
+    if (!event.payload.response_id.empty())
+        return event.payload.response_id;
     return std::nullopt;
 }
 
@@ -229,10 +228,10 @@ public:
                 co_return std::nullopt;
             }
 
-            nlohmann::json payload;
+            openai::response_event_payload payload;
             try {
-                payload = nlohmann::json::parse(sse->data);
-            } catch (const nlohmann::json::exception & e) {
+                payload = openai::parse_response_event_payload(sse->data);
+            } catch (const std::exception & e) {
                 throw protocol_error{
                     "OpenAI Responses stream sent invalid JSON: "
                     + std::string{e.what()}};

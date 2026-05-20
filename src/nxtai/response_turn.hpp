@@ -342,7 +342,7 @@ auto response_event_source(nxt::ui::yard & self, Stream & stream)
 }
 
 template<typename Stream>
-nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
+nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
     Stream & stream,
     nxt::ui::yard & self,
     std::string_view delta_event_type,
@@ -416,7 +416,7 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
 
     while (auto event = co_await nxt::next(stream)) {
         if (agent::is_event(*event, delta_event_type)) {
-            auto delta = event->payload.value("delta", std::string{});
+            auto delta = event->payload.delta;
             if (!delta.empty()) {
                 text += delta;
                 for_complete_words(text, false, append_segment);
@@ -441,7 +441,7 @@ nxt::task<std::optional<nlohmann::json>> read_text_delta_item(
 }
 
 template<typename Stream>
-nxt::task<std::optional<nlohmann::json>>
+nxt::task<std::optional<openai::raw_json>>
 read_reasoning_item(
     Stream & stream,
     nxt::ui::yard & self,
@@ -459,7 +459,7 @@ read_reasoning_item(
 }
 
 template<typename Stream>
-nxt::task<std::optional<nlohmann::json>>
+nxt::task<std::optional<openai::raw_json>>
 read_message_item(
     Stream & stream,
     nxt::ui::yard & self,

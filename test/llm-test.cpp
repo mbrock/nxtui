@@ -217,13 +217,8 @@ suite llm_tests = [] {
     };
 
     "function call item parses and runs matching tool"_test = [] {
-        auto item = nlohmann::json{
-            {"id", "fc_123"},
-            {"type", "function_call"},
-            {"call_id", "call_123"},
-            {"name", "nxt_echo"},
-            {"arguments", "{\"text\":\"hello\"}"},
-        };
+        auto item = nxt::ai::openai::raw_json{
+            R"({"id":"fc_123","type":"function_call","call_id":"call_123","name":"nxt_echo","arguments":"{\"text\":\"hello\"}"})"};
         auto call = nxt::ai::tools::function_call_from_item(item);
         expect(call.has_value());
         expect(call->call_id == "call_123");
@@ -412,7 +407,7 @@ suite llm_tests = [] {
 
         expect(events.size() == 2_ul);
         expect(events[0].type == "response.output_text.delta");
-        expect(events[0].payload["delta"] == "Ok");
+        expect(events[0].payload.delta == "Ok");
         expect(events[1].type == "response.completed");
         expect(transport.written().starts_with("POST /v1/responses HTTP/1.1\r\n"));
     };

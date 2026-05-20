@@ -20,7 +20,7 @@ struct response_stream_result
     /// Function calls discovered in completed output items.
     std::vector<tools::function_call> function_calls;
     /// Complete output items that should be preserved for stateless turns.
-    std::vector<nlohmann::json> output_items;
+    std::vector<openai::raw_json> output_items;
     /// Plain assistant message blocks emitted while rendering the stream.
     std::vector<std::string> message_blocks;
     /// Most recent response id observed in the stream.
@@ -50,7 +50,7 @@ struct output_item_result
     /// Parsed function call, if the output item was a function call.
     std::optional<tools::function_call> call;
     /// Complete output item JSON, when one was available.
-    std::optional<nlohmann::json> item;
+    std::optional<openai::raw_json> item;
     /// Plain text emitted for completed message items.
     std::string text;
 };
@@ -63,12 +63,11 @@ is_event(const responses::stream_event & event, std::string_view type)
 }
 
 /// Extract the event payload's `item` object when present.
-[[nodiscard]] inline std::optional<nlohmann::json>
+[[nodiscard]] inline std::optional<openai::raw_json>
 output_item_from_event(const responses::stream_event & event)
 {
-    if (auto it = event.payload.find("item");
-        it != event.payload.end() && it->is_object())
-        return *it;
+    if (openai::has_json(event.payload.item))
+        return event.payload.item;
     return std::nullopt;
 }
 
@@ -76,9 +75,8 @@ output_item_from_event(const responses::stream_event & event)
 [[nodiscard]] inline std::string
 output_item_type(const responses::stream_event & event)
 {
-    if (auto it = event.payload.find("item");
-        it != event.payload.end() && it->is_object())
-        return it->value("type", std::string{});
+    if (openai::has_json(event.payload.item))
+        return openai::output_item_type(event.payload.item);
     return {};
 }
 
@@ -105,11 +103,11 @@ inline void prepare_tool_request(
 /// Append model output items followed by tool outputs to a stateless input.
 inline void append_stateless_turn(
     nlohmann::json & input,
-    std::vector<nlohmann::json> output_items,
+    std::vector<openai::raw_json> output_items,
     std::vector<nlohmann::json> tool_outputs)
 {
     for (auto & item : output_items)
-        input.push_back(std::move(item));
+        input.push_back(nlohmann::json::parse(item.str));
     for (auto & output : tool_outputs)
         input.push_back(std::move(output));
 }

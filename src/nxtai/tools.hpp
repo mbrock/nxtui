@@ -1,5 +1,6 @@
 #pragma once
 
+#include <nxtai/openai_types.hpp>
 #include <nxtio/async.hpp>
 
 #include <nlohmann/json.hpp>
@@ -25,7 +26,7 @@ struct function_call
     /// Raw JSON argument string from the response item.
     std::string arguments;
     /// Original response output item.
-    nlohmann::json item = nlohmann::json::object();
+    openai::raw_json item;
 };
 
 /// Local executable function tool plus its JSON schema.
@@ -69,22 +70,27 @@ function_tool_definitions(const std::vector<function_tool> & tools)
 
 /// Parse a Responses output item as a function call when possible.
 [[nodiscard]] inline std::optional<function_call>
-function_call_from_item(const nlohmann::json & item)
+function_call_from_item(const openai::raw_json & raw_item)
 {
-    if (!item.is_object() || item.value("type", std::string{}) != "function_call")
+    if (!openai::has_json(raw_item))
         return std::nullopt;
 
-    auto call_id = item.value("call_id", std::string{});
-    auto name = item.value("name", std::string{});
+    auto item = openai::parse_response_output_item(raw_item);
+    auto * function_item = std::get_if<openai::function_call_item>(&item);
+    if (function_item == nullptr)
+        return std::nullopt;
+
+    auto call_id = std::move(function_item->call_id);
+    auto name = std::move(function_item->name);
     if (call_id.empty() || name.empty())
         return std::nullopt;
 
     return function_call{
-        .id = item.value("id", std::string{}),
+        .id = std::move(function_item->id),
         .call_id = std::move(call_id),
         .name = std::move(name),
-        .arguments = item.value("arguments", std::string{}),
-        .item = item,
+        .arguments = std::move(function_item->arguments),
+        .item = raw_item,
     };
 }
 
