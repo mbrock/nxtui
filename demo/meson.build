@@ -21,7 +21,16 @@ executable('nxtdemo',
   cpp_args : nxtdemo_cpp_args,
 )
 
-nxt_liburing_dep = dependency('liburing', required : false)
+if host_machine.system() == 'linux'
+  nxt_liburing_dep = dependency(
+    'liburing',
+    fallback : ['liburing', 'uring'],
+    required : false,
+  )
+else
+  nxt_liburing_dep = disabler()
+endif
+
 if nxt_liburing_dep.found()
   executable('ng-uring-wand-demo',
     'ng_uring_wand.cpp',
