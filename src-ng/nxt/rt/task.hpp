@@ -4,7 +4,9 @@
 
 #include <coroutine>
 #include <exception>
+#include <expected>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <stdexcept>
@@ -14,6 +16,12 @@
 #include <vector>
 
 namespace nxt::rt {
+
+template<typename T>
+class subtask;
+
+template<typename T>
+class catching_subtask;
 
 namespace detail {
 
@@ -249,7 +257,11 @@ public:
         /// Called when the awaiting task resumes after the child reaches final suspend.
         decltype(auto) await_resume()
         {
-            return coroutine_.promise().result();
+            if constexpr (std::is_void_v<T>) {
+                return coroutine_.promise().result();
+            } else {
+                return std::move(coroutine_.promise()).result();
+            }
         }
 
     private:
@@ -305,6 +317,12 @@ public:
     [[nodiscard]] coroutine_handle handle() const noexcept
     {
         return coroutine_;
+    }
+
+    /// Transfer frame ownership to low-level runtime machinery.
+    [[nodiscard]] coroutine_handle release() noexcept
+    {
+        return std::exchange(coroutine_, nullptr);
     }
 
     /// Coroutine customization point for `co_await task`.
@@ -385,6 +403,357 @@ with_env(typename Key::value_type value, Fn && fn)
     }
 }
 
+namespace detail {
+
+class started_handle_awaiter
+{
+public:
+    template<typename Promise>
+    explicit started_handle_awaiter(
+        std::coroutine_handle<Promise> handle) noexcept
+        : handle_(handle)
+        , promise_(handle ? &handle.promise() : nullptr)
+    {}
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return !handle_ || handle_.done();
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting) const
+    {
+        auto * current = detail::current_env;
+        auto * awaiting_promise =
+            current == nullptr ? nullptr : current->current_promise;
+        if (awaiting_promise == nullptr || promise_ == nullptr)
+            throw runtime_error{
+                "nxt::rt zone join used without a running task"};
+
+        promise_->set_continuation(awaiting, awaiting_promise);
+    }
+
+    void await_resume() const noexcept {}
+
+private:
+    std::coroutine_handle<> handle_;
+    promise_base * promise_ = nullptr;
+};
+
+struct child_record_base
+{
+    child_record_base() = default;
+    child_record_base(const child_record_base &) = delete;
+    child_record_base & operator=(const child_record_base &) = delete;
+    child_record_base(child_record_base &&) = delete;
+    child_record_base & operator=(child_record_base &&) = delete;
+    virtual ~child_record_base() = default;
+
+    [[nodiscard]] virtual bool done() const noexcept = 0;
+    [[nodiscard]] virtual std::exception_ptr failure() = 0;
+    [[nodiscard]] virtual task<void> join() = 0;
+
+    bool caught = false;
+};
+
+template<typename T>
+struct child_record final : child_record_base
+{
+    using handle_type = typename task<T>::coroutine_handle;
+
+    explicit child_record(handle_type h) noexcept
+        : handle(h)
+    {}
+
+    ~child_record() override
+    {
+        if (handle)
+            handle.destroy();
+    }
+
+    [[nodiscard]] bool done() const noexcept override
+    {
+        return !handle || handle.done();
+    }
+
+    [[nodiscard]] task<void> join() override
+    {
+        if (!joined && handle && !handle.done())
+            co_await started_handle_awaiter{handle};
+        joined = true;
+    }
+
+    [[nodiscard]] std::exception_ptr failure() override
+    {
+        ensure_done();
+        try {
+            handle.promise().result();
+        } catch (...) {
+            return std::current_exception();
+        }
+        return {};
+    }
+
+    [[nodiscard]] T take_result()
+    {
+        ensure_done();
+        if (result_taken)
+            throw runtime_error{"nxt::rt subtask result already taken"};
+        result_taken = true;
+        return std::move(handle.promise()).result();
+    }
+
+    void ensure_done() const
+    {
+        if (!done())
+            throw runtime_error{
+                "nxt::rt subtask result read before zone join"};
+    }
+
+    handle_type handle;
+    bool joined = false;
+    bool result_taken = false;
+};
+
+template<>
+struct child_record<void> final : child_record_base
+{
+    using handle_type = typename task<void>::coroutine_handle;
+
+    explicit child_record(handle_type h) noexcept
+        : handle(h)
+    {}
+
+    ~child_record() override
+    {
+        if (handle)
+            handle.destroy();
+    }
+
+    [[nodiscard]] bool done() const noexcept override
+    {
+        return !handle || handle.done();
+    }
+
+    [[nodiscard]] task<void> join() override
+    {
+        if (!joined && handle && !handle.done())
+            co_await started_handle_awaiter{handle};
+        joined = true;
+    }
+
+    [[nodiscard]] std::exception_ptr failure() override
+    {
+        ensure_done();
+        try {
+            handle.promise().result();
+        } catch (...) {
+            return std::current_exception();
+        }
+        return {};
+    }
+
+    void take_result()
+    {
+        ensure_done();
+        if (result_taken)
+            throw runtime_error{"nxt::rt subtask result already taken"};
+        result_taken = true;
+        handle.promise().result();
+    }
+
+    void ensure_done() const
+    {
+        if (!done())
+            throw runtime_error{
+                "nxt::rt subtask result read before zone join"};
+    }
+
+    handle_type handle;
+    bool joined = false;
+    bool result_taken = false;
+};
+
+} // namespace detail
+
+template<typename T>
+class subtask
+{
+public:
+    subtask() = default;
+    subtask(const subtask &) = delete;
+    subtask & operator=(const subtask &) = delete;
+    subtask(subtask &&) noexcept = default;
+    subtask & operator=(subtask &&) noexcept = default;
+
+    [[nodiscard]] std::exception_ptr exception() const
+    {
+        return record().failure();
+    }
+
+    [[nodiscard]] T get() &&
+    {
+        return record().take_result();
+    }
+
+    [[nodiscard]] catching_subtask<T> cope() &&;
+
+private:
+    friend class task_zone;
+    friend class catching_subtask<T>;
+
+    explicit subtask(std::shared_ptr<detail::child_record<T>> record) noexcept
+        : record_(std::move(record))
+    {}
+
+    [[nodiscard]] detail::child_record<T> & record() const
+    {
+        if (!record_)
+            throw runtime_error{"nxt::rt empty subtask handle"};
+        return *record_;
+    }
+
+    std::shared_ptr<detail::child_record<T>> record_;
+};
+
+template<>
+class subtask<void>
+{
+public:
+    subtask() = default;
+    subtask(const subtask &) = delete;
+    subtask & operator=(const subtask &) = delete;
+    subtask(subtask &&) noexcept = default;
+    subtask & operator=(subtask &&) noexcept = default;
+
+    [[nodiscard]] std::exception_ptr exception() const
+    {
+        return record().failure();
+    }
+
+    void get() &&
+    {
+        record().take_result();
+    }
+
+    [[nodiscard]] catching_subtask<void> cope() &&;
+
+private:
+    friend class task_zone;
+    friend class catching_subtask<void>;
+
+    explicit subtask(
+        std::shared_ptr<detail::child_record<void>> record) noexcept
+        : record_(std::move(record))
+    {}
+
+    [[nodiscard]] detail::child_record<void> & record() const
+    {
+        if (!record_)
+            throw runtime_error{"nxt::rt empty subtask handle"};
+        return *record_;
+    }
+
+    std::shared_ptr<detail::child_record<void>> record_;
+};
+
+template<typename T>
+class catching_subtask
+{
+public:
+    catching_subtask() = default;
+    catching_subtask(const catching_subtask &) = delete;
+    catching_subtask & operator=(const catching_subtask &) = delete;
+    catching_subtask(catching_subtask &&) noexcept = default;
+    catching_subtask & operator=(catching_subtask &&) noexcept = default;
+
+    [[nodiscard]] std::expected<T, std::exception_ptr> get() &&
+    {
+        auto & child = record();
+        child.ensure_done();
+        try {
+            return child.take_result();
+        } catch (...) {
+            return std::unexpected{std::current_exception()};
+        }
+    }
+
+private:
+    friend class subtask<T>;
+
+    explicit catching_subtask(
+        std::shared_ptr<detail::child_record<T>> record) noexcept
+        : record_(std::move(record))
+    {}
+
+    [[nodiscard]] detail::child_record<T> & record() const
+    {
+        if (!record_)
+            throw runtime_error{"nxt::rt empty catching_subtask handle"};
+        return *record_;
+    }
+
+    std::shared_ptr<detail::child_record<T>> record_;
+};
+
+template<>
+class catching_subtask<void>
+{
+public:
+    catching_subtask() = default;
+    catching_subtask(const catching_subtask &) = delete;
+    catching_subtask & operator=(const catching_subtask &) = delete;
+    catching_subtask(catching_subtask &&) noexcept = default;
+    catching_subtask & operator=(catching_subtask &&) noexcept = default;
+
+    [[nodiscard]] std::expected<void, std::exception_ptr> get() &&
+    {
+        auto & child = record();
+        child.ensure_done();
+        try {
+            child.take_result();
+            return {};
+        } catch (...) {
+            return std::unexpected{std::current_exception()};
+        }
+    }
+
+private:
+    friend class subtask<void>;
+
+    explicit catching_subtask(
+        std::shared_ptr<detail::child_record<void>> record) noexcept
+        : record_(std::move(record))
+    {}
+
+    [[nodiscard]] detail::child_record<void> & record() const
+    {
+        if (!record_)
+            throw runtime_error{"nxt::rt empty catching_subtask handle"};
+        return *record_;
+    }
+
+    std::shared_ptr<detail::child_record<void>> record_;
+};
+
+template<typename T>
+inline catching_subtask<T> subtask<T>::cope() &&
+{
+    auto child = std::move(record_);
+    if (!child)
+        throw runtime_error{"nxt::rt empty subtask handle"};
+    child->caught = true;
+    return catching_subtask<T>{std::move(child)};
+}
+
+inline catching_subtask<void> subtask<void>::cope() &&
+{
+    auto child = std::move(record_);
+    if (!child)
+        throw runtime_error{"nxt::rt empty subtask handle"};
+    child->caught = true;
+    return catching_subtask<void>{std::move(child)};
+}
+
 class task_zone
 {
 public:
@@ -395,7 +764,8 @@ public:
     task_zone(task_zone &&) = delete;
     task_zone & operator=(task_zone &&) = delete;
 
-    void spawn(task<void> child)
+    template<typename T>
+    subtask<T> spawn(task<T> child)
     {
         auto * current = detail::current_env;
         auto * active_deck =
@@ -404,19 +774,28 @@ public:
             throw runtime_error{
                 "nxt::rt zone spawn used without a running deck"};
 
-        auto handle = child.handle();
+        auto handle = child.release();
         if (!handle || handle.done())
-            return;
+            throw runtime_error{"nxt::rt zone spawn used with empty task"};
 
         handle.promise().env.bindings = current->bindings;
-        children_.push_back(std::move(child));
-        active_deck->start(children_.back());
+        auto record = std::shared_ptr<detail::child_record<T>>{};
+        try {
+            record = std::make_shared<detail::child_record<T>>(handle);
+        } catch (...) {
+            handle.destroy();
+            throw;
+        }
+
+        children_.push_back(record);
+        active_deck->enqueue(handle, &handle.promise());
+        return subtask<T>{std::move(record)};
     }
 
     [[nodiscard]] task<void> join();
 
 private:
-    std::vector<task<void>> children_;
+    std::vector<std::shared_ptr<detail::child_record_base>> children_;
 };
 
 struct task_zone_key
@@ -441,46 +820,13 @@ inline task_zone & require_current_zone()
     return *zone;
 }
 
-inline void spawn(task<void> child)
+template<typename T>
+subtask<T> spawn(task<T> child)
 {
-    require_current_zone().spawn(std::move(child));
+    return require_current_zone().spawn(std::move(child));
 }
 
 namespace detail {
-
-class started_task_awaiter
-{
-public:
-    explicit started_task_awaiter(task<void> & child) noexcept
-        : handle_(child.handle())
-    {}
-
-    [[nodiscard]] bool await_ready() const noexcept
-    {
-        return !handle_ || handle_.done();
-    }
-
-    void await_suspend(std::coroutine_handle<> awaiting) const
-    {
-        auto * current = detail::current_env;
-        auto * awaiting_promise =
-            current == nullptr ? nullptr : current->current_promise;
-        if (awaiting_promise == nullptr)
-            throw runtime_error{
-                "nxt::rt zone join used without a running task"};
-
-        handle_.promise().set_continuation(awaiting, awaiting_promise);
-    }
-
-    void await_resume() const
-    {
-        if (handle_)
-            handle_.promise().result();
-    }
-
-private:
-    task<void>::coroutine_handle handle_;
-};
 
 template<stored_task_factory Fn>
 [[nodiscard]] task<stored_task_result_t<Fn>>
@@ -530,7 +876,12 @@ inline task<void> task_zone::join()
     auto exceptions = std::vector<std::exception_ptr>{};
     for (auto i = std::size_t{0}; i < children_.size(); ++i) {
         try {
-            co_await detail::started_task_awaiter{children_[i]};
+            auto & child = *children_[i];
+            co_await child.join();
+            if (!child.caught) {
+                if (auto failure = child.failure())
+                    exceptions.push_back(std::move(failure));
+            }
         } catch (...) {
             exceptions.push_back(std::current_exception());
         }

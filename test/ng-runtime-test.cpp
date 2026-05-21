@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace nxt::test {
@@ -208,6 +209,18 @@ nxt::rt::task<void> throw_after_yield(std::vector<int> & events, int value)
     events.push_back(value * 10 + 1);
     co_await nxt::rt::yield();
     throw nxt::rt::runtime_error{"zone child boom"};
+}
+
+nxt::rt::task<int> value_after_yield(int value)
+{
+    co_await nxt::rt::yield();
+    co_return value;
+}
+
+nxt::rt::task<int> throw_int_after_yield()
+{
+    co_await nxt::rt::yield();
+    throw nxt::rt::runtime_error{"zone child int boom"};
 }
 
 static suite ng_runtime_tests{
@@ -526,6 +539,112 @@ static suite ng_runtime_tests{
 
                 expect(grouped);
                 expect(events == std::vector<int>{11, 21, 31, 32});
+            };
+
+            "return spawned task results after joining"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto child =
+                    deck.sync_wait([]()
+                        -> nxt::rt::task<nxt::rt::subtask<int>> {
+                        co_return co_await nxt::rt::with_zone(
+                            []() -> nxt::rt::task<nxt::rt::subtask<int>> {
+                                auto child =
+                                    nxt::rt::spawn(value_after_yield(42));
+                                co_return std::move(child);
+                            });
+                    });
+
+                expect(std::move(child).get() == 42_i);
+            };
+
+            "return several spawned task results"_test = [] {
+                auto deck = nxt::rt::deck{};
+                using children_type = std::tuple<
+                    nxt::rt::subtask<int>,
+                    nxt::rt::subtask<int>>;
+
+                auto children =
+                    deck.sync_wait([]() -> nxt::rt::task<children_type> {
+                        co_return co_await nxt::rt::with_zone(
+                            []() -> nxt::rt::task<children_type> {
+                                auto first =
+                                    nxt::rt::spawn(value_after_yield(10));
+                                auto second =
+                                    nxt::rt::spawn(value_after_yield(20));
+                                co_return children_type{
+                                    std::move(first),
+                                    std::move(second)};
+                            });
+                    });
+
+                auto [first, second] = std::move(children);
+                expect(std::move(first).get() == 10_i);
+                expect(std::move(second).get() == 20_i);
+            };
+
+            "fail the zone for uncoped returned subtasks"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto threw = false;
+
+                try {
+                    (void)deck.sync_wait([]()
+                        -> nxt::rt::task<nxt::rt::subtask<int>> {
+                        co_return co_await nxt::rt::with_zone(
+                            []() -> nxt::rt::task<nxt::rt::subtask<int>> {
+                                auto child =
+                                    nxt::rt::spawn(throw_int_after_yield());
+                                co_return std::move(child);
+                            });
+                    });
+                } catch (const std::exception &) {
+                    threw = true;
+                }
+
+                expect(threw);
+            };
+
+            "let coped subtasks report failure as expected"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto child =
+                    deck.sync_wait([]()
+                        -> nxt::rt::task<nxt::rt::catching_subtask<int>> {
+                        co_return co_await nxt::rt::with_zone(
+                            []()
+                                -> nxt::rt::task<
+                                    nxt::rt::catching_subtask<int>> {
+                                auto child =
+                                    nxt::rt::spawn(throw_int_after_yield())
+                                        .cope();
+                                co_return std::move(child);
+                            });
+                    });
+
+                auto result = std::move(child).get();
+                expect(!result.has_value());
+            };
+
+            "let coped subtasks report success as expected"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto child =
+                    deck.sync_wait([]()
+                        -> nxt::rt::task<nxt::rt::catching_subtask<int>> {
+                        co_return co_await nxt::rt::with_zone(
+                            []()
+                                -> nxt::rt::task<
+                                    nxt::rt::catching_subtask<int>> {
+                                auto child =
+                                    nxt::rt::spawn(value_after_yield(99))
+                                        .cope();
+                                co_return std::move(child);
+                            });
+                    });
+
+                auto result = std::move(child).get();
+                expect(result.has_value());
+                expect(*result == 99_i);
             };
         };
 

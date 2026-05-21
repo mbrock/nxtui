@@ -17,6 +17,7 @@ namespace nxt::rt {
 
 template<typename T = void>
 class task;
+class task_zone;
 class deck;
 struct yield_awaiter;
 
@@ -225,6 +226,7 @@ private:
     friend struct detail::promise_base;
     template<typename T>
     friend class task;
+    friend class task_zone;
     friend struct parked_task;
     friend struct yield_awaiter;
 
