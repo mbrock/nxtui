@@ -1,4 +1,5 @@
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/pipe.hpp>
 #include <nxt/rt/task.hpp>
 
 #include <boost/ut.hpp>
@@ -300,6 +301,125 @@ static suite ng_runtime_tests = [] {
             }
             co_return false;
         }));
+    };
+
+    "pipe yields values to an awaiting task"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        auto numbers = []() -> nxt::rt::pipe<int> {
+            co_yield 1;
+            co_yield 2;
+            co_yield 3;
+        };
+
+        auto values = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
+            auto pipe = numbers();
+            auto out = std::vector<int>{};
+            while (auto value = co_await pipe.next())
+                out.push_back(*value);
+            co_return out;
+        });
+
+        expect(values == std::vector<int>{1, 2, 3});
+    };
+
+    "pipe can await between yielded values"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        auto paced_numbers = []() -> nxt::rt::pipe<int> {
+            co_yield 1;
+            co_await nxt::rt::yield();
+            co_yield 2;
+        };
+
+        auto values = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
+            auto pipe = paced_numbers();
+            auto out = std::vector<int>{};
+            while (auto value = co_await pipe.next())
+                out.push_back(*value);
+            co_return out;
+        });
+
+        expect(values == std::vector<int>{1, 2});
+    };
+
+    "pipe can await child tasks before yielding values"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        auto child = [](int value) -> nxt::rt::task<int> {
+            co_await nxt::rt::yield();
+            co_return value * 2;
+        };
+
+        auto doubled = [child]() -> nxt::rt::pipe<int> {
+            co_yield co_await child(2);
+            co_yield co_await child(3);
+        };
+
+        auto values = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
+            auto pipe = doubled();
+            auto out = std::vector<int>{};
+            while (auto value = co_await pipe.next())
+                out.push_back(*value);
+            co_return out;
+        });
+
+        expect(values == std::vector<int>{4, 6});
+    };
+
+    "pipe can await a wand wish before yielding again"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto wand = manual_wand{};
+        auto values = std::vector<int>{};
+
+        auto consumer_body =
+            [](std::vector<int> & values) -> nxt::rt::task<void> {
+                auto producer = []() -> nxt::rt::pipe<int> {
+                    co_yield 1;
+                    co_await nxt::rt::manual_wish{.token = 99};
+                    co_yield 2;
+                };
+                auto pipe = producer();
+                while (auto value = co_await pipe.next())
+                    values.push_back(*value);
+            };
+
+        auto consumer = consumer_body(values);
+
+        deck.start(consumer);
+        deck.run_until_idle(wand);
+
+        expect(values == std::vector<int>{1});
+        expect(wand.parked.size() == std::size_t{1});
+        expect(wand.parked.front().token == std::uint64_t{99});
+
+        wand.fulfill(deck, 99);
+        deck.run_until_idle(wand);
+
+        expect(values == std::vector<int>{1, 2});
+        expect(consumer.done());
+    };
+
+    "pipe exceptions propagate to the awaiting task"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        auto broken = []() -> nxt::rt::pipe<int> {
+            co_yield 1;
+            throw std::runtime_error{"pipe boom"};
+        };
+
+        auto threw = false;
+        try {
+            deck.sync_wait([&]() -> nxt::rt::task<void> {
+                auto pipe = broken();
+                while (co_await pipe.next()) {
+                }
+            });
+        } catch (const std::runtime_error &) {
+            threw = true;
+        }
+
+        expect(threw);
     };
 };
 

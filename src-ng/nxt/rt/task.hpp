@@ -47,11 +47,7 @@ struct promise_base
         template<typename Promise>
         void await_suspend(std::coroutine_handle<Promise> coroutine) noexcept
         {
-            auto & promise = coroutine.promise();
-            if (promise.continuation && detail::current_deck != nullptr)
-                detail::current_deck->enqueue(
-                    promise.continuation,
-                    promise.continuation_promise);
+            coroutine.promise().resume_continuation();
         }
 
         void await_resume() const noexcept {}
@@ -84,6 +80,19 @@ struct promise_base
     {
         continuation = handle;
         continuation_promise = promise;
+    }
+
+    void resume_continuation() noexcept
+    {
+        if (continuation && detail::current_deck != nullptr)
+            detail::current_deck->enqueue(continuation, continuation_promise);
+    }
+
+    void enqueue_self(std::coroutine_handle<> handle)
+    {
+        if (detail::current_deck == nullptr)
+            throw std::runtime_error{"nxt::rt task enqueued without a deck"};
+        detail::current_deck->enqueue(handle, this);
     }
 
     /// Identity assigned when the coroutine frame is created.
