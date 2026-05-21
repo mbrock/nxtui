@@ -115,16 +115,15 @@ input_items_from_request(const openai_responses_request & request)
 openai_responses_body_payload_from_request(
     const openai_responses_request & request)
 {
-    auto body = openai_responses_body_payload{
-        .model = request.model,
-        .stream = true,
-        .store = request.store,
-        .max_output_tokens = request.max_output_tokens,
-        .input =
-            request.input_items.empty()
-                ? openai::raw_json{glz::ex::write_json(request.input)}
-                : openai::raw_json{glz::ex::write_json(request.input_items)},
-    };
+    auto body = openai_responses_body_payload{};
+    body.model = request.model;
+    body.stream = true;
+    body.store = request.store;
+    body.max_output_tokens = request.max_output_tokens;
+    body.input =
+        request.input_items.empty()
+            ? openai::raw_json{glz::ex::write_json(request.input)}
+            : openai::raw_json{glz::ex::write_json(request.input_items)};
 
     if (!request.tools.empty())
         body.tools = request.tools;
