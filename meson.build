@@ -278,18 +278,18 @@ if get_option('tests')
     dependencies : [nxt_dep],
   )
 
-  nxt_ng_runtime_test = executable('ng-runtime-test',
-    'test/ng-runtime-test.cpp',
-    'src/nxtio/stacktrace.cpp',
-    include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
-    dependencies : nxt_stacktrace_deps,
-    cpp_args : nxt_stacktrace_cpp_args,
-  )
-
   test('nxt-tests', nxt_tests)
-  test('ng-runtime-test', nxt_ng_runtime_test)
 
   if host_machine.system() == 'linux'
+    nxt_ng_runtime_test = executable('ng-runtime-test',
+      'test/ng-runtime-test.cpp',
+      'src/nxtio/stacktrace.cpp',
+      include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
+      dependencies : nxt_stacktrace_deps,
+      cpp_args : nxt_stacktrace_cpp_args,
+    )
+    test('ng-runtime-test', nxt_ng_runtime_test)
+
     nxt_test_liburing_dep = dependency(
       'liburing',
       fallback : ['liburing', 'uring'],
