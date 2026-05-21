@@ -57,7 +57,7 @@ struct pipe_promise final : promise_base
     std::optional<stored_type> take_current()
     {
         if (exception_)
-            std::rethrow_exception(exception_);
+            rethrow(exception_);
 
         auto value = std::move(current_);
         current_.reset();
@@ -99,7 +99,7 @@ public:
             auto * awaiting_promise =
                 current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || awaiting_promise == nullptr)
-                throw std::runtime_error{
+                throw runtime_error{
                     "nxt::rt pipe awaited without a running deck"};
 
             auto & promise = coroutine_.promise();

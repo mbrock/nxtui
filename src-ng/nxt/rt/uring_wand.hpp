@@ -40,7 +40,7 @@ public:
     {
         auto rc = io_uring_queue_init(queue_depth, &ring_, 0);
         if (rc < 0)
-            throw std::runtime_error{
+            throw runtime_error{
                 "io_uring_queue_init failed: " + std::to_string(-rc)};
     }
 
@@ -272,7 +272,7 @@ public:
         trace("uring wave submit");
         auto rc = io_uring_submit(&ring_);
         if (rc < 0)
-            throw std::runtime_error{
+            throw runtime_error{
                 "io_uring_submit failed: " + std::to_string(-rc)};
     }
 
@@ -285,7 +285,7 @@ public:
             if (rc == -EAGAIN)
                 return;
             if (rc < 0)
-                throw std::runtime_error{
+                throw runtime_error{
                     "io_uring_peek_cqe failed: " + std::to_string(-rc)};
             if (cqe == nullptr)
                 return;
@@ -378,7 +378,7 @@ private:
                 } else {
                     state_->set_exception(
                         std::make_exception_ptr(
-                            std::runtime_error{
+                            runtime_error{
                                 "io_uring operation failed: "
                                 + std::to_string(-result)}));
                 }
@@ -394,7 +394,7 @@ private:
                 if (result < 0) {
                     state_->set_exception(
                         std::make_exception_ptr(
-                            std::runtime_error{
+                            runtime_error{
                                 "io_uring operation failed: "
                                 + std::to_string(-result)}));
                     return;
@@ -420,7 +420,7 @@ private:
     {
         auto * sqe = io_uring_get_sqe(&ring_);
         if (sqe == nullptr)
-            throw std::runtime_error{"io_uring submission queue is full"};
+            throw runtime_error{"io_uring submission queue is full"};
         return sqe;
     }
 

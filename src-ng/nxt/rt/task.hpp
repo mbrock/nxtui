@@ -101,7 +101,7 @@ struct promise_base
     {
         auto * current = detail::current_env;
         if (current == nullptr || current->current_deck == nullptr)
-            throw std::runtime_error{"nxt::rt task enqueued without a deck"};
+            throw runtime_error{"nxt::rt task enqueued without a deck"};
         current->current_deck->enqueue(handle, this);
     }
 
@@ -151,8 +151,8 @@ struct promise final : promise_base
         if (std::holds_alternative<stored_type>(storage_))
             return std::get<stored_type>(storage_);
         if (std::holds_alternative<std::exception_ptr>(storage_))
-            std::rethrow_exception(std::get<std::exception_ptr>(storage_));
-        throw std::runtime_error{"nxt::rt task result was never set"};
+            rethrow(std::get<std::exception_ptr>(storage_));
+        throw runtime_error{"nxt::rt task result was never set"};
     }
 
     /// Move the completed result out of the promise.
@@ -161,8 +161,8 @@ struct promise final : promise_base
         if (std::holds_alternative<stored_type>(storage_))
             return std::move(std::get<stored_type>(storage_));
         if (std::holds_alternative<std::exception_ptr>(storage_))
-            std::rethrow_exception(std::get<std::exception_ptr>(storage_));
-        throw std::runtime_error{"nxt::rt task result was never set"};
+            rethrow(std::get<std::exception_ptr>(storage_));
+        throw runtime_error{"nxt::rt task result was never set"};
     }
 
 private:
@@ -189,7 +189,7 @@ struct promise<void> final : promise_base
     void result()
     {
         if (exception_)
-            std::rethrow_exception(exception_);
+            rethrow(exception_);
     }
 
 private:
@@ -237,7 +237,7 @@ public:
             auto * awaiting_promise =
                 current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || awaiting_promise == nullptr)
-                throw std::runtime_error{
+                throw runtime_error{
                     "nxt::rt task awaited without a running deck"};
 
             auto & promise = coroutine_.promise();
@@ -351,7 +351,7 @@ with_env(typename Key::value_type value, Fn && fn)
     auto * current = detail::current_env;
     auto * promise = current == nullptr ? nullptr : current->current_promise;
     if (current == nullptr || promise == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt env binding used without runtime env"};
 
     struct binding_guard
@@ -401,7 +401,7 @@ public:
         auto * active_deck =
             current == nullptr ? nullptr : current->current_deck;
         if (current == nullptr || active_deck == nullptr)
-            throw std::runtime_error{
+            throw runtime_error{
                 "nxt::rt zone spawn used without a running deck"};
 
         auto handle = child.handle();
@@ -437,7 +437,7 @@ inline task_zone & require_current_zone()
 {
     auto * zone = current_zone();
     if (zone == nullptr)
-        throw std::runtime_error{"nxt::rt operation used without task zone"};
+        throw runtime_error{"nxt::rt operation used without task zone"};
     return *zone;
 }
 
@@ -466,7 +466,7 @@ public:
         auto * awaiting_promise =
             current == nullptr ? nullptr : current->current_promise;
         if (awaiting_promise == nullptr)
-            throw std::runtime_error{
+            throw runtime_error{
                 "nxt::rt zone join used without a running task"};
 
         handle_.promise().set_continuation(awaiting, awaiting_promise);
@@ -486,23 +486,22 @@ template<stored_task_factory Fn>
 [[nodiscard]] task<stored_task_result_t<Fn>>
 run_zone_body(task_zone & zone, Fn fn)
 {
-    auto error = std::exception_ptr{};
+    auto exceptions = std::vector<std::exception_ptr>{};
 
     if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
         try {
             co_await std::invoke(fn);
         } catch (...) {
-            error = std::current_exception();
+            exceptions.push_back(std::current_exception());
         }
 
         try {
             co_await zone.join();
         } catch (...) {
-            if (!error)
-                error = std::current_exception();
+            exceptions.push_back(std::current_exception());
         }
-        if (error)
-            std::rethrow_exception(error);
+        if (!exceptions.empty())
+            throw_exceptions("zone body failed", std::move(exceptions));
     } else {
         using result_type = std::remove_cv_t<stored_task_result_t<Fn>>;
         auto result = std::optional<result_type>{};
@@ -510,17 +509,16 @@ run_zone_body(task_zone & zone, Fn fn)
         try {
             result.emplace(co_await std::invoke(fn));
         } catch (...) {
-            error = std::current_exception();
+            exceptions.push_back(std::current_exception());
         }
 
         try {
             co_await zone.join();
         } catch (...) {
-            if (!error)
-                error = std::current_exception();
+            exceptions.push_back(std::current_exception());
         }
-        if (error)
-            std::rethrow_exception(error);
+        if (!exceptions.empty())
+            throw_exceptions("zone body failed", std::move(exceptions));
         co_return std::move(*result);
     }
 }
@@ -529,18 +527,17 @@ run_zone_body(task_zone & zone, Fn fn)
 
 inline task<void> task_zone::join()
 {
-    auto error = std::exception_ptr{};
+    auto exceptions = std::vector<std::exception_ptr>{};
     for (auto i = std::size_t{0}; i < children_.size(); ++i) {
         try {
             co_await detail::started_task_awaiter{children_[i]};
         } catch (...) {
-            if (!error)
-                error = std::current_exception();
+            exceptions.push_back(std::current_exception());
         }
     }
 
-    if (error)
-        std::rethrow_exception(error);
+    if (!exceptions.empty())
+        throw_exceptions("zone tasks failed", std::move(exceptions));
 }
 
 template<typename Fn>
@@ -656,7 +653,7 @@ inline void waiter<T>::await_suspend(
     auto * current = detail::current_env;
     auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_wand == nullptr || running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt waiter awaited without a prepared wand"};
 
     trace("waiter suspend token=" + std::to_string(token_));
@@ -674,7 +671,7 @@ inline waiter<void> manual_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt manual wish awaited without a running wand"};
 
     trace("wish manual prepare token=" + std::to_string(token));
@@ -690,7 +687,7 @@ inline waiter<int> openat_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt openat wish awaited without a running wand"};
 
     trace("wish openat prepare path=" + path);
@@ -706,7 +703,7 @@ inline waiter<std::size_t> read_some_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt read wish awaited without a running wand"};
 
     trace("wish read prepare fd=" + std::to_string(fd)
@@ -723,7 +720,7 @@ inline waiter<std::size_t> recv_some_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt recv wish awaited without a running wand"};
 
     trace("wish recv prepare fd=" + std::to_string(fd)
@@ -740,7 +737,7 @@ inline waiter<std::size_t> send_some_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt send wish awaited without a running wand"};
 
     trace("wish send prepare fd=" + std::to_string(fd)
@@ -757,7 +754,7 @@ inline waiter<void> connect_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt connect wish awaited without a running wand"};
 
     trace("wish connect prepare fd=" + std::to_string(fd));
@@ -773,7 +770,7 @@ inline waiter<int> poll_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt poll wish awaited without a running wand"};
 
     trace("wish poll prepare fd=" + std::to_string(fd)
@@ -790,7 +787,7 @@ inline waiter<void> timeout_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt timeout wish awaited without a running wand"};
 
     trace("wish timeout prepare");
@@ -806,7 +803,7 @@ inline waiter<poll_until_result> poll_until_wish::operator co_await() const
     if (context.active_deck == nullptr
         || context.active_wand == nullptr
         || context.running == nullptr)
-        throw std::runtime_error{
+        throw runtime_error{
             "nxt::rt poll-until wish awaited without a running wand"};
 
     trace("wish poll-until prepare fd=" + std::to_string(fd)
@@ -833,7 +830,7 @@ struct yield_awaiter
             current == nullptr ? nullptr : current->current_deck;
         auto * running = current == nullptr ? nullptr : current->current_promise;
         if (active_deck == nullptr || running == nullptr)
-            throw std::runtime_error{
+            throw runtime_error{
                 "nxt::rt yield awaited without a running deck"};
         active_deck->enqueue(awaiting, running);
     }

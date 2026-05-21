@@ -14,9 +14,9 @@
 
 namespace nxt::rt::http {
 
-struct protocol_error : std::runtime_error
+struct protocol_error : runtime_error
 {
-    using std::runtime_error::runtime_error;
+    using runtime_error::runtime_error;
 };
 
 struct header

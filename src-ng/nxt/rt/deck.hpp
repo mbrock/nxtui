@@ -173,7 +173,7 @@ private:
     {
         auto * env = current_env();
         if (env != nullptr && env->current_promise != nullptr)
-            throw std::runtime_error{"nxt::rt deck pump is not reentrant"};
+            throw runtime_error{"nxt::rt deck pump is not reentrant"};
 
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
@@ -199,7 +199,7 @@ public:
         start(t);
         while (!t.done()) {
             if (ready_.empty())
-                throw std::runtime_error{"nxt::rt deck deadlock"};
+                throw runtime_error{"nxt::rt deck deadlock"};
             run_ready();
         }
 

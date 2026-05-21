@@ -1,5 +1,7 @@
 #pragma once
 
+#include "nxt/rt/exceptions.hpp"
+
 #include <coroutine>
 #include <chrono>
 #include <cstddef>
@@ -78,9 +80,9 @@ public:
     T take()
     {
         if (exception_)
-            std::rethrow_exception(exception_);
+            rethrow(exception_);
         if (!value_)
-            throw std::runtime_error{"nxt::rt waiter result was never set"};
+            throw runtime_error{"nxt::rt waiter result was never set"};
         return std::move(*value_);
     }
 
@@ -106,9 +108,9 @@ public:
     void take()
     {
         if (exception_)
-            std::rethrow_exception(exception_);
+            rethrow(exception_);
         if (!done_)
-            throw std::runtime_error{"nxt::rt waiter result was never set"};
+            throw runtime_error{"nxt::rt waiter result was never set"};
     }
 
 private:
@@ -142,7 +144,7 @@ public:
     T await_resume()
     {
         if (state_ == nullptr)
-            throw std::runtime_error{"nxt::rt waiter has no result state"};
+            throw runtime_error{"nxt::rt waiter has no result state"};
         return state_->take();
     }
 
@@ -166,7 +168,7 @@ template<>
 inline void waiter<void>::await_resume()
 {
     if (state_ == nullptr)
-        throw std::runtime_error{"nxt::rt waiter has no result state"};
+        throw runtime_error{"nxt::rt waiter has no result state"};
     state_->take();
 }
 
@@ -242,7 +244,7 @@ struct connect_wish
         socklen_t address_size)
     {
         if (address_size > sizeof(sockaddr_storage))
-            throw std::runtime_error{"connect address is too large"};
+            throw runtime_error{"connect address is too large"};
 
         auto wish = connect_wish{
             .fd = fd,

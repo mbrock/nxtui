@@ -13,9 +13,9 @@
 
 namespace nxt::rt {
 
-struct buffer_error : std::runtime_error
+struct buffer_error : runtime_error
 {
-    using std::runtime_error::runtime_error;
+    using runtime_error::runtime_error;
 };
 
 struct end_of_stream : buffer_error

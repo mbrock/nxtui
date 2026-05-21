@@ -203,11 +203,11 @@ nxt::rt::task<void> record_current_zone(
     zones.push_back(nxt::rt::current_zone());
 }
 
-nxt::rt::task<void> throw_after_yield(std::vector<int> & events)
+nxt::rt::task<void> throw_after_yield(std::vector<int> & events, int value)
 {
-    events.push_back(1);
+    events.push_back(value * 10 + 1);
     co_await nxt::rt::yield();
-    throw std::runtime_error{"zone child boom"};
+    throw nxt::rt::runtime_error{"zone child boom"};
 }
 
 static suite ng_runtime_tests{
@@ -337,7 +337,7 @@ static suite ng_runtime_tests{
                         co_await nxt::rt::yield();
                         throw std::runtime_error{"boom"};
                     });
-                } catch (const std::runtime_error &) {
+                } catch (const std::exception &) {
                     threw = true;
                 }
                 expect(threw);
@@ -349,7 +349,7 @@ static suite ng_runtime_tests{
                 expect(deck.sync_wait([&deck]() -> nxt::rt::task<bool> {
                     try {
                         deck.run_ready();
-                    } catch (const std::runtime_error &) {
+                    } catch (const std::exception &) {
                         co_return true;
                     }
                     co_return false;
@@ -471,7 +471,7 @@ static suite ng_runtime_tests{
                         nxt::rt::spawn([]() -> nxt::rt::task<void> {
                             co_return;
                         }());
-                    } catch (const std::runtime_error &) {
+                    } catch (const std::exception &) {
                         co_return true;
                     }
                     co_return false;
@@ -489,18 +489,43 @@ static suite ng_runtime_tests{
                     deck.sync_wait([&]() -> nxt::rt::task<void> {
                         co_await nxt::rt::with_zone(
                             [&]() -> nxt::rt::task<void> {
-                                nxt::rt::spawn(throw_after_yield(events));
+                                nxt::rt::spawn(throw_after_yield(events, 0));
                                 nxt::rt::spawn(record_after_yield(events, 2));
                                 co_return;
                             });
                         co_return;
                     });
-                } catch (const std::runtime_error &) {
+                } catch (const std::exception &) {
                     threw = true;
                 }
 
                 expect(threw);
                 expect(events == std::vector<int>{1, 21, 22});
+            };
+
+            "group multiple child exceptions"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+                auto grouped = false;
+
+                try {
+                    deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::with_zone(
+                            [&]() -> nxt::rt::task<void> {
+                                nxt::rt::spawn(throw_after_yield(events, 1));
+                                nxt::rt::spawn(throw_after_yield(events, 2));
+                                nxt::rt::spawn(record_after_yield(events, 3));
+                                co_return;
+                            });
+                        co_return;
+                    });
+                } catch (const nxt::rt::exception_group & group) {
+                    grouped = true;
+                    expect(group.exceptions().size() == std::size_t{2});
+                }
+
+                expect(grouped);
+                expect(events == std::vector<int>{11, 21, 31, 32});
             };
         };
 

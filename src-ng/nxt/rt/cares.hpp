@@ -41,7 +41,7 @@ public:
         ares_channel_t * channel = nullptr;
         auto rc = ares_init(&channel);
         if (rc != ARES_SUCCESS)
-            throw std::runtime_error{
+            throw runtime_error{
                 "ares_init failed: " + std::string{ares_strerror(rc)}};
         channel_.reset(channel);
     }
@@ -78,7 +78,7 @@ public:
             co_await drive_once();
 
         if (query.status != ARES_SUCCESS)
-            throw std::runtime_error{
+            throw runtime_error{
                 "ares_getaddrinfo failed: "
                 + std::string{ares_strerror(query.status)}};
 
@@ -101,7 +101,7 @@ private:
         {
             auto rc = ares_library_init(ARES_LIB_INIT_ALL);
             if (rc != ARES_SUCCESS)
-                throw std::runtime_error{
+                throw runtime_error{
                     "ares_library_init failed: "
                     + std::string{ares_strerror(rc)}};
         }

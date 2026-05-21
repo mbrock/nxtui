@@ -1,5 +1,7 @@
 #pragma once
 
+#include "nxt/rt/exceptions.hpp"
+
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -44,10 +46,10 @@ struct env_binding : env_binding_base
     value_type value;
 };
 
-struct missing_env : std::runtime_error
+struct missing_env : runtime_error
 {
     explicit missing_env(std::string_view name)
-        : std::runtime_error{
+        : runtime_error{
             "missing runtime env binding: " + std::string{name}}
     {}
 };
@@ -114,7 +116,7 @@ inline runtime_env & require_current_env()
 {
     auto * env = current_env();
     if (env == nullptr)
-        throw std::runtime_error{"nxt::rt operation used without runtime env"};
+        throw runtime_error{"nxt::rt operation used without runtime env"};
     return *env;
 }
 
