@@ -141,6 +141,8 @@ nxt_runtime_deps = [
 ]
 
 nxt_runtime_cpp_args = []
+nxt_stacktrace_deps = []
+nxt_stacktrace_cpp_args = []
 
 cpp = meson.get_compiler('cpp')
 
@@ -161,6 +163,8 @@ if cpptrace_dep.found() and cpp.links(
   name : 'cpptrace')
   nxt_runtime_deps += cpptrace_dep
   nxt_runtime_cpp_args += '-DNXT_HAVE_CPPTRACE=1'
+  nxt_stacktrace_deps += cpptrace_dep
+  nxt_stacktrace_cpp_args += '-DNXT_HAVE_CPPTRACE=1'
   message('cpptrace available')
 else
   message('cpptrace not available')
@@ -182,6 +186,7 @@ else
     dependencies : [stdcxxexp_dep],
     name : 'std::stacktrace with stdc++exp')
     nxt_runtime_deps += stdcxxexp_dep
+    nxt_stacktrace_deps += stdcxxexp_dep
     message('std::stacktrace available with stdc++exp')
   else
     message('std::stacktrace not available')
@@ -275,7 +280,10 @@ if get_option('tests')
 
   nxt_ng_runtime_test = executable('ng-runtime-test',
     'test/ng-runtime-test.cpp',
-    include_directories : [nxt_ng_inc, nxt_test_inc],
+    'src/nxtio/stacktrace.cpp',
+    include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
+    dependencies : nxt_stacktrace_deps,
+    cpp_args : nxt_stacktrace_cpp_args,
   )
 
   test('nxt-tests', nxt_tests)

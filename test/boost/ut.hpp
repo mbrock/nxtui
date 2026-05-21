@@ -1,5 +1,7 @@
 #pragma once
 
+#include <nxtio/stacktrace.hpp>
+
 #include <chrono>
 #include <exception>
 #include <iomanip>
@@ -38,9 +40,11 @@ struct test_case
             ++failures;
             std::cerr << name << ": unexpected exception: " << e.what()
                       << '\n';
+            nxt::io::print_current_exception_trace(std::cerr, "  ");
         } catch (...) {
             ++failures;
             std::cerr << name << ": unexpected non-std exception\n";
+            nxt::io::print_current_exception_trace(std::cerr, "  ");
         }
 
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
