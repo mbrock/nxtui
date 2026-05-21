@@ -155,6 +155,7 @@ public:
 
         // Suspend until this specific result is completed by ares.
         co_await resume_event;
+        co_await drain_poll_tasks();
         co_return result_ptr;
     }
 
@@ -171,14 +172,32 @@ private:
     /// This is the map of sockets that are currently being actively polled so multiple poll tasks
     /// are not setup when socket state is changed.
     std::unordered_map<fd_t, poll_op> m_active_sockets{};
+    std::recursive_mutex              m_ares_channel_mutex{};
+    uint64_t                          m_active_poll_tasks{0};
+    coro::event                       m_poll_tasks_drained{true};
+    bool                              m_draining_poll_tasks{false};
 
     auto make_poll_task(fd_t fd) -> coro::task<void>
     {
         // The loop ensures non-blocking polling until the socket is closed by c-ares.
-        while (m_active_sockets.contains(fd))
+        while (true)
         {
-            auto ops    = m_active_sockets[fd];
+            auto ops = poll_op{};
+            {
+                std::scoped_lock lock{m_ares_channel_mutex};
+                if (m_draining_poll_tasks || !m_active_sockets.contains(fd))
+                {
+                    break;
+                }
+                ops = m_active_sockets[fd];
+            }
+
             auto result = co_await m_executor->poll(fd, ops, m_timeout);
+            std::scoped_lock lock{m_ares_channel_mutex};
+            if (m_draining_poll_tasks || !m_active_sockets.contains(fd))
+            {
+                break;
+            }
             switch (result)
             {
                 case poll_status::read:
@@ -208,9 +227,51 @@ private:
         co_return;
     }
 
+    auto run_poll_task(fd_t fd) -> coro::task<void>
+    {
+        co_await make_poll_task(fd);
+
+        bool drained = false;
+        {
+            std::scoped_lock lock{m_ares_channel_mutex};
+            --m_active_poll_tasks;
+            drained = m_draining_poll_tasks && m_active_poll_tasks == 0;
+        }
+        if (drained)
+        {
+            m_poll_tasks_drained.set(m_executor, resume_order_policy::lifo);
+        }
+    }
+
+    auto drain_poll_tasks() -> coro::task<void>
+    {
+        bool needs_wait = false;
+        {
+            std::scoped_lock lock{m_ares_channel_mutex};
+            m_draining_poll_tasks = true;
+            m_active_sockets.clear();
+            needs_wait = m_active_poll_tasks > 0;
+            if (!needs_wait)
+            {
+                m_poll_tasks_drained.set(m_executor, resume_order_policy::lifo);
+            }
+        }
+
+        if (needs_wait)
+        {
+            co_await m_poll_tasks_drained;
+        }
+    }
+
     static auto ares_socket_state_callback(void* data, ares_socket_t socket_fd, int readable, int writable) -> void
     {
         resolver* self = static_cast<resolver*>(data);
+        std::scoped_lock lock{self->m_ares_channel_mutex};
+        if (self->m_draining_poll_tasks)
+        {
+            return;
+        }
+
         uint64_t  ops{0};
 
         if (readable)
@@ -229,7 +290,9 @@ private:
             auto [it, inserted] = self->m_active_sockets.insert_or_assign(fd, poll_ops);
             if (inserted)
             {
-                self->m_executor->spawn_detached(self->make_poll_task(fd));
+                ++self->m_active_poll_tasks;
+                self->m_poll_tasks_drained.reset();
+                self->m_executor->spawn_detached(self->run_poll_task(fd));
             }
         }
         else

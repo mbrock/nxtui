@@ -515,7 +515,7 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
         if (fold_when_done && (!block.empty() || drew_pending)) {
             if (!block.empty()) {
                 self.print(markdown_text_block(block, style, wrap_width));
-                self.print("\n");
+                self.print("\n\n");
             }
             if (hud) {
                 hud->add(folded_thought_block());

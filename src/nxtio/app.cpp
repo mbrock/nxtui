@@ -735,8 +735,8 @@ void UIRuntime::render_impl(
     // not the previous frame.
     record_frame_snapshot(buffer);
     auto guard = std::scoped_lock{output_mutex_};
-    flush_output_queue(std::cout);
     compositor_->present_frame(std::cout);
+    flush_output_queue(std::cout);
 }
 
 void UIRuntime::maybe_screenshot() noexcept
@@ -984,6 +984,7 @@ void UIRuntime::write_output(
 
     std::string buf;
     ansi::Writer w(buf);
+    auto leading_newline = false;
     if (!scrollback_cursor_row_)
         scrollback_cursor_row_ = scroll_bottom;
     if (scrollback_cursor_needs_move_) {
@@ -997,8 +998,10 @@ void UIRuntime::write_output(
     if (output.kind == QueuedOutput::Kind::block) {
         if (block_text.empty())
             return;
-        if (!scrollback_at_line_start_)
+        if (!scrollback_at_line_start_) {
             w.text("\n");
+            leading_newline = true;
+        }
         w.text(block_text);
         if (block_text.back() != '\n')
             w.text("\n");
@@ -1019,8 +1022,10 @@ void UIRuntime::write_output(
     out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     auto advance_rows = 0;
     if (output.kind == QueuedOutput::Kind::block) {
-        advance_rows = 1 + count_newlines(block_text);
+        advance_rows = count_newlines(block_text);
         if (block_text.empty() || block_text.back() != '\n')
+            ++advance_rows;
+        if (leading_newline)
             ++advance_rows;
     } else if (output.kind == QueuedOutput::Kind::line) {
         advance_rows = std::max(1, count_newlines(output.text));
