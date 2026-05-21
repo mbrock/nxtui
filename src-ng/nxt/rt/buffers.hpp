@@ -2,12 +2,24 @@
 
 #include "nxt/rt/task.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 
 namespace nxt::rt {
+
+struct buffer_error : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+
+struct end_of_stream : buffer_error
+{
+    using buffer_error::buffer_error;
+};
 
 /// View immutable bytes as text without copying.
 inline std::string_view as_string_view(std::span<const std::byte> bytes) noexcept
@@ -16,6 +28,20 @@ inline std::string_view as_string_view(std::span<const std::byte> bytes) noexcep
         reinterpret_cast<const char *>(bytes.data()),
         bytes.size_bytes(),
     };
+}
+
+inline std::span<const std::byte> as_bytes(std::string_view text) noexcept
+{
+    return std::as_bytes(std::span{text});
+}
+
+inline std::size_t find_bytes(
+    std::span<const std::byte> haystack,
+    std::span<const std::byte> needle)
+{
+    auto match = std::ranges::search(haystack, needle);
+    return static_cast<std::size_t>(
+        std::distance(haystack.begin(), match.begin()));
 }
 
 /// Runtime-polymorphic byte source.
@@ -84,6 +110,137 @@ public:
 
 private:
     int fd_ = -1;
+};
+
+/// Buffered asynchronous reader over a byte source.
+template<typename Source = byte_source>
+class byte_reader
+{
+public:
+    byte_reader(Source & source, std::span<std::byte> buffer)
+        : source_(&source)
+        , buffer_(buffer)
+    {}
+
+    [[nodiscard]] std::span<const std::byte> buffered() const noexcept
+    {
+        return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
+    }
+
+    [[nodiscard]] std::size_t buffered_size() const noexcept
+    {
+        return end_ - seek_;
+    }
+
+    [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
+    {
+        return buffer_.subspan(end_);
+    }
+
+    void rebase(std::size_t capacity)
+    {
+        if (capacity > buffer_.size())
+            throw buffer_error{"reader buffer is too small"};
+        if (buffer_.size() - seek_ >= capacity)
+            return;
+
+        auto pending = buffered_size();
+        std::memmove(buffer_.data(), buffer_.data() + seek_, pending);
+        seek_ = 0;
+        end_ = pending;
+    }
+
+    task<> fill(std::size_t n)
+    {
+        if (n > buffer_.size())
+            throw buffer_error{"reader buffer is too small"};
+        if (buffered_size() >= n)
+            co_return;
+
+        rebase(n);
+        while (buffered_size() < n) {
+            auto read = co_await fill_more_without_rebase();
+            if (read == 0)
+                throw end_of_stream{"unexpected end of input"};
+        }
+    }
+
+    task<std::size_t> fill_more()
+    {
+        if (buffered_size() == buffer_.size())
+            throw buffer_error{"reader buffer is full"};
+        rebase(buffered_size() + 1);
+        co_return co_await fill_more_without_rebase();
+    }
+
+    task<std::span<const std::byte>> peek(std::size_t n)
+    {
+        co_await fill(n);
+        co_return buffered().first(n);
+    }
+
+    void toss(std::size_t n)
+    {
+        if (n > buffered_size())
+            throw buffer_error{"reader consumed past buffered input"};
+        seek_ += n;
+    }
+
+    task<std::span<const std::byte>> take(std::size_t n)
+    {
+        auto out = co_await peek(n);
+        toss(n);
+        co_return out;
+    }
+
+    task<std::span<const std::byte>>
+    take_until(std::span<const std::byte> delimiter)
+    {
+        if (delimiter.empty())
+            throw buffer_error{"empty delimiter"};
+
+        while (true) {
+            auto available = buffered();
+            auto cut = find_bytes(available, delimiter);
+            if (cut < available.size()) {
+                auto out = available.first(cut);
+                seek_ += cut + delimiter.size();
+                co_return out;
+            }
+
+            if (buffered_size() == buffer_.size())
+                throw buffer_error{"reader buffer filled before delimiter"};
+
+            auto read = co_await fill_more();
+            if (read == 0)
+                throw end_of_stream{"unexpected end of input"};
+        }
+    }
+
+    task<std::span<const std::byte>>
+    take_until(std::string_view delimiter)
+    {
+        co_return co_await take_until(as_bytes(delimiter));
+    }
+
+private:
+    task<std::size_t> fill_more_without_rebase()
+    {
+        auto dst = unused_capacity();
+        if (dst.empty())
+            throw buffer_error{"reader buffer is full"};
+
+        auto n = co_await source_->read_some(dst);
+        if (n > dst.size())
+            throw buffer_error{"source overfilled read buffer"};
+        end_ += n;
+        co_return n;
+    }
+
+    Source * source_;
+    std::span<std::byte> buffer_;
+    std::size_t seek_ = 0;
+    std::size_t end_ = 0;
 };
 
 /// Repeatedly fill the same caller-owned buffer and visit each chunk.

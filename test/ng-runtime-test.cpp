@@ -1,4 +1,5 @@
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/http.hpp>
 #include <nxt/rt/pipe.hpp>
 #include <nxt/rt/task.hpp>
 
@@ -420,6 +421,83 @@ static suite ng_runtime_tests = [] {
         }
 
         expect(threw);
+    };
+
+    "ng byte reader leaves protocol leftovers buffered"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto chunks = std::array{"abc--def--ghi"sv};
+        auto source = nxt::rt::string_source{std::span{chunks}};
+        auto storage = std::array<std::byte, 16>{};
+        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
+
+        auto parts = deck.sync_wait([&]() -> nxt::rt::task<std::vector<std::string>> {
+            auto out = std::vector<std::string>{};
+            out.emplace_back(nxt::rt::as_string_view(
+                co_await reader.take_until("--")));
+            out.emplace_back(nxt::rt::as_string_view(
+                co_await reader.take_until("--")));
+            out.emplace_back(nxt::rt::as_string_view(reader.buffered()));
+            co_return out;
+        });
+
+        expect(parts == std::vector<std::string>{"abc", "def", "ghi"});
+    };
+
+    "ng http chunked body pipe leaves next response buffered"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto chunks = std::array{
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"sv,
+        };
+        auto source = nxt::rt::string_source{std::span{chunks}};
+        auto storage = std::array<std::byte, 256>{};
+        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
+
+        auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+            auto first = co_await nxt::rt::http::read_response_head(reader);
+            expect(first.status == 200_i);
+            expect(nxt::rt::http::is_chunked(first));
+
+            auto body = nxt::rt::http::read_response_body(reader, first);
+            auto text = std::string{};
+            while (auto chunk = co_await body.next())
+                text += nxt::rt::as_string_view(*chunk);
+
+            auto second = co_await nxt::rt::http::read_response_head(reader);
+            expect(second.status == 204_i);
+            expect(nxt::rt::http::content_length(second) == std::size_t{0});
+            co_return text;
+        });
+
+        expect(result == "hello world");
+    };
+
+    "ng http content-length body pipe leaves next response buffered"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto chunks = std::array{
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+            "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"sv,
+        };
+        auto source = nxt::rt::string_source{std::span{chunks}};
+        auto storage = std::array<std::byte, 128>{};
+        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
+
+        auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+            auto first = co_await nxt::rt::http::read_response_head(reader);
+            expect(first.status == 200_i);
+
+            auto body = nxt::rt::http::read_response_body(reader, first);
+            auto text = std::string{};
+            while (auto chunk = co_await body.next())
+                text += nxt::rt::as_string_view(*chunk);
+
+            auto second = co_await nxt::rt::http::read_response_head(reader);
+            expect(second.status == 201_i);
+            co_return text;
+        });
+
+        expect(result == "hello");
     };
 };
 
