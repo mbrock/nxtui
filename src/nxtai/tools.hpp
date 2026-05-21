@@ -56,15 +56,15 @@ template<typename Parameters>
 struct function_call
 {
     /// Output item id, when present.
-    std::string id;
+    std::string id = {};
     /// Stable call id used when returning `function_call_output`.
-    std::string call_id;
+    std::string call_id = {};
     /// Tool name selected by the model.
-    std::string name;
+    std::string name = {};
     /// Raw JSON argument string from the response item.
-    std::string arguments;
+    std::string arguments = {};
     /// Original response output item.
-    openai::raw_json item;
+    openai::raw_json item = {};
 };
 
 /// Heterogeneous compile-time set of concrete function tools.

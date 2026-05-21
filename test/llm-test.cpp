@@ -174,9 +174,6 @@ static suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
-            .input_items = {},
-            .tools = {},
-            .include = {},
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_effort = "minimal",
@@ -214,7 +211,6 @@ static suite llm_tests = [] {
             .include = {"reasoning.encrypted_content"},
             .previous_response_id = "resp_123",
             .max_output_tokens = 64,
-            .reasoning_effort = "medium",
             .reasoning_summary = "",
             .store = true,
         };
@@ -268,12 +264,9 @@ static suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Use a tool.",
-            .input_items = {},
-            .tools = {},
             .include = {"reasoning.encrypted_content"},
             .previous_response_id = {},
             .max_output_tokens = 64,
-            .reasoning_effort = "medium",
             .reasoning_summary = "",
             .store = false,
         };
@@ -330,11 +323,8 @@ static suite llm_tests = [] {
         };
 
         auto rg = nxt::ai::tools::function_call{
-            .id = {},
-            .call_id = {},
             .name = "rg_search",
             .arguments = R"({"pattern":"needle","path":"src"})",
-            .item = {},
         };
         expect(nxt::ai::tool_ui::args_summary(tool_list, rg) ==
                "/needle/ in src");
@@ -350,11 +340,8 @@ static suite llm_tests = [] {
             nxt::ai::tool_ui::result_summary(rg_result) == "8 bytes");
 
         auto echo = nxt::ai::tools::function_call{
-            .id = {},
-            .call_id = {},
             .name = "nxt_echo",
             .arguments = R"({"text":"hello"})",
-            .item = {},
         };
         expect(nxt::ai::tool_ui::args_summary(tool_list, echo) == "hello");
         auto echo_display =
@@ -362,11 +349,8 @@ static suite llm_tests = [] {
         expect(echo_display.icon == "echo"sv);
 
         auto bash = nxt::ai::tools::function_call{
-            .id = {},
-            .call_id = {},
             .name = "bash",
             .arguments = R"({"command":"set -e\nprintf 'hi\tthere\n'"})",
-            .item = {},
         };
         expect(nxt::ai::tool_ui::args_summary(tool_list, bash) ==
                "set -e printf 'hi there '");
@@ -565,14 +549,9 @@ static suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
-            .input_items = {},
-            .tools = {},
-            .include = {},
             .previous_response_id = {},
             .max_output_tokens = 64,
-            .reasoning_effort = "medium",
             .reasoning_summary = "",
-            .store = false,
         };
 
         nxt::sync_wait([&]() -> nxt::task<> {
@@ -609,14 +588,9 @@ static suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
-            .input_items = {},
-            .tools = {},
-            .include = {},
             .previous_response_id = {},
             .max_output_tokens = 64,
-            .reasoning_effort = "medium",
             .reasoning_summary = "",
-            .store = false,
         };
 
         auto event = nxt::sync_wait([&]()
