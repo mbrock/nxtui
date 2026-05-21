@@ -46,6 +46,15 @@ inline std::vector<test_result *> active_tests;
 inline std::vector<int> active_path;
 inline std::vector<int> sibling_counts;
 inline std::vector<std::vector<int>> filters;
+inline std::optional<std::vector<int>> active_leaf_path;
+
+enum class run_phase
+{
+    discovery,
+    execution,
+};
+
+inline run_phase phase = run_phase::execution;
 
 inline std::string format_ms(double elapsed_ms)
 {
@@ -107,6 +116,54 @@ inline bool ancestor_path(const std::vector<int> & path)
 inline bool related_path(const std::vector<int> & path)
 {
     return selected_path(path) || ancestor_path(path);
+}
+
+inline bool active_execution_path(const std::vector<int> & path)
+{
+    return active_leaf_path && path_starts_with(*active_leaf_path, path);
+}
+
+inline test_result & find_or_add_result(
+    std::vector<test_result> & siblings,
+    std::string_view name,
+    const std::vector<int> & path)
+{
+    for (auto & result : siblings)
+        if (result.path == path)
+            return result;
+
+    auto & result = siblings.emplace_back();
+    result.name = name;
+    result.path = path;
+    return result;
+}
+
+inline test_result *
+find_result(std::vector<test_result> & results, const std::vector<int> & path)
+{
+    for (auto & result : results) {
+        if (result.path == path)
+            return &result;
+        if (auto * child = find_result(result.children, path))
+            return child;
+    }
+    return nullptr;
+}
+
+inline void collect_selected_leaves(
+    const std::vector<test_result> & results,
+    std::vector<std::vector<int>> & leaves)
+{
+    for (const auto & result : results) {
+        if (!related_path(result.path))
+            continue;
+        if (result.children.empty()) {
+            if (selected_path(result.path))
+                leaves.push_back(result.path);
+            continue;
+        }
+        collect_selected_leaves(result.children, leaves);
+    }
 }
 
 inline void print_test_result(const test_result & result)
@@ -208,37 +265,48 @@ struct test_case
         auto path = active_path;
         auto & sibling_count = sibling_counts.back();
         path.push_back(++sibling_count);
-        if (!related_path(path))
+
+        if (phase == run_phase::execution && !active_execution_path(path))
             return;
 
         auto & siblings =
             active_tests.empty() ? tests : active_tests.back()->children;
-        auto & result = siblings.emplace_back();
-        result.name = name;
-        result.path = path;
+        auto & result = phase == run_phase::discovery
+                           ? siblings.emplace_back()
+                           : find_or_add_result(siblings, name, path);
+        if (phase == run_phase::discovery) {
+            result.name = name;
+            result.path = path;
+        }
 
         auto failures_before = failures;
         auto failed_tests_before = tests_failed;
-        auto count_this_test = selected_path(path);
+        auto count_this_test =
+            phase == run_phase::execution && active_leaf_path == path;
         auto scope = scoped_test{result, path};
         auto start = std::chrono::steady_clock::now();
         try {
             std::forward<F>(f)();
         } catch (const std::exception & e) {
-            ++failures;
-            std::cerr << result.name
-                      << ": unexpected exception: " << e.what() << '\n';
-            nxt::io::print_current_exception_trace(std::cerr, "  ");
+            if (phase == run_phase::execution) {
+                ++failures;
+                std::cerr << result.name
+                          << ": unexpected exception: " << e.what() << '\n';
+                nxt::io::print_current_exception_trace(std::cerr, "  ");
+            }
         } catch (...) {
-            ++failures;
-            std::cerr << result.name << ": unexpected non-std exception\n";
-            nxt::io::print_current_exception_trace(std::cerr, "  ");
+            if (phase == run_phase::execution) {
+                ++failures;
+                std::cerr << result.name << ": unexpected non-std exception\n";
+                nxt::io::print_current_exception_trace(std::cerr, "  ");
+            }
         }
 
         auto elapsed =
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - start);
-        result.elapsed_ms = static_cast<double>(elapsed.count()) / 1000.0;
+        if (phase == run_phase::execution)
+            result.elapsed_ms += static_cast<double>(elapsed.count()) / 1000.0;
 
         if (count_this_test) {
             result.counted = true;
@@ -251,7 +319,7 @@ struct test_case
                       << " >= " << format_ms(slow_test_failure_ms) << '\n';
         }
 
-        result.failed = failures != failures_before
+        result.failed = result.failed || failures != failures_before
                         || tests_failed != failed_tests_before;
         if (count_this_test && result.failed)
             ++tests_failed;
@@ -317,6 +385,8 @@ struct expectation
 
 inline expectation expect(bool ok)
 {
+    if (phase == run_phase::discovery)
+        return {true};
     if (!ok)
         ++failures;
     return {ok};
@@ -385,6 +455,8 @@ inline void reset_run_state()
     active_tests.clear();
     active_path.clear();
     sibling_counts.clear();
+    active_leaf_path.reset();
+    phase = run_phase::execution;
 }
 
 inline void run_registered_tests()
@@ -395,6 +467,69 @@ inline void run_registered_tests()
     sibling_counts.pop_back();
 }
 
+inline std::vector<std::vector<int>> discover_test_leaves()
+{
+    tests.clear();
+    active_tests.clear();
+    active_path.clear();
+    sibling_counts.clear();
+    active_leaf_path.reset();
+    phase = run_phase::discovery;
+
+    run_registered_tests();
+
+    auto leaves = std::vector<std::vector<int>>{};
+    collect_selected_leaves(tests, leaves);
+    return leaves;
+}
+
+inline void run_test_leaf(const std::vector<int> & path)
+{
+    active_tests.clear();
+    active_path.clear();
+    sibling_counts.clear();
+    active_leaf_path = path;
+    phase = run_phase::execution;
+
+    auto failures_before = failures;
+    auto tests_run_before = tests_run;
+    auto tests_failed_before = tests_failed;
+
+    run_registered_tests();
+
+    if (failures == failures_before && tests_failed == tests_failed_before)
+        return;
+
+    if (auto * leaf = find_result(tests, path)) {
+        leaf->failed = true;
+        leaf->counted = true;
+    }
+    if (tests_run == tests_run_before)
+        ++tests_run;
+    if (tests_failed == tests_failed_before)
+        ++tests_failed;
+}
+
+inline void run_selected_tests()
+{
+    auto leaves = discover_test_leaves();
+
+    failures = 0;
+    tests_run = 0;
+    tests_failed = 0;
+    progress_started = false;
+    tests.clear();
+
+    for (const auto & leaf : leaves)
+        run_test_leaf(leaf);
+
+    active_tests.clear();
+    active_path.clear();
+    sibling_counts.clear();
+    active_leaf_path.reset();
+    phase = run_phase::execution;
+}
+
 template<typename>
 struct config
 {
@@ -403,7 +538,7 @@ struct config
         reset_run_state();
         if (!configure_filters(options))
             return 1;
-        run_registered_tests();
+        run_selected_tests();
 
         if (progress_started)
             std::cout << "\x1b[2m done\x1b[0m\n\n";

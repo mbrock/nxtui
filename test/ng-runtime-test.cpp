@@ -337,9 +337,9 @@ static suite ng_runtime_tests{
         };
 
         "environment"_test = [] {
-            "survives nested task awaits"_test = [] {
-                auto deck = nxt::rt::deck{};
+            auto deck = nxt::rt::deck{};
 
+            "survives nested task awaits"_test = [&] {
                 auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
                     co_return co_await nxt::rt::with_env<ambient_int_key>(
                         41, [] { return read_ambient_int_after_yield(); });
@@ -348,9 +348,7 @@ static suite ng_runtime_tests{
                 expect(result == 41_i);
             };
 
-            "restores outer bindings"_test = [] {
-                auto deck = nxt::rt::deck{};
-
+            "restores outer bindings"_test = [&] {
                 auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
                     co_return co_await nxt::rt::with_env<ambient_int_key>(
                         10, []() -> nxt::rt::task<int> {
@@ -369,7 +367,7 @@ static suite ng_runtime_tests{
         };
 
         "wishes"_test = [] {
-            "prepare and park typed waiters"_test = [] {
+            "typed waiters are prepared and parked"_test = [] {
                 auto wand = manual_wand{};
                 auto deck = nxt::rt::deck{&wand};
                 auto events = std::vector<int>{};
@@ -403,7 +401,7 @@ static suite ng_runtime_tests{
                     << "fulfilled manual wish should resume the suspended task";
             };
 
-            "wave the wand after staged preparation"_test = [] {
+            "the wand is waved after staged preparation"_test = [] {
                 auto wand = manual_wand{};
                 auto deck = nxt::rt::deck{&wand};
                 auto events = std::vector<int>{};
@@ -437,7 +435,7 @@ static suite ng_runtime_tests{
         };
 
         "buffers"_test = [] {
-            "visit chunks through reused storage"_test = [] {
+            "chunks are visited through reused storage"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
                 auto source = nxt::rt::string_source{std::span{chunks}};
@@ -460,7 +458,7 @@ static suite ng_runtime_tests{
                     visited == std::vector<std::string>{"abc", "def", "g"});
             };
 
-            "leave protocol leftovers buffered"_test = [] {
+            "protocol leftovers remain buffered"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto chunks = std::array{"abc--def--ghi"sv};
                 auto source = nxt::rt::string_source{std::span{chunks}};
@@ -486,7 +484,7 @@ static suite ng_runtime_tests{
                     parts == std::vector<std::string>{"abc", "def", "ghi"});
             };
 
-            "distinguish empty reads from EOF"_test = [] {
+            "empty reads are distinguished from EOF"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto source = empty_then_string_source{};
                 auto storage = std::array<std::byte, 8>{};
@@ -507,7 +505,7 @@ static suite ng_runtime_tests{
         };
 
         "pipes"_test = [] {
-            "yield values to awaiting tasks"_test = [] {
+            "values are yielded to awaiting tasks"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto numbers = []() -> nxt::rt::pipe<int> {
@@ -528,7 +526,7 @@ static suite ng_runtime_tests{
                 expect(values == std::vector<int>{1, 2, 3});
             };
 
-            "await between yielded values"_test = [] {
+            "yielded values can be separated by awaits"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto paced_numbers = []() -> nxt::rt::pipe<int> {
@@ -549,7 +547,7 @@ static suite ng_runtime_tests{
                 expect(values == std::vector<int>{1, 2});
             };
 
-            "await child tasks before yielding values"_test = [] {
+            "child tasks can be awaited before values are yielded"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto child = [](int value) -> nxt::rt::task<int> {
@@ -574,7 +572,7 @@ static suite ng_runtime_tests{
                 expect(values == std::vector<int>{4, 6});
             };
 
-            "await wishes before yielding again"_test = [] {
+            "wishes can be awaited before more values are yielded"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto wand = manual_wand{};
                 auto values = std::vector<int>{};
@@ -607,7 +605,7 @@ static suite ng_runtime_tests{
                 expect(consumer.done());
             };
 
-            "propagate exceptions to awaiting tasks"_test = [] {
+            "exceptions propagate to awaiting tasks"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto broken = []() -> nxt::rt::pipe<int> {
@@ -631,7 +629,7 @@ static suite ng_runtime_tests{
         };
 
         "HTTP bodies"_test = [] {
-            "leave the next response buffered after chunked bodies"_test = [] {
+            "the next response remains buffered after chunked bodies"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto chunks = std::array{
                     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -670,7 +668,7 @@ static suite ng_runtime_tests{
                 expect(result == "hello world");
             };
 
-            "leave the next response buffered after content-length bodies"_test =
+            "the next response remains buffered after content-length bodies"_test =
                 [] {
                     auto deck = nxt::rt::deck{};
                     auto chunks = std::array{
@@ -708,9 +706,3 @@ static suite ng_runtime_tests{
     }};
 
 } // namespace nxt::test
-
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

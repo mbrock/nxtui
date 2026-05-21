@@ -281,40 +281,37 @@ if get_option('tests')
   test('nxt-tests', nxt_tests)
 
   if host_machine.system() == 'linux'
-    nxt_ng_runtime_test = executable('ng-runtime-test',
+    nxt_ng_test_sources = files(
       'test/ng-runtime-test.cpp',
       'src/nxtio/stacktrace.cpp',
-      include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
-      dependencies : nxt_stacktrace_deps,
-      cpp_args : nxt_stacktrace_cpp_args,
+      'test/test-main.cpp',
     )
-    test('ng-runtime-test', nxt_ng_runtime_test)
+    nxt_ng_test_deps = []
+    nxt_ng_test_deps += nxt_stacktrace_deps
 
     nxt_test_liburing_dep = dependency(
       'liburing',
       fallback : ['liburing', 'uring'],
       required : false,
     )
-  else
-    nxt_test_liburing_dep = disabler()
-  endif
 
-  if nxt_test_liburing_dep.found()
-    nxt_ng_uring_wand_test = executable('ng-uring-wand-test',
-      'test/ng-uring-wand-test.cpp',
-      include_directories : nxt_ng_inc,
-      dependencies : [nxt_test_liburing_dep],
-    )
-    test('ng-uring-wand-test', nxt_ng_uring_wand_test)
+    if nxt_test_liburing_dep.found()
+      nxt_ng_test_sources += files('test/ng-uring-wand-test.cpp')
+      nxt_ng_test_deps += nxt_test_liburing_dep
 
-    nxt_test_cares_dep = dependency('libcares', required : false)
-    if nxt_test_cares_dep.found()
-      nxt_ng_cares_test = executable('ng-cares-test',
-        'test/ng-cares-test.cpp',
-        include_directories : nxt_ng_inc,
-        dependencies : [nxt_test_liburing_dep, nxt_test_cares_dep],
-      )
-      test('ng-cares-test', nxt_ng_cares_test)
+      nxt_test_cares_dep = dependency('libcares', required : false)
+      if nxt_test_cares_dep.found()
+        nxt_ng_test_sources += files('test/ng-cares-test.cpp')
+        nxt_ng_test_deps += nxt_test_cares_dep
+      endif
     endif
+
+    nxt_ng_tests = executable('ng-tests',
+      nxt_ng_test_sources,
+      include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
+      dependencies : nxt_ng_test_deps,
+      cpp_args : nxt_stacktrace_cpp_args,
+    )
+    test('ng-tests', nxt_ng_tests)
   endif
 endif

@@ -1,6 +1,8 @@
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/uring_wand.hpp>
 
+#include "test.hpp"
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -17,7 +19,9 @@
 
 using namespace std::chrono_literals;
 
-namespace {
+namespace nxt::test {
+
+using namespace boost::ut;
 
 class unique_fd
 {
@@ -190,110 +194,117 @@ sockaddr_in loopback_listener_address(int fd)
     return address;
 }
 
-} // namespace
+static suite ng_uring_wand_tests{
+    "uring wand", [] {
+        "socket I/O"_test = [] {
+            "echoes over a socketpair"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
 
-int main()
-try {
-    {
-        auto sockets = std::array<int, 2>{-1, -1};
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
-            throw std::runtime_error{"socketpair failed"};
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
 
-        auto first = unique_fd{sockets[0]};
-        auto second = unique_fd{sockets[1]};
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = echo_over_socketpair(first.get(), second.get());
 
-        auto wand = nxt::rt::uring_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto task = echo_over_socketpair(first.get(), second.get());
+                deck.start(task);
+                auto echoed = pump_until_done(deck, wand, task);
 
-        deck.start(task);
-        auto echoed = pump_until_done(deck, wand, task);
-        if (echoed != "socket wish smoke")
-            throw std::runtime_error{"socket echo mismatch"};
-    }
+                expect(echoed == "socket wish smoke");
+            };
 
-    {
-        auto sockets = std::array<int, 2>{-1, -1};
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
-            throw std::runtime_error{"socketpair failed"};
+            "socket sends complete before readability is polled"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
 
-        auto first = unique_fd{sockets[0]};
-        auto second = unique_fd{sockets[1]};
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
 
-        auto wand = nxt::rt::uring_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto task = poll_after_socket_send(first.get(), second.get());
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = poll_after_socket_send(first.get(), second.get());
 
-        deck.start(task);
-        pump_until_done(deck, wand, task);
-    }
+                deck.start(task);
+                pump_until_done(deck, wand, task);
 
-    {
-        auto wand = nxt::rt::uring_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto task = timeout_once();
+                expect(task.done());
+            };
 
-        deck.start(task);
-        pump_until_done(deck, wand, task);
-    }
+            "loopback listeners accept connected clients"_test = [] {
+                auto listener = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+                if (listener.get() < 0)
+                    throw std::runtime_error{"listener socket failed"};
+                auto address = loopback_listener_address(listener.get());
 
-    {
-        auto sockets = std::array<int, 2>{-1, -1};
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
-            throw std::runtime_error{"socketpair failed"};
+                auto client = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+                if (client.get() < 0)
+                    throw std::runtime_error{"client socket failed"};
 
-        auto first = unique_fd{sockets[0]};
-        auto second = unique_fd{sockets[1]};
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = connect_to(client.get(), address);
 
-        auto wand = nxt::rt::uring_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto task = poll_until_after_socket_send(first.get(), second.get());
+                deck.start(task);
+                pump_until_done(deck, wand, task);
 
-        deck.start(task);
-        pump_until_done(deck, wand, task);
-    }
+                auto accepted =
+                    unique_fd{::accept(listener.get(), nullptr, nullptr)};
+                expect(accepted.get() >= 0);
+            };
+        };
 
-    {
-        auto sockets = std::array<int, 2>{-1, -1};
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
-            throw std::runtime_error{"socketpair failed"};
+        "timers and polling"_test = [] {
+            "timeout wishes complete"_test = [] {
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = timeout_once();
 
-        auto first = unique_fd{sockets[0]};
-        auto second = unique_fd{sockets[1]};
+                deck.start(task);
+                pump_until_done(deck, wand, task);
 
-        auto wand = nxt::rt::uring_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto task = poll_until_timeout(second.get());
+                expect(task.done());
+            };
 
-        deck.start(task);
-        pump_until_done(deck, wand, task);
-    }
+            "readiness is reported before a poll-until deadline"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
 
-    {
-        auto listener = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
-        if (listener.get() < 0)
-            throw std::runtime_error{"listener socket failed"};
-        auto address = loopback_listener_address(listener.get());
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
 
-        auto client = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
-        if (client.get() < 0)
-            throw std::runtime_error{"client socket failed"};
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task =
+                    poll_until_after_socket_send(first.get(), second.get());
 
-        auto wand = nxt::rt::uring_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto task = connect_to(client.get(), address);
+                deck.start(task);
+                pump_until_done(deck, wand, task);
 
-        deck.start(task);
-        pump_until_done(deck, wand, task);
+                expect(task.done());
+            };
 
-        auto accepted = unique_fd{::accept(listener.get(), nullptr, nullptr)};
-        if (accepted.get() < 0)
-            throw std::runtime_error{"accept failed"};
-    }
+            "quiet watched fds time out"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
 
-    return 0;
-} catch (std::exception const & error) {
-    write(STDERR_FILENO, error.what(), std::string_view{error.what()}.size());
-    write(STDERR_FILENO, "\n", 1);
-    return 1;
-}
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
+
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = poll_until_timeout(second.get());
+
+                deck.start(task);
+                pump_until_done(deck, wand, task);
+
+                expect(task.done());
+            };
+        };
+    }};
+
+} // namespace nxt::test
