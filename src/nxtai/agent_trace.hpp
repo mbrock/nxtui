@@ -27,7 +27,7 @@ struct llm_request_payload
     std::string reasoning_effort;
     std::string reasoning_summary;
     std::string previous_response_id;
-    openai::raw_json request_body;
+    responses::openai_responses_body_payload request_body;
 };
 
 struct tool_call_payload
@@ -62,14 +62,14 @@ inline void record_llm_request(
     if (!trace.enabled())
         return;
 
-    auto body = responses::openai_responses_body(request);
     auto metadata = llm_request_payload{
         .model = request.model,
         .max_output_tokens = request.max_output_tokens,
         .reasoning_effort = request.reasoning_effort,
         .reasoning_summary = request.reasoning_summary,
         .previous_response_id = request.previous_response_id,
-        .request_body = openai::raw_json{body},
+        .request_body =
+            responses::openai_responses_body_payload_from_request(request),
     };
     nxt::io::arrow::trace_row row;
     row.phase = "llm";

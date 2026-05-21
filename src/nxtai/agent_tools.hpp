@@ -237,6 +237,11 @@ struct read_file_tool
         std::string path;
     };
 
+    static std::string parameters_summary(const parameters & args)
+    {
+        return args.path;
+    }
+
     nxt::task<std::string> run(parameters args) const
     {
         auto path = std::move(args.path);
@@ -298,6 +303,12 @@ struct rg_search_tool
     {
         std::string error;
     };
+
+    static std::string parameters_summary(const parameters & args)
+    {
+        auto path = args.path.empty() ? std::string{"."} : args.path;
+        return "/" + args.pattern + "/ in " + path;
+    }
 
     nxt::scheduler * sched = nullptr;
 
@@ -367,6 +378,11 @@ struct web_fetch_tool
         std::string error;
     };
 
+    static std::string parameters_summary(const parameters & args)
+    {
+        return args.url;
+    }
+
     nxt::scheduler * sched = nullptr;
 
     nxt::task<std::string> run(parameters args) const
@@ -430,6 +446,11 @@ struct bash_tool
     {
         std::string error;
     };
+
+    static std::string parameters_summary(const parameters & args)
+    {
+        return args.command;
+    }
 
     nxt::scheduler * sched = nullptr;
 

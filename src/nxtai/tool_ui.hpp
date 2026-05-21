@@ -24,12 +24,15 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <format>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -79,32 +82,6 @@ inline bool tool_needs_approval(std::string_view name)
     return false; // name == "bash";
 }
 
-struct read_file_args_view
-{
-    std::string path;
-};
-
-struct rg_search_args_view
-{
-    std::string pattern;
-    std::string path = ".";
-};
-
-struct web_fetch_args_view
-{
-    std::string url;
-};
-
-struct bash_args_view
-{
-    std::string command;
-};
-
-struct echo_args_view
-{
-    std::string text;
-};
-
 struct tool_result_view
 {
     std::string error;
@@ -130,33 +107,66 @@ read_json_view(const std::string & json)
     return value;
 }
 
-// Short, glanceable summary of the call's args (the value of the
-// "main" parameter, usually).
-inline std::string
-args_summary(std::string_view name, const std::string & args_json)
+template<typename Tool>
+concept has_parameters_summary =
+    requires(const typename Tool::parameters & parameters) {
+        { Tool::parameters_summary(parameters) } -> std::same_as<std::string>;
+    };
+
+inline std::string fallback_args_summary(const std::string & args_json)
 {
-    if (name == "read_file") {
-        if (auto args = read_json_view<read_file_args_view>(args_json))
-            return args->path;
-    }
-    if (name == "rg_search") {
-        if (auto args = read_json_view<rg_search_args_view>(args_json))
-            return std::format("/{}/ in {}", args->pattern, args->path);
-    }
-    if (name == "web_fetch") {
-        if (auto args = read_json_view<web_fetch_args_view>(args_json))
-            return args->url;
-    }
-    if (name == "bash") {
-        if (auto args = read_json_view<bash_args_view>(args_json))
-            return args->command;
-    }
-    if (name == "nxt_echo") {
-        if (auto args = read_json_view<echo_args_view>(args_json))
-            return args->text;
-    }
     return args_json.size() > 50 ? args_json.substr(0, 47) + "..."
                                  : args_json;
+}
+
+template<typename Tool>
+[[nodiscard]] inline std::optional<std::string> args_summary_for_tool(
+    std::string_view name,
+    const std::string & args_json)
+{
+    using tool_t = std::remove_cvref_t<Tool>;
+    if (name != tool_t::name)
+        return std::nullopt;
+
+    auto args = read_json_view<typename tool_t::parameters>(args_json);
+    if (!args)
+        return fallback_args_summary(args_json);
+
+    if constexpr (has_parameters_summary<tool_t>)
+        return tool_t::parameters_summary(*args);
+    else
+        return fallback_args_summary(args_json);
+}
+
+template<std::size_t I = 0, typename ToolSet>
+[[nodiscard]] inline std::optional<std::string>
+args_summary_for_known_tool(
+    const ToolSet & tool_list,
+    std::string_view name,
+    const std::string & args_json)
+{
+    using tuple_t = std::remove_cvref_t<decltype(tool_list.items)>;
+    if constexpr (I == std::tuple_size_v<tuple_t>) {
+        return std::nullopt;
+    } else {
+        using tool_t = std::tuple_element_t<I, tuple_t>;
+        if (auto summary = args_summary_for_tool<tool_t>(name, args_json))
+            return summary;
+        return args_summary_for_known_tool<I + 1>(
+            tool_list, name, args_json);
+    }
+}
+
+// Short, glanceable summary of the call's args (the value of the
+// "main" parameter, usually).
+template<typename ToolSet>
+inline std::string
+args_summary(const ToolSet & tool_list, const tools::function_call & call)
+{
+    if (auto summary =
+            args_summary_for_known_tool(tool_list, call.name, call.arguments))
+        return *summary;
+    return fallback_args_summary(call.arguments);
 }
 
 // ============================================================================
@@ -453,10 +463,13 @@ enum class ApprovalDecision {
     cancel,
 };
 
-inline nxt::task<ApprovalDecision>
-request_approval(nxt::ui::yard & self, const tools::function_call & call)
+template<typename ToolSet>
+inline nxt::task<ApprovalDecision> request_approval(
+    nxt::ui::yard & self,
+    const ToolSet & tool_list,
+    const tools::function_call & call)
 {
-    auto args_short = args_summary(call.name, call.arguments);
+    auto args_short = args_summary(tool_list, call);
     self.draw(approval_card(call.name, args_short));
     while (!self.cancelled()) {
         auto event = co_await self.next_input();
@@ -543,13 +556,13 @@ std::string render_for_scrollback(nxt::ui::yard & self, L && layout)
 inline void commit_tool_result(
     nxt::ui::yard & self,
     const tools::function_call & call,
+    std::string_view args_short,
     const std::string & result,
     bool is_error,
     std::chrono::milliseconds elapsed,
     hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
-    auto args_short = args_summary(call.name, call.arguments);
     auto summary = result_summary(call.name, result);
     auto preview = preview_spans(result, 4);
     self.print_block(render_for_scrollback(
@@ -584,7 +597,7 @@ inline nxt::task<std::string> run_one_animated(
     hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
-    auto args_short = args_summary(call.name, call.arguments);
+    auto args_short = args_summary(tool_list, call);
     auto start = std::chrono::steady_clock::now();
 
     agent_trace::record_tool_call(self, call);
@@ -632,7 +645,7 @@ inline nxt::task<std::string> run_one_animated(
         is_error = !parsed->error.empty();
     agent_trace::record_tool_result(self, call, result, is_error);
 
-    commit_tool_result(self, call, result, is_error, elapsed, hud);
+    commit_tool_result(self, call, args_short, result, is_error, elapsed, hud);
     co_return result;
 }
 
@@ -646,7 +659,7 @@ inline nxt::task<std::string> run_one_or_deny(
 {
     using namespace nxt::tui;
     if (!approved) {
-        auto args_short = args_summary(call.name, call.arguments);
+        auto args_short = args_summary(tool_list, call);
         auto denied = denied_card(call.name, args_short);
         auto block = render_for_scrollback(self, denied);
         block += "\n";
@@ -702,7 +715,7 @@ inline nxt::task<std::vector<openai::raw_json>> run_all(
             approved[i] = false;
             continue;
         }
-        auto d = co_await request_approval(self, calls[i]);
+        auto d = co_await request_approval(self, tool_list, calls[i]);
         switch (d) {
         case ApprovalDecision::yes:
             approved[i] = true;

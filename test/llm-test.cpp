@@ -1,3 +1,5 @@
+#include <nxtai/agent_tools.hpp>
+#include <nxtai/builtin_tools.hpp>
 #include <nxtai/responses.hpp>
 #include <nxtai/response_turn.hpp>
 #include <nxtai/tool_ui.hpp>
@@ -213,7 +215,8 @@ suite llm_tests = [] {
 
     "function tool definition derives parameter json schema"_test = [] {
         auto definition =
-            nxt::ai::tools::function_tool_definition(test_echo_tool{}).str;
+            glz::ex::write_json(
+                nxt::ai::tools::function_tool_definition(test_echo_tool{}));
 
         expect(json_at<std::string, "/type">(definition) == "function");
         expect(json_at<std::string, "/name">(definition) == "nxt_echo");
@@ -230,7 +233,8 @@ suite llm_tests = [] {
                    definition) == "Text to echo.");
 
         auto empty_definition =
-            nxt::ai::tools::function_tool_definition(test_empty_tool{}).str;
+            glz::ex::write_json(
+                nxt::ai::tools::function_tool_definition(test_empty_tool{}));
         auto properties =
             glz::get_sv_json<"/parameters/properties">(empty_definition);
         expect(bool(properties));
@@ -293,6 +297,26 @@ suite llm_tests = [] {
         auto error =
             nxt::sync_wait(nxt::ai::tools::run_function_tool(tools, missing));
         expect(json_at<std::string, "/error">(error) == "unknown tool");
+    };
+
+    "tool ui argument summaries use concrete tool parameters"_test = [] {
+        auto tool_list = nxt::ai::tools::tool_set{
+            nxt::ai::agent_tools::rg_search_tool{},
+            nxt::ai::builtin_tools::echo_tool{},
+        };
+
+        auto rg = nxt::ai::tools::function_call{
+            .name = "rg_search",
+            .arguments = R"({"pattern":"needle","path":"src"})",
+        };
+        expect(nxt::ai::tool_ui::args_summary(tool_list, rg) ==
+               "/needle/ in src");
+
+        auto echo = nxt::ai::tools::function_call{
+            .name = "nxt_echo",
+            .arguments = R"({"text":"hello"})",
+        };
+        expect(nxt::ai::tool_ui::args_summary(tool_list, echo) == "hello");
     };
 
     "response item projections derive messages and calls"_test = [] {

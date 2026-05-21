@@ -38,7 +38,7 @@ struct openai_responses_request
     /// Structured Responses `input` array for multi-turn/stateless calls.
     std::vector<openai::raw_json> input_items;
     /// Tool definitions in Responses function-tool schema.
-    std::vector<openai::raw_json> tools;
+    std::vector<openai::function_tool_definition> tools;
     /// Extra response fields requested through the `include` option.
     std::vector<std::string> include;
     /// Server-side response id to continue when `store` is true.
@@ -72,7 +72,7 @@ struct openai_responses_body_payload
     bool store = false;
     std::size_t max_output_tokens = 0;
     openai::raw_json input;
-    std::optional<std::vector<openai::raw_json>> tools;
+    std::optional<std::vector<openai::function_tool_definition>> tools;
     std::optional<std::vector<std::string>> include;
     std::optional<std::string> previous_response_id;
     std::optional<reasoning_options> reasoning;
@@ -110,9 +110,10 @@ input_items_from_request(const openai_responses_request & request)
     return input;
 }
 
-/// Serialize a request into a JSON body for `POST /v1/responses`.
-[[nodiscard]] inline std::string
-openai_responses_body(const openai_responses_request & request)
+/// Build the typed payload sent as JSON to `POST /v1/responses`.
+[[nodiscard]] inline openai_responses_body_payload
+openai_responses_body_payload_from_request(
+    const openai_responses_request & request)
 {
     auto body = openai_responses_body_payload{
         .model = request.model,
@@ -142,6 +143,14 @@ openai_responses_body(const openai_responses_request & request)
     if (reasoning.effort || reasoning.summary)
         body.reasoning = std::move(reasoning);
 
+    return body;
+}
+
+/// Serialize a request into a JSON body for `POST /v1/responses`.
+[[nodiscard]] inline std::string
+openai_responses_body(const openai_responses_request & request)
+{
+    auto body = openai_responses_body_payload_from_request(request);
     return glz::ex::write_json(body);
 }
 

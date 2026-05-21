@@ -93,35 +93,26 @@ template<function_tool... Left, function_tool... Right>
         std::move(joined));
 }
 
-struct function_tool_definition_item
-{
-    std::string type = "function";
-    std::string name;
-    std::string description;
-    openai::raw_json parameters;
-    bool strict = true;
-};
-
 /// Convert one concrete function tool to the Responses tool definition object.
 template<function_tool Tool>
-[[nodiscard]] inline openai::raw_json
+[[nodiscard]] inline openai::function_tool_definition
 function_tool_definition(const Tool &)
 {
     using tool_t = std::remove_cvref_t<Tool>;
-    return openai::raw_json{glz::ex::write_json(function_tool_definition_item{
+    return openai::function_tool_definition{
         .name = std::string{tool_t::name},
         .description = std::string{tool_t::description},
         .parameters = parameters_schema<typename tool_t::parameters>(),
         .strict = tool_t::strict,
-    })};
+    };
 }
 
 /// Convert a compile-time set of function tools to a Responses `tools` array.
 template<function_tool... Tools>
-[[nodiscard]] inline std::vector<openai::raw_json>
+[[nodiscard]] inline std::vector<openai::function_tool_definition>
 function_tool_definitions(const tool_set<Tools...> & tools)
 {
-    auto out = std::vector<openai::raw_json>{};
+    auto out = std::vector<openai::function_tool_definition>{};
     out.reserve(sizeof...(Tools));
     std::apply(
         [&](const auto &... tool) {

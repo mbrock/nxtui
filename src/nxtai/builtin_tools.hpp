@@ -102,6 +102,11 @@ struct echo_tool
         std::string text;
     };
 
+    static std::string parameters_summary(const parameters & args)
+    {
+        return args.text;
+    }
+
     nxt::task<std::string> run(parameters args) const
     {
         co_return glz::ex::write_json(result{.text = std::move(args.text)});

@@ -53,6 +53,15 @@ struct function_call_item
     std::string status;
 };
 
+struct function_tool_definition
+{
+    std::string type = "function";
+    std::string name;
+    std::string description;
+    raw_json parameters;
+    bool strict = true;
+};
+
 struct message_content_part
 {
     std::string type;
