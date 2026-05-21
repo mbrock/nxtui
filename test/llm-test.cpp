@@ -311,12 +311,30 @@ suite llm_tests = [] {
         };
         expect(nxt::ai::tool_ui::args_summary(tool_list, rg) ==
                "/needle/ in src");
+        auto rg_display = nxt::ai::tool_ui::display_for_call(tool_list, rg);
+        expect(rg_display.icon == "grep"sv);
+        expect(
+            rg_display.color
+            == nxt::Rgba8{nxt::theme::baltic_church.amber});
+        auto rg_result = glz::ex::write_json(
+            nxt::ai::agent_tools::rg_search_tool::result{
+                .pattern = "needle",
+                .path = "src",
+                .bytes = 2048,
+                .output = "one\ntwo\n",
+            });
+        expect(
+            nxt::ai::tool_ui::result_summary(tool_list, rg, rg_result)
+            == "x2 2K");
 
         auto echo = nxt::ai::tools::function_call{
             .name = "nxt_echo",
             .arguments = R"({"text":"hello"})",
         };
         expect(nxt::ai::tool_ui::args_summary(tool_list, echo) == "hello");
+        auto echo_display =
+            nxt::ai::tool_ui::display_for_call(tool_list, echo);
+        expect(echo_display.icon == "echo"sv);
     };
 
     "response item projections derive messages and calls"_test = [] {
@@ -450,7 +468,10 @@ suite llm_tests = [] {
 
     "finished tool result block folds to done card"_test = [] {
         auto layout = nxt::ai::tool_ui::folded_result_card(
-            "rg_search",
+            nxt::ai::tool_ui::tool_display{
+                .icon = "grep",
+                .color = nxt::Rgba8{nxt::theme::baltic_church.amber},
+            },
             "/needle/ in .",
             std::chrono::milliseconds{80},
             "3 matches",

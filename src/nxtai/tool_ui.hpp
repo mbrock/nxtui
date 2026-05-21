@@ -41,46 +41,45 @@ namespace nxt::ai::tool_ui {
 using namespace std::chrono_literals;
 
 // ============================================================================
-// Display metadata per tool name
+// Display metadata projected from the concrete tool type
 // ============================================================================
 
-inline std::string_view tool_icon(std::string_view name)
+struct tool_display
 {
-    if (name == "read_file")
-        return "read";
-    if (name == "rg_search")
-        return "grep";
-    if (name == "web_fetch")
-        return "look";
-    if (name == "bash")
-        return "bash";
-    if (name == "nxt_echo")
-        return "echo";
-    if (name == "nxt_current_time")
-        return "time";
-    if (name == "nxt_terminal_size")
-        return "size";
-    return "tool";
+    std::string_view icon = "tool";
+    nxt::Rgba8 color = nxt::Rgba8{nxt::theme::baltic_church.green};
+    bool needs_approval = false;
+};
+
+[[nodiscard]] inline const nxt::theme::Palette & tool_palette()
+{
+    return nxt::theme::baltic_church;
 }
 
-inline nxt::Rgba8 tool_color(std::string_view name)
+[[nodiscard]] inline tool_display
+default_tool_display(const nxt::theme::Palette & palette = tool_palette())
 {
-    if (name == "read_file")
-        return {120, 180, 220}; // sky
-    if (name == "rg_search")
-        return {230, 200, 90}; // amber
-    if (name == "web_fetch")
-        return {180, 140, 220}; // violet
-    if (name == "bash")
-        return {240, 140, 90}; // orange (warning hue)
-    return {160, 200, 110};    // green
+    return tool_display{
+        .icon = "tool",
+        .color = nxt::Rgba8{palette.green},
+        .needs_approval = false,
+    };
 }
 
-inline bool tool_needs_approval(std::string_view name)
-{
-    (void) name;
-    return false; // name == "bash";
-}
+template<typename Tool>
+concept has_tool_icon = requires {
+    { Tool::icon } -> std::convertible_to<std::string_view>;
+};
+
+template<typename Tool>
+concept has_theme_color = requires(const nxt::theme::Palette & palette) {
+    { Tool::theme_color(palette) } -> std::convertible_to<nxt::Rgba8>;
+};
+
+template<typename Tool>
+concept has_approval_requirement = requires {
+    { Tool::needs_approval } -> std::convertible_to<bool>;
+};
 
 struct tool_result_view
 {
@@ -111,6 +110,12 @@ template<typename Tool>
 concept has_parameters_summary =
     requires(const typename Tool::parameters & parameters) {
         { Tool::parameters_summary(parameters) } -> std::same_as<std::string>;
+    };
+
+template<typename Tool>
+concept has_result_summary =
+    requires(const typename Tool::result & result) {
+        { Tool::result_summary(result) } -> std::same_as<std::string>;
     };
 
 inline std::string fallback_args_summary(const std::string & args_json)
@@ -169,6 +174,55 @@ args_summary(const ToolSet & tool_list, const tools::function_call & call)
     return fallback_args_summary(call.arguments);
 }
 
+template<typename Tool>
+[[nodiscard]] inline std::optional<tool_display> display_for_tool(
+    std::string_view name,
+    const nxt::theme::Palette & palette)
+{
+    using tool_t = std::remove_cvref_t<Tool>;
+    if (name != tool_t::name)
+        return std::nullopt;
+
+    auto display = default_tool_display(palette);
+    if constexpr (has_tool_icon<tool_t>)
+        display.icon = tool_t::icon;
+    if constexpr (has_theme_color<tool_t>)
+        display.color = tool_t::theme_color(palette);
+    if constexpr (has_approval_requirement<tool_t>)
+        display.needs_approval = tool_t::needs_approval;
+    return display;
+}
+
+template<std::size_t I = 0, typename ToolSet>
+[[nodiscard]] inline std::optional<tool_display>
+display_for_known_tool(
+    const ToolSet & tool_list,
+    std::string_view name,
+    const nxt::theme::Palette & palette = tool_palette())
+{
+    using tuple_t = std::remove_cvref_t<decltype(tool_list.items)>;
+    if constexpr (I == std::tuple_size_v<tuple_t>) {
+        return std::nullopt;
+    } else {
+        using tool_t = std::tuple_element_t<I, tuple_t>;
+        if (auto display = display_for_tool<tool_t>(name, palette))
+            return display;
+        return display_for_known_tool<I + 1>(tool_list, name, palette);
+    }
+}
+
+template<typename ToolSet>
+[[nodiscard]] inline tool_display
+display_for_call(
+    const ToolSet & tool_list,
+    const tools::function_call & call,
+    const nxt::theme::Palette & palette = tool_palette())
+{
+    if (auto display = display_for_known_tool(tool_list, call.name, palette))
+        return *display;
+    return default_tool_display(palette);
+}
+
 // ============================================================================
 // Cards
 // ============================================================================
@@ -187,17 +241,16 @@ constexpr std::array<std::string_view, 10> spinner_frames = {
 };
 
 inline auto running_card(
-    std::string_view tool_name,
+    tool_display display,
     std::string_view args,
     int tick,
     std::chrono::milliseconds elapsed)
 {
     using namespace nxt::tui;
-    auto color = tool_color(tool_name);
     auto frame = std::string{
         spinner_frames
             [static_cast<std::size_t>(tick) % spinner_frames.size()]};
-    auto label = std::string{tool_icon(tool_name)};
+    auto label = std::string{display.icon};
     auto args_str = std::string{args};
     if (args_str.size() > 60)
         args_str = args_str.substr(0, 58) + "…";
@@ -206,19 +259,19 @@ inline auto running_card(
             ? std::format("{:.1f}s", elapsed.count() / 1000.0)
             : std::string{};
     return hud_blocks::header_row(
-        frame, label, args_str, elapsed_str, color, faint);
+        frame, label, args_str, elapsed_str, display.color, faint);
 }
 
 inline auto done_card(
-    std::string_view tool_name,
+    tool_display display,
     std::string_view args,
     std::chrono::milliseconds elapsed,
     std::string_view summary,
     bool error)
 {
     using namespace nxt::tui;
-    auto color = error ? nxt::Rgba8{230, 110, 110} : tool_color(tool_name);
-    auto label = std::string{tool_icon(tool_name)};
+    auto color = error ? nxt::Rgba8{tool_palette().coral} : display.color;
+    auto label = std::string{display.icon};
     auto args_str = std::string{args};
     if (args_str.size() > 60)
         args_str = args_str.substr(0, 58) + "…";
@@ -233,30 +286,30 @@ inline auto done_card(
 }
 
 inline auto folded_result_card(
-    std::string_view tool_name,
+    tool_display display,
     std::string_view args,
     std::chrono::milliseconds elapsed,
     std::string_view summary,
     bool error)
 {
-    return done_card(tool_name, args, elapsed, summary, error);
+    return done_card(display, args, elapsed, summary, error);
 }
 
 // Two-line card for approval prompts. Line 1 names the tool and its
 // args; line 2 shows the key hints.
-inline auto approval_card(std::string_view tool_name, std::string_view args)
+inline auto approval_card(tool_display display, std::string_view args)
 {
     using namespace nxt::tui;
-    auto warn = nxt::Rgba8{240, 200, 90};
-    auto label = std::string{tool_icon(tool_name)};
+    auto warn = nxt::Rgba8{tool_palette().amber};
+    auto label = std::string{display.icon};
     auto args_str = std::string{args};
     args_str = args_str.substr(0, 40) + "…";
     return column(
         styled_text(
             span(" !  ", fg(warn) | bold),
             span("approve  ", fg(warn) | bold),
-            span(label + "  ", fg(tool_color(tool_name)) | bold),
-            span(args_str, fg(nxt::Rgba8{225, 225, 235}))),
+            span(label + "  ", fg(display.color) | bold),
+            span(args_str, fg(nxt::Rgba8{tool_palette().fg}))),
         styled_text(
             span("    ", fg(warn)),
             span("y", fg(warn) | bold),
@@ -271,11 +324,11 @@ inline auto approval_card(std::string_view tool_name, std::string_view args)
             span(" cancel batch", faint)));
 }
 
-inline auto denied_card(std::string_view tool_name, std::string_view args)
+inline auto denied_card(tool_display display, std::string_view args)
 {
     using namespace nxt::tui;
-    auto color = nxt::Rgba8{200, 130, 130};
-    auto label = std::string{tool_icon(tool_name)};
+    auto color = nxt::Rgba8{tool_palette().coral};
+    auto label = std::string{display.icon};
     auto args_str = std::string{args};
     if (args_str.size() > 70)
         args_str = args_str.substr(0, 68) + "…";
@@ -285,11 +338,11 @@ inline auto denied_card(std::string_view tool_name, std::string_view args)
 
 // Compact "queued" indicator drawn into each child's surface while
 // approvals are still being collected for the batch.
-inline auto queued_card(std::string_view tool_name, std::string_view args)
+inline auto queued_card(tool_display display, std::string_view args)
 {
     using namespace nxt::tui;
-    auto color = nxt::Rgba8{120, 130, 150};
-    auto label = std::string{tool_icon(tool_name)};
+    auto color = nxt::Rgba8{tool_palette().fg_subtle};
+    auto label = std::string{display.icon};
     auto args_str = std::string{args};
     if (args_str.size() > 70)
         args_str = args_str.substr(0, 68) + "…";
@@ -297,33 +350,64 @@ inline auto queued_card(std::string_view tool_name, std::string_view args)
         "·", label, args_str, "queued", color, faint);
 }
 
+inline std::string fallback_result_summary(const tool_result_view & result)
+{
+    if (result.bytes > 0)
+        return std::format("{} bytes", result.bytes);
+    return {};
+}
+
+template<typename Tool>
+[[nodiscard]] inline std::optional<std::string> result_summary_for_tool(
+    std::string_view name,
+    const std::string & result_json)
+{
+    using tool_t = std::remove_cvref_t<Tool>;
+    if (name != tool_t::name)
+        return std::nullopt;
+    if constexpr (has_result_summary<tool_t>) {
+        auto result = read_json_view<typename tool_t::result>(result_json);
+        if (result)
+            return tool_t::result_summary(*result);
+    }
+    return std::nullopt;
+}
+
+template<std::size_t I = 0, typename ToolSet>
+[[nodiscard]] inline std::optional<std::string>
+result_summary_for_known_tool(
+    const ToolSet & tool_list,
+    std::string_view name,
+    const std::string & result_json)
+{
+    using tuple_t = std::remove_cvref_t<decltype(tool_list.items)>;
+    if constexpr (I == std::tuple_size_v<tuple_t>) {
+        return std::nullopt;
+    } else {
+        using tool_t = std::tuple_element_t<I, tuple_t>;
+        if (auto summary = result_summary_for_tool<tool_t>(name, result_json))
+            return summary;
+        return result_summary_for_known_tool<I + 1>(
+            tool_list, name, result_json);
+    }
+}
+
 // One-line summary of the JSON result (matches/bytes/error).
-inline std::string
-result_summary(std::string_view tool_name, const std::string & result_json)
+template<typename ToolSet>
+inline std::string result_summary(
+    const ToolSet & tool_list,
+    const tools::function_call & call,
+    const std::string & result_json)
 {
     auto result = read_json_view<tool_result_view>(result_json);
     if (!result)
         return {};
     if (!result->error.empty())
         return "error: " + result->error;
-    auto bytes = result->bytes;
-    if (tool_name == "rg_search") {
-        auto out = result->output;
-        auto lines = static_cast<std::size_t>(
-            std::count(out.begin(), out.end(), '\n'));
-        return std::format("⨉{} {}K", lines, bytes / 1024);
-    }
-    if (tool_name == "read_file")
-        return std::format("{} K", bytes / 1024);
-    if (tool_name == "web_fetch") {
-        auto out = result->output;
-        auto lines = static_cast<std::size_t>(
-            std::count(out.begin(), out.end(), '\n'));
-        return std::format("{}K", lines, bytes / 1024);
-    }
-    if (bytes > 0)
-        return std::format("{} bytes", bytes);
-    return "";
+    if (auto summary =
+            result_summary_for_known_tool(tool_list, call.name, result_json))
+        return *summary;
+    return fallback_result_summary(*result);
 }
 
 // Strip terminal control characters from a line before we
@@ -437,7 +521,7 @@ preview_spans(const std::string & result_json, std::size_t max_lines = 4)
     std::vector<Span> out;
     out.reserve(preview.size() + 1);
 
-    auto preview_color = nxt::Rgba8{120, 130, 150};
+    auto preview_color = nxt::Rgba8{tool_palette().fg_subtle};
     for (auto & line : preview)
         out.push_back(span(std::move(line), fg(preview_color)));
 
@@ -445,7 +529,7 @@ preview_spans(const std::string & result_json, std::size_t max_lines = 4)
         auto more = total - preview.size();
         out.push_back(span(
             std::format("...{} more lines.", more),
-            fg(nxt::Rgba8{100, 110, 130}) | faint));
+            fg(nxt::Rgba8{tool_palette().fg_subtle}) | faint));
     }
 
     return out;
@@ -470,7 +554,8 @@ inline nxt::task<ApprovalDecision> request_approval(
     const tools::function_call & call)
 {
     auto args_short = args_summary(tool_list, call);
-    self.draw(approval_card(call.name, args_short));
+    auto display = display_for_call(tool_list, call);
+    self.draw(approval_card(display, args_short));
     while (!self.cancelled()) {
         auto event = co_await self.next_input();
         if (!event)
@@ -553,9 +638,12 @@ std::string render_for_scrollback(nxt::ui::yard & self, L && layout)
     return nxt::ansi::render_raster(raster);
 }
 
+template<typename ToolSet>
 inline void commit_tool_result(
     nxt::ui::yard & self,
+    const ToolSet & tool_list,
     const tools::function_call & call,
+    tool_display display,
     std::string_view args_short,
     const std::string & result,
     bool is_error,
@@ -563,18 +651,18 @@ inline void commit_tool_result(
     hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
-    auto summary = result_summary(call.name, result);
+    auto summary = result_summary(tool_list, call, result);
     auto preview = preview_spans(result, 4);
     self.print_block(render_for_scrollback(
         self,
         column(
-            done_card(call.name, args_short, elapsed, summary, is_error),
+            done_card(display, args_short, elapsed, summary, is_error),
             list(preview, [](const Span & line) {
                 return styled_text(line);
             }))));
 
     auto folded = folded_result_card(
-        call.name, args_short, elapsed, summary, is_error);
+        display, args_short, elapsed, summary, is_error);
     if (hud) {
         hud->add(folded);
         self.draw(hud->view());
@@ -598,6 +686,7 @@ inline nxt::task<std::string> run_one_animated(
 {
     using namespace nxt::tui;
     auto args_short = args_summary(tool_list, call);
+    auto display = display_for_call(tool_list, call);
     auto start = std::chrono::steady_clock::now();
 
     agent_trace::record_tool_call(self, call);
@@ -610,7 +699,7 @@ inline nxt::task<std::string> run_one_animated(
     };
 
     {
-        auto companion = [tool_name = std::string{call.name},
+        auto companion = [display,
                           args_short,
                           start](nxt::ui::yard & s) -> nxt::task<> {
             int tick = 0;
@@ -619,7 +708,7 @@ inline nxt::task<std::string> run_one_animated(
                 auto elapsed =
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - start);
-                s.draw(running_card(tool_name, args_short, tick, elapsed));
+                s.draw(running_card(display, args_short, tick, elapsed));
                 ++tick;
                 co_await s.sleep(40ms);
             }
@@ -645,7 +734,16 @@ inline nxt::task<std::string> run_one_animated(
         is_error = !parsed->error.empty();
     agent_trace::record_tool_result(self, call, result, is_error);
 
-    commit_tool_result(self, call, args_short, result, is_error, elapsed, hud);
+    commit_tool_result(
+        self,
+        tool_list,
+        call,
+        display,
+        args_short,
+        result,
+        is_error,
+        elapsed,
+        hud);
     co_return result;
 }
 
@@ -660,7 +758,8 @@ inline nxt::task<std::string> run_one_or_deny(
     using namespace nxt::tui;
     if (!approved) {
         auto args_short = args_summary(tool_list, call);
-        auto denied = denied_card(call.name, args_short);
+        auto display = display_for_call(tool_list, call);
+        auto denied = denied_card(display, args_short);
         auto block = render_for_scrollback(self, denied);
         block += "\n";
         self.print_block(block);
@@ -705,7 +804,7 @@ inline nxt::task<std::vector<openai::raw_json>> run_all(
     bool blanket_no = false;
     bool cancelled = false;
     for (std::size_t i = 0; i < calls.size(); ++i) {
-        if (!tool_needs_approval(calls[i].name))
+        if (!display_for_call(tool_list, calls[i]).needs_approval)
             continue;
         if (blanket_yes) {
             approved[i] = true;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <nxt/baltics.hpp>
 #include <nxtai/tools.hpp>
 #include <nxtio/app.hpp>
 
@@ -36,6 +37,7 @@ struct current_time_tool
     static constexpr std::string_view description =
         "Return the current local timestamp for the nxtllm process.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "time";
 
     struct parameters
     {
@@ -45,6 +47,11 @@ struct current_time_tool
     {
         std::string local_time;
     };
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.mint;
+    }
 
     nxt::task<std::string> run(parameters) const
     {
@@ -58,6 +65,7 @@ struct terminal_size_tool
     static constexpr std::string_view description =
         "Return the current terminal size used by the nxt UI runtime.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "size";
 
     struct parameters
     {
@@ -68,6 +76,11 @@ struct terminal_size_tool
         std::size_t columns = 0;
         std::size_t rows = 0;
     };
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.cyan_soft;
+    }
 
     nxt::ui::UIRuntime * runtime = nullptr;
 
@@ -86,6 +99,7 @@ struct echo_tool
     static constexpr std::string_view description =
         "Echo a short text string. Useful for checking that tool calling works.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "echo";
 
     struct parameters
     {
@@ -105,6 +119,11 @@ struct echo_tool
     static std::string parameters_summary(const parameters & args)
     {
         return args.text;
+    }
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.green;
     }
 
     nxt::task<std::string> run(parameters args) const

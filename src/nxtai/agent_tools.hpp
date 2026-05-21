@@ -7,6 +7,7 @@
 // and yield the scheduler periodically so the per-tool spinner card
 // in tool_ui.hpp animates while the work is in flight.
 
+#include <nxt/baltics.hpp>
 #include <nxtai/tools.hpp>
 #include <nxtio/async-core.hpp>
 
@@ -22,6 +23,7 @@
 #include <memory>
 #include <spawn.h>
 #include <stop_token>
+#include <format>
 #include <string>
 #include <string_view>
 #include <sys/wait.h>
@@ -212,6 +214,7 @@ struct read_file_tool
         "JSON with the file path, byte count, and the file's "
         "contents truncated to 80 KiB.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "read";
 
     struct parameters
     {
@@ -240,6 +243,16 @@ struct read_file_tool
     static std::string parameters_summary(const parameters & args)
     {
         return args.path;
+    }
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.cyan;
+    }
+
+    static std::string result_summary(const result & value)
+    {
+        return std::format("{} K", value.bytes / 1024);
     }
 
     nxt::task<std::string> run(parameters args) const
@@ -275,6 +288,7 @@ struct rg_search_tool
         "Returns JSON with the matching lines (file:line:text). "
         "Use this to locate symbols, definitions, or usages.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "grep";
 
     struct parameters
     {
@@ -308,6 +322,18 @@ struct rg_search_tool
     {
         auto path = args.path.empty() ? std::string{"."} : args.path;
         return "/" + args.pattern + "/ in " + path;
+    }
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.amber;
+    }
+
+    static std::string result_summary(const result & value)
+    {
+        auto lines = static_cast<std::size_t>(
+            std::count(value.output.begin(), value.output.end(), '\n'));
+        return std::format("x{} {}K", lines, value.bytes / 1024);
     }
 
     nxt::scheduler * sched = nullptr;
@@ -355,6 +381,7 @@ struct web_fetch_tool
         "documentation pages, blog posts, or any public web "
         "content. Renders JS before extracting.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "look";
 
     struct parameters
     {
@@ -381,6 +408,18 @@ struct web_fetch_tool
     static std::string parameters_summary(const parameters & args)
     {
         return args.url;
+    }
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.pink;
+    }
+
+    static std::string result_summary(const result & value)
+    {
+        auto lines = static_cast<std::size_t>(
+            std::count(value.output.begin(), value.output.end(), '\n'));
+        return std::format("{} lines {}K", lines, value.bytes / 1024);
     }
 
     nxt::scheduler * sched = nullptr;
@@ -422,6 +461,7 @@ struct bash_tool
         "runs. Use it for read-only inspections and idempotent "
         "operations; avoid destructive commands.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "bash";
 
     struct parameters
     {
@@ -450,6 +490,11 @@ struct bash_tool
     static std::string parameters_summary(const parameters & args)
     {
         return args.command;
+    }
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.doc_orange;
     }
 
     nxt::scheduler * sched = nullptr;
