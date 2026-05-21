@@ -181,9 +181,10 @@ void queue_post_exit_summary(
     }
 }
 
+template<typename ToolSet>
 nxt::task<> run_agent_worker(
     nxt::ui::yard & self,
-    nxt::ai::agent::response_continuation turn,
+    nxt::ai::agent::response_continuation<ToolSet> turn,
     bool post_exit_summary = false)
 {
     auto hud = nxt::ai::hud_blocks::State{};
@@ -218,9 +219,10 @@ nxt::task<> run_agent_worker(
     self.println("too much");
 }
 
+template<typename ToolSet>
 nxt::task<> run_agent_turn(
     nxt::ui::yard & self,
-    nxt::ai::agent::response_continuation turn,
+    nxt::ai::agent::response_continuation<ToolSet> turn,
     bool post_exit_summary = false)
 {
     co_await run_agent_worker(self, std::move(turn), post_exit_summary);
@@ -236,11 +238,9 @@ nxt::task<> run_submitted_prompt(
         co_return;
     }
 
-    auto tools = nxt::ai::builtin_tools::for_runtime(self.runtime());
-    auto extra = nxt::ai::agent_tools::for_agent(
-        self.runtime().scheduler());
-    for (auto & t : extra)
-        tools.push_back(std::move(t));
+    auto tools = nxt::ai::tools::concat(
+        nxt::ai::builtin_tools::for_runtime(self.runtime()),
+        nxt::ai::agent_tools::for_agent(self.runtime().scheduler()));
     co_await run_agent_turn(
         self,
         nxt::ai::agent::response_continuation{

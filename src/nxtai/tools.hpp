@@ -3,17 +3,33 @@
 #include <nxtai/openai_types.hpp>
 #include <nxtio/async.hpp>
 
+#include <glaze/glaze_exceptions.hpp>
 #include <nlohmann/json.hpp>
 
-#include <functional>
+#include <concepts>
+#include <cstddef>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace nxt::ai::tools {
+
+template<typename Tool>
+concept function_tool = requires(
+    const Tool & tool,
+    typename Tool::parameters parameters)
+{
+    { Tool::name } -> std::convertible_to<std::string_view>;
+    { Tool::description } -> std::convertible_to<std::string_view>;
+    { Tool::parameters_schema } -> std::convertible_to<std::string_view>;
+    { Tool::strict } -> std::convertible_to<bool>;
+    { tool.run(std::move(parameters)) } -> std::same_as<nxt::task<std::string>>;
+};
 
 /// Function-call item emitted by a Responses model.
 struct function_call
@@ -30,42 +46,67 @@ struct function_call
     openai::raw_json item;
 };
 
-/// Local executable function tool plus its JSON schema.
-struct function_tool
+/// Heterogeneous compile-time set of concrete function tools.
+template<function_tool... Tools>
+struct tool_set
 {
-    /// Name exposed to the model.
-    std::string name;
-    /// Human-readable description exposed to the model.
-    std::string description;
-    /// JSON schema for arguments.
-    nlohmann::json parameters = nlohmann::json::object();
-    /// Whether the model must conform strictly to `parameters`.
-    bool strict = true;
-    /// Coroutine called with parsed arguments to produce tool output text.
-    std::function<nxt::task<std::string>(const nlohmann::json &)> run;
+    std::tuple<Tools...> items;
+
+    explicit tool_set(Tools... tools)
+        : items(std::move(tools)...)
+    {
+    }
 };
 
-/// Convert one local function tool to the Responses tool-definition object.
-[[nodiscard]] inline nlohmann::json
-function_tool_definition(const function_tool & tool)
+template<function_tool... Tools>
+tool_set(Tools...) -> tool_set<Tools...>;
+
+template<function_tool... Tools>
+[[nodiscard]] constexpr bool empty(const tool_set<Tools...> &) noexcept
 {
+    return sizeof...(Tools) == 0;
+}
+
+template<function_tool... Left, function_tool... Right>
+[[nodiscard]] auto concat(tool_set<Left...> left, tool_set<Right...> right)
+{
+    auto joined = std::tuple_cat(std::move(left.items), std::move(right.items));
+    return std::apply(
+        [](auto &&... tools) {
+            return tool_set<std::decay_t<decltype(tools)>...>{
+                std::forward<decltype(tools)>(tools)...};
+        },
+        std::move(joined));
+}
+
+/// Convert one concrete function tool to the Responses tool definition object.
+template<function_tool Tool>
+[[nodiscard]] inline nlohmann::json
+function_tool_definition(const Tool &)
+{
+    using tool_t = std::remove_cvref_t<Tool>;
     auto out = nlohmann::json{
         {"type", "function"},
-        {"name", tool.name},
-        {"description", tool.description},
-        {"parameters", tool.parameters},
-        {"strict", tool.strict},
+        {"name", std::string{tool_t::name}},
+        {"description", std::string{tool_t::description}},
+        {"parameters", nlohmann::json::parse(
+                           std::string{tool_t::parameters_schema})},
+        {"strict", tool_t::strict},
     };
     return out;
 }
 
-/// Convert a list of local function tools to a Responses `tools` array.
+/// Convert a compile-time set of function tools to a Responses `tools` array.
+template<function_tool... Tools>
 [[nodiscard]] inline nlohmann::json
-function_tool_definitions(const std::vector<function_tool> & tools)
+function_tool_definitions(const tool_set<Tools...> & tools)
 {
     auto out = nlohmann::json::array();
-    for (const auto & tool : tools)
-        out.push_back(function_tool_definition(tool));
+    std::apply(
+        [&](const auto &... tool) {
+            (out.push_back(function_tool_definition(tool)), ...);
+        },
+        tools.items);
     return out;
 }
 
@@ -107,60 +148,88 @@ function_call_from_item(const openai::raw_json & raw_item)
     return calls;
 }
 
+struct function_call_output_item
+{
+    std::string type = "function_call_output";
+    std::string call_id;
+    std::string output;
+};
+
 /// Build the structured input item that returns output for a function call.
 [[nodiscard]] inline nlohmann::json
 function_call_output(std::string call_id, std::string output)
 {
-    return {
-        {"type", "function_call_output"},
-        {"call_id", std::move(call_id)},
-        {"output", std::move(output)},
+    auto item = function_call_output_item{
+        .call_id = std::move(call_id),
+        .output = std::move(output),
     };
+    return nlohmann::json::parse(glz::ex::write_json(item));
 }
 
-/// Find and execute a local tool, returning a JSON error string on failure.
-inline nxt::task<std::string> run_function_tool(
-    const std::vector<function_tool> & tools,
+struct tool_error
+{
+    std::string error;
+    std::string name;
+    std::string detail;
+    std::string arguments;
+};
+
+[[nodiscard]] inline std::string
+tool_error_json(
+    std::string error,
+    std::string name,
+    std::string detail = {},
+    std::string arguments = {})
+{
+    return glz::ex::write_json(tool_error{
+        .error = std::move(error),
+        .name = std::move(name),
+        .detail = std::move(detail),
+        .arguments = std::move(arguments),
+    });
+}
+
+template<function_tool Tool>
+nxt::task<std::string> run_one_function_tool(
+    const Tool & tool,
     const function_call & call)
 {
-    auto it = std::ranges::find_if(tools, [&](const function_tool & tool) {
-        return tool.name == call.name;
-    });
-    if (it == tools.end()) {
-        co_return nlohmann::json{
-            {"error", "unknown tool"},
-            {"name", call.name},
-        }.dump();
-    }
-    if (!it->run) {
-        co_return nlohmann::json{
-            {"error", "tool has no executor"},
-            {"name", call.name},
-        }.dump();
-    }
-
-    nlohmann::json arguments = nlohmann::json::object();
+    using parameters_t = typename std::remove_cvref_t<Tool>::parameters;
+    auto arguments = parameters_t{};
     if (!call.arguments.empty()) {
-        try {
-            arguments = nlohmann::json::parse(call.arguments);
-        } catch (const nlohmann::json::exception & e) {
-            co_return nlohmann::json{
-                {"error", "invalid tool arguments json"},
-                {"name", call.name},
-                {"detail", e.what()},
-                {"arguments", call.arguments},
-            }.dump();
-        }
+        if (auto ec =
+                glz::read<openai::json_read_opts>(arguments, call.arguments))
+            co_return tool_error_json(
+                "invalid tool arguments json",
+                call.name,
+                glz::format_error(ec, call.arguments),
+                call.arguments);
     }
 
     try {
-        co_return co_await it->run(arguments);
+        co_return co_await tool.run(std::move(arguments));
     } catch (const std::exception & e) {
-        co_return nlohmann::json{
-            {"error", "tool execution failed"},
-            {"name", call.name},
-            {"detail", e.what()},
-        }.dump();
+        co_return tool_error_json("tool execution failed", call.name, e.what());
+    } catch (...) {
+        co_return tool_error_json(
+            "tool execution failed", call.name, "non-std exception");
+    }
+}
+
+/// Find and execute a concrete tool from a compile-time set.
+template<std::size_t I = 0, function_tool... Tools>
+nxt::task<std::string> run_function_tool(
+    const tool_set<Tools...> & tools,
+    const function_call & call)
+{
+    if constexpr (I == sizeof...(Tools)) {
+        co_return tool_error_json("unknown tool", call.name);
+    } else {
+        const auto & tool = std::get<I>(tools.items);
+        using tool_t = std::remove_cvref_t<decltype(tool)>;
+        if (call.name == tool_t::name)
+            co_return co_await run_one_function_tool(tool, call);
+        co_return co_await run_function_tool<I + 1>(tools, call);
     }
 }
 

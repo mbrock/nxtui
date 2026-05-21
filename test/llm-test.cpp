@@ -98,6 +98,25 @@ Emphasis rendered_emphasis(const Layout & layout, std::size_t row, std::size_t c
     return cell ? cell->em : Emphasis::none;
 }
 
+struct test_echo_tool
+{
+    static constexpr std::string_view name = "nxt_echo";
+    static constexpr std::string_view description = "Echo text.";
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false})json";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+        std::string text;
+    };
+
+    nxt::task<std::string> run(parameters args) const
+    {
+        co_return args.text;
+    }
+};
+
 suite llm_tests = [] {
     using namespace std::literals;
 
@@ -224,16 +243,7 @@ suite llm_tests = [] {
         expect(call->call_id == "call_123");
         expect(call->name == "nxt_echo");
 
-        auto tools = std::vector<nxt::ai::tools::function_tool>{};
-        tools.push_back({
-            .name = "nxt_echo",
-            .description = "Echo text.",
-            .parameters = nlohmann::json::object(),
-            .strict = true,
-            .run = [](const nlohmann::json & args) -> nxt::task<std::string> {
-                co_return args.value("text", std::string{});
-            },
-        });
+        auto tools = nxt::ai::tools::tool_set{test_echo_tool{}};
 
         auto output =
             nxt::sync_wait(nxt::ai::tools::run_function_tool(tools, *call));

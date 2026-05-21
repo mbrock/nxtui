@@ -10,8 +10,6 @@
 #include <nxtai/tools.hpp>
 #include <nxtio/async-core.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -34,17 +32,6 @@
 extern "C" char ** environ;
 
 namespace nxt::ai::agent_tools {
-
-inline nlohmann::json object_schema(
-    nlohmann::json properties, nlohmann::json required)
-{
-    return {
-        {"type", "object"},
-        {"properties", std::move(properties)},
-        {"required", std::move(required)},
-        {"additionalProperties", false},
-    };
-}
 
 inline std::string read_file_to_string(
     const std::filesystem::path & p, std::size_t max_bytes)
@@ -217,77 +204,103 @@ run_subprocess_async(
     co_return out;
 }
 
-inline tools::function_tool make_read_file()
+struct read_file_tool
 {
-    tools::function_tool t;
-    t.name = "read_file";
-    t.description =
+    static constexpr std::string_view name = "read_file";
+    static constexpr std::string_view description =
         "Read a text file from the local filesystem. Returns "
         "JSON with the file path, byte count, and the file's "
         "contents truncated to 80 KiB.";
-    t.parameters = object_schema(
-        {
-            {"path",
-             {{"type", "string"},
-              {"description",
-               "Absolute or relative path to the file"}}},
-        },
-        {"path"});
-    t.strict = true;
-    t.run = [](const nlohmann::json & args)
-        -> nxt::task<std::string> {
-        auto path = args.value("path", std::string{});
-        if (path.empty())
-            co_return nlohmann::json{
-                {"error", "missing required parameter `path`"}}
-                .dump();
-        std::error_code ec;
-        if (!std::filesystem::exists(path, ec))
-            co_return nlohmann::json{
-                {"error", "file does not exist"},
-                {"path", path}}
-                .dump();
-        auto contents = read_file_to_string(path, 80 * 1024);
-        co_return nlohmann::json{
-            {"path", path},
-            {"bytes", contents.size()},
-            {"contents", contents},
-        }.dump();
-    };
-    return t;
-}
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file"}},"required":["path"],"additionalProperties":false})json";
+    static constexpr bool strict = true;
 
-inline tools::function_tool
-make_rg_search(nxt::scheduler & sched)
+    struct parameters
+    {
+        std::string path;
+    };
+
+    struct result
+    {
+        std::string path;
+        std::size_t bytes = 0;
+        std::string contents;
+    };
+
+    struct error_result
+    {
+        std::string error;
+        std::string path;
+    };
+
+    nxt::task<std::string> run(parameters args) const
+    {
+        auto path = std::move(args.path);
+        if (path.empty()) {
+            co_return glz::ex::write_json(error_result{
+                .error = "missing required parameter `path`",
+                .path = {},
+            });
+        }
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) {
+            co_return glz::ex::write_json(error_result{
+                .error = "file does not exist",
+                .path = path,
+            });
+        }
+        auto contents = read_file_to_string(path, 80 * 1024);
+        co_return glz::ex::write_json(result{
+            .path = std::move(path),
+            .bytes = contents.size(),
+            .contents = std::move(contents),
+        });
+    }
+};
+
+struct rg_search_tool
 {
-    tools::function_tool t;
-    t.name = "rg_search";
-    t.description =
+    static constexpr std::string_view name = "rg_search";
+    static constexpr std::string_view description =
         "Search for a regex pattern across files using ripgrep. "
         "Returns JSON with the matching lines (file:line:text). "
         "Use this to locate symbols, definitions, or usages.";
-    t.parameters = object_schema(
-        {
-            {"pattern",
-             {{"type", "string"},
-              {"description",
-               "Regex pattern to search for (rg-style)"}}},
-            {"path",
-             {{"type", "string"},
-              {"description",
-               "Directory or file to search; use \".\" for "
-               "current working directory"}}},
-        },
-        {"pattern", "path"});
-    t.strict = true;
-    t.run = [&sched](const nlohmann::json & args)
-        -> nxt::task<std::string> {
-        auto pattern = args.value("pattern", std::string{});
-        auto path = args.value("path", std::string{"."});
-        if (pattern.empty())
-            co_return nlohmann::json{
-                {"error", "missing pattern"}}
-                .dump();
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern to search for (rg-style)"},"path":{"type":"string","description":"Directory or file to search; use \".\" for current working directory"}},"required":["pattern","path"],"additionalProperties":false})json";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+        std::string pattern;
+        std::string path = ".";
+    };
+
+    struct result
+    {
+        std::string pattern;
+        std::string path;
+        std::size_t bytes = 0;
+        std::string output;
+    };
+
+    struct error_result
+    {
+        std::string error;
+    };
+
+    nxt::scheduler * sched = nullptr;
+
+    nxt::task<std::string> run(parameters args) const
+    {
+        if (args.pattern.empty()) {
+            co_return glz::ex::write_json(error_result{
+                .error = "missing pattern",
+            });
+        }
+        if (args.path.empty())
+            args.path = ".";
+        auto pattern = args.pattern;
+        auto path = args.path;
         std::vector<std::string> argv = {
             "rg",
             "--no-heading",
@@ -301,42 +314,55 @@ make_rg_search(nxt::scheduler & sched)
             path,
         };
         auto output = co_await run_subprocess_async(
-            sched, std::move(argv), 60 * 1024);
-        co_return nlohmann::json{
-            {"pattern", pattern},
-            {"path", path},
-            {"bytes", output.size()},
-            {"output", output},
-        }.dump();
-    };
-    return t;
-}
+            *sched, std::move(argv), 60 * 1024);
+        co_return glz::ex::write_json(result{
+            .pattern = std::move(args.pattern),
+            .path = std::move(args.path),
+            .bytes = output.size(),
+            .output = std::move(output),
+        });
+    }
+};
 
-inline tools::function_tool
-make_web_fetch(nxt::scheduler & sched)
+struct web_fetch_tool
 {
-    tools::function_tool t;
-    t.name = "web_fetch";
-    t.description =
+    static constexpr std::string_view name = "web_fetch";
+    static constexpr std::string_view description =
         "Fetch a URL and return its content as Markdown using "
         "lightpanda (a headless browser). Useful for reading "
         "documentation pages, blog posts, or any public web "
         "content. Renders JS before extracting.";
-    t.parameters = object_schema(
-        {
-            {"url",
-             {{"type", "string"},
-              {"description", "HTTPS URL to fetch"}}},
-        },
-        {"url"});
-    t.strict = true;
-    t.run = [&sched](const nlohmann::json & args)
-        -> nxt::task<std::string> {
-        auto url = args.value("url", std::string{});
-        if (url.empty())
-            co_return nlohmann::json{
-                {"error", "missing url"}}
-                .dump();
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{"url":{"type":"string","description":"HTTPS URL to fetch"}},"required":["url"],"additionalProperties":false})json";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+        std::string url;
+    };
+
+    struct result
+    {
+        std::string url;
+        std::size_t bytes = 0;
+        std::string output;
+    };
+
+    struct error_result
+    {
+        std::string error;
+    };
+
+    nxt::scheduler * sched = nullptr;
+
+    nxt::task<std::string> run(parameters args) const
+    {
+        if (args.url.empty()) {
+            co_return glz::ex::write_json(error_result{
+                .error = "missing url",
+            });
+        }
+        auto url = args.url;
         std::vector<std::string> argv = {
             "lightpanda",
             "fetch",
@@ -347,65 +373,75 @@ make_web_fetch(nxt::scheduler & sched)
             url,
         };
         auto output = co_await run_subprocess_async(
-            sched, std::move(argv), 120 * 1024);
-        co_return nlohmann::json{
-            {"url", url},
-            {"bytes", output.size()},
-            {"output", output},
-        }.dump();
-    };
-    return t;
-}
+            *sched, std::move(argv), 120 * 1024);
+        co_return glz::ex::write_json(result{
+            .url = std::move(args.url),
+            .bytes = output.size(),
+            .output = std::move(output),
+        });
+    }
+};
 
-inline tools::function_tool make_bash(nxt::scheduler & sched)
+struct bash_tool
 {
-    tools::function_tool t;
-    t.name = "bash";
-    t.description =
+    static constexpr std::string_view name = "bash";
+    static constexpr std::string_view description =
         "Run a bash command. The combined stdout+stderr is "
         "returned. This tool REQUIRES user approval — the user "
         "will be prompted to confirm or deny before the command "
         "runs. Use it for read-only inspections and idempotent "
         "operations; avoid destructive commands.";
-    t.parameters = object_schema(
-        {
-            {"command",
-             {{"type", "string"},
-              {"description",
-               "Full shell command line. Will be passed to "
-               "/bin/bash -c."}}},
-        },
-        {"command"});
-    t.strict = true;
-    t.run = [&sched](const nlohmann::json & args)
-        -> nxt::task<std::string> {
-        auto cmd = args.value("command", std::string{});
-        if (cmd.empty())
-            co_return nlohmann::json{
-                {"error", "missing command"}}
-                .dump();
-        std::vector<std::string> argv = {
-            "/bin/bash", "-c", cmd};
-        auto output = co_await run_subprocess_async(
-            sched, std::move(argv), 80 * 1024);
-        co_return nlohmann::json{
-            {"command", cmd},
-            {"bytes", output.size()},
-            {"output", output},
-        }.dump();
-    };
-    return t;
-}
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{"command":{"type":"string","description":"Full shell command line. Will be passed to /bin/bash -c."}},"required":["command"],"additionalProperties":false})json";
+    static constexpr bool strict = true;
 
-inline std::vector<tools::function_tool>
-for_agent(nxt::scheduler & sched)
+    struct parameters
+    {
+        std::string command;
+    };
+
+    struct result
+    {
+        std::string command;
+        std::size_t bytes = 0;
+        std::string output;
+    };
+
+    struct error_result
+    {
+        std::string error;
+    };
+
+    nxt::scheduler * sched = nullptr;
+
+    nxt::task<std::string> run(parameters args) const
+    {
+        if (args.command.empty()) {
+            co_return glz::ex::write_json(error_result{
+                .error = "missing command",
+            });
+        }
+        auto command = args.command;
+        std::vector<std::string> argv = {
+            "/bin/bash", "-c", command};
+        auto output = co_await run_subprocess_async(
+            *sched, std::move(argv), 80 * 1024);
+        co_return glz::ex::write_json(result{
+            .command = std::move(args.command),
+            .bytes = output.size(),
+            .output = std::move(output),
+        });
+    }
+};
+
+inline auto for_agent(nxt::scheduler & sched)
 {
-    std::vector<tools::function_tool> out;
-    out.push_back(make_read_file());
-    out.push_back(make_rg_search(sched));
-    out.push_back(make_web_fetch(sched));
-    out.push_back(make_bash(sched));
-    return out;
+    return tools::tool_set{
+        read_file_tool{},
+        rg_search_tool{.sched = &sched},
+        web_fetch_tool{.sched = &sched},
+        bash_tool{.sched = &sched},
+    };
 }
 
 } // namespace nxt::ai::agent_tools

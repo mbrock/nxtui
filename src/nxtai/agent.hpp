@@ -41,11 +41,12 @@ inline void request_encrypted_reasoning(
 }
 
 /// Attach tool definitions and stateless-continuation includes to a request.
+template<typename ToolSet>
 inline void prepare_tool_request(
     responses::openai_responses_request & request,
-    const std::vector<tools::function_tool> & tool_list)
+    const ToolSet & tool_list)
 {
-    if (tool_list.empty())
+    if (tools::empty(tool_list))
         return;
 
     request.tools = tools::function_tool_definitions(tool_list);
@@ -95,12 +96,13 @@ message_blocks_from_items(const std::vector<openai::raw_json> & output_items)
 ///
 /// This owns only protocol state: the next request to send, the tool list, and
 /// the stateless transcript needed when server-side response storage is off.
+template<typename ToolSet>
 class response_continuation
 {
 public:
     response_continuation(
         responses::openai_responses_request request,
-        std::vector<tools::function_tool> tools,
+        ToolSet tools,
         std::size_t max_steps = 256)
         : original_request_(std::move(request))
         , request_(original_request_)
@@ -121,7 +123,7 @@ public:
         return request_;
     }
 
-    [[nodiscard]] const std::vector<tools::function_tool> & tools() const
+    [[nodiscard]] const ToolSet & tools() const
     {
         return tools_;
     }
@@ -163,10 +165,16 @@ public:
 private:
     responses::openai_responses_request original_request_;
     responses::openai_responses_request request_;
-    std::vector<tools::function_tool> tools_;
+    ToolSet tools_;
     nlohmann::json stateless_input_ = nlohmann::json::array();
     std::size_t step_ = 0;
     std::size_t max_steps_ = 0;
 };
+
+template<typename ToolSet>
+response_continuation(
+    responses::openai_responses_request,
+    ToolSet,
+    std::size_t = 256) -> response_continuation<ToolSet>;
 
 } // namespace nxt::ai::agent

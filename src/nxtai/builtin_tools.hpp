@@ -3,28 +3,16 @@
 #include <nxtai/tools.hpp>
 #include <nxtio/app.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <chrono>
 #include <ctime>
+#include <cstddef>
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace nxt::ai::builtin_tools {
-
-inline nlohmann::json
-object_schema(nlohmann::json properties, nlohmann::json required)
-{
-    return {
-        {"type", "object"},
-        {"properties", std::move(properties)},
-        {"required", std::move(required)},
-        {"additionalProperties", false},
-    };
-}
 
 inline std::string local_timestamp()
 {
@@ -42,64 +30,93 @@ inline std::string local_timestamp()
     return out.str();
 }
 
-inline std::vector<tools::function_tool>
+struct current_time_tool
+{
+    static constexpr std::string_view name = "nxt_current_time";
+    static constexpr std::string_view description =
+        "Return the current local timestamp for the nxtllm process.";
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{},"required":[],"additionalProperties":false})json";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+    };
+
+    struct result
+    {
+        std::string local_time;
+    };
+
+    nxt::task<std::string> run(parameters) const
+    {
+        co_return glz::ex::write_json(result{.local_time = local_timestamp()});
+    }
+};
+
+struct terminal_size_tool
+{
+    static constexpr std::string_view name = "nxt_terminal_size";
+    static constexpr std::string_view description =
+        "Return the current terminal size used by the nxt UI runtime.";
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{},"required":[],"additionalProperties":false})json";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+    };
+
+    struct result
+    {
+        std::size_t columns = 0;
+        std::size_t rows = 0;
+    };
+
+    nxt::ui::UIRuntime * runtime = nullptr;
+
+    nxt::task<std::string> run(parameters) const
+    {
+        co_return glz::ex::write_json(result{
+            .columns = runtime->terminal_width().count(),
+            .rows = runtime->terminal_height().count(),
+        });
+    }
+};
+
+struct echo_tool
+{
+    static constexpr std::string_view name = "nxt_echo";
+    static constexpr std::string_view description =
+        "Echo a short text string. Useful for checking that tool calling works.";
+    static constexpr std::string_view parameters_schema =
+        R"json({"type":"object","properties":{"text":{"type":"string","description":"Text to echo back."}},"required":["text"],"additionalProperties":false})json";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+        std::string text;
+    };
+
+    struct result
+    {
+        std::string text;
+    };
+
+    nxt::task<std::string> run(parameters args) const
+    {
+        co_return glz::ex::write_json(result{.text = std::move(args.text)});
+    }
+};
+
+inline auto
 for_runtime(nxt::ui::UIRuntime & runtime)
 {
-    auto out = std::vector<tools::function_tool>{};
-
-    out.push_back(tools::function_tool{
-        .name = "nxt_current_time",
-        .description =
-            "Return the current local timestamp for the nxtllm process.",
-        .parameters = object_schema(
-            nlohmann::json::object(),
-            nlohmann::json::array()),
-        .strict = true,
-        .run = [](const nlohmann::json &) -> nxt::task<std::string> {
-            co_return nlohmann::json{
-                {"local_time", local_timestamp()},
-            }.dump();
-        },
-    });
-
-    out.push_back(tools::function_tool{
-        .name = "nxt_terminal_size",
-        .description =
-            "Return the current terminal size used by the nxt UI runtime.",
-        .parameters = object_schema(
-            nlohmann::json::object(),
-            nlohmann::json::array()),
-        .strict = true,
-        .run = [&runtime](const nlohmann::json &) -> nxt::task<std::string> {
-            co_return nlohmann::json{
-                {"columns", runtime.terminal_width().count()},
-                {"rows", runtime.terminal_height().count()},
-            }.dump();
-        },
-    });
-
-    out.push_back(tools::function_tool{
-        .name = "nxt_echo",
-        .description =
-            "Echo a short text string. Useful for checking that tool calling works.",
-        .parameters = object_schema(
-            {
-                {"text",
-                 {
-                     {"type", "string"},
-                     {"description", "Text to echo back."},
-                 }},
-            },
-            {"text"}),
-        .strict = true,
-        .run = [](const nlohmann::json & args) -> nxt::task<std::string> {
-            co_return nlohmann::json{
-                {"text", args.value("text", std::string{})},
-            }.dump();
-        },
-    });
-
-    return out;
+    return tools::tool_set{
+        current_time_tool{},
+        terminal_size_tool{.runtime = &runtime},
+        echo_tool{},
+    };
 }
 
 } // namespace nxt::ai::builtin_tools

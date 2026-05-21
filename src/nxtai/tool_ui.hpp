@@ -533,9 +533,10 @@ inline void commit_tool_result(
 // or a synthesized denial blob).
 // ============================================================================
 
+template<typename ToolSet>
 inline nxt::task<std::string> run_one_animated(
     nxt::ui::yard & self,
-    const std::vector<tools::function_tool> & tool_list,
+    const ToolSet & tool_list,
     tools::function_call call,
     hud_blocks::State * hud = nullptr)
 {
@@ -596,9 +597,10 @@ inline nxt::task<std::string> run_one_animated(
     co_return result;
 }
 
+template<typename ToolSet>
 inline nxt::task<std::string> run_one_or_deny(
     nxt::ui::yard & self,
-    const std::vector<tools::function_tool> & tool_list,
+    const ToolSet & tool_list,
     tools::function_call call,
     bool approved,
     hud_blocks::State * hud = nullptr)
@@ -636,9 +638,10 @@ inline nxt::task<std::string> run_one_or_deny(
 // concurrently, compose their surfaces in a column, await all.
 // ============================================================================
 
+template<typename ToolSet>
 inline nxt::task<std::vector<nlohmann::json>> run_all(
     nxt::ui::yard & self,
-    const std::vector<tools::function_tool> & tool_list,
+    const ToolSet & tool_list,
     const std::vector<tools::function_call> & calls,
     hud_blocks::State * hud = nullptr)
 {
