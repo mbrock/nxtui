@@ -1,7 +1,6 @@
 #include <nxt/text_field.hpp>
 #include <nxt/tui.hpp>
 #include <nxtai/agent_tools.hpp>
-#include <nxtai/builtin_tools.hpp>
 #include <nxtai/hud_blocks.hpp>
 #include <nxtai/response_turn.hpp>
 #include <nxtai/responses.hpp>
@@ -236,9 +235,7 @@ nxt::task<> run_submitted_prompt(
         co_return;
     }
 
-    auto tools = nxt::ai::tools::concat(
-        nxt::ai::builtin_tools::for_runtime(self.runtime()),
-        nxt::ai::agent_tools::for_agent(self.runtime().scheduler()));
+    auto tools = nxt::ai::agent_tools::for_agent(self.runtime().scheduler());
     co_await run_agent_turn(
         self,
         nxt::ai::agent::response_continuation{

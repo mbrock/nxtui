@@ -1,5 +1,4 @@
 #include <nxtai/agent_tools.hpp>
-#include <nxtai/builtin_tools.hpp>
 #include <nxtai/responses.hpp>
 #include <nxtai/response_turn.hpp>
 #include <nxtai/tool_ui.hpp>
@@ -119,6 +118,7 @@ struct test_echo_tool
     static constexpr std::string_view name = "nxt_echo";
     static constexpr std::string_view description = "Echo text.";
     static constexpr bool strict = true;
+    static constexpr std::string_view icon = "echo";
 
     struct parameters
     {
@@ -129,6 +129,16 @@ struct test_echo_tool
             glz::schema text{.description = "Text to echo."};
         };
     };
+
+    static std::string parameters_summary(const parameters & args)
+    {
+        return args.text;
+    }
+
+    static nxt::Rgba8 theme_color(const nxt::theme::Palette & palette)
+    {
+        return palette.green;
+    }
 
     nxt::task<std::string> run(parameters args) const
     {
@@ -302,7 +312,7 @@ suite llm_tests = [] {
     "tool ui argument summaries use concrete tool parameters"_test = [] {
         auto tool_list = nxt::ai::tools::tool_set{
             nxt::ai::agent_tools::rg_search_tool{},
-            nxt::ai::builtin_tools::echo_tool{},
+            test_echo_tool{},
         };
 
         auto rg = nxt::ai::tools::function_call{
