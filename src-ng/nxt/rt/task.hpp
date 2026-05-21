@@ -4,6 +4,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <string>
 #include <stdexcept>
 #include <type_traits>
@@ -55,7 +56,10 @@ struct promise_base
 
     promise_base() noexcept
         : id(task_ids.next())
-    {}
+    {
+        if (auto * current = detail::current_env)
+            env.bindings = current->bindings;
+    }
 
     /// Called by the compiler before running the coroutine body.
     ///
@@ -84,15 +88,19 @@ struct promise_base
 
     void resume_continuation() noexcept
     {
-        if (continuation && detail::current_deck != nullptr)
-            detail::current_deck->enqueue(continuation, continuation_promise);
+        auto * current = detail::current_env;
+        if (continuation
+            && current != nullptr
+            && current->current_deck != nullptr)
+            current->current_deck->enqueue(continuation, continuation_promise);
     }
 
     void enqueue_self(std::coroutine_handle<> handle)
     {
-        if (detail::current_deck == nullptr)
+        auto * current = detail::current_env;
+        if (current == nullptr || current->current_deck == nullptr)
             throw std::runtime_error{"nxt::rt task enqueued without a deck"};
-        detail::current_deck->enqueue(handle, this);
+        current->current_deck->enqueue(handle, this);
     }
 
     /// Identity assigned when the coroutine frame is created.
@@ -101,6 +109,8 @@ struct promise_base
     std::coroutine_handle<> continuation;
     /// Awaiting task promise, used to restore ambient context when continuation runs.
     promise_base * continuation_promise = nullptr;
+    /// Inheritable runtime environment captured by this coroutine frame.
+    runtime_env env;
 };
 
 /// Promise for non-void task results.
@@ -219,13 +229,17 @@ public:
         /// child's continuation and enqueue the child for the pump.
         void await_suspend(std::coroutine_handle<> awaiting)
         {
-            auto * active_deck = detail::current_deck;
-            auto * awaiting_promise = detail::current_promise;
+            auto * current = detail::current_env;
+            auto * active_deck =
+                current == nullptr ? nullptr : current->current_deck;
+            auto * awaiting_promise =
+                current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || awaiting_promise == nullptr)
                 throw std::runtime_error{
                     "nxt::rt task awaited without a running deck"};
 
             auto & promise = coroutine_.promise();
+            promise.env.bindings = current->bindings;
             promise.set_continuation(awaiting, awaiting_promise);
             active_deck->enqueue(coroutine_, &promise);
         }
@@ -328,6 +342,47 @@ private:
     coroutine_handle coroutine_{nullptr};
 };
 
+template<typename Key, task_factory Fn>
+[[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
+with_env(typename Key::value_type value, Fn && fn)
+{
+    auto * current = detail::current_env;
+    auto * promise = current == nullptr ? nullptr : current->current_promise;
+    if (current == nullptr || promise == nullptr)
+        throw std::runtime_error{
+            "nxt::rt env binding used without runtime env"};
+
+    struct binding_guard
+    {
+        detail::promise_base * promise = nullptr;
+        env_binding_base * previous = nullptr;
+
+        ~binding_guard()
+        {
+            if (promise != nullptr)
+                promise->env.bindings = previous;
+            auto * current = detail::current_env;
+            if (current != nullptr && current->current_promise == promise)
+                current->bindings = previous;
+        }
+    };
+
+    auto binding = env_binding<Key>{promise->env.bindings, std::move(value)};
+    auto restore = binding_guard{
+        .promise = promise,
+        .previous = promise->env.bindings,
+    };
+    promise->env.bindings = &binding;
+    current->bindings = &binding;
+    auto child = std::invoke(std::forward<Fn>(fn));
+
+    if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+        co_await child;
+    } else {
+        co_return co_await child;
+    }
+}
+
 namespace detail {
 
 template<typename T>
@@ -347,9 +402,12 @@ inline auto promise<void>::get_return_object() noexcept -> task_type
 
 inline task_id deck::current_task_id() const noexcept
 {
-    if (detail::current_deck != this || detail::current_promise == nullptr)
+    auto * env = current_env();
+    if (env == nullptr
+        || env->current_deck != this
+        || env->current_promise == nullptr)
         return {};
-    return detail::current_promise->id;
+    return env->current_promise->id;
 }
 
 inline void deck::enqueue(
@@ -364,13 +422,17 @@ inline void deck::enqueue(
         });
 }
 
-inline void deck::ready_item::resume_if_ready() const
+inline void deck::ready_item::resume_if_ready(deck & d, wand * w) const
 {
     if (!handle || handle.done())
         return;
 
     trace("deck resume task");
-    auto promise_guard = current_promise_guard{promise};
+    auto env = promise->env;
+    env.current_deck = &d;
+    env.current_wand = w;
+    env.current_promise = promise;
+    auto env_guard = detail::env_guard{env};
     handle.resume();
 }
 
@@ -385,7 +447,8 @@ inline void waiter<T>::await_suspend(
     std::coroutine_handle<> awaiting) const
 {
     auto * active_wand = source_;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt waiter awaited without a prepared wand"};
@@ -401,9 +464,10 @@ inline void waiter<T>::await_suspend(
 
 inline waiter<void> manual_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt manual wish awaited without a running wand"};
@@ -414,9 +478,10 @@ inline waiter<void> manual_wish::operator co_await() const
 
 inline waiter<int> openat_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt openat wish awaited without a running wand"};
@@ -427,9 +492,10 @@ inline waiter<int> openat_wish::operator co_await() const
 
 inline waiter<std::size_t> read_some_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt read wish awaited without a running wand"};
@@ -441,9 +507,10 @@ inline waiter<std::size_t> read_some_wish::operator co_await() const
 
 inline waiter<std::size_t> recv_some_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt recv wish awaited without a running wand"};
@@ -455,9 +522,10 @@ inline waiter<std::size_t> recv_some_wish::operator co_await() const
 
 inline waiter<std::size_t> send_some_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt send wish awaited without a running wand"};
@@ -469,9 +537,10 @@ inline waiter<std::size_t> send_some_wish::operator co_await() const
 
 inline waiter<void> connect_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt connect wish awaited without a running wand"};
@@ -482,9 +551,10 @@ inline waiter<void> connect_wish::operator co_await() const
 
 inline waiter<int> poll_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt poll wish awaited without a running wand"};
@@ -496,9 +566,10 @@ inline waiter<int> poll_wish::operator co_await() const
 
 inline waiter<void> timeout_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt timeout wish awaited without a running wand"};
@@ -509,9 +580,10 @@ inline waiter<void> timeout_wish::operator co_await() const
 
 inline waiter<poll_until_result> poll_until_wish::operator co_await() const
 {
-    auto * active_deck = detail::current_deck;
-    auto * active_wand = detail::current_wand;
-    auto * running = detail::current_promise;
+    auto * current = detail::current_env;
+    auto * active_deck = current == nullptr ? nullptr : current->current_deck;
+    auto * active_wand = current == nullptr ? nullptr : current->current_wand;
+    auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
         throw std::runtime_error{
             "nxt::rt poll-until wish awaited without a running wand"};
@@ -532,8 +604,10 @@ struct yield_awaiter
     /// Re-enqueue the currently running coroutine.
     void await_suspend(std::coroutine_handle<> awaiting) const
     {
-        auto * active_deck = detail::current_deck;
-        auto * running = detail::current_promise;
+        auto * current = detail::current_env;
+        auto * active_deck =
+            current == nullptr ? nullptr : current->current_deck;
+        auto * running = current == nullptr ? nullptr : current->current_promise;
         if (active_deck == nullptr || running == nullptr)
             throw std::runtime_error{
                 "nxt::rt yield awaited without a running deck"};

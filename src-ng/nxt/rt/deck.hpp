@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxt/rt/ids.hpp"
+#include "nxt/rt/env.hpp"
 #include "nxt/rt/trace.hpp"
 #include "nxt/rt/wish.hpp"
 
@@ -49,17 +50,6 @@ concept task_factory =
 namespace detail {
 
 struct promise_base;
-
-// Dynamic execution context for code currently being resumed by a deck.
-//
-// A C++ coroutine frame stores its own promise object, but ordinary functions
-// called from inside the coroutine do not automatically receive that promise.
-// These thread-local pointers are the minimal "ambient" hook that lets
-// `co_await nxt::rt::yield()` and `co_await child_task` discover the currently
-// running task while the deck pump is resuming it.
-inline thread_local deck * current_deck = nullptr;
-inline thread_local promise_base * current_promise = nullptr;
-inline thread_local wand * current_wand = nullptr;
 
 } // namespace detail
 
@@ -135,17 +125,16 @@ public:
 private:
     void run_ready_with(wand * w)
     {
-        if (detail::current_promise != nullptr)
+        auto * env = current_env();
+        if (env != nullptr && env->current_promise != nullptr)
             throw std::runtime_error{"nxt::rt deck pump is not reentrant"};
 
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
         trace("deck round begin size=" + std::to_string(round.size()));
 
-        auto deck_guard = current_deck_guard{*this};
-        auto wand_guard = current_wand_guard{w};
         for (auto const & item : round)
-            item.resume_if_ready();
+            item.resume_if_ready(*this, w);
         trace("deck round end ready=" + std::to_string(ready_.size()));
     }
 
@@ -193,63 +182,6 @@ private:
     friend struct parked_task;
     friend struct yield_awaiter;
 
-    /// Temporarily marks `d` as the deck currently resuming code.
-    class current_deck_guard
-    {
-    public:
-        explicit current_deck_guard(deck & d) noexcept
-            : previous_(detail::current_deck)
-        {
-            detail::current_deck = &d;
-        }
-
-        ~current_deck_guard()
-        {
-            detail::current_deck = previous_;
-        }
-
-    private:
-        deck * previous_;
-    };
-
-    /// Temporarily marks `promise` as the current coroutine promise.
-    class current_promise_guard
-    {
-    public:
-        explicit current_promise_guard(detail::promise_base * promise) noexcept
-            : previous_(detail::current_promise)
-        {
-            detail::current_promise = promise;
-        }
-
-        ~current_promise_guard()
-        {
-            detail::current_promise = previous_;
-        }
-
-    private:
-        detail::promise_base * previous_;
-    };
-
-    /// Temporarily marks `w` as the wand currently available to operations.
-    class current_wand_guard
-    {
-    public:
-        explicit current_wand_guard(wand * w) noexcept
-            : previous_(detail::current_wand)
-        {
-            detail::current_wand = w;
-        }
-
-        ~current_wand_guard()
-        {
-            detail::current_wand = previous_;
-        }
-
-    private:
-        wand * previous_;
-    };
-
     struct ready_item
     {
         /// Resume this coroutine frame if it still has work to do.
@@ -258,7 +190,7 @@ private:
         /// `run_ready()`. Each item only needs to restore its own promise as
         /// the ambient current task before transferring control to the
         /// compiler/runtime handle.
-        void resume_if_ready() const;
+        void resume_if_ready(deck & d, wand * w) const;
 
         // The compiler/runtime handle used to resume the coroutine frame.
         std::coroutine_handle<> handle;

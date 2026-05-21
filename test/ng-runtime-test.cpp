@@ -19,6 +19,12 @@ namespace nxt::test {
 using namespace boost::ut;
 using namespace std::literals;
 
+struct ambient_int_key
+{
+    using value_type = int;
+    static constexpr auto name = "ambient-int";
+};
+
 struct manual_wand final : nxt::rt::wand
 {
     nxt::rt::waiter<void> prepare(
@@ -170,6 +176,17 @@ struct empty_then_string_source final : nxt::rt::byte_source
     bool returned_empty = false;
 };
 
+nxt::rt::task<int> read_ambient_int_after_yield()
+{
+    co_await nxt::rt::yield();
+    co_return nxt::rt::env_require<ambient_int_key>();
+}
+
+nxt::rt::task<int> read_ambient_int()
+{
+    co_return nxt::rt::env_require<ambient_int_key>();
+}
+
 static suite ng_runtime_tests = [] {
     "sync_wait returns a completed root task value"_test = [] {
         auto deck = nxt::rt::deck{};
@@ -275,6 +292,41 @@ static suite ng_runtime_tests = [] {
         expect(events == std::vector<int>{1, 2})
             << "run_until_idle should play all rounds";
         expect(deck.empty()) << "deck should be empty after run_until_idle";
+    };
+
+    "runtime env binding survives nested task awaits"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
+            co_return co_await nxt::rt::with_env<ambient_int_key>(
+                41,
+                [] {
+                    return read_ambient_int_after_yield();
+                });
+        });
+
+        expect(result == 41_i);
+    };
+
+    "runtime env binding restores outer binding"_test = [] {
+        auto deck = nxt::rt::deck{};
+
+        auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
+            co_return co_await nxt::rt::with_env<ambient_int_key>(
+                10,
+                []() -> nxt::rt::task<int> {
+                    auto before = co_await read_ambient_int();
+                    auto inside = co_await nxt::rt::with_env<ambient_int_key>(
+                        20,
+                        [] {
+                            return read_ambient_int_after_yield();
+                        });
+                    auto after = co_await read_ambient_int();
+                    co_return before * 100 + inside * 10 + after;
+                });
+        });
+
+        expect(result == 1210_i);
     };
 
     "manual wish prepares and parks a typed waiter"_test = [] {

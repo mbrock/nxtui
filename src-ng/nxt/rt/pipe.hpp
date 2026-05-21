@@ -93,13 +93,17 @@ public:
 
         void await_suspend(std::coroutine_handle<> awaiting)
         {
-            auto * active_deck = detail::current_deck;
-            auto * awaiting_promise = detail::current_promise;
+            auto * current = detail::current_env;
+            auto * active_deck =
+                current == nullptr ? nullptr : current->current_deck;
+            auto * awaiting_promise =
+                current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || awaiting_promise == nullptr)
                 throw std::runtime_error{
                     "nxt::rt pipe awaited without a running deck"};
 
             auto & promise = coroutine_.promise();
+            promise.env.bindings = current->bindings;
             promise.set_continuation(awaiting, awaiting_promise);
             promise.enqueue_self(coroutine_);
         }
