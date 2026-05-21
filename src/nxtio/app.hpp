@@ -211,11 +211,8 @@ public:
                 ansi::SynchronizedUpdate synchronized_update;
 
                 std::optional<TermSize> resize_to;
-                if (refresh_terminal_size()) {
-                    scrollback_cursor_row_.reset();
-                    scrollback_cursor_needs_move_ = true;
+                if (refresh_terminal_size())
                     resize_to = terminal_size();
-                }
 
                 // Process any pending resizes, keeping only the newest size.
                 while (auto sz = resize_queue_.try_pop())
@@ -423,13 +420,9 @@ private:
     std::atomic<nxt::width_t> term_width_{80 * ch};
     std::atomic<nxt::height_t> term_height_{24 * ln};
     std::atomic<std::uint64_t> damage_counter_{0};
-    std::optional<int> scrollback_cursor_row_;
-    bool scrollback_cursor_needs_move_{true};
-    bool scrollback_cursor_on_blank_{false};
     bool scrollback_has_output_{false};
     std::vector<QueuedOutput> output_queue_;
     std::vector<std::string> post_exit_blocks_;
-    nxt::height_t last_hud_height_{0 * ln};
 
     // Trace stream: run id + root span id are minted up front so any
     // producer can emit a row before the first body coroutine runs.

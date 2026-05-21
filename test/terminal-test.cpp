@@ -1,5 +1,6 @@
 #include "vterm-wrapper.hpp"
 #include <nxt/ansi.hpp>
+#include <nxt/regional-tty.hpp>
 #include <nxtio/app.hpp>
 #include <nxt/tui.hpp>
 #include <nxt/tui_terminal.hpp>
@@ -12,6 +13,7 @@ namespace nxt::test {
 
 using namespace boost::ut;
 namespace tui = nxt::tui;
+namespace rtty = nxt::regional_tty;
 
 template<typename Exception, typename Fn>
 bool throws_exception(Fn fn)
@@ -160,6 +162,144 @@ void first_runtime_block_at(
     w.text(text);
     term.write(apply_onlcr(buf));
 }
+
+void append_runtime_block(
+    vterm::Terminal & term,
+    const rtty::screen_partition & partition,
+    std::string_view text)
+{
+    ansi::mode = ansi::Mode::enabled;
+    auto buf = rtty::append_block<rtty::ansi_string_backend>(partition, text);
+    term.write(apply_onlcr(buf));
+}
+
+// ============================================================================
+// Regional TTY model tests
+// ============================================================================
+
+suite regional_tty_tests = [] {
+    "bottom fixed partition names the scroll margin"_test = [] {
+        auto partition =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
+
+        expect(partition.windowed());
+        expect(partition.terminal.height() == 6 * ln);
+        expect(partition.bottom_fixed.top.index() == std::size_t{4});
+        expect(partition.bottom_fixed.bottom_exclusive.index() == std::size_t{6});
+        expect(partition.scroll.has_value());
+        expect(partition.scroll->top_margin().index() == std::size_t{0});
+        expect(partition.scroll->bottom_margin().index() == std::size_t{3});
+    };
+
+    "initial repartition moves the fresh cursor row above the HUD"_test = [] {
+        auto partition =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
+        auto change = rtty::repartition::initial(partition);
+        auto reservation = change.reservation();
+
+        expect(reservation.active());
+        expect(reservation.rows == 2 * ln);
+
+        auto program =
+            rtty::emit_repartition<rtty::command_list_backend>(change);
+        expect(program.size() == std::size_t{6});
+        expect(program[0].kind == rtty::command_kind::reset_graphics);
+        expect(program[1].kind == rtty::command_kind::scroll_up);
+        expect(program[1].amount == 2 * ln);
+        expect(program[2].kind == rtty::command_kind::move_up);
+        expect(program[2].amount == 2 * ln);
+        expect(program[3].kind == rtty::command_kind::save_cursor);
+        expect(program[4].kind == rtty::command_kind::set_scroll_region);
+        expect(program[4].scroll.bottom_margin().index() == std::size_t{3});
+        expect(program[5].kind == rtty::command_kind::restore_cursor);
+    };
+
+    "hidden to windowed reserves the incoming fixed region"_test = [] {
+        auto hidden =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 0 * ln);
+        auto windowed =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
+        auto change = rtty::repartition::from(hidden, windowed);
+        auto reservation = change.reservation();
+
+        expect(reservation.active());
+        expect(reservation.rows == 2 * ln);
+
+        auto clear = change.chrome_to_clear();
+        expect(clear.top.index() == std::size_t{4});
+        expect(clear.bottom_exclusive.index() == std::size_t{6});
+    };
+
+    "windowed growth reserves from the old bottom margin"_test = [] {
+        auto short_hud =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 1 * ln);
+        auto tall_hud =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 3 * ln);
+        auto change = rtty::repartition::from(short_hud, tall_hud);
+        auto reservation = change.reservation();
+
+        expect(reservation.active());
+        expect(reservation.rows == 2 * ln);
+    };
+
+    "windowed shrink releases rows into the scrollback region"_test = [] {
+        auto tall_hud =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 3 * ln);
+        auto short_hud =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
+        auto change = rtty::repartition::from(tall_hud, short_hud);
+        auto release = change.release();
+
+        expect(release.active());
+        expect(release.rows == 1 * ln);
+
+        auto program =
+            rtty::emit_repartition<rtty::command_list_backend>(change);
+        expect(program.size() == std::size_t{12});
+        expect(program[0].kind == rtty::command_kind::reset_graphics);
+        expect(program[1].kind == rtty::command_kind::save_cursor);
+        expect(program[2].kind == rtty::command_kind::set_scroll_region);
+        expect(program[2].scroll.bottom_margin().index() == std::size_t{3});
+        expect(program[3].kind == rtty::command_kind::restore_cursor);
+        expect(program[4].kind == rtty::command_kind::scroll_down);
+        expect(program[4].amount == 1 * ln);
+        expect(program[5].kind == rtty::command_kind::move_down);
+        expect(program[5].amount == 1 * ln);
+        expect(program[6].kind == rtty::command_kind::save_cursor);
+        expect(program[7].kind == rtty::command_kind::move_to_left);
+        expect(program[7].row.index() == std::size_t{4});
+        expect(program[8].kind == rtty::command_kind::clear_line);
+        expect(program[11].kind == rtty::command_kind::restore_cursor);
+    };
+
+    "append block prints complete lines and leaves cursor on the next row"_test = [] {
+        auto partition =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
+
+        auto program = rtty::append_block<rtty::command_list_backend>(
+            partition, "FIRST\nSECOND");
+        expect(program.size() == std::size_t{5});
+        expect(program[0].kind == rtty::command_kind::reset_graphics);
+        expect(program[1].kind == rtty::command_kind::text);
+        expect(program[1].text == "FIRST");
+        expect(program[2].kind == rtty::command_kind::line_feed);
+        expect(program[3].kind == rtty::command_kind::text);
+        expect(program[3].text == "SECOND");
+        expect(program[4].kind == rtty::command_kind::line_feed);
+    };
+
+    "ansi backend renders the same initial repartition"_test = [] {
+        ansi::mode = ansi::Mode::enabled;
+        auto partition =
+            rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
+        auto program = rtty::emit_repartition<rtty::ansi_string_backend>(
+            rtty::repartition::initial(partition));
+
+        expect(program == "\x1b[0m\x1b[2S\x1b[2A\x1b"
+                          "7\x1b[1;4r\x1b"
+                          "8");
+    };
+};
 
 // ============================================================================
 // Compositor tests
@@ -359,8 +499,8 @@ suite hud_tests = [] {
                 "",
                 "",
                 "",
-                "",
                 "PROMPT command",
+                "",
                 "HUD-LINE-1",
                 "HUD-LINE-2",
             });
@@ -378,13 +518,7 @@ suite hud_tests = [] {
 
         set_hud_height(compositor, term, 2 * ln, 12 * ln);
 
-        first_runtime_block_at(
-            term,
-            terminal_origin_v
-                + static_cast<std::size_t>(
-                    compositor.scrollback_bottom_row())
-                    * ln,
-            "FIRST BLOCK");
+        append_runtime_block(term, compositor.partition(), "FIRST BLOCK");
 
         auto layout =
             tui::column(tui::text("HUD-LINE-1"), tui::text("HUD-LINE-2"));
@@ -398,11 +532,11 @@ suite hud_tests = [] {
                 "",
                 "",
                 "",
-                "",
                 "PROMPT row 1",
                 "PROMPT row 2",
                 "PROMPT row 3",
                 "FIRST BLOCK",
+                "",
                 "HUD-LINE-1",
                 "HUD-LINE-2",
             });
@@ -430,32 +564,63 @@ suite hud_tests = [] {
         check_display(
             term,
             {
-                "a",
                 "XXXX",
                 "YYYY",
                 "ZZ",
+                "",
                 "1hud",
                 "2hud",
             });
 
-        first_runtime_block_at(
-            term,
-            terminal_origin_v
-                + static_cast<std::size_t>(
-                    compositor.scrollback_bottom_row())
-                    * ln,
-            "1txt\n2txt");
+        append_runtime_block(term, compositor.partition(), "1txt\n2txt");
 
         check_display(
             term,
             {
-                "YYYY",
                 "ZZ",
                 "1txt",
                 "2txt",
+                "",
                 "1hud",
                 "2hud",
             });
+    };
+
+    "HUD rendering preserves the scrollback insertion cursor"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
+        vterm::Terminal term(6, 20);
+
+        move_cursor_to(term, terminal_origin_v + 5 * ln);
+        set_hud_height(compositor, term, 2 * ln, 6 * ln);
+
+        auto cursor = term.cursor();
+        expect(cursor.has_value());
+        expect(cursor->row == 3_i);
+        expect(cursor->col == 0_i);
+
+        auto layout = tui::column(tui::text("1hud"), tui::text("2hud"));
+        term.write(render_to_string(compositor, layout, {20 * ch, 2 * ln}));
+
+        cursor = term.cursor();
+        expect(cursor.has_value());
+        expect(cursor->row == 3_i);
+        expect(cursor->col == 0_i);
+
+        append_runtime_block(term, compositor.partition(), "BLOCK");
+
+        cursor = term.cursor();
+        expect(cursor.has_value());
+        expect(cursor->row == 3_i);
+        expect(cursor->col == 0_i);
+
+        auto layout2 = tui::column(tui::text("new-1"), tui::text("new-2"));
+        term.write(render_to_string(compositor, layout2, {20 * ch, 2 * ln}));
+
+        cursor = term.cursor();
+        expect(cursor.has_value());
+        expect(cursor->row == 3_i);
+        expect(cursor->col == 0_i);
     };
 
     "full screen mode when HUD equals terminal height"_test = [] {
@@ -604,13 +769,14 @@ suite hud_tests = [] {
             });
     };
 
-    "output after shrinking HUD scrolls up to existing log content"_test = [] {
+    "shrinking HUD releases rows below existing log content"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
         vterm::Terminal term(6, 20);
 
         set_hud_height(compositor, term, 3 * ln, 6 * ln);
         write_at(term, terminal_origin_v + 1 * ln, "BOTTOM");
+        move_cursor_to(term, terminal_origin_v + 2 * ln);
 
         set_hud_height(compositor, term, 2 * ln, 6 * ln);
 
@@ -618,31 +784,62 @@ suite hud_tests = [] {
             term,
             {
                 "",
-                "BOTTOM",
                 "",
+                "BOTTOM",
                 "",
                 "",
                 "",
             });
 
-        first_runtime_block_at(
-            term,
-            terminal_origin_v
-                + static_cast<std::size_t>(
-                    compositor.scrollback_bottom_row())
-                    * ln,
-            "NEXT");
+        append_runtime_block(term, compositor.partition(), "NEXT");
 
         check_display(
             term,
             {
+                "",
                 "BOTTOM",
-                "",
-                "",
                 "NEXT",
                 "",
                 "",
+                "",
             });
+    };
+
+    "hiding HUD releases its rows without erasing the final block"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
+        vterm::Terminal term(6, 20);
+
+        move_cursor_to(term, terminal_origin_v + 5 * ln);
+        set_hud_height(compositor, term, 2 * ln, 6 * ln);
+
+        auto hud = tui::column(tui::text("HUD-1"), tui::text("HUD-2"));
+        term.write(render_to_string(compositor, hud, {20 * ch, 2 * ln}));
+
+        append_runtime_block(
+            term,
+            compositor.partition(),
+            "╭──╮\n"
+            "│OK│\n"
+            "╰──╯");
+
+        set_hud_height(compositor, term, 0 * ln, 6 * ln);
+
+        check_display(
+            term,
+            {
+                "",
+                "",
+                "╭──╮",
+                "│OK│",
+                "╰──╯",
+                "",
+            });
+
+        auto cursor = term.cursor();
+        expect(cursor.has_value());
+        expect(cursor->row == 5_i);
+        expect(cursor->col == 0_i);
     };
 
     "block output newline stacks next block without spacer row"_test = [] {

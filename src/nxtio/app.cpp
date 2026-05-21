@@ -855,16 +855,6 @@ void UIRuntime::update_hud_height(height_t hud_h)
         return;
 
     compositor_->set_hud_height(hud_h, terminal_height());
-
-    if (hud_h != last_hud_height_) {
-        last_hud_height_ = hud_h;
-        if (scrollback_cursor_row_ && hud_h > 0 * ln
-            && hud_h < terminal_height()) {
-            *scrollback_cursor_row_ = compositor_->scrollback_bottom_row();
-            scrollback_cursor_needs_move_ = true;
-            scrollback_cursor_on_blank_ = true;
-        }
-    }
 }
 
 void UIRuntime::enqueue_output(QueuedOutput output)
@@ -931,43 +921,23 @@ void UIRuntime::write_output(
         return;
     }
 
-    auto hud_h = compositor_->hud_height();
-    auto term_h = terminal_height();
+    const auto & partition = compositor_->partition();
 
-    if (hud_h == 0 * ln) {
-        if (!scrollback_has_output_)
-            out << '\n';
-        out << block_text;
+    if (partition.hidden()) {
+        auto buf =
+            regional_tty::append_block<regional_tty::ansi_string_backend>(
+                partition, block_text);
+        out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
         scrollback_has_output_ = true;
         return;
     }
 
-    // No scroll region in full-screen mode.
-    if (hud_h > 0 * ln && hud_h >= term_h)
+    if (!partition.windowed())
         return;
 
-    auto scroll_bottom = compositor_->scrollback_bottom_row();
-
-    std::string buf;
-    ansi::Writer w(buf);
-    if (!scrollback_cursor_row_)
-        scrollback_cursor_row_ = scroll_bottom;
-    if (scrollback_cursor_needs_move_) {
-        w.move_to(
-            Pos::at(
-                0 * ch,
-                static_cast<std::size_t>(*scrollback_cursor_row_) * ln));
-        scrollback_cursor_needs_move_ = false;
-    }
-    w.reset();
-    if (!scrollback_cursor_on_blank_)
-        w.text("\n");
-    w.text(block_text);
-
+    auto buf = regional_tty::append_block<regional_tty::ansi_string_backend>(
+        partition, block_text);
     out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-    if (scrollback_cursor_row_)
-        *scrollback_cursor_row_ = scroll_bottom;
-    scrollback_cursor_on_blank_ = false;
     scrollback_has_output_ = true;
 }
 
@@ -1038,8 +1008,6 @@ nxt::task<> UIRuntime::signal_loop()
 
             case SIGWINCH:
                 if (refresh_terminal_size()) {
-                    scrollback_cursor_row_.reset();
-                    scrollback_cursor_needs_move_ = true;
                     co_await resize_queue_.push(terminal_size());
                     signal_damage();
                 }

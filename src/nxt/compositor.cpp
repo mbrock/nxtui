@@ -2,9 +2,9 @@
 #include "nxt/ansi.hpp"
 #include "nxt/raster-diff.hpp"
 
-#include <algorithm>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,63 +12,28 @@
 namespace nxt::ui {
 namespace {
 
+namespace rtty = nxt::regional_tty;
+
 [[nodiscard]] int row_index(const row_t row)
 {
     return static_cast<int>((row - terminal_origin_v).count());
 }
 
-[[nodiscard]] int row_count(const height_t rows)
-{
-    return static_cast<int>(rows.count());
-}
-
-[[nodiscard]] height_t lines(const int count)
-{
-    return static_cast<std::size_t>(count) * ln;
-}
-
-[[nodiscard]] bool has_windowed_hud(
+[[nodiscard]] rtty::screen_partition partition_for(
     const height_t hud_height, const height_t term_height)
 {
-    return hud_height > 0 * ln && hud_height < term_height;
-}
-
-[[nodiscard]] row_t hud_start_row_for(
-    const height_t hud_height, const height_t term_height)
-{
-    if (has_windowed_hud(hud_height, term_height))
-        return terminal_origin_v + (term_height - hud_height);
-    if (hud_height > 0 * ln)
-        return terminal_origin_v + 0 * ln;
-    return terminal_origin_v + term_height;
-}
-
-[[nodiscard]] row_t scroll_bottom_for(
-    const height_t hud_height, const height_t term_height)
-{
-    if (has_windowed_hud(hud_height, term_height))
-        return hud_start_row_for(hud_height, term_height) - 1 * ln;
-    return hud_start_row_for(hud_height, term_height) - 1 * ln;
+    return rtty::screen_partition::for_bottom_fixed_height(
+        term_height, hud_height);
 }
 
 [[nodiscard]] height_t raster_height_for(
-    const height_t hud_height, const height_t term_height)
+    const rtty::screen_partition & partition)
 {
-    if (hud_height == 0 * ln)
+    if (partition.hidden())
         return 0 * ln;
-    if (has_windowed_hud(hud_height, term_height))
-        return hud_height;
-    return term_height;
-}
-
-[[nodiscard]] int chrome_start_row_for(
-    const height_t hud_height, const height_t term_height)
-{
-    if (has_windowed_hud(hud_height, term_height))
-        return row_index(hud_start_row_for(hud_height, term_height));
-    if (hud_height > 0 * ln)
-        return 0;
-    return row_count(term_height);
+    if (partition.windowed())
+        return partition.bottom_fixed.height();
+    return partition.terminal.height();
 }
 
 void write_terminal_text(ansi::Writer & w, std::string_view text)
@@ -90,130 +55,6 @@ void write_terminal_text(ansi::Writer & w, std::string_view text)
     }
 }
 
-struct HudGeometryChange
-{
-    height_t old_hud_height;
-    height_t old_term_height;
-    height_t new_hud_height;
-    height_t new_term_height;
-    bool old_windowed = false;
-    bool new_windowed = false;
-    int old_scroll_bottom = -1;
-    int new_scroll_bottom = -1;
-    bool initial_geometry = false;
-};
-
-HudGeometryChange describe_hud_change(
-    height_t old_hud_height,
-    height_t old_term_height,
-    height_t new_hud_height,
-    height_t new_term_height,
-    bool geometry_initialized)
-{
-    auto old_windowed =
-        has_windowed_hud(old_hud_height, old_term_height);
-    auto new_windowed =
-        has_windowed_hud(new_hud_height, new_term_height);
-    return HudGeometryChange{
-        .old_hud_height = old_hud_height,
-        .old_term_height = old_term_height,
-        .new_hud_height = new_hud_height,
-        .new_term_height = new_term_height,
-        .old_windowed = old_windowed,
-        .new_windowed = new_windowed,
-        .old_scroll_bottom =
-            old_windowed
-                ? row_index(
-                    scroll_bottom_for(old_hud_height, old_term_height))
-                : -1,
-        .new_scroll_bottom =
-            new_windowed
-                ? row_index(
-                    scroll_bottom_for(new_hud_height, new_term_height))
-                : -1,
-        .initial_geometry = !geometry_initialized,
-    };
-}
-
-void reserve_scrollback_space_for_hud(
-    ansi::Writer & wr,
-    const HudGeometryChange & change)
-{
-    if (change.initial_geometry) {
-        if (change.new_windowed) {
-            // On process start, the shell command that launched us is already
-            // history, but it may still occupy wrapped rows just above the
-            // cursor. The current cursor row is the fresh line created by
-            // pressing Enter, so only rows above that need to be moved out
-            // from under the HUD.
-            auto reserved_rows =
-                std::max(0, row_count(change.new_hud_height) - 1);
-            wr.scroll_up(lines(reserved_rows));
-        }
-        return;
-    }
-
-    if (!change.old_windowed && change.new_windowed) {
-        // Re-entering the HUD after it was fully hidden happens after live
-        // scrollback blocks have already been emitted. Those blocks may occupy
-        // the terminal's bottom rows, so reserve the whole incoming HUD area.
-        wr.scroll_up(change.new_hud_height);
-        return;
-    }
-
-    if (!change.old_windowed || !change.new_windowed
-        || change.new_scroll_bottom >= change.old_scroll_bottom)
-        return;
-
-    auto scroll_diff =
-        change.old_scroll_bottom - change.new_scroll_bottom;
-    wr.move_to(Pos::at(0 * ch, lines(change.old_scroll_bottom)));
-    wr.scroll_up(lines(scroll_diff));
-}
-
-void apply_scroll_region(
-    ansi::Writer & wr,
-    const HudGeometryChange & change,
-    row_t & hud_start_row)
-{
-    hud_start_row = hud_start_row_for(
-        change.new_hud_height, change.new_term_height);
-
-    if (!change.new_windowed) {
-        wr.reset_scroll_region();
-        return;
-    }
-
-    wr.set_scroll_region(
-        terminal_origin_v + 0 * ln,
-        scroll_bottom_for(change.new_hud_height, change.new_term_height));
-}
-
-void clear_chrome_rows(
-    ansi::Writer & wr,
-    const HudGeometryChange & change)
-{
-    if (change.initial_geometry)
-        return;
-
-    int clear_start = std::min(
-        chrome_start_row_for(
-            change.old_hud_height, change.old_term_height),
-        chrome_start_row_for(
-            change.new_hud_height, change.new_term_height));
-    if (change.old_term_height == 0 * ln)
-        clear_start = chrome_start_row_for(
-            change.new_hud_height, change.new_term_height);
-    clear_start =
-        std::clamp(clear_start, 0, row_count(change.new_term_height));
-
-    for (int row = clear_start; row < row_count(change.new_term_height);
-         ++row) {
-        wr.move_to(Pos::at(0 * ch, static_cast<std::size_t>(row) * ln));
-        wr.clear_line();
-    }
-}
-
 } // namespace
 
 TerminalCompositor::TerminalCompositor(
@@ -221,9 +62,7 @@ TerminalCompositor::TerminalCompositor(
     : front_(size.w, size.h, glyphs)
     , back_(size.w, size.h, glyphs)
     , glyphs_(glyphs)
-    , hud_height_(size.h)
-    , term_height_(size.h)
-    , hud_start_row_(terminal_origin_v + 0 * ln)
+    , partition_(partition_for(size.h, size.h))
 {
 }
 
@@ -231,7 +70,9 @@ void TerminalCompositor::resize(nxt::Size size)
 {
     // In HUD mode, the raster only covers HUD rows; fullscreen layouts use
     // the whole terminal.
-    auto raster_h = raster_height_for(hud_height_, size.h);
+    auto resized_partition =
+        partition_for(partition_.bottom_fixed.height(), size.h);
+    auto raster_h = raster_height_for(resized_partition);
     front_ = Raster(size.w, raster_h, glyphs_);
     back_ = Raster(size.w, raster_h, glyphs_);
 
@@ -244,14 +85,14 @@ void TerminalCompositor::resize(nxt::Size size)
     ansi::Writer w(buf);
     w.save_cursor();
 
-    if (has_windowed_hud(hud_height_, size.h)) {
-        auto end_row = terminal_origin_v + size.h;
-        auto start_row = hud_start_row_for(hud_height_, size.h);
-        for (auto row = start_row; row < end_row; row += 1 * ln) {
+    if (resized_partition.windowed()) {
+        for (auto row = resized_partition.bottom_fixed.top;
+             row < resized_partition.bottom_fixed.bottom_exclusive;
+             row += 1 * ln) {
             w.move_to(Pos{terminal_origin + 0 * ch, row});
             w.clear_line();
         }
-    } else if (hud_height_ > 0 * ln) {
+    } else if (resized_partition.fullscreen()) {
         w.clear_screen();
     }
 
@@ -279,57 +120,46 @@ void TerminalCompositor::set_hud_height(
 void TerminalCompositor::set_hud_height(
     height_t hud_height, height_t term_height, std::ostream & out)
 {
-    auto new_hud_height = std::min(hud_height, term_height);
-    if (new_hud_height == hud_height_ && term_height == term_height_)
+    auto next_partition = partition_for(hud_height, term_height);
+    if (next_partition == partition_)
         return;
 
-    auto old_term_height = term_height_;
-    auto old_hud_height = hud_height_;
-    auto change = describe_hud_change(
-        old_hud_height,
-        old_term_height,
-        new_hud_height,
-        term_height,
-        geometry_initialized_);
+    auto change = geometry_initialized_
+                      ? rtty::repartition::from(partition_, next_partition)
+                      : rtty::repartition::initial(next_partition);
 
-    hud_height_ = new_hud_height;
-    term_height_ = term_height;
-
-    // Calculate where the HUD starts
-    // Note: DECSTBM (set scroll region) moves cursor to home, so
-    // save/restore
     {
-        std::string buf;
-        ansi::Writer wr(buf);
-        wr.save_cursor();
-        wr.reset();
-
-        reserve_scrollback_space_for_hud(wr, change);
-        apply_scroll_region(wr, change, hud_start_row_);
-        clear_chrome_rows(wr, change);
-
-        wr.restore_cursor();
+        auto buf = rtty::emit_repartition<rtty::ansi_string_backend>(change);
         out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
         out.flush();
     }
 
+    partition_ = next_partition;
     geometry_initialized_ = true;
 
     // Resize rasters to match HUD height
     auto raster_w = front_.width();
-    auto raster_h = raster_height_for(new_hud_height, term_height);
+    auto raster_h = raster_height_for(partition_);
     front_ = Raster(raster_w, raster_h, glyphs_);
     back_ = Raster(raster_w, raster_h, glyphs_);
 }
 
 height_t TerminalCompositor::hud_height() const noexcept
 {
-    return hud_height_;
+    return partition_.bottom_fixed.height();
+}
+
+const regional_tty::screen_partition &
+TerminalCompositor::partition() const noexcept
+{
+    return partition_;
 }
 
 int TerminalCompositor::scrollback_bottom_row() const noexcept
 {
-    return row_index(scroll_bottom_for(hud_height_, term_height_));
+    if (!partition_.scroll)
+        return -1;
+    return row_index(partition_.scroll->bottom_margin());
 }
 
 Raster & TerminalCompositor::back_buffer() noexcept
@@ -362,10 +192,8 @@ void TerminalCompositor::present_frame(std::ostream & out)
     // Save cursor so HUD rendering doesn't disturb log output position
     w.save_cursor();
 
-    // Offset for HUD mode: raster row 0 maps to hud_start_row_ on
-    // terminal hud_start_row_ is a row_t (point), subtract origin to get
-    // quantity offset
-    auto row_offset = hud_start_row_ - terminal_origin_v;
+    // Offset for HUD mode: raster row 0 maps to the partition chrome start.
+    auto row_offset = partition_.chrome_start() - terminal_origin_v;
 
     // Track current colors to re-emit after SGR reset
     std::optional<Rgba8> current_fg;

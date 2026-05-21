@@ -1,0 +1,243 @@
+
+* Terminal HUD
+
+Some thoughts about domain model concepts for the HUD TUI paradigm...
+
+When we start our system, the terminal is already there, the cursor is
+somewhere, etc.  Probably the cursor is on the left margin, but we
+should probably make sure.  Then we have some kind of known state.
+
+Then, OK, we remain aware of the terminal's dimensions.
+
+The SIGWINCH or whatever tells us about that -- but asynchronously, so
+it's not actually fully reliable, and this may cause some glitches,
+but resizing isn't THAT common, and it'll be a bit weird whatever we
+do.  However it is cool to note that a new mode supported at least by
+Ghostty helps.  Digression, to some extent, but see [[*In-band Resize][In-band Resize]].
+
+What does our system do?
+
+It renders a HUD region at the bottom of the terminal, and this region
+grows and shrinks, it can go to zero, it can go to full screen
+probably.  It is rendered by replacing it, although we use diffing to
+minimize the bytes.
+
+It also appends lines to the scroll region above the HUD region.  That
+is an error-prone operation, currently.  We don't have the right
+structure for it.
+
+So there is a TERMINAL.
+
+The TERMINAL has a SCROLL REGION and a FIXED REGION.
+
+The scroll region of the terminal is configured by setting the TOP
+MARGIN and BOTTOM MARGIN parameters (=DECSTBM=).
+
+When =DECSTBM= changes the margins, it also moves the CURSOR POSITION
+to HOME.  Without DECOM, HOME is row 1 / column 1 of the whole
+terminal.  With DECOM, HOME is the top-left of the scroll region.
+This means changing the scroll region is not cursor-neutral and must
+be treated as a cursor-clobbering operation.
+
+The TOP MARGIN and BOTTOM MARGIN parameters are in the 1-based affine
+space we call ANSI 1-COORDINATES (=ansi_row_t=).
+
+The initial default TOP MARGIN is equal to the ANSI VERTICAL ORIGIN.
+
+The initial default BOTTOM MARGIN is equal to the TERMINAL HEIGHT.
+
+We used to have actually different types for ANSI 1-coordinates and
+0-coordinates, using =mp-units=, but tragically, we collapsed them
+into a single type with =using= aliases; this should be fixed.
+
+We could have an actual reified concept for a VERTICAL REGION.
+
+The SCROLL REGION and the FIXED REGION would be VERTICAL REGIONS.
+
+The FIXED REGION is the vertical region that is not the SCROLL REGION.
+
+In principle, we should have _two_ fixed regions.  But we only have
+one, and it's BELOW the scroll region, for now.
+
+The vertical regions form a PARTITION of the TERMINAL EXTENTS.
+
+The terminal conventions treat the SCROLL REGION as the thing you
+explicitly configure, and the FIXED REGIONs are implicitly the SCROLL
+REGION's COMPLEMENT.
+
+But our system primarily knows its intended BOTTOM FIXED REGION
+HEIGHT, and wants the SCROLL REGION to accomodate that precisely.
+
+The SCROLL REGION has the marvelous ability to SCROLL.
+
+One way to SCROLL the SCROLL REGION is with the SCROLL UP COMMAND and
+the SCROLL DOWN COMMAND, alternatively considered a single SCROLL
+COMMAND with signed number of rows.
+
+When the SCROLL REGION exists, the SCROLL COMMAND scrolls its contents
+by creating new blank rows at its bottom, and shifting rows at its top
+into the SCROLL BUFFER, which is the invisible stack of rows
+conceptually located above the SCROLL REGION's top, such that the
+SCROLL COMMAND when scrolling DOWN takes those rows back into the
+SCROLL REGION.
+
+The SCROLL COMMAND has no effect on the CURSOR POSITION.
+
+Another way to cause SCROLLING is by writing a LINE FEED to the BOTTOM
+ROW of the SCROLL REGION, which causes a one-row SCROLL UP, leaving
+the cursor in the BOTTOM ROW, and most likely in the LEFTMOST COLUMN.
+
+When you SCROLL DOWN by =n= rows, the bottom =n= rows of the SCROLL
+REGION vanish forever.  If =n= exceeds the SCROLL REGION HEIGHT, you
+start dropping the bottom rows of the SCROLL BUFFER.
+
+In order to change the BOTTOM FIXED REGION HEIGHT, we must first
+SCROLL.  By scrolling before altering the SCROLL REGION EXTENTS, we
+can ensure that the FIXED REGION remains snugly and correctly joined.
+
+To insert content in the SCROLL REGION, we can simply MOVE THE CURSOR
+to somewhere inside of it and PRINT TEXT, including LINE FEEDs.
+
+Currently the system always inserts scroll region content lines at the
+BOTTOM of the scroll region.  But this is not a law.  In fact it is
+suboptimal.  It would be better to distinguish the SCROLL REGION
+BOTTOM MARGIN from the SCROLL REGION INSERTION TARGET or something.
+This target would be initialized to the CURSOR POSITION when starting
+the system, and then maintained in a particular way.
+
+This would let our scroll region output simply follow the existing
+terminal cursor which would initially be right below the shell prompt
+that started our program.
+
+The way to maintain the INSERTION TARGET properly is, I suspect, to
+just keep the CURSOR POSITION right there, meaning that when updating
+the FIXED REGION contents, keeping its height the same, we would
+always SAVE and RESTORE the CURSOR POSITION.
+
+When changing the BOTTOM FIXED REGION HEIGHT, thereby changing the
+SCROLL REGION BOTTOM MARGIN, however, we must preserve the insertion
+cursor deliberately.  If the fixed region grows, reserve rows with
+SCROLL UP and move the cursor up by the same amount.  If the fixed
+region shrinks, release rows with SCROLL DOWN and move the cursor down
+by the same amount.  Around the actual =DECSTBM= change, SAVE CURSOR
+and RESTORE CURSOR because =DECSTBM= itself moves the cursor home.
+
+That is, we do not recompute the insertion target from the new bottom
+margin.  The insertion target is still the cursor; repartition only
+translates it by the same relative amount as the visible scrollback
+viewport.
+
+For now we should not rely on DECOM while doing this.  It may later be
+useful as a backend detail, but the domain model should not depend on
+origin-mode behavior while changing margins.
+
+I believe that if we take basically these concepts, as nouns and
+verbs, and encode them as semantically lucid operations on a simple
+domain object, the code will become much easier to understand and
+modify correctly.
+
+
+** In-band Resize
+
+In-Band Resize (Mode 2048) is a DECSET/DECRST mode that causes the
+terminal to report size changes as escape sequences in the input
+stream, providing a deterministic alternative to the SIGWINCH signal.
+
+ - CSI ? 2048 h    DECSET — Enable in-band resize notifications
+ - CSI ? 2048 l    DECRST — Disable in-band resize notifications
+
+ - DECSET-mode2048 = 0x1b, "[", "?", "2", "0", "4", "8", "h" ;
+ - DECRST-mode2048 = 0x1b, "[", "?", "2", "0", "4", "8", "l" ;
+
+Mode 2048 provides a mechanism for the terminal to report resize
+events directly in the input stream, alongside regular keyboard and
+mouse input. This solves fundamental problems with the traditional
+SIGWINCH-based approach to terminal resize notification.
+
+Set — The terminal sends a resize report in the input stream whenever
+the terminal dimensions change.
+
+Reset — Resize events are not reported in-band. The application relies
+on SIGWINCH. This is the default.
+
+When the terminal is resized and Mode 2048 is enabled, the terminal
+sends:
+
+  CSI 8 ; rows ; cols t
+
+Where:
+
+  - rows is the new height in character rows
+  - cols is the new width in character columns
+
+This is the same format as the DTTERM window manipulation response for
+"report terminal size in characters."
+
+*** Problems with SIGWINCH
+
+The traditional Unix mechanism for resize notification is the SIGWINCH
+signal. While widely supported, it has several limitations:
+
+ - Not in-band — SIGWINCH is delivered asynchronously and out-of-band
+   relative to the input stream. The application cannot determine
+   exactly where in its input processing the resize occurred.
+ - Lost through SSH — When running over SSH, SIGWINCH must be
+   forwarded by the SSH client. This introduces latency and can be
+   unreliable, especially through multiple SSH hops.
+ - Lost through multiplexers — Terminal multiplexers must translate
+   outer resize events to inner pane resizes, and the signal path can
+   be lossy.
+ - Race conditions — If multiple resizes happen quickly, intermediate
+   SIGWINCH signals may be coalesced, and the application may miss
+   intermediate sizes. The application must query the terminal size
+   separately using an ioctl, which may return a stale value.
+
+*** Advantages of in-band resize
+ - Deterministic — The resize notification arrives in sequence with
+   other input, so the application knows exactly when in the input
+   stream the resize occurred.
+ - Reliable through SSH and multiplexers — The notification travels
+   through the same data channel as regular terminal I/O, so it cannot
+   be lost in translation.
+ - No race conditions — Each resize produces a distinct notification
+   with the exact new dimensions. No separate ioctl query is needed.
+
+*** Typical usage
+Applications that enable Mode 2048 can process resize notifications in
+their main input loop alongside keyboard and mouse events, rather than
+needing a separate signal handler. This simplifies application
+architecture, especially in event-loop-based designs.
+
+Applications should still handle SIGWINCH as a fallback for terminals
+that do not support Mode 2048. The two mechanisms can coexist safely.
+
+> # Query Mode 2048 support via DECRPM:
+> printf '\e[?2048$p'
+> # Response: CSI ? 2048 ; Ps $ y
+> #   Ps=1: set, Ps=2: reset, Ps=0: not recognized
+
+** Origin Mode
+
+DECOM, DEC origin mode, changes cursor addressing so that drawing
+coordinates are relative to the active scrolling region rather than to
+the whole terminal.
+
+This is attractive for applications that live entirely inside one
+scrolling region: once the SCROLL REGION is configured, the application
+can draw in the region's local coordinate system and stop manually
+adding the TOP MARGIN everywhere.
+
+Our HUD model is trickier.  We draw in two spaces:
+
+ - SCROLL REGION insertion, which ideally does not use coordinates at
+   all.  The cursor is already the INSERTION TARGET.  To insert a
+   block, print each line and finish each line with LINE FEED.
+ - FIXED REGION painting, which deliberately addresses rows outside
+   the SCROLL REGION.
+
+So DECOM may still become useful, but it should probably be a backend
+detail around a clearly modeled operation, not a hidden global premise.
+If enabled while painting the HUD, absolute row addressing becomes less
+obvious rather than more obvious.  A lucid model should first say which
+region an operation belongs to, and then the ANSI backend can decide
+whether DECOM makes that operation simpler.
