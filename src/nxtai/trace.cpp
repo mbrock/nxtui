@@ -59,7 +59,7 @@ void response_trace::record_event(const responses::stream_event & event)
     if (!enabled())
         return;
 
-    trace_.add("sse_event", event.type, event.raw, event.raw);
+    trace_.add("sse_event", event.type, event.data, event.data);
 }
 
 void response_trace::record_marker(std::string phase, std::string data)

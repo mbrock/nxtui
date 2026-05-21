@@ -368,7 +368,7 @@ suite llm_tests = [] {
         expect(layout.height_hint().min == 1 * ln);
     };
 
-    "openai responses stream emits parsed sse json events"_test = [] {
+    "openai responses stream emits raw sse json events"_test = [] {
         auto sse =
             "event: response.output_text.delta\n"
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Ok\"}\n"
@@ -407,9 +407,49 @@ suite llm_tests = [] {
 
         expect(events.size() == 2_ul);
         expect(events[0].type == "response.output_text.delta");
-        expect(events[0].payload.delta == "Ok");
+        expect(events[0].data == "{\"type\":\"response.output_text.delta\",\"delta\":\"Ok\"}");
         expect(events[1].type == "response.completed");
         expect(transport.written().starts_with("POST /v1/responses HTTP/1.1\r\n"));
+    };
+
+    "openai responses stream leaves event data unparsed"_test = [] {
+        auto sse =
+            "event: response.output_text.delta\n"
+            "data: not-json\n"
+            "\n"
+            "data: [DONE]\n"
+            "\n"s;
+
+        auto response =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            "Content-Length: "
+            + std::to_string(sse.size()) + "\r\n\r\n" + sse;
+        auto chunks = std::array{std::string_view{response}};
+        nxt::io::string_transport transport{std::span{chunks}};
+
+        auto request = nxt::ai::responses::openai_responses_request{
+            .api_key = "test-key",
+            .model = "gpt-5-mini",
+            .input = "Say ok.",
+            .input_items = nlohmann::json::array(),
+            .tools = nlohmann::json::array(),
+            .include = nlohmann::json::array(),
+            .previous_response_id = {},
+            .max_output_tokens = 64,
+            .reasoning_summary = "",
+        };
+
+        auto event = nxt::sync_wait([&]()
+            -> nxt::task<std::optional<nxt::ai::responses::stream_event>> {
+            auto stream = nxt::ai::responses::openai_response_stream<
+                nxt::io::string_transport>{transport};
+            co_await stream.connect(request);
+            co_return co_await stream.next();
+        }());
+
+        expect(event.has_value());
+        expect(event->type == "response.output_text.delta");
+        expect(event->data == "not-json");
     };
 };
 

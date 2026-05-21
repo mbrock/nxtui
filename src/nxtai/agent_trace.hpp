@@ -67,7 +67,7 @@ inline void record_llm_event(
     row.phase = "llm";
     row.event_type = event.type;
     row.data = event.type;
-    row.payload_json = event.raw;
+    row.payload_json = event.data;
     stamp_with_span(self, row);
     trace.add(std::move(row));
 }

@@ -57,10 +57,8 @@ struct stream_event
 {
     /// SSE event type, such as `response.output_item.added`.
     std::string type;
-    /// Typed view of the JSON payload from the event's `data` field.
-    openai::response_event_payload payload;
     /// Original unparsed `data` field text.
-    std::string raw;
+    std::string data;
 };
 
 /// Return the structured input array represented by a request.
@@ -83,15 +81,14 @@ input_items_from_request(const openai_responses_request & request)
 [[nodiscard]] inline std::optional<std::string>
 response_id_from_event(const stream_event & event)
 {
-    if (openai::has_json(event.payload.response)) {
-        auto response = openai::parse_response_ref(event.payload.response);
-        if (!response.id.empty())
-            return response.id;
-    }
+    if (event.type != "response.created"
+        && event.type != "response.in_progress"
+        && event.type != "response.completed"
+        && event.type != "response.failed"
+        && event.type != "response.incomplete")
+        return std::nullopt;
 
-    if (!event.payload.response_id.empty())
-        return event.payload.response_id;
-    return std::nullopt;
+    return openai::response_id_from_event_data(event.data);
 }
 
 /// Serialize a request into a JSON body for `POST /v1/responses`.
@@ -228,23 +225,13 @@ public:
                 co_return std::nullopt;
             }
 
-            openai::response_event_payload payload;
-            try {
-                payload = openai::parse_response_event_payload(sse->data);
-            } catch (const std::exception & e) {
-                throw protocol_error{
-                    "OpenAI Responses stream sent invalid JSON: "
-                    + std::string{e.what()}};
-            }
-
             auto terminal = sse->type == "response.completed"
                             || sse->type == "response.incomplete"
                             || sse->type == "response.failed";
 
             auto event = stream_event{
                 .type = std::move(sse->type),
-                .payload = std::move(payload),
-                .raw = std::move(sse->data),
+                .data = std::move(sse->data),
             };
 
             if (terminal)

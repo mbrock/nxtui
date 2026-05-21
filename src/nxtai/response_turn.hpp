@@ -416,7 +416,7 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
 
     while (auto event = co_await nxt::next(stream)) {
         if (agent::is_event(*event, delta_event_type)) {
-            auto delta = event->payload.delta;
+            auto delta = openai::delta_from_event_data(event->data);
             if (!delta.empty()) {
                 text += delta;
                 for_complete_words(text, false, append_segment);
@@ -487,7 +487,16 @@ nxt::task<output_item_result> read_output_item(
     const stream_event & first,
     hud_blocks::State * hud = nullptr)
 {
-    auto type = agent::output_item_type(first);
+    auto first_event = openai::lazy_event(first.data);
+    auto first_item_view = openai::item_view(*first_event);
+    auto type = std::string{};
+    auto first_item = std::optional<openai::raw_json>{};
+    if (first_item_view) {
+        type = openai::read_view<openai::response_output_item_header>(
+                   first_item_view)
+                   .type;
+        first_item = openai::raw_json_from(first_item_view);
+    }
 
     if (type == "reasoning") {
         co_return output_item_result{
@@ -508,7 +517,7 @@ nxt::task<output_item_result> read_output_item(
     }
 
     if (type == "function_call") {
-        auto item = agent::output_item_from_event(first);
+        auto item = std::move(first_item);
         while (auto event = co_await nxt::next(stream)) {
             if (agent::is_event(*event, "response.output_item.done")) {
                 if (auto done_item = agent::output_item_from_event(*event))
@@ -528,7 +537,7 @@ nxt::task<output_item_result> read_output_item(
 
     self.draw(nxt::tui::text("Reading item..."));
 
-    auto item = agent::output_item_from_event(first);
+    auto item = std::move(first_item);
     while (auto event = co_await nxt::next(stream)) {
         if (agent::is_event(*event, "response.output_item.done")) {
             if (auto done_item = agent::output_item_from_event(*event))

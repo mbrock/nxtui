@@ -66,18 +66,7 @@ is_event(const responses::stream_event & event, std::string_view type)
 [[nodiscard]] inline std::optional<openai::raw_json>
 output_item_from_event(const responses::stream_event & event)
 {
-    if (openai::has_json(event.payload.item))
-        return event.payload.item;
-    return std::nullopt;
-}
-
-/// Return the output item type carried by an event, or an empty string.
-[[nodiscard]] inline std::string
-output_item_type(const responses::stream_event & event)
-{
-    if (openai::has_json(event.payload.item))
-        return openai::output_item_type(event.payload.item);
-    return {};
+    return openai::item_from_event_data(event.data);
 }
 
 /// Ask Responses to include encrypted reasoning content in output items.
