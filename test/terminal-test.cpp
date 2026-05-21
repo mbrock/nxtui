@@ -7,6 +7,7 @@
 
 #include <boost/ut.hpp>
 #include <format>
+#include <optional>
 #include <sstream>
 
 namespace nxt::test {
@@ -54,7 +55,13 @@ void set_hud_height(
 {
     ansi::mode = ansi::Mode::enabled;
     std::ostringstream out;
-    compositor.set_hud_height(hud_height, term_height, out);
+    auto cursor = term.cursor();
+    auto insertion_cursor =
+        cursor ? std::optional{terminal_origin_v
+                               + static_cast<std::size_t>(cursor->row) * ln}
+               : std::nullopt;
+    compositor.set_hud_height(
+        hud_height, term_height, out, insertion_cursor);
     term.write(out.str());
 }
 
@@ -539,6 +546,41 @@ suite hud_tests = [] {
                 "",
                 "HUD-LINE-1",
                 "HUD-LINE-2",
+            });
+    };
+
+    "initial HUD install preserves an insertion cursor above the fixed region"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 12 * ln}, glyphs);
+        vterm::Terminal term(12, 20);
+
+        write_at(term, terminal_origin_v + 2 * ln, "earlier output");
+        move_cursor_to(term, terminal_origin_v + 3 * ln);
+
+        set_hud_height(compositor, term, 2 * ln, 12 * ln);
+
+        auto cursor = term.cursor();
+        expect(cursor.has_value());
+        expect(cursor->row == 3_i);
+        expect(cursor->col == 0_i);
+
+        append_runtime_block(term, compositor.partition(), "FIRST BLOCK");
+
+        check_display(
+            term,
+            {
+                "",
+                "",
+                "earlier output",
+                "FIRST BLOCK",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
             });
     };
 

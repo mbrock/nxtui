@@ -180,14 +180,18 @@ struct repartition
 {
     std::optional<screen_partition> old{};
     screen_partition next{};
+    std::optional<row_t> insertion_cursor{};
     bool initial_attachment = false;
 
     [[nodiscard]] static constexpr repartition
-    initial(screen_partition next) noexcept
+    initial(
+        screen_partition next,
+        std::optional<row_t> insertion_cursor = std::nullopt) noexcept
     {
         return repartition{
             .old = std::nullopt,
             .next = next,
+            .insertion_cursor = insertion_cursor,
             .initial_attachment = true};
     }
 
@@ -206,9 +210,16 @@ struct repartition
             return {};
 
         if (initial_attachment) {
-            // The shell has already accepted Enter, so the cursor is on a
-            // fresh line. Reserve the whole incoming fixed region so that
-            // fresh insertion row moves to the scroll-region bottom.
+            if (insertion_cursor) {
+                auto bottom = next.scroll->bottom_margin();
+                if (*insertion_cursor > bottom)
+                    return {.rows = *insertion_cursor - bottom};
+                return {};
+            }
+
+            // Legacy fallback for callers that cannot observe the starting
+            // cursor. Most command invocations start on the terminal's fresh
+            // bottom row, so reserve the whole incoming fixed region.
             return {.rows = next.bottom_fixed.height()};
         }
 

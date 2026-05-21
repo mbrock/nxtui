@@ -114,11 +114,20 @@ void TerminalCompositor::set_hud_height(
 {
     auto guard = output_mutex_ ? std::unique_lock{*output_mutex_}
                                : std::unique_lock<std::mutex>{};
-    set_hud_height(hud_height, term_height, std::cout);
+    set_hud_height(hud_height, term_height, std::cout, std::nullopt);
 }
 
 void TerminalCompositor::set_hud_height(
     height_t hud_height, height_t term_height, std::ostream & out)
+{
+    set_hud_height(hud_height, term_height, out, std::nullopt);
+}
+
+void TerminalCompositor::set_hud_height(
+    height_t hud_height,
+    height_t term_height,
+    std::ostream & out,
+    std::optional<row_t> insertion_cursor)
 {
     auto next_partition = partition_for(hud_height, term_height);
     if (next_partition == partition_)
@@ -126,7 +135,8 @@ void TerminalCompositor::set_hud_height(
 
     auto change = geometry_initialized_
                       ? rtty::repartition::from(partition_, next_partition)
-                      : rtty::repartition::initial(next_partition);
+                      : rtty::repartition::initial(
+                            next_partition, insertion_cursor);
 
     {
         auto buf = rtty::emit_repartition<rtty::ansi_string_backend>(change);

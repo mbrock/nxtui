@@ -350,6 +350,7 @@ private:
     bool refresh_terminal_size() noexcept;
     void render_impl(std::function<void(RasterView &, Size)> render_fn);
     void update_hud_height(height_t hud_h);
+    [[nodiscard]] std::optional<row_t> query_insertion_cursor() const;
     void enqueue_output(QueuedOutput output);
     void flush_output_queue(std::ostream & out);
     void write_output(std::ostream & out, const QueuedOutput & output);

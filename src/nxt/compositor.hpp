@@ -7,6 +7,7 @@
 
 #include <iosfwd>
 #include <mutex>
+#include <optional>
 
 namespace nxt::ui {
 
@@ -32,6 +33,11 @@ public:
     void set_hud_height(height_t hud_height, height_t term_height);
     void set_hud_height(
         height_t hud_height, height_t term_height, std::ostream & out);
+    void set_hud_height(
+        height_t hud_height,
+        height_t term_height,
+        std::ostream & out,
+        std::optional<row_t> insertion_cursor);
     /// Current HUD height.
     [[nodiscard]] height_t hud_height() const noexcept;
     /// Current terminal partition owned by the compositor.

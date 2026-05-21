@@ -854,7 +854,20 @@ void UIRuntime::update_hud_height(height_t hud_h)
     if (!has_terminal_surface())
         return;
 
-    compositor_->set_hud_height(hud_h, terminal_height());
+    auto guard = std::scoped_lock{output_mutex_};
+    compositor_->set_hud_height(
+        hud_h, terminal_height(), std::cout, query_insertion_cursor());
+}
+
+std::optional<row_t> UIRuntime::query_insertion_cursor() const
+{
+    if (!has_terminal_surface())
+        return std::nullopt;
+    if (compositor_->hud_height() > 0 * ln)
+        return std::nullopt;
+    if (auto pos = ansi::query_cursor_position())
+        return pos->y;
+    return std::nullopt;
 }
 
 void UIRuntime::enqueue_output(QueuedOutput output)
