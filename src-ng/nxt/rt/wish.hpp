@@ -7,6 +7,7 @@
 #include <exception>
 #include <fcntl.h>
 #include <memory>
+#include <poll.h>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -244,6 +245,16 @@ struct connect_wish
     waiter<void> operator co_await() const;
 };
 
+struct poll_wish
+{
+    using result_type = int;
+
+    int fd = -1;
+    short events = 0;
+
+    waiter<int> operator co_await() const;
+};
+
 /// Backend interface for staged platform/event-loop machinery.
 ///
 /// `prepare()` is called synchronously while a coroutine is running. It can
@@ -284,6 +295,11 @@ public:
         deck & d,
         detail::promise_base & promise,
         connect_wish wish) = 0;
+
+    virtual waiter<int> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        poll_wish wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void wave(deck & d) = 0;

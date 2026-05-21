@@ -72,6 +72,14 @@ struct manual_wand final : nxt::rt::wand
         throw std::runtime_error{"manual_wand does not implement connect"};
     }
 
+    nxt::rt::waiter<int> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::poll_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement poll"};
+    }
+
     void suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
     {
         parked.push_back(

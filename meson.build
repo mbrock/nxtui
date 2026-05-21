@@ -306,5 +306,15 @@ if get_option('tests')
       dependencies : [nxt_test_liburing_dep],
     )
     test('ng-uring-wand-test', nxt_ng_uring_wand_test)
+
+    nxt_test_cares_dep = dependency('libcares', required : false)
+    if nxt_test_cares_dep.found()
+      nxt_ng_cares_test = executable('ng-cares-test',
+        'test/ng-cares-test.cpp',
+        include_directories : nxt_ng_inc,
+        dependencies : [nxt_test_liburing_dep, nxt_test_cares_dep],
+      )
+      test('ng-cares-test', nxt_ng_cares_test)
+    endif
   endif
 endif

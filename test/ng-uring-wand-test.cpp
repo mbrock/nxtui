@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <netinet/in.h>
+#include <poll.h>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -76,6 +77,21 @@ nxt::rt::task<std::string> echo_over_socketpair(int tx, int rx)
         throw std::runtime_error{"socket recv reached eof"};
 
     co_return std::string{nxt::rt::as_string_view(*chunk)};
+}
+
+nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
+{
+    auto message = std::string_view{"x"};
+    auto sent = co_await nxt::rt::send_some(tx, nxt::rt::as_bytes(message));
+    if (sent != message.size())
+        throw std::runtime_error{"short poll smoke send"};
+
+    auto revents = co_await nxt::rt::poll_wish{
+        .fd = rx,
+        .events = POLLIN,
+    };
+    if ((revents & POLLIN) == 0)
+        throw std::runtime_error{"poll did not report readable socket"};
 }
 
 nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
@@ -170,6 +186,22 @@ try {
         auto echoed = pump_until_done(deck, wand, task);
         if (echoed != "socket wish smoke")
             throw std::runtime_error{"socket echo mismatch"};
+    }
+
+    {
+        auto sockets = std::array<int, 2>{-1, -1};
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+            throw std::runtime_error{"socketpair failed"};
+
+        auto first = unique_fd{sockets[0]};
+        auto second = unique_fd{sockets[1]};
+
+        auto deck = nxt::rt::deck{};
+        auto wand = nxt::rt::uring_wand{};
+        auto task = poll_after_socket_send(first.get(), second.get());
+
+        deck.start(task);
+        pump_until_done(deck, wand, task);
     }
 
     {

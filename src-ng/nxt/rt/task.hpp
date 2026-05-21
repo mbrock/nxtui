@@ -480,6 +480,20 @@ inline waiter<void> connect_wish::operator co_await() const
     return active_wand->prepare(*active_deck, *running, *this);
 }
 
+inline waiter<int> poll_wish::operator co_await() const
+{
+    auto * active_deck = detail::current_deck;
+    auto * active_wand = detail::current_wand;
+    auto * running = detail::current_promise;
+    if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
+        throw std::runtime_error{
+            "nxt::rt poll wish awaited without a running wand"};
+
+    trace("wish poll prepare fd=" + std::to_string(fd)
+        + " events=" + std::to_string(events));
+    return active_wand->prepare(*active_deck, *running, *this);
+}
+
 struct yield_awaiter
 {
     /// Yielding always suspends so the coroutine returns to the pump.
