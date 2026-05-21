@@ -5,6 +5,7 @@
 #include <nxtio/async.hpp>
 #include <nxtio/http.hpp>
 
+#include <glaze/glaze_exceptions.hpp>
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -59,6 +60,15 @@ struct stream_event
     std::string type;
     /// Original unparsed `data` field text.
     std::string data;
+
+    /// Read the event's JSON data into one typed payload projection.
+    template<typename T, auto Opts = openai::json_read_opts>
+    [[nodiscard]] T read() const
+    {
+        auto payload = T{};
+        glz::ex::read<Opts>(payload, data);
+        return payload;
+    }
 };
 
 /// Return the structured input array represented by a request.
@@ -75,20 +85,6 @@ input_items_from_request(const openai_responses_request & request)
             {"content", request.input},
         });
     return input;
-}
-
-/// Extract a response id from events that carry one.
-[[nodiscard]] inline std::optional<std::string>
-response_id_from_event(const stream_event & event)
-{
-    if (event.type != "response.created"
-        && event.type != "response.in_progress"
-        && event.type != "response.completed"
-        && event.type != "response.failed"
-        && event.type != "response.incomplete")
-        return std::nullopt;
-
-    return openai::response_id_from_event_data(event.data);
 }
 
 /// Serialize a request into a JSON body for `POST /v1/responses`.

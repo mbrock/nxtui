@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -72,26 +73,38 @@ function_tool_definitions(const std::vector<function_tool> & tools)
 [[nodiscard]] inline std::optional<function_call>
 function_call_from_item(const openai::raw_json & raw_item)
 {
-    if (!openai::has_json(raw_item))
+    if (raw_item.str.empty())
         return std::nullopt;
 
-    auto item = openai::parse_response_output_item(raw_item);
-    auto * function_item = std::get_if<openai::function_call_item>(&item);
-    if (function_item == nullptr)
+    auto item = openai::function_call_item{};
+    if (auto ec = glz::read<openai::json_read_opts>(item, raw_item.str))
+        throw std::runtime_error{glz::format_error(ec, raw_item.str)};
+    if (item.type != "function_call")
         return std::nullopt;
 
-    auto call_id = std::move(function_item->call_id);
-    auto name = std::move(function_item->name);
+    auto call_id = std::move(item.call_id);
+    auto name = std::move(item.name);
     if (call_id.empty() || name.empty())
         return std::nullopt;
 
     return function_call{
-        .id = std::move(function_item->id),
+        .id = std::move(item.id),
         .call_id = std::move(call_id),
         .name = std::move(name),
-        .arguments = std::move(function_item->arguments),
+        .arguments = std::move(item.arguments),
         .item = raw_item,
     };
+}
+
+/// Parse all function-call output items from a completed response.
+[[nodiscard]] inline std::vector<function_call> function_calls_from_items(
+    const std::vector<openai::raw_json> & output_items)
+{
+    auto calls = std::vector<function_call>{};
+    for (const auto & item : output_items)
+        if (auto call = function_call_from_item(item))
+            calls.push_back(std::move(*call));
+    return calls;
 }
 
 /// Build the structured input item that returns output for a function call.

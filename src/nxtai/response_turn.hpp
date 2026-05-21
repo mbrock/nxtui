@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glaze/glaze_exceptions.hpp>
+
 #include "nxt/tui.hpp"
 #include "nxt/utf8.hpp"
 #include <nxtai/agent.hpp>
@@ -19,6 +21,7 @@
 #include <format>
 #include <optional>
 #include <stop_token>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -26,10 +29,7 @@
 
 namespace nxt::ai::response_turn {
 
-using function_call = tools::function_call;
-using function_tool = tools::function_tool;
 using llm_request = responses::openai_responses_request;
-using output_item_result = agent::output_item_result;
 using response_stream_result = agent::response_stream_result;
 using stream_event = responses::stream_event;
 
@@ -341,6 +341,15 @@ auto response_event_source(nxt::ui::yard & self, Stream & stream)
         });
 }
 
+inline bool is_response_lifecycle_event(const stream_event & event)
+{
+    return event.type == "response.created"
+           || event.type == "response.in_progress"
+           || event.type == "response.completed"
+           || event.type == "response.failed"
+           || event.type == "response.incomplete";
+}
+
 template<typename Stream>
 nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
     Stream & stream,
@@ -349,8 +358,7 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
     tui::Style style,
     bool fold_when_done,
     bool separate_before_commit,
-    hud_blocks::State * hud,
-    auto on_delta)
+    hud_blocks::State * hud)
 {
     auto text = std::string{};
     auto wrap_width = stream_wrap_width(self);
@@ -415,22 +423,22 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
     };
 
     while (auto event = co_await nxt::next(stream)) {
-        if (agent::is_event(*event, delta_event_type)) {
-            auto delta = openai::delta_from_event_data(event->data);
-            if (!delta.empty()) {
-                text += delta;
-                for_complete_words(text, false, append_segment);
-                draw_pending();
-                on_delta(std::string_view{delta});
-            }
-            continue;
+        const stream_event & current = *event;
+        
+        if (current.type == delta_event_type) {
+            auto payload = current.read<openai::text_delta_event>();
+
+            text += payload.delta;
+            for_complete_words(text, false, append_segment);
+            draw_pending();
         }
 
-        if (agent::is_event(*event, "response.output_item.done")) {
-            auto item = agent::output_item_from_event(*event);
+        else if (current.type == "response.output_item.done") {
+            auto payload = current.read<openai::output_item_event>();
+
             for_complete_words(text, true, append_segment);
             commit_block();
-            co_return item;
+            co_return payload.item;
         }
     }
 
@@ -454,8 +462,7 @@ read_reasoning_item(
         nxt::tui::fg(nxt::Rgba8::cyan()),
         true,
         false,
-        hud,
-        [](std::string_view) {});
+        hud);
 }
 
 template<typename Stream>
@@ -463,8 +470,7 @@ nxt::task<std::optional<openai::raw_json>>
 read_message_item(
     Stream & stream,
     nxt::ui::yard & self,
-    hud_blocks::State * hud = nullptr,
-    std::string * text_out = nullptr)
+    hud_blocks::State * hud = nullptr)
 {
     co_return co_await read_text_delta_item(
         stream,
@@ -473,84 +479,38 @@ read_message_item(
         nxt::tui::fg(nxt::Rgba8::yellow()),
         false,
         true,
-        hud,
-        [text_out](std::string_view delta) {
-            if (text_out)
-                *text_out += delta;
-        });
+        hud);
 }
 
 template<typename Stream>
-nxt::task<output_item_result> read_output_item(
+nxt::task<std::optional<openai::raw_json>> read_output_item(
     Stream & stream,
     nxt::ui::yard & self,
     const stream_event & first,
     hud_blocks::State * hud = nullptr)
 {
-    auto first_event = openai::lazy_event(first.data);
-    auto first_item_view = openai::item_view(*first_event);
-    auto type = std::string{};
-    auto first_item = std::optional<openai::raw_json>{};
-    if (first_item_view) {
-        type = openai::read_view<openai::response_output_item_header>(
-                   first_item_view)
-                   .type;
-        first_item = openai::raw_json_from(first_item_view);
-    }
+    auto item_type = glz::get_sv_json<"/item/type">(first.data);
+    
+    if (item_type == "reasoning")
+        co_return co_await read_reasoning_item(stream, self, hud);
 
-    if (type == "reasoning") {
-        co_return output_item_result{
-            .call = std::nullopt,
-            .item = co_await read_reasoning_item(stream, self, hud),
-            .text = {},
-        };
-    }
+    else if (item_type == "message")
+        co_return co_await read_message_item(stream, self, hud);
 
-    if (type == "message") {
-        auto text = std::string{};
-        auto item = co_await read_message_item(stream, self, hud, &text);
-        co_return output_item_result{
-            .call = std::nullopt,
-            .item = std::move(item),
-            .text = std::move(text),
-        };
-    }
-
-    if (type == "function_call") {
-        auto item = std::move(first_item);
-        while (auto event = co_await nxt::next(stream)) {
-            if (agent::is_event(*event, "response.output_item.done")) {
-                if (auto done_item = agent::output_item_from_event(*event))
-                    item = std::move(*done_item);
-                break;
+    else if (item_type == "function_call") {
+        while (std::optional<stream_event> event = co_await nxt::next(stream)) {
+            if (event->type == "response.output_item.done") {
+                auto item = event->read<openai::output_item_event>();
+                co_return item.item;
             }
         }
 
-        auto call = item ? tools::function_call_from_item(*item)
-                         : std::optional<function_call>{};
-        co_return output_item_result{
-            .call = std::move(call),
-            .item = std::move(item),
-            .text = {},
-        };
+        throw std::runtime_error{"expected item done"};
     }
 
-    self.draw(nxt::tui::text("Reading item..."));
-
-    auto item = std::move(first_item);
-    while (auto event = co_await nxt::next(stream)) {
-        if (agent::is_event(*event, "response.output_item.done")) {
-            if (auto done_item = agent::output_item_from_event(*event))
-                item = std::move(*done_item);
-            break;
-        }
-    }
-
-    co_return output_item_result{
-        .call = std::nullopt,
-        .item = std::move(item),
-        .text = {},
-    };
+    else
+        throw std::runtime_error{
+            "unexpected OpenAI output item type: " + first.data};
 }
 
 template<typename ReadStream>
@@ -599,34 +559,26 @@ read_openai_response_stream(
     auto events = response_event_source(self, stream);
     auto result = response_stream_result{};
 
-    while (auto event = co_await nxt::next(events)) {
-        if (auto response_id = responses::response_id_from_event(*event))
-            result.response_id = std::move(*response_id);
-
-        if (agent::is_event(*event, "response.output_item.added")) {
+    while (std::optional<stream_event> event = co_await nxt::next(events)) {
+        if (event->type == "response.created") {
+            auto payload = event->read<openai::response_event>();
+            result.response_id = payload.response.id;
+        }
+        
+        else if (event->type == "response.output_item.added") {
             auto output_item =
                 co_await read_output_item(events, self, *event, hud);
 
-            if (output_item.item)
-                result.output_items.push_back(std::move(*output_item.item));
-
-            if (!output_item.text.empty())
-                result.message_blocks.push_back(std::move(output_item.text));
-
-            if (output_item.call)
-                result.function_calls.push_back(
-                    std::move(*output_item.call));
-
-            continue;
+            if (output_item)
+                result.output_items.push_back(std::move(*output_item));
         }
 
-        if (agent::is_event(*event, "response.completed")) {
+        else if (event->type == "response.completed") {
             result.completed = true;
             co_return result;
         }
 
-        if (agent::is_event(*event, "response.failed")
-            || agent::is_event(*event, "response.incomplete")) {
+        else if (event->type == "response.failed" || event->type == "response.incomplete") {
             co_return result;
         }
     }

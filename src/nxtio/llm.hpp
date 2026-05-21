@@ -15,7 +15,7 @@ using nxt::ai::responses::input_items_from_request;
 using nxt::ai::responses::openai_response_stream;
 using nxt::ai::responses::openai_responses_body;
 using nxt::ai::responses::openai_responses_http_request;
-using nxt::ai::responses::response_id_from_event;
+using nxt::ai::tools::function_calls_from_items;
 using nxt::ai::tools::function_call_from_item;
 using nxt::ai::tools::function_call_output;
 using nxt::ai::tools::function_tool_definition;

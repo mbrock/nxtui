@@ -246,6 +246,24 @@ suite llm_tests = [] {
         expect(nlohmann::json::parse(error)["error"] == "unknown tool");
     };
 
+    "response item projections derive messages and calls"_test = [] {
+        auto items = std::vector<nxt::ai::openai::raw_json>{
+            nxt::ai::openai::raw_json{
+                R"({"id":"msg_123","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello"},{"type":"output_text","text":" world"}]})"},
+            nxt::ai::openai::raw_json{
+                R"({"id":"fc_123","type":"function_call","call_id":"call_123","name":"nxt_echo","arguments":"{\"text\":\"hello\"}"})"},
+        };
+
+        auto messages = nxt::ai::agent::message_blocks_from_items(items);
+        expect(messages.size() == 1_ul);
+        expect(messages[0] == "hello world");
+
+        auto calls = nxt::ai::tools::function_calls_from_items(items);
+        expect(calls.size() == 1_ul);
+        expect(calls[0].call_id == "call_123");
+        expect(calls[0].name == "nxt_echo");
+    };
+
     "response text wrapping preserves paragraph breaks"_test = [] {
         auto lines = nxt::ai::response_turn::wrap_stream_text(
             "alpha beta\n\nsecond paragraph", 80);

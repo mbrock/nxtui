@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,42 +18,12 @@ namespace nxt::ai::agent {
 /// Summary gathered while consuming one Responses stream.
 struct response_stream_result
 {
-    /// Function calls discovered in completed output items.
-    std::vector<tools::function_call> function_calls;
     /// Complete output items that should be preserved for stateless turns.
     std::vector<openai::raw_json> output_items;
-    /// Plain assistant message blocks emitted while rendering the stream.
-    std::vector<std::string> message_blocks;
     /// Most recent response id observed in the stream.
     std::optional<std::string> response_id;
     /// True when the stream reached `response.completed`.
     bool completed = false;
-
-    [[nodiscard]] bool needs_tools() const
-    {
-        return !function_calls.empty();
-    }
-
-    [[nodiscard]] bool done() const
-    {
-        return function_calls.empty();
-    }
-
-    [[nodiscard]] const std::vector<tools::function_call> & tool_calls() const
-    {
-        return function_calls;
-    }
-};
-
-/// Result of consuming one output item from the event stream.
-struct output_item_result
-{
-    /// Parsed function call, if the output item was a function call.
-    std::optional<tools::function_call> call;
-    /// Complete output item JSON, when one was available.
-    std::optional<openai::raw_json> item;
-    /// Plain text emitted for completed message items.
-    std::string text;
 };
 
 /// Test whether an SSE event has the requested Responses event type.
@@ -60,13 +31,6 @@ struct output_item_result
 is_event(const responses::stream_event & event, std::string_view type)
 {
     return event.type == type;
-}
-
-/// Extract the event payload's `item` object when present.
-[[nodiscard]] inline std::optional<openai::raw_json>
-output_item_from_event(const responses::stream_event & event)
-{
-    return openai::item_from_event_data(event.data);
 }
 
 /// Ask Responses to include encrypted reasoning content in output items.
@@ -99,6 +63,32 @@ inline void append_stateless_turn(
         input.push_back(nlohmann::json::parse(item.str));
     for (auto & output : tool_outputs)
         input.push_back(std::move(output));
+}
+
+/// Extract assistant message text blocks from completed response items.
+[[nodiscard]] inline std::vector<std::string>
+message_blocks_from_items(const std::vector<openai::raw_json> & output_items)
+{
+    auto messages = std::vector<std::string>{};
+    for (const auto & raw_item : output_items) {
+        if (raw_item.str.empty())
+            continue;
+
+        auto item = openai::message_item{};
+        if (auto ec =
+                glz::read<openai::json_read_opts>(item, raw_item.str))
+            throw std::runtime_error{glz::format_error(ec, raw_item.str)};
+        if (item.type != "message")
+            continue;
+
+        auto text = std::string{};
+        for (const auto & part : item.content)
+            if (part.type == "output_text")
+                text += part.text;
+        if (!text.empty())
+            messages.push_back(std::move(text));
+    }
+    return messages;
 }
 
 /// Stateful Responses continuation rules for multi-step tool turns.
@@ -136,10 +126,11 @@ public:
         return tools_;
     }
 
-    [[nodiscard]] std::optional<std::string>
-    continuation_problem(const response_stream_result & response) const
+    [[nodiscard]] std::optional<std::string> continuation_problem(
+        const response_stream_result & response,
+        bool needs_tools) const
     {
-        if (request_.store && response.needs_tools() && !response.response_id)
+        if (request_.store && needs_tools && !response.response_id)
             return "tool call response had no response id";
         return std::nullopt;
     }

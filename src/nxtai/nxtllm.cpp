@@ -155,7 +155,8 @@ void queue_post_exit_summary(
     auto wrap_width = nxt::ai::response_turn::stream_wrap_width(self);
     auto message_style = nxt::tui::fg(nxt::Rgba8::yellow());
 
-    for (const auto & message : response.message_blocks) {
+    for (const auto & message :
+         nxt::ai::agent::message_blocks_from_items(response.output_items)) {
         if (message.empty())
             continue;
         if (!block.empty())
@@ -195,19 +196,21 @@ nxt::task<> run_agent_worker(
 
         if (self.cancelled())
             co_return;
-        if (response.done()) {
+        auto calls =
+            nxt::ai::tools::function_calls_from_items(response.output_items);
+        if (calls.empty()) {
             if (post_exit_summary)
                 queue_post_exit_summary(self, hud, response);
             co_return;
         }
 
-        if (auto problem = turn.continuation_problem(response)) {
+        if (auto problem = turn.continuation_problem(response, !calls.empty())) {
             self.println(*problem);
             co_return;
         }
 
         auto outputs = co_await nxt::ai::tool_ui::run_all(
-            self, turn.tools(), response.tool_calls(), &hud);
+            self, turn.tools(), calls, &hud);
 
         turn.continue_after_tools(std::move(response), std::move(outputs));
     }
