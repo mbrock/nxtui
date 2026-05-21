@@ -250,7 +250,11 @@ nxt::task<> run_prompt_loop(nxt::ui::yard & self, llm_request request)
 
 int main(int argc, char ** argv)
 {
-    return nxt::ui::main([&](nxt::ui::UIRuntime & runtime) {
+    auto runtime_options = nxt::ui::UIRuntimeOptions{
+        .render = true,
+        .read_input = true,
+        .scheduler_mode = nxt::ui::UIRuntimeOptions::SchedulerMode::inline_tasks};
+    return nxt::ui::main(runtime_options, [&](nxt::ui::UIRuntime & runtime) {
         auto options = parse_args(argc, argv);
         auto request = make_request(options, {});
 

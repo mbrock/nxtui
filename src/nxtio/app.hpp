@@ -38,8 +38,15 @@ using ansi::TerminalGuard;
 
 struct UIRuntimeOptions
 {
+    enum class SchedulerMode
+    {
+        thread_pool,
+        inline_tasks
+    };
+
     bool render = true;
     bool read_input = true;
+    SchedulerMode scheduler_mode = SchedulerMode::thread_pool;
 };
 
 /// Runtime state for the UI system.

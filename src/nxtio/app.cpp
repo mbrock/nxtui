@@ -329,11 +329,44 @@ void print_exception_tree(
     }
 }
 
+UIRuntimeOptions::SchedulerMode scheduler_mode_from_env(
+    UIRuntimeOptions::SchedulerMode fallback)
+{
+    auto * raw = std::getenv("NXT_SCHEDULER");
+    if (raw == nullptr)
+        return fallback;
+
+    auto value = std::string_view{raw};
+    if (
+        value == "inline" || value == "single" || value == "single-thread"
+        || value == "single_thread" || value == "1")
+        return UIRuntimeOptions::SchedulerMode::inline_tasks;
+    if (
+        value == "pool" || value == "thread_pool" || value == "thread-pool"
+        || value == "threads" || value == "0")
+        return UIRuntimeOptions::SchedulerMode::thread_pool;
+
+    return fallback;
+}
+
+nxt::scheduler::options scheduler_options_for(
+    UIRuntimeOptions::SchedulerMode mode)
+{
+    auto options = nxt::scheduler::options{};
+    if (mode == UIRuntimeOptions::SchedulerMode::inline_tasks) {
+        options.execution_strategy =
+            nxt::scheduler::execution_strategy_t::process_tasks_inline;
+        options.pool.thread_count = 0;
+    }
+    return options;
+}
+
 } // namespace
 
 UIRuntime::UIRuntime(UIRuntimeOptions options)
     : options_(options)
-    , scheduler_(nxt::scheduler::make_unique(nxt::scheduler::options{}))
+    , scheduler_(nxt::scheduler::make_unique(scheduler_options_for(
+          scheduler_mode_from_env(options_.scheduler_mode))))
     , terminal_surface_(options_.render && isatty(STDOUT_FILENO) != 0)
     , run_id_(make_short_id())
     , root_span_id_(make_short_id())
