@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -44,17 +46,24 @@ inline std::size_t find_bytes(
         std::distance(haystack.begin(), match.begin()));
 }
 
+struct read_result
+{
+    /// Bytes written into the requested destination.
+    ///
+    /// Zero bytes is valid progresslessness; it only means EOF when `eof` is
+    /// also true.
+    std::size_t bytes = 0;
+    /// True when the source is known to be exhausted.
+    bool eof = false;
+};
+
 /// Runtime-polymorphic byte source.
-///
-/// This mirrors the `read_some` shape from `src/nxtio/buffers.hpp`, but uses a
-/// vtable so higher-level buffer code can be written against one small runtime
-/// interface while the source chooses how it waits for platform I/O.
 class byte_source
 {
 public:
     virtual ~byte_source() = default;
 
-    virtual task<std::size_t> read_some(std::span<std::byte> dst) = 0;
+    virtual task<read_result> read_some(std::span<std::byte> dst) = 0;
 };
 
 /// Borrowed in-memory source exposed through the byte-source vtable.
@@ -65,7 +74,7 @@ public:
         : chunks_(chunks)
     {}
 
-    task<std::size_t> read_some(std::span<std::byte> dst) override
+    task<read_result> read_some(std::span<std::byte> dst) override
     {
         auto written = std::size_t{0};
         while (written < dst.size() && chunk_ < chunks_.size()) {
@@ -82,7 +91,10 @@ public:
             }
         }
 
-        co_return written;
+        co_return read_result{
+            .bytes = written,
+            .eof = chunk_ == chunks_.size(),
+        };
     }
 
 private:
@@ -99,12 +111,16 @@ public:
         : fd_(fd)
     {}
 
-    task<std::size_t> read_some(std::span<std::byte> dst) override
+    task<read_result> read_some(std::span<std::byte> dst) override
     {
-        co_return co_await read_some_wish{
+        auto n = co_await read_some_wish{
             .fd = fd_,
             .buffer = dst,
             .offset = -1,
+        };
+        co_return read_result{
+            .bytes = n,
+            .eof = n == 0,
         };
     }
 
@@ -160,12 +176,12 @@ public:
         rebase(n);
         while (buffered_size() < n) {
             auto read = co_await fill_more_without_rebase();
-            if (read == 0)
+            if (read.eof && read.bytes == 0)
                 throw end_of_stream{"unexpected end of input"};
         }
     }
 
-    task<std::size_t> fill_more()
+    task<read_result> fill_more()
     {
         if (buffered_size() == buffer_.size())
             throw buffer_error{"reader buffer is full"};
@@ -177,6 +193,26 @@ public:
     {
         co_await fill(n);
         co_return buffered().first(n);
+    }
+
+    /// Consume and return the next borrowed chunk, up to `limit` bytes.
+    ///
+    /// The returned span may be empty. `std::nullopt` is the EOF signal.
+    task<std::optional<std::span<const std::byte>>>
+    take_some(std::size_t limit = std::numeric_limits<std::size_t>::max())
+    {
+        if (buffered_size() == 0) {
+            auto read = co_await fill_more();
+            if (read.eof && read.bytes == 0)
+                co_return std::nullopt;
+            if (read.bytes == 0)
+                co_return buffered().first(0);
+        }
+
+        auto n = std::min(limit, buffered_size());
+        auto out = buffered().first(n);
+        toss(n);
+        co_return out;
     }
 
     void toss(std::size_t n)
@@ -212,7 +248,7 @@ public:
                 throw buffer_error{"reader buffer filled before delimiter"};
 
             auto read = co_await fill_more();
-            if (read == 0)
+            if (read.eof && read.bytes == 0)
                 throw end_of_stream{"unexpected end of input"};
         }
     }
@@ -224,17 +260,17 @@ public:
     }
 
 private:
-    task<std::size_t> fill_more_without_rebase()
+    task<read_result> fill_more_without_rebase()
     {
         auto dst = unused_capacity();
         if (dst.empty())
             throw buffer_error{"reader buffer is full"};
 
-        auto n = co_await source_->read_some(dst);
-        if (n > dst.size())
+        auto read = co_await source_->read_some(dst);
+        if (read.bytes > dst.size())
             throw buffer_error{"source overfilled read buffer"};
-        end_ += n;
-        co_return n;
+        end_ += read.bytes;
+        co_return read;
     }
 
     Source * source_;
@@ -255,13 +291,13 @@ task<std::size_t> for_each_chunk(
 {
     auto total = std::size_t{0};
     while (true) {
-        auto n = co_await source.read_some(buffer);
-        if (n == 0)
+        auto read = co_await source.read_some(buffer);
+        if (read.eof && read.bytes == 0)
             co_return total;
 
-        auto chunk = std::span<const std::byte>{buffer}.first(n);
+        auto chunk = std::span<const std::byte>{buffer}.first(read.bytes);
         visitor(chunk);
-        total += n;
+        total += read.bytes;
     }
 }
 

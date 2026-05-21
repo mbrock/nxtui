@@ -88,6 +88,40 @@ struct manual_wand final : nxt::rt::wand
     int waves = 0;
 };
 
+struct empty_then_string_source final : nxt::rt::byte_source
+{
+    nxt::rt::task<nxt::rt::read_result> read_some(
+        std::span<std::byte> dst) override
+    {
+        if (!returned_empty) {
+            returned_empty = true;
+            co_return nxt::rt::read_result{
+                .bytes = 0,
+                .eof = false,
+            };
+        }
+
+        if (offset == text.size())
+            co_return nxt::rt::read_result{
+                .bytes = 0,
+                .eof = true,
+            };
+
+        auto rest = std::string_view{text}.substr(offset);
+        auto n = std::min(dst.size(), rest.size());
+        std::memcpy(dst.data(), rest.data(), n);
+        offset += n;
+        co_return nxt::rt::read_result{
+            .bytes = n,
+            .eof = offset == text.size(),
+        };
+    }
+
+    std::string_view text = "abc";
+    std::size_t offset = 0;
+    bool returned_empty = false;
+};
+
 static suite ng_runtime_tests = [] {
     "sync_wait returns a completed root task value"_test = [] {
         auto deck = nxt::rt::deck{};
@@ -441,6 +475,22 @@ static suite ng_runtime_tests = [] {
         });
 
         expect(parts == std::vector<std::string>{"abc", "def", "ghi"});
+    };
+
+    "ng byte reader yields empty reads distinctly from eof"_test = [] {
+        auto deck = nxt::rt::deck{};
+        auto source = empty_then_string_source{};
+        auto storage = std::array<std::byte, 8>{};
+        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
+
+        auto parts = deck.sync_wait([&]() -> nxt::rt::task<std::vector<std::string>> {
+            auto out = std::vector<std::string>{};
+            while (auto chunk = co_await reader.take_some())
+                out.emplace_back(nxt::rt::as_string_view(*chunk));
+            co_return out;
+        });
+
+        expect(parts == std::vector<std::string>{"", "abc"});
     };
 
     "ng http chunked body pipe leaves next response buffered"_test = [] {

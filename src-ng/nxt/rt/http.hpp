@@ -193,18 +193,11 @@ read_content_length(Reader & reader, std::size_t length)
 {
     auto remaining = length;
     while (remaining > 0) {
-        auto available = reader.buffered();
-        if (available.empty()) {
-            if (co_await reader.fill_more() == 0)
-                throw protocol_error{"unexpected end of content-length body"};
-            available = reader.buffered();
-        }
-
-        auto n = std::min(remaining, available.size());
-        auto chunk = available.first(n);
-        reader.toss(n);
-        remaining -= n;
-        co_yield chunk;
+        auto chunk = co_await reader.take_some(remaining);
+        if (!chunk)
+            throw protocol_error{"unexpected end of content-length body"};
+        remaining -= chunk->size();
+        co_yield *chunk;
     }
 }
 
@@ -250,15 +243,10 @@ read_response_body(Reader & reader, const response_head & head)
     }
 
     while (true) {
-        auto available = reader.buffered();
-        if (available.empty()) {
-            if (co_await reader.fill_more() == 0)
-                co_return;
-            available = reader.buffered();
-        }
-
-        reader.toss(available.size());
-        co_yield available;
+        auto chunk = co_await reader.take_some();
+        if (!chunk)
+            co_return;
+        co_yield *chunk;
     }
 }
 
