@@ -66,7 +66,7 @@ inline std::string visible_duration(double elapsed_ms)
 
 inline std::string format_path(const std::vector<int> & path)
 {
-    auto out = std::string{"§"};
+    auto out = std::string{};
     for (auto i = std::size_t{0}; i < path.size(); ++i) {
         if (i != 0)
             out += '.';
