@@ -149,13 +149,13 @@ public:
     template<typename... Awaitables>
     [[nodiscard]] auto all(Awaitables &&... awaitables)
     {
-        return coro::when_all(std::forward<Awaitables>(awaitables)...);
+        return nxt::when_all(std::forward<Awaitables>(awaitables)...);
     }
 
     /// Run stored void tasks to completion within this scope.
     [[nodiscard]] auto all(std::vector<task<>> tasks)
     {
-        return coro::when_all(std::move(tasks));
+        return nxt::when_all(std::move(tasks));
     }
 
     /// Run all tasks previously spawned into this scope.

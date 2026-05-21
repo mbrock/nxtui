@@ -1,12 +1,12 @@
 #pragma once
 
 #include <nxtio/async.hpp>
+#include <nxtio/stacktrace.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <span>
-#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -14,9 +14,9 @@
 namespace nxt::io {
 
 /// Base exception for buffered byte I/O helpers.
-struct buffer_error : std::runtime_error
+struct buffer_error : runtime_error
 {
-    using std::runtime_error::runtime_error;
+    using runtime_error::runtime_error;
 };
 
 /// Raised when a reader needs more bytes but the source ended.

@@ -4,6 +4,7 @@
 #include <nxt/http.hpp>
 #include <nxtio/async.hpp>
 #include <nxtio/http.hpp>
+#include <nxtio/stacktrace.hpp>
 
 #include <glaze/glaze_exceptions.hpp>
 
@@ -11,7 +12,6 @@
 #include <cstddef>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <utility>
@@ -21,9 +21,9 @@ namespace nxt::ai::responses {
 
 /// Error raised for malformed Responses requests, HTTP failures, and stream
 /// parse errors.
-struct protocol_error : std::runtime_error
+struct protocol_error : nxt::io::runtime_error
 {
-    using std::runtime_error::runtime_error;
+    using nxt::io::runtime_error::runtime_error;
 };
 
 /// Parameters for one OpenAI Responses API request.

@@ -1452,7 +1452,8 @@ inline nxt::task<> root(yard & self)
 
 int run(int /*argc*/, char ** /*argv*/)
 {
-    return nxt::ui::run2(root);
+    return nxt::ui::main(
+        [](nxt::ui::UIRuntime & runtime) { nxt::ui::run2(runtime, root); });
 }
 
 } // namespace nxt::build_sim

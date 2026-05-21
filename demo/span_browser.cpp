@@ -1657,10 +1657,13 @@ int run(int argc, char ** argv)
     auto data = std::make_shared<Dataset>(
         Dataset{std::move(spans), std::move(traces)});
 
-    return nxt::ui::run2(
-        [data = std::move(data)](yard & self) -> nxt::task<> {
-            co_await root(self, data);
-        });
+    return nxt::ui::main([data = std::move(data)](
+                             nxt::ui::UIRuntime & runtime) mutable {
+        nxt::ui::run2(
+            runtime, [data = std::move(data)](yard & self) -> nxt::task<> {
+                co_await root(self, data);
+            });
+    });
 }
 
 } // namespace nxt::span_browser

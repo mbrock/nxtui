@@ -103,42 +103,31 @@ and coroutine scheduler integration. It is currently implemented on top of
 `libcoro`; the intent is to keep the core layout/raster layer separate from
 that runtime choice.
 
-The high-level runner takes:
-
-- an initial state
-- a pure-ish `build_ui(state)` function returning a layout
-- an async `update(runtime, state)` coroutine
+The high-level runner builds around a `yard`: draw the current layout, spawn
+child work, print scrollback output, and request shutdown from the same
+runtime-backed handle.
 
 ```cpp
-#include <nxtio/app.hpp>
 #include <nxt/tui.hpp>
-
-struct State {
-    nxt::percent_t progress{0.0 * nxt::percent};
-};
+#include <nxtio/process.hpp>
 
 int main()
 {
     using namespace std::chrono_literals;
     using namespace nxt::tui;
 
-    return nxt::ui::run(
-        State{},
-        [](const State & state) {
-            return column(
-                text("working", fg(nxt::Rgba8::cyan()) | bold),
-                progress_bar(state.progress)
-            );
-        },
-        [](nxt::ui::UIRuntime & runtime, State & state) -> nxt::task<> {
+    return nxt::ui::main([](nxt::ui::UIRuntime & runtime) {
+        nxt::ui::run2(runtime, [](nxt::ui::yard & self) -> nxt::task<> {
             for (int i = 0; i <= 100; ++i) {
-                state.progress = i * nxt::percent;
-                runtime.signal_damage();
-                co_await runtime.sleep(30ms);
+                self.draw(column(
+                    text("working", fg(nxt::Rgba8::cyan()) | bold),
+                    progress_bar(i * nxt::percent)));
+                co_await self.sleep(30ms);
             }
 
-            runtime.request_shutdown();
+            self.request_shutdown();
         });
+    });
 }
 ```
 
@@ -198,13 +187,22 @@ meson compile -C build
 meson test -C build
 ```
 
-The default build includes the `nxtdemo` UI demo binary and the test suite. The
-`nxtllm` trace/debug tool is off by default because it pulls in nanoarrow IPC
-support:
+The default build includes the `nxtdemo` UI demo binary, the `nxtllm`
+trace/debug tool, and the test suite. Disable `nxtllm` explicitly if you want a
+smaller local build:
 
 ```sh
-meson setup build -Dllm_tool=true
+meson setup build -Dllm_tool=false
 ```
+
+Install `cpptrace` if you want richer crash stack traces in the TUI runtime:
+
+```sh
+brew install cpptrace
+```
+
+Meson enables it only after a real compile/link probe, so compilers that find
+an incompatible system package will fall back to the built-in stacktrace shim.
 
 `nxtdemo` bundles all UI demos behind subcommands (`nxtdemo build_sim`,
 `nxtdemo cgroup_browser`, `nxtdemo shell_scope`). When the Arrow C++ Dataset and

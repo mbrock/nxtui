@@ -356,9 +356,27 @@ public:
         done_.count_down();
     }
 
-    nxt::task<> join() const
+    void fail(std::exception_ptr failure) noexcept
+    {
+        failure_ = std::move(failure);
+    }
+
+    nxt::task<> join()
     {
         co_await done_;
+        if (failure_) {
+            failure_observed_ = true;
+            nxt::io::rethrow(failure_);
+        }
+    }
+
+    nxt::task<> join_unobserved()
+    {
+        co_await done_;
+        if (failure_ && !failure_observed_) {
+            failure_observed_ = true;
+            nxt::io::rethrow(failure_);
+        }
     }
 
 private:
@@ -366,6 +384,8 @@ private:
     nxt::scope<ProcessContext> scope_;
     yard self_;
     nxt::latch done_{1};
+    std::exception_ptr failure_;
+    bool failure_observed_ = false;
 };
 
 /// Parent-side handle to a spawned process. Cancels the child's scope
@@ -439,24 +459,66 @@ nxt::task<> run_body(std::shared_ptr<ProcessState> state, Body body)
 
     std::string_view status = "ok";
     try {
-        co_await body(state->self());
+        co_await nxt::invoke(std::move(body), state->self());
     } catch (const nxt::cancelled &) {
         status = "cancelled";
     } catch (...) {
+        state->fail(std::current_exception());
         rt.emit_span_end(
             ctx.span_id, ctx.parent_span_id, ctx.span_name, "error");
         state->scope().cancel();
         state->complete();
-        throw;
+        co_return;
     }
-    rt.emit_span_end(ctx.span_id, ctx.parent_span_id, ctx.span_name, status);
+    rt.emit_span_end(
+        ctx.span_id, ctx.parent_span_id, ctx.span_name, status);
     state->scope().cancel();
     state->complete();
 }
 
 inline nxt::task<> join_body(std::shared_ptr<ProcessState> state)
 {
-    co_await state->join();
+    co_await state->join_unobserved();
+}
+
+template<typename Body>
+nxt::task<> run_root_body(
+    UIRuntime & runtime,
+    std::shared_ptr<ProcessState> root_state,
+    Body body)
+{
+    std::exception_ptr eptr;
+    try {
+        co_await nxt::invoke(std::move(body), root_state->self());
+    } catch (const nxt::cancelled &) {
+        // Treat cancellation as a normal exit; we still want children
+        // to drain so their span_end rows land in the trace.
+    } catch (...) {
+        eptr = std::current_exception();
+    }
+
+    // Cancel any still-running children so they exit promptly, then
+    // await every `join_body` task spawned into the root scope. Without
+    // this, detached child coroutines may be torn down by the scheduler
+    // before `run_body` reaches the line that emits their `span_end`.
+    root_state->scope().cancel();
+    std::exception_ptr drain_eptr;
+    try {
+        co_await root_state->scope().all();
+    } catch (const nxt::cancelled &) {
+    } catch (...) {
+        drain_eptr = std::current_exception();
+    }
+
+    runtime.request_shutdown();
+    if (eptr && drain_eptr)
+        throw nxt::exception_group{
+            "root process and child process drain failed",
+            {eptr, drain_eptr}};
+    if (eptr)
+        nxt::io::rethrow(eptr);
+    if (drain_eptr)
+        nxt::io::rethrow(drain_eptr);
 }
 
 } // namespace detail
@@ -479,8 +541,7 @@ spawn(const yard & parent, std::string name, Body body)
         parent_ctx.span_id,
         std::move(name));
 
-    rt.scheduler().spawn_detached(
-        detail::run_body(state, std::move(body)));
+    rt.scheduler().spawn_detached(detail::run_body(state, std::move(body)));
 
     parent.scope().spawn(detail::join_body(state));
 
@@ -501,8 +562,7 @@ template<typename Body>
 }
 
 template<typename Body>
-[[nodiscard]] ProcessHandle
-yard::spawn(std::string name, Body body) const
+[[nodiscard]] ProcessHandle yard::spawn(std::string name, Body body) const
 {
     return nxt::ui::spawn(*this, std::move(name), std::move(body));
 }
@@ -549,17 +609,21 @@ inline span_guard yard::span(std::string name) const
     return span_guard{*this, std::move(name)};
 }
 
+inline nxt::task<> spinner_body(
+    yard & self, std::chrono::milliseconds interval, tui::Style style)
+{
+    for (std::size_t tick = 0; !self.cancelled(); ++tick) {
+        self.draw(tui::spinner(tick, style));
+        co_await self.sleep(interval);
+    }
+}
+
 inline auto spinner(
     std::chrono::milliseconds interval = std::chrono::milliseconds{80},
     tui::Style style = tui::bold | tui::fg(Rgba8::black())
                        | tui::bg(Rgba8::white()))
 {
-    return [=](yard & self) -> nxt::task<> {
-        for (std::size_t tick = 0; !self.cancelled(); ++tick) {
-            self.draw(tui::spinner(tick, style));
-            co_await self.sleep(interval);
-        }
-    };
+    return [=](yard & self) { return spinner_body(self, interval, style); };
 }
 
 template<typename WorkerBody, typename CompanionBody, typename Layout>
@@ -591,86 +655,68 @@ nxt::task<> spintag(const yard & self, WorkerBody worker_body)
         });
 }
 
-/// Run a TUI application Proact-style: the body coroutine owns the
-/// whole UI lifecycle. Its surface is mounted as the screen root, and
-/// the program exits when the body returns.
 template<typename Body>
-int run2(Body body)
+void run2(UIRuntime & runtime, Body body)
 {
-    UIRuntime runtime;
     std::vector<nxt::task<>> tasks;
+    std::optional<TerminalGuard> guard;
+    if (runtime.has_terminal_surface())
+        guard.emplace();
 
-    try {
-        TerminalGuard guard;
-        nxt::input::InputModeGuard input_guard;
+    std::optional<nxt::input::InputModeGuard> input_guard;
+    if (runtime.read_input_enabled())
+        input_guard.emplace();
 
-        // Wire the root yard's context to the runtime's root span so
-        // every `self.spawn(...)` inside `body` becomes a child of
-        // `runtime` in the trace. The root yard itself shares the
-        // runtime span — `run2` doesn't emit its own span_begin/end
-        // because UIRuntime already brackets the run.
-        auto root_state = std::make_shared<ProcessState>(
-            runtime,
-            std::stop_token{},
-            runtime_output(runtime),
-            std::string{runtime.root_span_id()},
-            std::string{},
-            "runtime");
+    auto root_state = std::make_shared<ProcessState>(
+        runtime,
+        std::stop_token{},
+        runtime_output(runtime),
+        std::string{runtime.root_span_id()},
+        std::string{},
+        "runtime");
 
-        tasks.push_back(runtime.signal_loop());
+    tasks.push_back(runtime.signal_loop());
+    if (runtime.read_input_enabled())
         tasks.push_back(runtime.input_loop());
+    if (runtime.render_enabled())
         tasks.push_back(runtime.run_render_loop(
             [surface = root_state->surface()] { return surface; }));
 
-        auto root_runner = [&runtime,
-                            root_state,
-                            body =
-                                std::move(body)]() mutable -> nxt::task<> {
-            // Capture any body exception outside the catch so the
-            // drain step below (which co_awaits) can run before
-            // propagation. co_await inside a catch handler is
-            // disallowed by the language, so we use this trampoline.
-            std::exception_ptr eptr;
-            try {
-                co_await body(root_state->self());
-            } catch (const nxt::cancelled &) {
-                // Treat cancellation as a normal exit; we still want
-                // children to drain so their span_end rows land in
-                // the trace.
-            } catch (...) {
-                eptr = std::current_exception();
-            }
-            // Cancel any still-running children so they exit promptly,
-            // then await every `join_body` task spawned into the
-            // root scope. Without this, detached child coroutines may
-            // be torn down by the scheduler before `run_body` reaches
-            // the line that emits their `span_end`.
-            root_state->scope().cancel();
-            try {
-                co_await root_state->scope().all();
-            } catch (const nxt::cancelled &) {
-            } catch (...) {
-                // Suppress: we're already winding down. The body's
-                // exception (if any) is the one that matters.
-            }
+    tasks.push_back(
+        detail::run_root_body(runtime, root_state, std::move(body)));
+
+    nxt::sync_wait(nxt::when_all(std::move(tasks)));
+    runtime.cleanup();
+}
+
+template<typename Body>
+int main(UIRuntimeOptions options, Body body)
+{
+    nxt::ui::UIRuntime runtime{options};
+    int status = 0;
+
+    nxt::io::try_catch([&] {
+        body(runtime);
+    }, [&] {
+        try {
+            runtime.mark_failed();
             runtime.request_shutdown();
-            if (eptr)
-                std::rethrow_exception(eptr);
-        };
-        tasks.push_back(root_runner());
+            runtime.cleanup_for_crash();
+        } catch (...) {
+            // Preserve the original failure while still doing our best
+            // to leave the terminal in a normal state.
+        }
 
-        nxt::sync_wait(nxt::when_all(std::move(tasks)));
-        runtime.cleanup();
-    } catch (const std::exception & e) {
-        runtime.cleanup();
-        std::cerr << "Error: " << e.what() << '\n';
-        std::exit(1);
-    } catch (...) {
-        runtime.cleanup();
-        throw;
-    }
+        status = nxt::ui::report_exception(std::current_exception());
+    });
 
-    return 0;
+    return status;
+}
+
+template<typename Body>
+int main(Body body)
+{
+    return main(UIRuntimeOptions{}, std::move(body));
 }
 
 } // namespace nxt::ui

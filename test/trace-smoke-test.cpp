@@ -34,7 +34,8 @@ nxt::task<> root(nxt::ui::yard & self)
 
 int main()
 {
-    auto rc = nxt::ui::run2(root);
+    auto rc = nxt::ui::main(
+        [](nxt::ui::UIRuntime & runtime) { nxt::ui::run2(runtime, root); });
     std::printf("rc=%d\n", rc);
     return rc;
 }

@@ -680,9 +680,12 @@ nxt::task<ExitStatus> PtySession::finish_reap(
         co_return *status;
 
     auto wait_for_reap =
-        [this, &scheduler, stop](int attempts) -> nxt::task<bool> {
+        [](PtySession & session,
+           nxt::scheduler & scheduler,
+           std::stop_token stop,
+           int attempts) -> nxt::task<bool> {
         for (int i = 0; i < attempts; ++i) {
-            if (auto status = try_reap()) {
+            if (auto status = session.try_reap()) {
                 (void) status;
                 co_return true;
             }
@@ -693,19 +696,19 @@ nxt::task<ExitStatus> PtySession::finish_reap(
         co_return false;
     };
 
-    if (co_await wait_for_reap(8)) {
+    if (co_await wait_for_reap(*this, scheduler, stop, 8)) {
         co_return *exit_status_;
     }
 
     if (child_pid_ > 0) {
         terminate(stop.stop_requested() ? SIGHUP : SIGTERM);
-        if (co_await wait_for_reap(8))
+        if (co_await wait_for_reap(*this, scheduler, stop, 8))
             co_return *exit_status_;
     }
 
     if (child_pid_ > 0) {
         terminate(SIGKILL);
-        if (co_await wait_for_reap(40))
+        if (co_await wait_for_reap(*this, scheduler, stop, 40))
             co_return *exit_status_;
     }
 

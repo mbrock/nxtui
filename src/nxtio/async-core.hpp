@@ -16,8 +16,13 @@
 #include <coro/task.hpp>
 #include <coro/when_any.hpp>
 
+#include "nxtio/stacktrace.hpp"
+
 #include <cstddef>
+#include <exception>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace nxt {
 
@@ -59,19 +64,98 @@ inline auto sync_wait(auto && awaitable)
     return coro::sync_wait(std::forward<decltype(awaitable)>(awaitable));
 }
 
-/// Await a collection of tasks.
-inline auto when_all(auto && tasks)
+/// Invoke a coroutine functor from inside nxt coroutine code while keeping
+/// the functor object alive in this wrapper coroutine's frame. Unlike
+/// libcoro's coro::invoke, this does not eagerly resume the wrapper before
+/// returning it, so it composes with scheduler-owned co_await chains.
+template<typename Functor, typename... Args>
+auto invoke(Functor functor, Args &&... args)
+    -> decltype(functor(std::forward<Args>(args)...))
 {
-    return coro::when_all(std::forward<decltype(tasks)>(tasks));
+    auto user_task = functor(std::forward<Args>(args)...);
+    co_return co_await user_task;
+}
+
+class exception_group : public std::exception
+{
+public:
+    explicit exception_group(
+        std::string message,
+        std::vector<std::exception_ptr> exceptions)
+        : message_(std::move(message))
+        , exceptions_(std::move(exceptions))
+    {
+    }
+
+    const char * what() const noexcept override
+    {
+        return message_.c_str();
+    }
+
+    [[nodiscard]] const std::vector<std::exception_ptr> &
+    exceptions() const noexcept
+    {
+        return exceptions_;
+    }
+
+private:
+    std::string message_;
+    std::vector<std::exception_ptr> exceptions_;
+};
+
+namespace detail {
+
+inline void collect_when_all_exception(
+    auto & completed,
+    std::vector<std::exception_ptr> & exceptions)
+{
+    try {
+        completed.return_value();
+    } catch (...) {
+        exceptions.push_back(std::current_exception());
+    }
+}
+
+[[noreturn]] inline void throw_when_all_exceptions(
+    std::vector<std::exception_ptr> exceptions)
+{
+    throw exception_group{
+        exceptions.size() == 1 ? "one task failed" : "multiple tasks failed",
+        std::move(exceptions)};
+}
+
+} // namespace detail
+
+/// Await a collection of void tasks, then throw an exception_group if any
+/// completed task failed. libcoro stores child exceptions in the returned
+/// wrappers, so callers must inspect them; this facade makes that semantic
+/// automatic for nxt code.
+inline task<> when_all(std::vector<task<>> tasks)
+{
+    auto completed = co_await coro::when_all(std::move(tasks));
+    auto exceptions = std::vector<std::exception_ptr>{};
+    for (auto & task : completed)
+        detail::collect_when_all_exception(task, exceptions);
+    if (!exceptions.empty())
+        detail::throw_when_all_exceptions(std::move(exceptions));
 }
 
 /// Await several awaitables.
-inline auto when_all(auto && first, auto && second, auto &&... rest)
+template<typename First, typename Second, typename... Rest>
+inline task<> when_all(First && first, Second && second, Rest &&... rest)
 {
-    return coro::when_all(
+    auto completed = co_await coro::when_all(
         std::forward<decltype(first)>(first),
         std::forward<decltype(second)>(second),
         std::forward<decltype(rest)>(rest)...);
+    auto exceptions = std::vector<std::exception_ptr>{};
+    std::apply(
+        [&](auto &... task) {
+            (detail::collect_when_all_exception(task, exceptions), ...);
+        },
+        completed);
+    if (!exceptions.empty())
+        detail::throw_when_all_exceptions(std::move(exceptions));
 }
 
 /// Schedule a task to run on the given scheduler.

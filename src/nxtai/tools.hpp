@@ -20,6 +20,12 @@
 
 namespace nxt::ai::tools {
 
+struct tool_result
+{
+    bool failed = false;
+    std::string output;
+};
+
 template<typename Tool>
 concept function_tool = requires(
     const Tool & tool,
@@ -28,7 +34,8 @@ concept function_tool = requires(
     { Tool::name } -> std::convertible_to<std::string_view>;
     { Tool::description } -> std::convertible_to<std::string_view>;
     { Tool::strict } -> std::convertible_to<bool>;
-    { tool.run(std::move(parameters)) } -> std::same_as<nxt::task<std::string>>;
+    { tool.run(std::move(parameters)) }
+        -> std::same_as<nxt::task<tool_result>>;
 };
 
 inline constexpr auto tool_schema_opts =
@@ -178,31 +185,20 @@ function_call_output(std::string call_id, std::string output)
     return openai::raw_json{glz::ex::write_json(item)};
 }
 
-struct tool_error
+[[nodiscard]] inline std::string
+tool_result_json(const tool_result & result)
 {
-    std::string error;
-    std::string name;
-    std::string detail;
-    std::string arguments;
-};
+    return glz::ex::write_json(result);
+}
 
 [[nodiscard]] inline std::string
-tool_error_json(
-    std::string error,
-    std::string name,
-    std::string detail = {},
-    std::string arguments = {})
+tool_result_json(tool_result && result)
 {
-    return glz::ex::write_json(tool_error{
-        .error = std::move(error),
-        .name = std::move(name),
-        .detail = std::move(detail),
-        .arguments = std::move(arguments),
-    });
+    return glz::ex::write_json(std::move(result));
 }
 
 template<function_tool Tool>
-nxt::task<std::string> run_one_function_tool(
+nxt::task<tool_result> run_one_function_tool(
     const Tool & tool,
     const function_call & call)
 {
@@ -211,31 +207,39 @@ nxt::task<std::string> run_one_function_tool(
     if (!call.arguments.empty()) {
         if (auto ec =
                 glz::read<openai::json_read_opts>(arguments, call.arguments))
-            co_return tool_error_json(
-                "invalid tool arguments json",
-                call.name,
-                glz::format_error(ec, call.arguments),
-                call.arguments);
+            co_return tool_result{
+                .failed = true,
+                .output = std::string{"invalid tool arguments json: "}
+                    + glz::format_error(ec, call.arguments),
+            };
     }
 
     try {
         co_return co_await tool.run(std::move(arguments));
     } catch (const std::exception & e) {
-        co_return tool_error_json("tool execution failed", call.name, e.what());
+        co_return tool_result{
+            .failed = true,
+            .output = std::string{"tool execution failed: "} + e.what(),
+        };
     } catch (...) {
-        co_return tool_error_json(
-            "tool execution failed", call.name, "non-std exception");
+        co_return tool_result{
+            .failed = true,
+            .output = "tool execution failed: non-std exception",
+        };
     }
 }
 
 /// Find and execute a concrete tool from a compile-time set.
 template<std::size_t I = 0, function_tool... Tools>
-nxt::task<std::string> run_function_tool(
+nxt::task<tool_result> run_function_tool(
     const tool_set<Tools...> & tools,
     const function_call & call)
 {
     if constexpr (I == sizeof...(Tools)) {
-        co_return tool_error_json("unknown tool", call.name);
+        co_return tool_result{
+            .failed = true,
+            .output = "unknown tool",
+        };
     } else {
         const auto & tool = std::get<I>(tools.items);
         using tool_t = std::remove_cvref_t<decltype(tool)>;

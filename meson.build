@@ -142,6 +142,52 @@ nxt_runtime_deps = [
 
 nxt_runtime_cpp_args = []
 
+cpp = meson.get_compiler('cpp')
+
+cpptrace_dep = dependency('cpptrace', method : 'cmake', required : false)
+cpptrace_probe = '''
+  #include <cpptrace/cpptrace.hpp>
+  #include <cpptrace/formatting.hpp>
+  #include <sstream>
+  int main() {
+    std::ostringstream out;
+    cpptrace::formatter{}.print(out, cpptrace::generate_trace(), false);
+    return 0;
+  }
+'''
+if cpptrace_dep.found() and cpp.links(
+  cpptrace_probe,
+  dependencies : [cpptrace_dep],
+  name : 'cpptrace')
+  nxt_runtime_deps += cpptrace_dep
+  nxt_runtime_cpp_args += '-DNXT_HAVE_CPPTRACE=1'
+  message('cpptrace available')
+else
+  message('cpptrace not available')
+endif
+
+std_stacktrace_probe = '''
+  #include <stacktrace>
+  int main() {
+    auto trace = std::stacktrace::current();
+    return static_cast<int>(trace.size());
+  }
+'''
+if cpp.links(std_stacktrace_probe, name : 'std::stacktrace')
+  message('std::stacktrace available')
+else
+  stdcxxexp_dep = cpp.find_library('stdc++exp', required : false)
+  if stdcxxexp_dep.found() and cpp.links(
+    std_stacktrace_probe,
+    dependencies : [stdcxxexp_dep],
+    name : 'std::stacktrace with stdc++exp')
+    nxt_runtime_deps += stdcxxexp_dep
+    message('std::stacktrace available with stdc++exp')
+  else
+    message('std::stacktrace not available')
+  endif
+endif
+
 if nxt_png_available
   nxt_png_lib = static_library('nxt-png',
     'src/nxt/png.cpp',
@@ -170,6 +216,7 @@ nxt_runtime_sources = files(
   'src/nxtio/net.cpp',
   'src/nxtio/short_id.cpp',
   'src/nxtio/signal-pipe.cpp',
+  'src/nxtio/stacktrace.cpp',
   'src/nxtio/subprocess.cpp',
 )
 

@@ -8,10 +8,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <random>
 #include <string>
 #include <string_view>
@@ -22,8 +24,13 @@
 #include "nxtio/input.hpp"
 #include "nxt/raster.hpp"
 #include "nxtio/short_id.hpp"
+#include "nxtio/stacktrace.hpp"
 #include "nxt/tui_terminal.hpp"
 #include "nxt/units.hpp"
+
+#ifdef NXT_HAVE_CPPTRACE
+#  include <cpptrace/cpptrace.hpp>
+#endif
 
 #include <glaze/glaze_exceptions.hpp>
 
@@ -307,11 +314,49 @@ scrollback_bottom_row(const height_t hud_h, const height_t term_h)
     return static_cast<int>(std::ranges::count(text, '\n'));
 }
 
+void print_exception_tree(
+    std::ostream & out,
+    std::exception_ptr failure,
+    std::string_view indent = "",
+    std::string_view label = "")
+{
+    if (!failure) {
+        out << indent << "unknown non-standard exception\n";
+        return;
+    }
+
+    try {
+        std::rethrow_exception(failure);
+    } catch (const exception_group & group) {
+        auto use_indexes = group.exceptions().size() > 1;
+        for (std::size_t i = 0; i < group.exceptions().size(); ++i) {
+            auto child_label = std::string{label};
+            if (use_indexes)
+                child_label += std::format("[{}]", i);
+            print_exception_tree(
+                out, group.exceptions()[i], indent, child_label);
+        }
+        return;
+#ifdef NXT_HAVE_CPPTRACE
+    } catch (const cpptrace::exception & e) {
+        out << indent << e.message() << "\n\n";
+        auto trace_indent = std::string{indent};
+        nxt::io::print_stacktrace(out, e.trace(), trace_indent);
+        return;
+#endif
+    } catch (const std::exception & e) {
+        out << indent << label << ": " << e.what() << '\n';
+    } catch (...) {
+        out << indent << "non-standard exception\n";
+    }
+}
+
 } // namespace
 
-UIRuntime::UIRuntime()
-    : scheduler_(nxt::scheduler::make_unique(nxt::scheduler::options{}))
-    , terminal_surface_(isatty(STDOUT_FILENO) != 0)
+UIRuntime::UIRuntime(UIRuntimeOptions options)
+    : options_(options)
+    , scheduler_(nxt::scheduler::make_unique(nxt::scheduler::options{}))
+    , terminal_surface_(options_.render && isatty(STDOUT_FILENO) != 0)
     , run_id_(make_short_id())
     , root_span_id_(make_short_id())
     , trace_(resolve_trace_path(run_id_), run_id_)
@@ -580,7 +625,7 @@ UIRuntime::~UIRuntime()
     // crash during summary printing still leaves a complete file.
     if (trace_.enabled()) {
         try {
-            emit_span_end(root_span_id_, {}, "runtime", "ok");
+            emit_span_end(root_span_id_, {}, "runtime", final_status_);
             trace_.write();
         } catch (...) {
             // Best-effort: never let trace teardown propagate.
@@ -597,14 +642,14 @@ UIRuntime::~UIRuntime()
         std::cout.flush();
 
     if (!snapshot_paths_.empty()) {
-        std::cout << "\nsnapshots:\n";
+        std::cerr << "\nsnapshots:\n";
         for (const auto & path : snapshot_paths_)
-            std::cout << "  " << path << '\n';
-        std::cout.flush();
+            std::cerr << "  " << path << '\n';
+        std::cerr.flush();
     }
     if (trace_.output_path()) {
-        std::cout << "trace: " << *trace_.output_path() << '\n';
-        std::cout.flush();
+        std::cerr << "\nSaved trace: " << *trace_.output_path() << '\n';
+        std::cerr.flush();
     }
 }
 
@@ -653,6 +698,11 @@ void UIRuntime::request_shutdown()
     damage_event_.set();   // Wake present_loop
     SignalPipe::notify(0); // Wake signal_loop
     input_poll_stop_.signal_stop();
+}
+
+void UIRuntime::mark_failed(std::string status) noexcept
+{
+    final_status_ = std::move(status);
 }
 
 void UIRuntime::signal_damage()
@@ -1006,6 +1056,37 @@ void UIRuntime::cleanup()
     std::cout.flush();
 }
 
+void UIRuntime::cleanup_for_crash()
+{
+    auto guard = std::scoped_lock{output_mutex_};
+    flush_output_queue(std::cout);
+    if (has_terminal_surface() && ansi::is_tty()) {
+        std::string buf;
+        ansi::Writer w(buf);
+        w.reset_scroll_region();
+        w.move_to(Pos::at(0 * ch, 0 * ln));
+        w.clear_screen();
+        w.reset();
+        w.show_cursor();
+        std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    }
+    std::cout.flush();
+}
+
+int report_exception(std::exception_ptr failure) noexcept
+{
+    try {
+        std::cerr << '\n';
+        print_exception_tree(std::cerr, failure);
+        nxt::io::print_current_exception_trace(std::cerr);
+        std::cerr.flush();
+    } catch (...) {
+        // Last ditch: never throw from a crash reporter.
+    }
+
+    return 1;
+}
+
 TerminalCompositor & UIRuntime::compositor() noexcept
 {
     return *compositor_;
@@ -1049,6 +1130,15 @@ nxt::task<> UIRuntime::signal_loop()
     co_return;
 }
 
+nxt::task<> UIRuntime::publish_input_event(nxt::input::KeyEvent event)
+{
+    record_input_event(event);
+    auto shutdown = event.is_ctrl_c();
+    co_await input_queue_.push(std::move(event));
+    if (shutdown)
+        request_shutdown();
+}
+
 nxt::task<> UIRuntime::input_loop()
 {
     if (!isatty(STDIN_FILENO))
@@ -1057,13 +1147,6 @@ nxt::task<> UIRuntime::input_loop()
     nxt::input::Parser parser;
     std::array<char, 256> buffer{};
     constexpr auto pending_timeout = std::chrono::milliseconds{25};
-    auto publish = [this](nxt::input::KeyEvent event) -> nxt::task<> {
-        record_input_event(event);
-        auto shutdown = event.is_ctrl_c();
-        co_await input_queue_.push(std::move(event));
-        if (shutdown)
-            request_shutdown();
-    };
 
     while (!shutdown_requested()) {
         auto status = co_await scheduler_->poll(
@@ -1077,7 +1160,7 @@ nxt::task<> UIRuntime::input_loop()
             break;
         if (status == nxt::poll_status::timeout) {
             for (auto & event : parser.flush())
-                co_await publish(std::move(event));
+                co_await publish_input_event(std::move(event));
             continue;
         }
         if (status != nxt::poll_status::read)
@@ -1089,7 +1172,7 @@ nxt::task<> UIRuntime::input_loop()
                 auto bytes = std::string_view{
                     buffer.data(), static_cast<std::size_t>(n)};
                 for (auto & event : parser.feed(bytes))
-                    co_await publish(std::move(event));
+                    co_await publish_input_event(std::move(event));
                 continue;
             }
 
@@ -1106,7 +1189,7 @@ nxt::task<> UIRuntime::input_loop()
     }
 
     for (auto & event : parser.flush())
-        co_await publish(std::move(event));
+        co_await publish_input_event(std::move(event));
     co_await input_queue_.shutdown();
 
     co_return;

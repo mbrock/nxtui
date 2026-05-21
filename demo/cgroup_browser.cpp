@@ -975,10 +975,13 @@ int run(int argc, char ** argv)
         ctx->cgroups.size(),
         ctx->root.c_str());
 
-    return nxt::ui::run2(
-        [ctx = std::move(ctx)](yard & self) -> nxt::task<> {
-            co_await root(self, ctx);
-        });
+    return nxt::ui::main([ctx = std::move(ctx)](
+                             nxt::ui::UIRuntime & runtime) mutable {
+        nxt::ui::run2(
+            runtime, [ctx = std::move(ctx)](yard & self) -> nxt::task<> {
+                co_await root(self, ctx);
+            });
+    });
 }
 
 } // namespace nxt::cgroup_browser

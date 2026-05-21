@@ -37,6 +37,7 @@
 // future multi-threaded runtime.
 //
 #include "nxtio/async-core.hpp"
+#include "nxtio/stacktrace.hpp"
 
 #include <any>
 #include <atomic>
@@ -364,9 +365,8 @@ struct yard_promise final : yard_promise_base
         if (std::holds_alternative<stored_type>(storage_))
             return std::get<stored_type>(storage_);
         if (std::holds_alternative<std::exception_ptr>(storage_))
-            std::rethrow_exception(
-                std::get<std::exception_ptr>(storage_));
-        throw std::runtime_error{"yardtask result was never set"};
+            nxt::io::rethrow(std::get<std::exception_ptr>(storage_));
+        throw nxt::io::runtime_error{"yardtask result was never set"};
     }
 
     const T & result() const &
@@ -374,9 +374,8 @@ struct yard_promise final : yard_promise_base
         if (std::holds_alternative<stored_type>(storage_))
             return std::get<stored_type>(storage_);
         if (std::holds_alternative<std::exception_ptr>(storage_))
-            std::rethrow_exception(
-                std::get<std::exception_ptr>(storage_));
-        throw std::runtime_error{"yardtask result was never set"};
+            nxt::io::rethrow(std::get<std::exception_ptr>(storage_));
+        throw nxt::io::runtime_error{"yardtask result was never set"};
     }
 
     T && result() &&
@@ -384,9 +383,8 @@ struct yard_promise final : yard_promise_base
         if (std::holds_alternative<stored_type>(storage_))
             return std::move(std::get<stored_type>(storage_));
         if (std::holds_alternative<std::exception_ptr>(storage_))
-            std::rethrow_exception(
-                std::get<std::exception_ptr>(storage_));
-        throw std::runtime_error{"yardtask result was never set"};
+            nxt::io::rethrow(std::get<std::exception_ptr>(storage_));
+        throw nxt::io::runtime_error{"yardtask result was never set"};
     }
 
 private:
@@ -405,7 +403,7 @@ struct yard_promise<void> final : yard_promise_base
     void result()
     {
         if (exception_)
-            std::rethrow_exception(exception_);
+            nxt::io::rethrow(exception_);
     }
 };
 
@@ -597,7 +595,7 @@ public:
     {
         auto * context = yard_current_context();
         if (!context)
-            throw std::runtime_error{"no current yard context"};
+            throw nxt::io::runtime_error{"no current yard context"};
         context->set<T>(key_, std::move(value));
     }
 
@@ -628,7 +626,7 @@ public:
     {
         if (auto * value = get_if())
             return *value;
-        throw std::out_of_range{"yard context variable is not set"};
+        throw nxt::io::out_of_range{"yard context variable is not set"};
     }
 
 private:

@@ -11,8 +11,10 @@
 #include <nxtai/tools.hpp>
 #include <nxtio/arrow.hpp>
 #include <nxtio/async.hpp>
+#include <nxtio/buffers.hpp>
 #include <nxtio/net.hpp>
 #include <nxtio/process.hpp>
+#include <nxtio/stacktrace.hpp>
 
 #include <algorithm>
 #include <exception>
@@ -348,6 +350,117 @@ inline bool is_response_lifecycle_event(const stream_event & event)
            || event.type == "response.incomplete";
 }
 
+inline std::string event_detail(const stream_event & event)
+{
+    auto data = event.data;
+    if (data.size() > 240)
+        data = data.substr(0, 237) + "...";
+    return std::format("{}: {}", event.type, data);
+}
+
+[[noreturn]] inline void throw_unexpected_event(
+    std::string_view context,
+    const stream_event & event)
+{
+    throw nxt::io::runtime_error{
+        std::format(
+            "unexpected OpenAI stream event while {}: {}",
+            context,
+            event_detail(event))};
+}
+
+[[noreturn]] inline void throw_unexpected_eof(std::string_view context)
+{
+    throw nxt::io::runtime_error{
+        std::format(
+            "OpenAI response stream ended while {}; expected a terminal event",
+            context)};
+}
+
+inline bool is_text_item_scaffolding_event(const stream_event & event)
+{
+    return event.type == "response.content_part.added"
+           || event.type == "response.content_part.done"
+           || event.type == "response.output_text.done"
+           || event.type == "response.reasoning_summary_part.added"
+           || event.type == "response.reasoning_summary_part.done"
+           || event.type == "response.reasoning_summary_text.done";
+}
+
+inline bool is_function_call_item_event(const stream_event & event)
+{
+    return event.type == "response.function_call_arguments.delta"
+           || event.type == "response.function_call_arguments.done";
+}
+
+inline std::exception_ptr classify_response_failure(
+    nxt::ui::UIRuntime & runtime,
+    std::exception_ptr failure)
+{
+    try {
+        nxt::io::rethrow(failure);
+    } catch (const nxt::io::operation_cancelled &) {
+        if (!runtime.shutdown_requested())
+            return failure;
+    } catch (const nxt::cancelled &) {
+        if (!runtime.shutdown_requested())
+            return failure;
+    } catch (...) {
+        return failure;
+    }
+    return {};
+}
+
+[[noreturn]] inline void throw_stream_lifecycle_failure(
+    std::string_view work_context,
+    std::exception_ptr work_failure,
+    std::string_view shutdown_context,
+    std::exception_ptr shutdown_failure)
+{
+    if (work_failure && shutdown_failure)
+        throw nxt::exception_group{
+            std::format("{}; {}", work_context, shutdown_context),
+            {work_failure, shutdown_failure}};
+    if (work_failure)
+        nxt::io::rethrow(work_failure);
+    nxt::io::rethrow(shutdown_failure);
+}
+
+template<typename Result, typename Work, typename Shutdown>
+nxt::task<Result> run_then_shutdown(
+    nxt::ui::UIRuntime & runtime,
+    std::string_view work_context,
+    Work work,
+    std::string_view shutdown_context,
+    Shutdown shutdown)
+{
+    auto result = Result{};
+    auto work_failure = std::exception_ptr{};
+    auto shutdown_failure = std::exception_ptr{};
+
+    try {
+        result = co_await nxt::invoke(std::move(work));
+    } catch (...) {
+        work_failure = classify_response_failure(
+            runtime, std::current_exception());
+    }
+
+    try {
+        co_await nxt::invoke(std::move(shutdown));
+    } catch (...) {
+        shutdown_failure = std::current_exception();
+    }
+
+    if (work_failure || shutdown_failure)
+        throw_stream_lifecycle_failure(
+            work_context,
+            work_failure,
+            shutdown_context,
+            shutdown_failure);
+
+    co_return result;
+}
+
 template<typename Stream>
 nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
     Stream & stream,
@@ -438,12 +551,16 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
             commit_block();
             co_return payload.item;
         }
+
+        else if (is_text_item_scaffolding_event(current)) {
+            continue;
+        }
+
+        else
+            throw_unexpected_event("reading output text item", current);
     }
 
-    for_complete_words(text, true, append_segment);
-    commit_block();
-
-    co_return std::nullopt;
+    throw_unexpected_eof("reading output text item");
 }
 
 template<typename Stream>
@@ -501,13 +618,18 @@ nxt::task<std::optional<openai::raw_json>> read_output_item(
                 auto item = event->read<openai::output_item_event>();
                 co_return item.item;
             }
+
+            if (is_function_call_item_event(*event))
+                continue;
+
+            throw_unexpected_event("reading function call item", *event);
         }
 
-        throw std::runtime_error{"expected item done"};
+        throw_unexpected_eof("reading function call item");
     }
 
     else
-        throw std::runtime_error{
+        throw nxt::io::runtime_error{
             "unexpected OpenAI output item type: " + first.data};
 }
 
@@ -525,21 +647,18 @@ nxt::task<response_stream_result> with_openai_response_stream(
     auto stream = responses::openai_response_stream<transport_t>{
         transport, runtime.get_stop_token()};
 
-    auto result = response_stream_result{};
-    auto failure = std::exception_ptr{};
-    try {
-        agent_trace::record_llm_request(self, request);
-        co_await stream.connect(request);
-        result = co_await read_stream(stream);
-    } catch (...) {
-        if (!runtime.shutdown_requested())
-            failure = std::current_exception();
-    }
-
-    co_await transport.shutdown();
-    if (failure)
-        std::rethrow_exception(failure);
-    co_return result;
+    co_return co_await run_then_shutdown<response_stream_result>(
+        runtime,
+        "response stream failed",
+        [&]() -> nxt::task<response_stream_result> {
+            agent_trace::record_llm_request(self, request);
+            co_await stream.connect(request);
+            co_return co_await nxt::invoke(std::move(read_stream), stream);
+        },
+        "transport shutdown failed",
+        [&]() {
+            return transport.shutdown();
+        });
 }
 
 template<typename Stream>
@@ -579,10 +698,16 @@ read_openai_response_stream(
         else if (event->type == "response.failed" || event->type == "response.incomplete") {
             co_return result;
         }
+
+        else if (event->type == "response.in_progress") {
+            continue;
+        }
+
+        else
+            throw_unexpected_event("reading response stream", *event);
     }
 
-    result.completed = true;
-    co_return result;
+    throw_unexpected_eof("reading response stream");
 }
 
 inline nxt::task<response_stream_result>
@@ -598,8 +723,8 @@ request_response_turn(
     co_return co_await with_openai_response_stream(
         self,
         request,
-        [&](auto & stream) -> nxt::task<response_stream_result> {
-            co_return co_await read_openai_response_stream(self, stream, hud);
+        [&](auto & stream) {
+            return read_openai_response_stream(self, stream, hud);
         });
 }
 

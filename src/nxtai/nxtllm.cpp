@@ -291,39 +291,30 @@ nxt::task<> run_prompt_loop(nxt::ui::yard & self, llm_request request)
 
 int main(int argc, char ** argv)
 {
-    try {
+    return nxt::ui::main([&](nxt::ui::UIRuntime & runtime) {
         auto options = parse_args(argc, argv);
         auto request = make_request(options, {});
 
-        if (options.oneshot_prompt) {
-            // One-shot mode: run a single agent turn (LLM + tools) and
-            // exit. This works whether stdout is a TTY or not; the
-            // HUD is unused but `self.println` still routes output to
-            // stdout. Pair with `NXT_TRACE=auto` to capture the full
-            // request/response/tool flow for inspection.
-            request.input = std::move(*options.oneshot_prompt);
-            return nxt::ui::run2(
-                [request = std::move(request)](
-                    nxt::ui::yard & self) mutable -> nxt::task<> {
+        nxt::ui::run2(
+            runtime,
+            [request = std::move(request),
+             prompt = std::move(options.oneshot_prompt)](
+                nxt::ui::yard & self) mutable -> nxt::task<> {
+                if (prompt) {
+                    request.input = std::move(*prompt);
                     co_await run_submitted_prompt(
                         self, std::move(request), true);
-                });
-        }
+                    co_return;
+                }
 
-        return nxt::ui::run2(
-            [request = std::move(request)](
-                nxt::ui::yard & self) mutable -> nxt::task<> {
-                if (self.runtime().has_terminal_surface()) {
-                    co_await run_prompt_loop(self, std::move(request));
-                } else {
+                if (!self.runtime().has_terminal_surface()) {
                     self.println(
                         "error: nxtllm without a prompt requires a TTY;\n"
                         "pass a prompt as positional args for one-shot mode");
+                    co_return;
                 }
-            });
 
-    } catch (const std::exception & e) {
-        std::cerr << "nxtllm error: " << e.what() << '\n';
-        return 1;
-    }
+                co_await run_prompt_loop(self, std::move(request));
+            });
+    });
 }

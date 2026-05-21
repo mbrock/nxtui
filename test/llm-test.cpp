@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace nxt::test {
@@ -140,9 +141,11 @@ struct test_echo_tool
         return palette.green;
     }
 
-    nxt::task<std::string> run(parameters args) const
+    nxt::task<nxt::ai::tools::tool_result> run(parameters args) const
     {
-        co_return args.text;
+        co_return nxt::ai::tools::tool_result{
+            .output = std::move(args.text),
+        };
     }
 };
 
@@ -156,9 +159,9 @@ struct test_empty_tool
     {
     };
 
-    nxt::task<std::string> run(parameters) const
+    nxt::task<nxt::ai::tools::tool_result> run(parameters) const
     {
-        co_return "{}";
+        co_return nxt::ai::tools::tool_result{};
     }
 };
 
@@ -300,13 +303,15 @@ suite llm_tests = [] {
 
         auto output =
             nxt::sync_wait(nxt::ai::tools::run_function_tool(tools, *call));
-        expect(output == "hello");
+        expect(!output.failed);
+        expect(output.output == "hello");
 
         auto missing = *call;
         missing.name = "missing";
         auto error =
             nxt::sync_wait(nxt::ai::tools::run_function_tool(tools, missing));
-        expect(json_at<std::string, "/error">(error) == "unknown tool");
+        expect(error.failed);
+        expect(error.output == "unknown tool");
     };
 
     "tool ui argument summaries use concrete tool parameters"_test = [] {
@@ -326,16 +331,11 @@ suite llm_tests = [] {
         expect(
             rg_display.color
             == nxt::Rgba8{nxt::theme::baltic_church.amber});
-        auto rg_result = glz::ex::write_json(
-            nxt::ai::agent_tools::rg_search_tool::result{
-                .pattern = "needle",
-                .path = "src",
-                .bytes = 2048,
-                .output = "one\ntwo\n",
-            });
+        auto rg_result = nxt::ai::tools::tool_result{
+            .output = "one\ntwo\n",
+        };
         expect(
-            nxt::ai::tool_ui::result_summary(tool_list, rg, rg_result)
-            == "x2 2K");
+            nxt::ai::tool_ui::result_summary(rg_result) == "8 bytes");
 
         auto echo = nxt::ai::tools::function_call{
             .name = "nxt_echo",

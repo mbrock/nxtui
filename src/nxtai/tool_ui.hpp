@@ -81,21 +81,6 @@ concept has_approval_requirement = requires {
     { Tool::needs_approval } -> std::convertible_to<bool>;
 };
 
-struct tool_result_view
-{
-    std::string error;
-    std::size_t bytes = 0;
-    std::string output;
-    std::string contents;
-};
-
-struct denied_tool_result
-{
-    std::string error = "denied by user";
-    std::string tool;
-    std::string args;
-};
-
 template<typename T>
 [[nodiscard]] inline std::optional<T>
 read_json_view(const std::string & json)
@@ -110,12 +95,6 @@ template<typename Tool>
 concept has_parameters_summary =
     requires(const typename Tool::parameters & parameters) {
         { Tool::parameters_summary(parameters) } -> std::same_as<std::string>;
-    };
-
-template<typename Tool>
-concept has_result_summary =
-    requires(const typename Tool::result & result) {
-        { Tool::result_summary(result) } -> std::same_as<std::string>;
     };
 
 inline std::string fallback_args_summary(const std::string & args_json)
@@ -350,64 +329,14 @@ inline auto queued_card(tool_display display, std::string_view args)
         "·", label, args_str, "queued", color, faint);
 }
 
-inline std::string fallback_result_summary(const tool_result_view & result)
+// One-line summary of the result (bytes/error).
+inline std::string result_summary(const tools::tool_result & result)
 {
-    if (result.bytes > 0)
-        return std::format("{} bytes", result.bytes);
+    if (result.failed)
+        return "error: " + result.output;
+    if (!result.output.empty())
+        return std::format("{} bytes", result.output.size());
     return {};
-}
-
-template<typename Tool>
-[[nodiscard]] inline std::optional<std::string> result_summary_for_tool(
-    std::string_view name,
-    const std::string & result_json)
-{
-    using tool_t = std::remove_cvref_t<Tool>;
-    if (name != tool_t::name)
-        return std::nullopt;
-    if constexpr (has_result_summary<tool_t>) {
-        auto result = read_json_view<typename tool_t::result>(result_json);
-        if (result)
-            return tool_t::result_summary(*result);
-    }
-    return std::nullopt;
-}
-
-template<std::size_t I = 0, typename ToolSet>
-[[nodiscard]] inline std::optional<std::string>
-result_summary_for_known_tool(
-    const ToolSet & tool_list,
-    std::string_view name,
-    const std::string & result_json)
-{
-    using tuple_t = std::remove_cvref_t<decltype(tool_list.items)>;
-    if constexpr (I == std::tuple_size_v<tuple_t>) {
-        return std::nullopt;
-    } else {
-        using tool_t = std::tuple_element_t<I, tuple_t>;
-        if (auto summary = result_summary_for_tool<tool_t>(name, result_json))
-            return summary;
-        return result_summary_for_known_tool<I + 1>(
-            tool_list, name, result_json);
-    }
-}
-
-// One-line summary of the JSON result (matches/bytes/error).
-template<typename ToolSet>
-inline std::string result_summary(
-    const ToolSet & tool_list,
-    const tools::function_call & call,
-    const std::string & result_json)
-{
-    auto result = read_json_view<tool_result_view>(result_json);
-    if (!result)
-        return {};
-    if (!result->error.empty())
-        return "error: " + result->error;
-    if (auto summary =
-            result_summary_for_known_tool(tool_list, call.name, result_json))
-        return *summary;
-    return fallback_result_summary(*result);
 }
 
 // Strip terminal control characters from a line before we
@@ -466,18 +395,16 @@ inline std::string sanitize_line(std::string_view line)
     return out;
 }
 
-// Up to `max_lines` preview lines extracted from the JSON result's
-// payload (.output / .contents). Each line trimmed to ~120 cells
-// and sanitized so embedded terminal controls can't escape into the
-// outer terminal state.
+// Up to `max_lines` preview lines extracted from the result payload.
+// Each line is trimmed to ~120 cells and sanitized so embedded terminal
+// controls can't escape into the outer terminal state.
 inline std::vector<std::string>
-preview_lines(const std::string & result_json, std::size_t max_lines = 4)
+preview_lines(const tools::tool_result & result, std::size_t max_lines = 4)
 {
     std::vector<std::string> out;
-    auto result = read_json_view<tool_result_view>(result_json);
-    if (!result)
+    if (result.failed)
         return out;
-    auto content = !result->output.empty() ? result->output : result->contents;
+    const auto & content = result.output;
     if (content.empty())
         return out;
     std::size_t pos = 0;
@@ -499,12 +426,9 @@ preview_lines(const std::string & result_json, std::size_t max_lines = 4)
 
 // Total number of payload lines (for the "and N more lines" hint
 // when preview is truncated).
-inline std::size_t result_total_lines(const std::string & result_json)
+inline std::size_t result_total_lines(const tools::tool_result & result)
 {
-    auto result = read_json_view<tool_result_view>(result_json);
-    if (!result)
-        return 0;
-    auto content = !result->output.empty() ? result->output : result->contents;
+    const auto & content = result.output;
     if (content.empty())
         return 0;
     return static_cast<std::size_t>(
@@ -513,11 +437,11 @@ inline std::size_t result_total_lines(const std::string & result_json)
 }
 
 inline std::vector<nxt::tui::Span>
-preview_spans(const std::string & result_json, std::size_t max_lines = 4)
+preview_spans(const tools::tool_result & result, std::size_t max_lines = 4)
 {
     using namespace nxt::tui;
-    auto preview = preview_lines(result_json, max_lines);
-    auto total = result_total_lines(result_json);
+    auto preview = preview_lines(result, max_lines);
+    auto total = result.failed ? 0 : result_total_lines(result);
     std::vector<Span> out;
     out.reserve(preview.size() + 1);
 
@@ -641,18 +565,18 @@ std::string render_for_scrollback(nxt::ui::yard & self, L && layout)
 template<typename ToolSet>
 inline void commit_tool_result(
     nxt::ui::yard & self,
-    const ToolSet & tool_list,
-    const tools::function_call & call,
+    const ToolSet &,
+    const tools::function_call &,
     tool_display display,
     std::string_view args_short,
-    const std::string & result,
-    bool is_error,
+    const tools::tool_result & result,
     std::chrono::milliseconds elapsed,
     hud_blocks::State * hud = nullptr)
 {
     using namespace nxt::tui;
-    auto summary = result_summary(tool_list, call, result);
+    auto summary = result_summary(result);
     auto preview = preview_spans(result, 4);
+    auto is_error = result.failed;
     self.print_block(render_for_scrollback(
         self,
         column(
@@ -673,12 +597,11 @@ inline void commit_tool_result(
 
 // ============================================================================
 // Per-tool execution (already-decided): animated card + commit.
-// Returns the result string (the JSON output from run_function_tool
-// or a synthesized denial blob).
+// Returns the typed result produced by the generic tool runner.
 // ============================================================================
 
 template<typename ToolSet>
-inline nxt::task<std::string> run_one_animated(
+inline nxt::task<tools::tool_result> run_one_animated(
     nxt::ui::yard & self,
     const ToolSet & tool_list,
     tools::function_call call,
@@ -691,7 +614,7 @@ inline nxt::task<std::string> run_one_animated(
 
     agent_trace::record_tool_call(self, call);
 
-    std::string result;
+    tools::tool_result result;
     auto worker = [&result, tool_list_ptr = &tool_list, call](
                       nxt::ui::yard & s) -> nxt::task<> {
         (void) s;
@@ -729,10 +652,11 @@ inline nxt::task<std::string> run_one_animated(
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
 
-    bool is_error = false;
-    if (auto parsed = read_json_view<tool_result_view>(result))
-        is_error = !parsed->error.empty();
-    agent_trace::record_tool_result(self, call, result, is_error);
+    agent_trace::record_tool_result(
+        self,
+        call,
+        tools::tool_result_json(result),
+        result.failed);
 
     commit_tool_result(
         self,
@@ -741,14 +665,13 @@ inline nxt::task<std::string> run_one_animated(
         display,
         args_short,
         result,
-        is_error,
         elapsed,
         hud);
     co_return result;
 }
 
 template<typename ToolSet>
-inline nxt::task<std::string> run_one_or_deny(
+inline nxt::task<tools::tool_result> run_one_or_deny(
     nxt::ui::yard & self,
     const ToolSet & tool_list,
     tools::function_call call,
@@ -770,11 +693,15 @@ inline nxt::task<std::string> run_one_or_deny(
             self.draw(nxt::tui::AnyLayout{});
         }
         agent_trace::record_tool_call(self, call);
-        auto denial = glz::ex::write_json(denied_tool_result{
-            .tool = call.name,
-            .args = call.arguments,
-        });
-        agent_trace::record_tool_result(self, call, denial, true);
+        auto denial = tools::tool_result{
+            .failed = true,
+            .output = "denied by user",
+        };
+        agent_trace::record_tool_result(
+            self,
+            call,
+            tools::tool_result_json(denial),
+            true);
         co_return denial;
     }
     co_return co_await run_one_animated(
@@ -846,7 +773,8 @@ inline nxt::task<std::vector<openai::raw_json>> run_all(
     // animates its card via `accompany`, runs (or denies), commits
     // to scrollback. Results land in a shared vector indexed by
     // slot — single scheduler thread so no data race.
-    auto results = std::make_shared<std::vector<std::string>>(calls.size());
+    auto results =
+        std::make_shared<std::vector<tools::tool_result>>(calls.size());
 
     std::vector<nxt::ui::ProcessHandle> handles;
     handles.reserve(calls.size());
@@ -887,14 +815,16 @@ inline nxt::task<std::vector<openai::raw_json>> run_all(
     else
         self.draw(nxt::tui::AnyLayout{});
 
-    // Wrap each child's result string as a function_call_output for
+    // Serialize each child's typed result as a function_call_output for
     // the LLM's next turn.
     std::vector<openai::raw_json> out;
     out.reserve(calls.size());
     for (std::size_t i = 0; i < calls.size(); ++i)
         out.push_back(
             tools::function_call_output(
-                calls[i].call_id, std::move((*results)[i])));
+                calls[i].call_id,
+                tools::tool_result_json(
+                    std::move((*results)[i]))));
     co_return out;
 }
 

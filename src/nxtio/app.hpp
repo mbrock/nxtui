@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -18,6 +19,7 @@
 #include "nxtio/input.hpp"
 #include "nxt/raster.hpp"
 #include "nxtio/signal-pipe.hpp"
+#include "nxtio/stacktrace.hpp"
 #include "nxt/units.hpp"
 #include "nxt/vterm.hpp"
 
@@ -34,6 +36,12 @@ using TermSize = nxt::Size;
 /// Re-exported terminal cleanup guard for applications.
 using ansi::TerminalGuard;
 
+struct UIRuntimeOptions
+{
+    bool render = true;
+    bool read_input = true;
+};
+
 /// Runtime state for the UI system.
 /// Owns scheduler, glyph table, compositor, and coordinates
 /// signals/events.
@@ -41,7 +49,7 @@ class UIRuntime
 {
 public:
     /// Create runtime resources and discover the initial terminal size.
-    UIRuntime();
+    explicit UIRuntime(UIRuntimeOptions options = {});
     /// Release runtime resources.
     ~UIRuntime();
 
@@ -79,6 +87,9 @@ public:
     /// Request shutdown.
     void request_shutdown();
 
+    /// Mark the overall runtime span status used when tracing closes.
+    void mark_failed(std::string status = "error") noexcept;
+
     /// Run a task, then request shutdown when it completes.
     nxt::task<> shutdown_after(nxt::task<> t)
     {
@@ -109,6 +120,16 @@ public:
     [[nodiscard]] bool has_terminal_surface() const noexcept
     {
         return terminal_surface_;
+    }
+
+    [[nodiscard]] bool render_enabled() const noexcept
+    {
+        return options_.render;
+    }
+
+    [[nodiscard]] bool read_input_enabled() const noexcept
+    {
+        return options_.read_input;
     }
 
     /// Schedule tasks on the runtime scheduler and await all of them.
@@ -150,6 +171,9 @@ public:
 
     /// Flush queued output before exit, preserving the final rendered HUD.
     void cleanup();
+
+    /// Clear the live terminal surface before printing a crash report.
+    void cleanup_for_crash();
 
     /// Capture the current back buffer to `img/<short-id>.png` and
     /// print the path to scrollback. Returns the saved path, or an
@@ -216,6 +240,9 @@ public:
 
     /// Coroutine that reads stdin and publishes decoded keyboard events.
     nxt::task<> input_loop();
+
+    /// Publish one decoded keyboard event to the input queue.
+    nxt::task<> publish_input_event(nxt::input::KeyEvent event);
 
     /// Wait for the next keyboard event. Returns nullopt if the channel
     /// shuts down.
@@ -387,6 +414,7 @@ private:
     // setup and must be able to use it across its whole lifetime.
     std::mutex output_mutex_;
 
+    UIRuntimeOptions options_;
     std::unique_ptr<nxt::scheduler> scheduler_;
     bool terminal_surface_{false};
     GlyphTable glyphs_;
@@ -413,6 +441,7 @@ private:
     // derived from run_id_ in the initializer list.
     std::string run_id_;
     std::string root_span_id_;
+    std::string final_status_ = "ok";
     nxt::io::arrow::ipc_trace trace_;
     std::int64_t next_frame_seq_{0};
     std::uint64_t last_frame_hash_{0};
@@ -440,75 +469,8 @@ private:
     std::stop_source stop_source_;
 };
 
-/// Run a TUI application.
-/// - initial_state: the starting state
-/// - build_ui: (const State&) → Layout
-/// - update: (UIRuntime&, State&) → nxt::task<> (should call
-/// request_shutdown)
-template<typename State, typename BuildUI, typename Update>
-int run(State initial_state, BuildUI build_ui, Update update)
-{
-    UIRuntime runtime;
-    State state = std::move(initial_state);
-
-    std::vector<nxt::task<>> tasks;
-    try {
-        TerminalGuard guard;
-        nxt::input::InputModeGuard input_guard;
-
-        tasks.push_back(runtime.signal_loop());
-        tasks.push_back(runtime.input_loop());
-        tasks.push_back(runtime.run_render_loop(
-            [&state, build_ui] { return build_ui(state); }));
-        tasks.push_back(update(runtime, state));
-
-        nxt::sync_wait(nxt::when_all(std::move(tasks)));
-        runtime.cleanup();
-    } catch (const std::exception & e) {
-        runtime.cleanup();
-        std::cerr << "Error: " << e.what() << '\n';
-        std::exit(1);
-    } catch (...) {
-        runtime.cleanup();
-        throw;
-    }
-
-    return 0;
-}
-
-/// Run the UI runtime without a rendered HUD. This still gives callers the
-/// scheduler, signal handling, and scroll output helpers.
-template<typename State, typename Update>
-int run_headless(State initial_state, Update update, bool read_input = false)
-{
-    UIRuntime runtime;
-    State state = std::move(initial_state);
-
-    std::vector<nxt::task<>> tasks;
-    try {
-        TerminalGuard guard;
-        runtime.compositor().set_hud_height(0 * ln, runtime.terminal_height());
-        std::optional<nxt::input::InputModeGuard> input_guard;
-        if (read_input)
-            input_guard.emplace();
-
-        tasks.push_back(runtime.signal_loop());
-        if (read_input)
-            tasks.push_back(runtime.input_loop());
-        tasks.push_back(update(runtime, state));
-
-        nxt::sync_wait(nxt::when_all(std::move(tasks)));
-        runtime.cleanup();
-    } catch (const std::exception & e) {
-        runtime.cleanup();
-        std::cerr << "Error: " << e.what() << '\n';
-        std::exit(1);
-    } catch (...) {
-        runtime.cleanup();
-        throw;
-    }
-
-    return 0;
-}
+/// Print a top-level exception report for the active process boundary.
+/// Returns the process exit status callers should use.
+int report_exception(std::exception_ptr failure) noexcept;
 
 } // namespace nxt::ui

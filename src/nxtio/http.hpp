@@ -2,6 +2,7 @@
 
 #include <nxt/http.hpp>
 #include <nxtio/buffers.hpp>
+#include <nxtio/stacktrace.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -10,7 +11,6 @@
 #include <cstring>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,9 +20,9 @@
 namespace nxt::io::http {
 
 /// Error raised for HTTP protocol parsing and transfer-framing failures.
-struct protocol_error : std::runtime_error
+struct protocol_error : nxt::io::runtime_error
 {
-    using std::runtime_error::runtime_error;
+    using nxt::io::runtime_error::runtime_error;
 };
 
 /// Parsed URL pieces supported by the small HTTP client.
@@ -96,7 +96,7 @@ nxt::task<> read_content_length(
         auto available = reader.buffered();
         if (!available.empty()) {
             auto n = std::min(remaining, available.size());
-            co_await on_chunk(available.first(n));
+            co_await nxt::invoke(on_chunk, available.first(n));
             reader.toss(n);
             remaining -= n;
             continue;
@@ -148,7 +148,7 @@ nxt::task<> read_until_eof(Reader & reader, OnChunk on_chunk)
     while (true) {
         auto available = reader.buffered();
         if (!available.empty()) {
-            co_await on_chunk(available);
+            co_await nxt::invoke(on_chunk, available);
             reader.toss(available.size());
             continue;
         }
@@ -210,6 +210,14 @@ nxt::task<> read_response_body(
 }
 
 /// Read the full response body into a string.
+inline nxt::task<> append_response_chunk(
+    std::string & body,
+    std::span<const std::byte> chunk)
+{
+    body += as_text(chunk);
+    co_return;
+}
+
 template<typename Reader>
 nxt::task<std::string> read_response_text(
     Reader & reader,
@@ -218,9 +226,8 @@ nxt::task<std::string> read_response_text(
     // Convenience semantic stage for callers that know the body should be
     // treated as opaque bytes/text, commonly error responses.
     auto body = std::string{};
-    auto collect = [&](std::span<const std::byte> chunk) -> nxt::task<> {
-        body += as_text(chunk);
-        co_return;
+    auto collect = [&body](std::span<const std::byte> chunk) {
+        return append_response_chunk(body, chunk);
     };
 
     co_await read_response_body(reader, response, collect);
