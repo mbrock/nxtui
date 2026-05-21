@@ -1,7 +1,7 @@
 #include <nxtio/buffers.hpp>
 #include <nxtio/async.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <algorithm>
 #include <array>

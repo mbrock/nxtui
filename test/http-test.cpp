@@ -1,6 +1,6 @@
 #include <nxt/http.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <string>
 #include <vector>

@@ -5,7 +5,7 @@
 #include <nxtai/tools.hpp>
 #include <nxtai/tools/subprocess.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 #include <glaze/json/json_ptr.hpp>
 
 #include <array>

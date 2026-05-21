@@ -1,7 +1,7 @@
 #include <nxt/tui_terminal.hpp>
 #include <nxtio/subprocess.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <algorithm>
 #include <chrono>

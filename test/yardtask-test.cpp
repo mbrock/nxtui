@@ -1,7 +1,7 @@
 #include <nxtio/async.hpp>
 #include <nxtio/yardtask.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <chrono>
 

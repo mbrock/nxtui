@@ -3,7 +3,7 @@
 #include <nxt/rt/pipe.hpp>
 #include <nxt/rt/task.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <array>
 #include <cstddef>

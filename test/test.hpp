@@ -118,12 +118,9 @@ inline void print_test_result(const test_result & result)
     std::cout << "\x1b[2m" << format_path(result.path) << "\x1b[0m  ";
     if (has_children) {
         std::cout << "\x1b[1m";
-        std::print(
-            "{:s} {}",
-            result.name | std::ranges::views::transform([](char c) {
-                return char(::toupper(c));
-            }),
-            status);
+        for (auto c : result.name)
+            std::cout << char(::toupper(static_cast<unsigned char>(c)));
+        std::cout << status;
     } else {
         std::cout << result.name << status;
     }

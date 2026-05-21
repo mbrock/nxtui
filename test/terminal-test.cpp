@@ -5,7 +5,7 @@
 #include <nxt/tui.hpp>
 #include <nxt/tui_terminal.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 #include <format>
 #include <optional>
 #include <sstream>

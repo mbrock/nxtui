@@ -15,6 +15,4 @@ subtrees by number:
 build/nxt-tests 1 2.7 7
 ```
 
-Tests are nested with the local `_test` DSL in `test/boost/ut.hpp`. Despite the
-path, this is a small custom runner, not really Boost.UT; it may be worth
-renaming someday.
+Tests are nested with the local `_test` DSL in `test/test.hpp`.

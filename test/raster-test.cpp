@@ -3,7 +3,7 @@
 #include <nxt/tui.hpp>
 #include <nxt/units.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 #include <format>
 
 namespace nxt::test {

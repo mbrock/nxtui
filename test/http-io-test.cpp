@@ -1,6 +1,6 @@
 #include <nxtio/http.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <array>
 #include <ranges>

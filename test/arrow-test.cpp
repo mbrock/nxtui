@@ -1,6 +1,6 @@
 #include <nxtio/arrow.hpp>
 
-#include <boost/ut.hpp>
+#include "test.hpp"
 
 #include <chrono>
 #include <filesystem>
