@@ -3,8 +3,6 @@
 #include <nxtai/responses.hpp>
 #include <nxtai/tools.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <cstddef>
 #include <optional>
 #include <stdexcept>
@@ -37,7 +35,7 @@ is_event(const responses::stream_event & event, std::string_view type)
 inline void request_encrypted_reasoning(
     responses::openai_responses_request & request)
 {
-    request.include = nlohmann::json::array({"reasoning.encrypted_content"});
+    request.include = {"reasoning.encrypted_content"};
 }
 
 /// Attach tool definitions and stateless-continuation includes to a request.
@@ -56,12 +54,12 @@ inline void prepare_tool_request(
 
 /// Append model output items followed by tool outputs to a stateless input.
 inline void append_stateless_turn(
-    nlohmann::json & input,
+    std::vector<openai::raw_json> & input,
     std::vector<openai::raw_json> output_items,
-    std::vector<nlohmann::json> tool_outputs)
+    std::vector<openai::raw_json> tool_outputs)
 {
     for (auto & item : output_items)
-        input.push_back(nlohmann::json::parse(item.str));
+        input.push_back(std::move(item));
     for (auto & output : tool_outputs)
         input.push_back(std::move(output));
 }
@@ -139,7 +137,7 @@ public:
 
     void continue_after_tools(
         response_stream_result response,
-        std::vector<nlohmann::json> tool_outputs)
+        std::vector<openai::raw_json> tool_outputs)
     {
         ++step_;
 
@@ -166,7 +164,7 @@ private:
     responses::openai_responses_request original_request_;
     responses::openai_responses_request request_;
     ToolSet tools_;
-    nlohmann::json stateless_input_ = nlohmann::json::array();
+    std::vector<openai::raw_json> stateless_input_;
     std::size_t step_ = 0;
     std::size_t max_steps_ = 0;
 };

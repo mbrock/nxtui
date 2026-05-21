@@ -21,14 +21,13 @@
 #include <nxtio/input.hpp>
 #include <nxtio/process.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <format>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -80,31 +79,84 @@ inline bool tool_needs_approval(std::string_view name)
     return false; // name == "bash";
 }
 
+struct read_file_args_view
+{
+    std::string path;
+};
+
+struct rg_search_args_view
+{
+    std::string pattern;
+    std::string path = ".";
+};
+
+struct web_fetch_args_view
+{
+    std::string url;
+};
+
+struct bash_args_view
+{
+    std::string command;
+};
+
+struct echo_args_view
+{
+    std::string text;
+};
+
+struct tool_result_view
+{
+    std::string error;
+    std::size_t bytes = 0;
+    std::string output;
+    std::string contents;
+};
+
+struct denied_tool_result
+{
+    std::string error = "denied by user";
+    std::string tool;
+    std::string args;
+};
+
+template<typename T>
+[[nodiscard]] inline std::optional<T>
+read_json_view(const std::string & json)
+{
+    auto value = T{};
+    if (glz::read<nxt::ai::openai::json_read_opts>(value, json))
+        return std::nullopt;
+    return value;
+}
+
 // Short, glanceable summary of the call's args (the value of the
 // "main" parameter, usually).
 inline std::string
 args_summary(std::string_view name, const std::string & args_json)
 {
-    try {
-        auto j = nlohmann::json::parse(args_json);
-        if (name == "read_file")
-            return j.value("path", std::string{});
-        if (name == "rg_search") {
-            auto p = j.value("pattern", std::string{});
-            auto path = j.value("path", std::string{"."});
-            return std::format("/{}/ in {}", p, path);
-        }
-        if (name == "web_fetch")
-            return j.value("url", std::string{});
-        if (name == "bash")
-            return j.value("command", std::string{});
-        if (name == "nxt_echo")
-            return j.value("text", std::string{});
-        return args_json.size() > 50 ? args_json.substr(0, 47) + "..."
-                                     : args_json;
-    } catch (...) {
-        return args_json;
+    if (name == "read_file") {
+        if (auto args = read_json_view<read_file_args_view>(args_json))
+            return args->path;
     }
+    if (name == "rg_search") {
+        if (auto args = read_json_view<rg_search_args_view>(args_json))
+            return std::format("/{}/ in {}", args->pattern, args->path);
+    }
+    if (name == "web_fetch") {
+        if (auto args = read_json_view<web_fetch_args_view>(args_json))
+            return args->url;
+    }
+    if (name == "bash") {
+        if (auto args = read_json_view<bash_args_view>(args_json))
+            return args->command;
+    }
+    if (name == "nxt_echo") {
+        if (auto args = read_json_view<echo_args_view>(args_json))
+            return args->text;
+    }
+    return args_json.size() > 50 ? args_json.substr(0, 47) + "..."
+                                 : args_json;
 }
 
 // ============================================================================
@@ -239,12 +291,14 @@ inline auto queued_card(std::string_view tool_name, std::string_view args)
 inline std::string
 result_summary(std::string_view tool_name, const std::string & result_json)
 {
-    auto j = nlohmann::json::parse(result_json);
-    if (j.contains("error"))
-        return std::string{"error: "} + j["error"].get<std::string>();
-    auto bytes = j.value("bytes", std::size_t{0});
+    auto result = read_json_view<tool_result_view>(result_json);
+    if (!result)
+        return {};
+    if (!result->error.empty())
+        return "error: " + result->error;
+    auto bytes = result->bytes;
     if (tool_name == "rg_search") {
-        auto out = j.value("output", std::string{});
+        auto out = result->output;
         auto lines = static_cast<std::size_t>(
             std::count(out.begin(), out.end(), '\n'));
         return std::format("⨉{} {}K", lines, bytes / 1024);
@@ -252,7 +306,7 @@ result_summary(std::string_view tool_name, const std::string & result_json)
     if (tool_name == "read_file")
         return std::format("{} K", bytes / 1024);
     if (tool_name == "web_fetch") {
-        auto out = j.value("output", std::string{});
+        auto out = result->output;
         auto lines = static_cast<std::size_t>(
             std::count(out.begin(), out.end(), '\n'));
         return std::format("{}K", lines, bytes / 1024);
@@ -326,30 +380,25 @@ inline std::vector<std::string>
 preview_lines(const std::string & result_json, std::size_t max_lines = 4)
 {
     std::vector<std::string> out;
-    try {
-        auto j = nlohmann::json::parse(result_json);
-        std::string content;
-        if (j.contains("output") && j["output"].is_string())
-            content = j["output"].get<std::string>();
-        else if (j.contains("contents") && j["contents"].is_string())
-            content = j["contents"].get<std::string>();
-        else
-            return out;
-        std::size_t pos = 0;
-        while (pos < content.size() && out.size() < max_lines) {
-            auto nl = content.find('\n', pos);
-            auto end = nl == std::string::npos ? content.size() : nl;
-            auto raw = std::string_view{content.data() + pos, end - pos};
-            auto line = sanitize_line(raw);
-            if (line.size() > 120)
-                line = line.substr(0, 118) + "…";
-            if (!line.empty())
-                out.push_back(std::move(line));
-            if (nl == std::string::npos)
-                break;
-            pos = nl + 1;
-        }
-    } catch (...) {
+    auto result = read_json_view<tool_result_view>(result_json);
+    if (!result)
+        return out;
+    auto content = !result->output.empty() ? result->output : result->contents;
+    if (content.empty())
+        return out;
+    std::size_t pos = 0;
+    while (pos < content.size() && out.size() < max_lines) {
+        auto nl = content.find('\n', pos);
+        auto end = nl == std::string::npos ? content.size() : nl;
+        auto raw = std::string_view{content.data() + pos, end - pos};
+        auto line = sanitize_line(raw);
+        if (line.size() > 120)
+            line = line.substr(0, 118) + "…";
+        if (!line.empty())
+            out.push_back(std::move(line));
+        if (nl == std::string::npos)
+            break;
+        pos = nl + 1;
     }
     return out;
 }
@@ -358,21 +407,15 @@ preview_lines(const std::string & result_json, std::size_t max_lines = 4)
 // when preview is truncated).
 inline std::size_t result_total_lines(const std::string & result_json)
 {
-    try {
-        auto j = nlohmann::json::parse(result_json);
-        std::string content;
-        if (j.contains("output") && j["output"].is_string())
-            content = j["output"].get<std::string>();
-        else if (j.contains("contents") && j["contents"].is_string())
-            content = j["contents"].get<std::string>();
-        if (content.empty())
-            return 0;
-        return static_cast<std::size_t>(
-                   std::count(content.begin(), content.end(), '\n'))
-               + (content.back() == '\n' ? 0 : 1);
-    } catch (...) {
+    auto result = read_json_view<tool_result_view>(result_json);
+    if (!result)
         return 0;
-    }
+    auto content = !result->output.empty() ? result->output : result->contents;
+    if (content.empty())
+        return 0;
+    return static_cast<std::size_t>(
+               std::count(content.begin(), content.end(), '\n'))
+           + (content.back() == '\n' ? 0 : 1);
 }
 
 inline std::vector<nxt::tui::Span>
@@ -585,12 +628,8 @@ inline nxt::task<std::string> run_one_animated(
         std::chrono::steady_clock::now() - start);
 
     bool is_error = false;
-    try {
-        auto j = nlohmann::json::parse(result);
-        is_error = j.is_object() && j.contains("error");
-    } catch (...) {
-        is_error = false;
-    }
+    if (auto parsed = read_json_view<tool_result_view>(result))
+        is_error = !parsed->error.empty();
     agent_trace::record_tool_result(self, call, result, is_error);
 
     commit_tool_result(self, call, result, is_error, elapsed, hud);
@@ -619,13 +658,10 @@ inline nxt::task<std::string> run_one_or_deny(
             self.draw(nxt::tui::AnyLayout{});
         }
         agent_trace::record_tool_call(self, call);
-        auto denial =
-            nlohmann::json{
-                {"error", "denied by user"},
-                {"tool", call.name},
-                {"args", call.arguments},
-            }
-                .dump();
+        auto denial = glz::ex::write_json(denied_tool_result{
+            .tool = call.name,
+            .args = call.arguments,
+        });
         agent_trace::record_tool_result(self, call, denial, true);
         co_return denial;
     }
@@ -639,7 +675,7 @@ inline nxt::task<std::string> run_one_or_deny(
 // ============================================================================
 
 template<typename ToolSet>
-inline nxt::task<std::vector<nlohmann::json>> run_all(
+inline nxt::task<std::vector<openai::raw_json>> run_all(
     nxt::ui::yard & self,
     const ToolSet & tool_list,
     const std::vector<tools::function_call> & calls,
@@ -647,7 +683,7 @@ inline nxt::task<std::vector<nlohmann::json>> run_all(
 {
     using namespace nxt::tui;
     if (calls.empty())
-        co_return std::vector<nlohmann::json>{};
+        co_return std::vector<openai::raw_json>{};
 
     // Phase 1: collect approvals sequentially. While we're prompting,
     // the HUD shows the approval card for the current call.
@@ -741,7 +777,7 @@ inline nxt::task<std::vector<nlohmann::json>> run_all(
 
     // Wrap each child's result string as a function_call_output for
     // the LLM's next turn.
-    std::vector<nlohmann::json> out;
+    std::vector<openai::raw_json> out;
     out.reserve(calls.size());
     for (std::size_t i = 0; i < calls.size(); ++i)
         out.push_back(

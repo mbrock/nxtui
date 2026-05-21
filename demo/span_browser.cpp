@@ -21,7 +21,7 @@
 #include <arrow/dataset/plan.h>
 #include <arrow/filesystem/api.h>
 
-#include <nlohmann/json.hpp>
+#include <glaze/json/generic.hpp>
 
 #include <algorithm>
 #include <array>
@@ -33,6 +33,7 @@
 #include <format>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -330,21 +331,21 @@ inline std::string format_duration(std::int64_t us)
 
 // ============================================================================
 // Rename catalog: declarative rules to project OTel data into the
-// labels and annotations a human actually wants to read. Each rule
-// matches a span by name and produces:
-//   * `label`: replaces the span name, with `{attr:k}` placeholders
-//     substituted from the span's attributes JSON
-//   * `salient`: attribute keys whose values appear after the label
-//     as a dim annotation like `[7089 stmts · 1.2MB]`
+// labels and annotations a human actually wants to read. A rule names
+// the span, gives it a nicer label, optionally appends one headline
+// attribute, and lists salient attributes for the dim annotation.
 //
 // Adding a rule is the path of least resistance for taming any
 // repetitive or jargony span pattern in a real trace.
 // ============================================================================
 
+using Attrs = glz::generic_u64;
+
 struct DisplayRule
 {
     std::string_view match;
     std::string_view label;
+    std::string_view headline;
     std::vector<std::string_view> salient;
 };
 
@@ -352,46 +353,60 @@ inline std::vector<DisplayRule> const & display_rules()
 {
     static const std::vector<DisplayRule> rules = {
         {"sheaf.fetch_graph",
-         "fetch ▸ {attr:sheaf.graph}",
+         "fetch",
+         "sheaf.graph",
          {"sheaf.statement_count", "sheaf.statement_bytes"}},
         {"sheaf.repo.load_once",
-         "load ▸ {attr:sheaf.graph}",
+         "load",
+         "sheaf.graph",
          {"sheaf.statement_count"}},
         {"sheaf.repo.ask",
-         "ask ▸ {attr:sheaf.graph}",
+         "ask",
+         "sheaf.graph",
          {"sheaf.row_count"}},
         {"sheaf.repo.match_rows",
-         "match ▸ {attr:sheaf.graph}",
+         "match",
+         "sheaf.graph",
          {"sheaf.row_count"}},
         {"quadlog.sqlite.select",
          "sqlite select",
+         "",
          {"sheaf.row_count"}},
         {"quadlog.sqlite.stream_nquads",
          "sqlite stream nquads",
+         "",
          {"sheaf.statement_count"}},
         {"Sheaf.Documents.from_rows",
          "documents ◂ rows",
+         "",
          {"sheaf.row_count"}},
         {"Sheaf.Documents.from_rows.build",
          "documents.build",
+         "",
          {}},
         {"Sheaf.Documents.list",
          "list documents",
+         "",
          {"sheaf.row_count"}},
         {"Sheaf.Corpus.find_documents",
          "find documents",
+         "",
          {"sheaf.row_count"}},
         {"Sheaf.ResourceResolver.resolve",
          "resolve resource",
+         "",
          {}},
         {"SheafWeb.AssistantMarkdown.document",
          "render markdown",
+         "",
          {}},
         {"SheafWeb.AssistantMarkdown.resource_ref_resolver",
          "resolve refs in markdown",
+         "",
          {}},
         {"GET",
-         "GET {attr:http.route}",
+         "GET",
+         "http.route",
          {"http.response.status_code"}},
     };
     return rules;
@@ -438,86 +453,59 @@ inline std::string short_uri(const std::string & uri)
     return uri.substr(path_start + 1);
 }
 
-inline std::string
-expand_template(
-    std::string_view tmpl,
-    const std::string & span_name,
-    const nlohmann::json & attrs)
+inline Attrs empty_attrs()
 {
-    std::string out;
-    out.reserve(tmpl.size());
-    std::size_t i = 0;
-    while (i < tmpl.size()) {
-        if (tmpl[i] == '{') {
-            auto end = tmpl.find('}', i);
-            if (end == std::string::npos) {
-                out += tmpl[i++];
-                continue;
-            }
-            auto inner = tmpl.substr(i + 1, end - i - 1);
-            if (inner == "name") {
-                out += span_name;
-            } else if (inner.starts_with("attr:")) {
-                auto key = std::string{inner.substr(5)};
-                if (attrs.is_object() && attrs.contains(key)) {
-                    const auto & v = attrs[key];
-                    if (v.is_string()) {
-                        auto s = v.get<std::string>();
-                        // Compact URIs in labels — they otherwise
-                        // dominate horizontal space.
-                        if (s.find("://") != std::string::npos)
-                            out += short_uri(s);
-                        else
-                            out += s;
-                    } else {
-                        out += v.dump();
-                    }
-                } else {
-                    // No such attribute — leave a hint marker.
-                    out += "—";
-                }
-            }
-            i = end + 1;
-        } else {
-            out += tmpl[i++];
-        }
+    return Attrs{Attrs::object_t{}};
+}
+
+inline std::string attr_value_string(const Attrs & value, bool compact_uri)
+{
+    if (value.is_string()) {
+        auto out = value.get_string();
+        if (compact_uri && out.find("://") != std::string::npos)
+            return short_uri(out);
+        return out;
     }
-    return out;
+    if (value.is_boolean())
+        return value.get_boolean() ? "true" : "false";
+    if (value.is_uint64())
+        return std::to_string(value.get<std::uint64_t>());
+    if (value.is_int64())
+        return std::to_string(value.get<std::int64_t>());
+    if (value.is_double())
+        return std::format("{:.2f}", value.get<double>());
+    auto dumped = value.dump();
+    return dumped ? *dumped : std::string{};
+}
+
+inline std::optional<std::string>
+attr_value(
+    const Attrs & attrs,
+    std::string_view key,
+    bool compact_uri = false)
+{
+    if (!attrs.is_object())
+        return std::nullopt;
+    if (!attrs.contains(key))
+        return std::nullopt;
+    return attr_value_string(attrs[key], compact_uri);
 }
 
 inline std::string
-format_salient(
-    const nlohmann::json & attrs,
-    const std::vector<std::string_view> & keys)
+format_salient(const Attrs & attrs, const std::vector<std::string_view> & keys)
 {
-    if (!attrs.is_object())
-        return {};
     std::vector<std::string> parts;
     parts.reserve(keys.size());
     for (auto key : keys) {
-        auto k = std::string{key};
-        if (!attrs.contains(k))
+        auto vstr = attr_value(attrs, key);
+        if (!vstr || vstr->empty())
             continue;
-        const auto & v = attrs[k];
-        std::string vstr;
-        if (v.is_string())
-            vstr = v.get<std::string>();
-        else if (v.is_number_integer())
-            vstr = std::to_string(v.get<std::int64_t>());
-        else if (v.is_number_unsigned())
-            vstr = std::to_string(v.get<std::uint64_t>());
-        else if (v.is_number_float())
-            vstr = std::format("{:.2f}", v.get<double>());
-        else if (v.is_boolean())
-            vstr = v.get<bool>() ? "true" : "false";
-        else
-            vstr = v.dump();
         auto label = short_attr_label(key);
         if (label.empty())
-            parts.push_back(std::move(vstr));
+            parts.push_back(std::move(*vstr));
         else
             parts.push_back(
-                std::format("{} {}", vstr, label));
+                std::format("{} {}", *vstr, label));
     }
     if (parts.empty())
         return {};
@@ -530,16 +518,28 @@ format_salient(
     return s;
 }
 
-inline nlohmann::json parse_attrs(const Span & s)
+inline Attrs parse_attrs(const Span & s)
 {
     if (s.attributes_json.empty()
         || s.attributes_json == "null")
-        return nlohmann::json::object();
-    try {
-        return nlohmann::json::parse(s.attributes_json);
-    } catch (...) {
-        return nlohmann::json::object();
+        return empty_attrs();
+    auto attrs = glz::read_json<Attrs>(s.attributes_json);
+    if (!attrs || !attrs->is_object())
+        return empty_attrs();
+    return std::move(*attrs);
+}
+
+inline std::string display_label_for(
+    const DisplayRule & rule,
+    const Attrs & attrs)
+{
+    auto out = std::string{rule.label};
+    if (!rule.headline.empty()) {
+        if (auto value = attr_value(attrs, rule.headline, true);
+            value && !value->empty())
+            out += " ▸ " + *value;
     }
+    return out;
 }
 
 inline DisplayInfo display_info_for(const Span & s)
@@ -548,7 +548,7 @@ inline DisplayInfo display_info_for(const Span & s)
     for (const auto & rule : display_rules()) {
         if (s.name == rule.match) {
             return {
-                expand_template(rule.label, s.name, attrs),
+                display_label_for(rule, attrs),
                 format_salient(attrs, rule.salient),
             };
         }
@@ -1296,23 +1296,10 @@ struct AttributePanel
         // Parse attributes. Be defensive: invalid/empty JSON ->
         // show a single "(no attributes)" line.
         std::vector<std::pair<std::string, std::string>> kvs;
-        if (!s.attributes_json.empty()
-            && s.attributes_json != "null") {
-            try {
-                auto j = nlohmann::json::parse(s.attributes_json);
-                if (j.is_object()) {
-                    for (auto it = j.begin(); it != j.end();
-                         ++it) {
-                        std::string v;
-                        if (it->is_string())
-                            v = it->get<std::string>();
-                        else
-                            v = it->dump();
-                        kvs.emplace_back(it.key(), v);
-                    }
-                }
-            } catch (...) {
-            }
+        auto attrs = parse_attrs(s);
+        if (attrs.is_object()) {
+            for (const auto & [key, value] : attrs.get_object())
+                kvs.emplace_back(key, attr_value_string(value, false));
         }
         std::sort(
             kvs.begin(),

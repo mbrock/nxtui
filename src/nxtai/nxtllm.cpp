@@ -10,8 +10,6 @@
 #include <nxtio/process.hpp>
 #include <nxtio/text_field.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <cstdlib>
 #include <exception>
 #include <iostream>

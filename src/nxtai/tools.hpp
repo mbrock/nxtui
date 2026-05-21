@@ -4,8 +4,8 @@
 #include <nxtio/async.hpp>
 
 #include <glaze/glaze_exceptions.hpp>
+#include <glaze/json/generic.hpp>
 #include <glaze/json/schema.hpp>
-#include <nlohmann/json.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -35,14 +35,14 @@ inline constexpr auto tool_schema_opts =
     glz::opts{.error_on_missing_keys = true};
 
 template<typename Parameters>
-[[nodiscard]] inline nlohmann::json parameters_schema()
+[[nodiscard]] inline openai::raw_json parameters_schema()
 {
-    auto schema = nlohmann::json::parse(
+    auto schema = glz::ex::read_json<glz::generic>(
         glz::ex::write_json_schema<Parameters, tool_schema_opts>());
-    schema.erase("title");
+    schema.get_object().erase("title");
     if (schema.contains("properties") && !schema.contains("required"))
-        schema["required"] = nlohmann::json::array();
-    return schema;
+        schema["required"] = glz::generic::array_t{};
+    return openai::raw_json{glz::ex::write_json(schema)};
 }
 
 /// Function-call item emitted by a Responses model.
@@ -93,31 +93,39 @@ template<function_tool... Left, function_tool... Right>
         std::move(joined));
 }
 
+struct function_tool_definition_item
+{
+    std::string type = "function";
+    std::string name;
+    std::string description;
+    openai::raw_json parameters;
+    bool strict = true;
+};
+
 /// Convert one concrete function tool to the Responses tool definition object.
 template<function_tool Tool>
-[[nodiscard]] inline nlohmann::json
+[[nodiscard]] inline openai::raw_json
 function_tool_definition(const Tool &)
 {
     using tool_t = std::remove_cvref_t<Tool>;
-    auto out = nlohmann::json{
-        {"type", "function"},
-        {"name", std::string{tool_t::name}},
-        {"description", std::string{tool_t::description}},
-        {"parameters", parameters_schema<typename tool_t::parameters>()},
-        {"strict", tool_t::strict},
-    };
-    return out;
+    return openai::raw_json{glz::ex::write_json(function_tool_definition_item{
+        .name = std::string{tool_t::name},
+        .description = std::string{tool_t::description},
+        .parameters = parameters_schema<typename tool_t::parameters>(),
+        .strict = tool_t::strict,
+    })};
 }
 
 /// Convert a compile-time set of function tools to a Responses `tools` array.
 template<function_tool... Tools>
-[[nodiscard]] inline nlohmann::json
+[[nodiscard]] inline std::vector<openai::raw_json>
 function_tool_definitions(const tool_set<Tools...> & tools)
 {
-    auto out = nlohmann::json::array();
+    auto out = std::vector<openai::raw_json>{};
+    out.reserve(sizeof...(Tools));
     std::apply(
         [&](const auto &... tool) {
-            (out.push_back(function_tool_definition(tool)), ...);
+            (out.emplace_back(function_tool_definition(tool)), ...);
         },
         tools.items);
     return out;
@@ -169,14 +177,14 @@ struct function_call_output_item
 };
 
 /// Build the structured input item that returns output for a function call.
-[[nodiscard]] inline nlohmann::json
+[[nodiscard]] inline openai::raw_json
 function_call_output(std::string call_id, std::string output)
 {
     auto item = function_call_output_item{
         .call_id = std::move(call_id),
         .output = std::move(output),
     };
-    return nlohmann::json::parse(glz::ex::write_json(item));
+    return openai::raw_json{glz::ex::write_json(item)};
 }
 
 struct tool_error

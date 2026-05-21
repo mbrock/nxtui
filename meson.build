@@ -30,10 +30,6 @@ nxt_libcoro_dep = declare_dependency(
   ],
 )
 
-nlohmann_json_dep = dependency(
-  'nlohmann_json',
-  fallback : ['nlohmann_json', 'nlohmann_json_dep'],
-)
 glaze_dep = declare_dependency(
   include_directories : include_directories('vendor/glaze/include'),
 )
@@ -141,7 +137,6 @@ nxt_core_dep = declare_dependency(
 nxt_runtime_deps = [
   nxt_core_dep,
   nxt_libcoro_dep,
-  nlohmann_json_dep,
   glaze_dep,
 ]
 

@@ -2,11 +2,24 @@
 
 #include <nxtio/short_id.hpp>
 
-#include <nlohmann/json.hpp>
+#include <glaze/glaze_exceptions.hpp>
 
+#include <string>
 #include <utility>
 
 namespace nxt::ai::trace {
+
+struct response_request_payload
+{
+    std::string provider = "openai";
+    std::string api = "responses";
+    std::string url = "https://api.openai.com/v1/responses";
+    std::string method = "POST";
+    openai::raw_json request_body;
+    openai::raw_json headers =
+        R"({"Accept":"text/event-stream","Content-Type":"application/json","User-Agent":"nxtllm/0"})";
+    bool authorization_header_present = false;
+};
 
 response_trace::response_trace(std::optional<std::string> output_path)
     : trace_(std::move(output_path), "nxtllm-" + nxt::io::make_short_id())
@@ -32,26 +45,16 @@ void response_trace::record_request(
         return;
 
     auto body = responses::openai_responses_body(request);
-    auto metadata = nlohmann::json{
-        {"provider", "openai"},
-        {"api", "responses"},
-        {"url", "https://api.openai.com/v1/responses"},
-        {"method", "POST"},
-        {"request_body", body},
-        {"headers",
-         {
-             {"Accept", "text/event-stream"},
-             {"Content-Type", "application/json"},
-             {"User-Agent", "nxtllm/0"},
-         }},
-        {"authorization_header_present", !request.api_key.empty()},
+    auto metadata = response_request_payload{
+        .request_body = openai::raw_json{body},
+        .authorization_header_present = !request.api_key.empty(),
     };
 
     trace_.add(
         "request",
         "openai.responses.request",
-        metadata.dump(),
-        body.dump());
+        glz::ex::write_json(metadata),
+        body);
 }
 
 void response_trace::record_event(const responses::stream_event & event)

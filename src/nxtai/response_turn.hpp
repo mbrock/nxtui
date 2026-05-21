@@ -14,8 +14,6 @@
 #include <nxtio/net.hpp>
 #include <nxtio/process.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <exception>
 #include <format>

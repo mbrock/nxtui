@@ -4,6 +4,8 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -23,7 +25,7 @@
 #include "nxt/tui_terminal.hpp"
 #include "nxt/units.hpp"
 
-#include <nlohmann/json.hpp>
+#include <glaze/glaze_exceptions.hpp>
 
 #ifdef NXT_HAVE_PNG
 #  include "nxt/png.hpp"
@@ -36,6 +38,51 @@ extern char * program_invocation_short_name; // glibc
 #endif
 
 namespace nxt::ui {
+
+struct FrameSnapshotPayload
+{
+    std::uint64_t cols = 0;
+    std::uint64_t rows = 0;
+    std::uint64_t hash = 0;
+    std::size_t bytes = 0;
+};
+
+struct TtyInitPayload
+{
+    std::uint64_t cols = 0;
+    std::uint64_t rows = 0;
+    bool surface = false;
+};
+
+struct TtyResizePayload
+{
+    std::uint64_t cols = 0;
+    std::uint64_t rows = 0;
+};
+
+struct InputModsPayload
+{
+    bool shift = false;
+    bool alt = false;
+    bool ctrl = false;
+    bool super = false;
+    bool hyper = false;
+    bool meta = false;
+};
+
+struct InputEventPayload
+{
+    int key = 0;
+    int type = 0;
+    std::uint32_t codepoint = 0;
+    InputModsPayload mods;
+    std::string text;
+};
+
+struct SpanEndPayload
+{
+    std::string status;
+};
 
 namespace {
 
@@ -383,11 +430,11 @@ void UIRuntime::record_frame_snapshot(const Raster & back)
     auto cols = static_cast<std::uint64_t>(back.width().count());
     auto rows = static_cast<std::uint64_t>(back.height().count());
 
-    auto payload = nlohmann::json{
-        {"cols", cols},
-        {"rows", rows},
-        {"hash", hash},
-        {"bytes", bytes.size()},
+    auto payload = FrameSnapshotPayload{
+        .cols = cols,
+        .rows = rows,
+        .hash = hash,
+        .bytes = bytes.size(),
     };
 
     nxt::io::arrow::trace_row row;
@@ -395,7 +442,7 @@ void UIRuntime::record_frame_snapshot(const Raster & back)
     row.event_type = "ansi";
     row.data = std::format(
         "{}x{} bytes={} hash={:016x}", cols, rows, bytes.size(), hash);
-    row.payload_json = payload.dump();
+    row.payload_json = glz::ex::write_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     row.frame_seq = next_frame_seq_++;
@@ -412,16 +459,16 @@ void UIRuntime::record_tty_init()
         return;
     auto cols = static_cast<std::uint64_t>(terminal_width().count());
     auto rows = static_cast<std::uint64_t>(terminal_height().count());
-    auto payload = nlohmann::json{
-        {"cols", cols},
-        {"rows", rows},
-        {"surface", has_terminal_surface()},
+    auto payload = TtyInitPayload{
+        .cols = cols,
+        .rows = rows,
+        .surface = has_terminal_surface(),
     };
     nxt::io::arrow::trace_row row;
     row.phase = "tty";
     row.event_type = "init";
     row.data = std::format("{}x{}", cols, rows);
-    row.payload_json = payload.dump();
+    row.payload_json = glz::ex::write_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     trace_.add(std::move(row));
@@ -433,15 +480,15 @@ void UIRuntime::record_tty_resize()
         return;
     auto cols = static_cast<std::uint64_t>(terminal_width().count());
     auto rows = static_cast<std::uint64_t>(terminal_height().count());
-    auto payload = nlohmann::json{
-        {"cols", cols},
-        {"rows", rows},
+    auto payload = TtyResizePayload{
+        .cols = cols,
+        .rows = rows,
     };
     nxt::io::arrow::trace_row row;
     row.phase = "tty";
     row.event_type = "resize";
     row.data = std::format("{}x{}", cols, rows);
-    row.payload_json = payload.dump();
+    row.payload_json = glz::ex::write_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     trace_.add(std::move(row));
@@ -472,22 +519,22 @@ void UIRuntime::record_input_event(const nxt::input::KeyEvent & event)
     if (!trace_.enabled())
         return;
 
-    auto mods = nlohmann::json{
-        {"shift", event.mods.shift},
-        {"alt", event.mods.alt},
-        {"ctrl", event.mods.ctrl},
-        {"super", event.mods.super},
-        {"hyper", event.mods.hyper},
-        {"meta", event.mods.meta},
+    auto payload = InputEventPayload{
+        .key = static_cast<int>(event.key),
+        .type = static_cast<int>(event.type),
+        .codepoint = static_cast<std::uint32_t>(event.codepoint),
+        .mods =
+            {
+                .shift = event.mods.shift,
+                .alt = event.mods.alt,
+                .ctrl = event.mods.ctrl,
+                .super = event.mods.super,
+                .hyper = event.mods.hyper,
+                .meta = event.mods.meta,
+            },
+        .text = event.text,
     };
-    auto payload = nlohmann::json{
-        {"key", static_cast<int>(event.key)},
-        {"type", static_cast<int>(event.type)},
-        {"codepoint", event.codepoint},
-        {"mods", std::move(mods)},
-        {"text", event.text},
-    };
-    auto dumped = payload.dump();
+    auto dumped = glz::ex::write_json(payload);
     nxt::io::arrow::trace_row row;
     row.phase = "input";
     row.event_type = "key";
@@ -506,14 +553,13 @@ void UIRuntime::emit_span_end(
 {
     if (!trace_.enabled())
         return;
-    auto payload = nlohmann::json::object();
-    if (!status.empty())
-        payload["status"] = std::string{status};
     nxt::io::arrow::trace_row row;
     row.phase = "span_end";
     row.event_type = std::string{name};
     row.data = std::string{status};
-    row.payload_json = payload.empty() ? std::string{} : payload.dump();
+    if (!status.empty())
+        row.payload_json =
+            glz::ex::write_json(SpanEndPayload{.status = std::string{status}});
     row.span_id = std::string{span_id};
     row.parent_span_id = std::string{parent_span_id};
     row.span_name = std::string{name};

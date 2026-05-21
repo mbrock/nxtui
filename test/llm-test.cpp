@@ -4,7 +4,7 @@
 #include <nxtai/tools.hpp>
 
 #include <boost/ut.hpp>
-#include <nlohmann/json.hpp>
+#include <glaze/json/json_ptr.hpp>
 
 #include <array>
 #include <chrono>
@@ -16,6 +16,20 @@
 namespace nxt::test {
 
 using namespace boost::ut;
+
+template<typename T, glz::string_literal Path>
+T json_at(std::string_view json)
+{
+    auto value = glz::get_as_json<T, Path>(json);
+    expect(bool(value));
+    return *value;
+}
+
+template<glz::string_literal Path>
+bool json_has(std::string_view json)
+{
+    return bool(glz::get_sv_json<Path>(json));
+}
 
 template<typename Layout>
 std::vector<std::string> render_lines(const Layout & layout)
@@ -144,9 +158,6 @@ suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
-            .input_items = nlohmann::json::array(),
-            .tools = nlohmann::json::array(),
-            .include = nlohmann::json::array(),
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_effort = "minimal",
@@ -160,13 +171,13 @@ suite llm_tests = [] {
         auto body_start = wire.find("\r\n\r\n");
         expect(body_start != std::string::npos);
 
-        auto body = nlohmann::json::parse(wire.substr(body_start + 4));
-        expect(body["model"] == "gpt-5-mini");
-        expect(body["input"] == "Say ok.");
-        expect(body["stream"] == true);
-        expect(body["store"] == false);
-        expect(body["reasoning"]["effort"] == "minimal");
-        expect(body["reasoning"]["summary"] == "auto");
+        auto body = wire.substr(body_start + 4);
+        expect(json_at<std::string, "/model">(body) == "gpt-5-mini");
+        expect(json_at<std::string, "/input">(body) == "Say ok.");
+        expect(json_at<bool, "/stream">(body));
+        expect(!json_at<bool, "/store">(body));
+        expect(json_at<std::string, "/reasoning/effort">(body) == "minimal");
+        expect(json_at<std::string, "/reasoning/summary">(body) == "auto");
         expect(wire.find("Authorization: Bearer test-key\r\n") != std::string::npos);
     };
 
@@ -176,30 +187,12 @@ suite llm_tests = [] {
             .model = "gpt-5-mini",
             .input = "ignored for tool output turn",
             .input_items =
-                nlohmann::json::array({
-                    nxt::ai::tools::function_call_output(
-                        "call_123",
-                        "{\"ok\":true}")}),
-            .tools =
-                nlohmann::json::array({
-                    {
-                        {"type", "function"},
-                        {"name", "nxt_echo"},
-                        {"description", "Echo text."},
-                        {"parameters",
-                         {
-                             {"type", "object"},
-                             {"properties",
-                              {
-                                  {"text", {{"type", "string"}}},
-                              }},
-                             {"required", {"text"}},
-                             {"additionalProperties", false},
-                         }},
-                        {"strict", true},
-                    },
-                }),
-            .include = nlohmann::json::array({"reasoning.encrypted_content"}),
+                {nxt::ai::tools::function_call_output(
+                    "call_123",
+                    "{\"ok\":true}")},
+            .tools = {nxt::ai::tools::function_tool_definition(
+                test_echo_tool{})},
+            .include = {"reasoning.encrypted_content"},
             .previous_response_id = "resp_123",
             .max_output_tokens = 64,
             .reasoning_summary = "",
@@ -207,38 +200,45 @@ suite llm_tests = [] {
         };
 
         auto body = nxt::ai::responses::openai_responses_body(request);
-        expect(body["input"].is_array());
-        expect(body["input"][0]["type"] == "function_call_output");
-        expect(body["input"][0]["call_id"] == "call_123");
-        expect(body["tools"][0]["name"] == "nxt_echo");
-        expect(body["include"][0] == "reasoning.encrypted_content");
-        expect(body["previous_response_id"] == "resp_123");
-        expect(body["store"] == true);
+        expect(json_at<std::string, "/input/0/type">(body) ==
+               "function_call_output");
+        expect(json_at<std::string, "/input/0/call_id">(body) == "call_123");
+        expect(json_at<std::string, "/tools/0/name">(body) == "nxt_echo");
+        expect(json_at<std::string, "/include/0">(body) ==
+               "reasoning.encrypted_content");
+        expect(json_at<std::string, "/previous_response_id">(body) ==
+               "resp_123");
+        expect(json_at<bool, "/store">(body));
     };
 
     "function tool definition derives parameter json schema"_test = [] {
         auto definition =
-            nxt::ai::tools::function_tool_definition(test_echo_tool{});
+            nxt::ai::tools::function_tool_definition(test_echo_tool{}).str;
 
-        expect(definition["type"] == "function");
-        expect(definition["name"] == "nxt_echo");
-        expect(definition["parameters"]["type"] == "object");
-        expect(!definition["parameters"].contains("title"));
-        expect(definition["parameters"]["additionalProperties"] == false);
-        expect(definition["parameters"]["required"] ==
-               nlohmann::json::array({"text"}));
-        expect(definition["parameters"]["properties"]["text"]["type"] ==
-               "string");
-        expect(
-            definition["parameters"]["properties"]["text"]["description"] ==
-            "Text to echo.");
+        expect(json_at<std::string, "/type">(definition) == "function");
+        expect(json_at<std::string, "/name">(definition) == "nxt_echo");
+        expect(json_at<std::string, "/parameters/type">(definition) ==
+               "object");
+        expect(!json_has<"/parameters/title">(definition));
+        expect(!json_at<bool, "/parameters/additionalProperties">(definition));
+        expect(json_at<std::string, "/parameters/required/0">(definition) ==
+               "text");
+        expect(json_at<std::string, "/parameters/properties/text/type">(
+                   definition) == "string");
+        expect(json_at<std::string,
+                       "/parameters/properties/text/description">(
+                   definition) == "Text to echo.");
 
         auto empty_definition =
-            nxt::ai::tools::function_tool_definition(test_empty_tool{});
-        expect(empty_definition["parameters"]["properties"] ==
-               nlohmann::json::object());
-        expect(empty_definition["parameters"]["required"] ==
-               nlohmann::json::array());
+            nxt::ai::tools::function_tool_definition(test_empty_tool{}).str;
+        auto properties =
+            glz::get_sv_json<"/parameters/properties">(empty_definition);
+        expect(bool(properties));
+        expect(*properties == "{}");
+        auto required =
+            glz::get_sv_json<"/parameters/required">(empty_definition);
+        expect(bool(required));
+        expect(*required == "[]");
     };
 
     "openai responses request builds stateless tool input history"_test = [] {
@@ -246,9 +246,7 @@ suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Use a tool.",
-            .input_items = nlohmann::json::array(),
-            .tools = nlohmann::json::array(),
-            .include = nlohmann::json::array({"reasoning.encrypted_content"}),
+            .include = {"reasoning.encrypted_content"},
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_summary = "",
@@ -256,13 +254,8 @@ suite llm_tests = [] {
         };
 
         auto input = nxt::ai::responses::input_items_from_request(request);
-        input.push_back({
-            {"id", "fc_123"},
-            {"type", "function_call"},
-            {"call_id", "call_123"},
-            {"name", "nxt_echo"},
-            {"arguments", "{\"text\":\"hello\"}"},
-        });
+        input.emplace_back(
+            R"({"id":"fc_123","type":"function_call","call_id":"call_123","name":"nxt_echo","arguments":"{\"text\":\"hello\"}"})");
         input.push_back(nxt::ai::tools::function_call_output(
             "call_123",
             "{\"text\":\"hello\"}"));
@@ -270,13 +263,15 @@ suite llm_tests = [] {
         request.input.clear();
         request.input_items = std::move(input);
         auto body = nxt::ai::responses::openai_responses_body(request);
-        expect(body["store"] == false);
-        expect(body["include"][0] == "reasoning.encrypted_content");
-        expect(!body.contains("previous_response_id"));
-        expect(body["input"].is_array());
-        expect(body["input"][0]["role"] == "user");
-        expect(body["input"][1]["type"] == "function_call");
-        expect(body["input"][2]["type"] == "function_call_output");
+        expect(!json_at<bool, "/store">(body));
+        expect(json_at<std::string, "/include/0">(body) ==
+               "reasoning.encrypted_content");
+        expect(!json_has<"/previous_response_id">(body));
+        expect(json_at<std::string, "/input/0/role">(body) == "user");
+        expect(json_at<std::string, "/input/1/type">(body) ==
+               "function_call");
+        expect(json_at<std::string, "/input/2/type">(body) ==
+               "function_call_output");
     };
 
     "function call item parses and runs matching tool"_test = [] {
@@ -297,7 +292,7 @@ suite llm_tests = [] {
         missing.name = "missing";
         auto error =
             nxt::sync_wait(nxt::ai::tools::run_function_tool(tools, missing));
-        expect(nlohmann::json::parse(error)["error"] == "unknown tool");
+        expect(json_at<std::string, "/error">(error) == "unknown tool");
     };
 
     "response item projections derive messages and calls"_test = [] {
@@ -461,9 +456,6 @@ suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
-            .input_items = nlohmann::json::array(),
-            .tools = nlohmann::json::array(),
-            .include = nlohmann::json::array(),
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_summary = "",
@@ -503,9 +495,6 @@ suite llm_tests = [] {
             .api_key = "test-key",
             .model = "gpt-5-mini",
             .input = "Say ok.",
-            .input_items = nlohmann::json::array(),
-            .tools = nlohmann::json::array(),
-            .include = nlohmann::json::array(),
             .previous_response_id = {},
             .max_output_tokens = 64,
             .reasoning_summary = "",
