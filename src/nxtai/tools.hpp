@@ -4,6 +4,7 @@
 #include <nxtio/async.hpp>
 
 #include <glaze/glaze_exceptions.hpp>
+#include <glaze/json/schema.hpp>
 #include <nlohmann/json.hpp>
 
 #include <concepts>
@@ -26,10 +27,23 @@ concept function_tool = requires(
 {
     { Tool::name } -> std::convertible_to<std::string_view>;
     { Tool::description } -> std::convertible_to<std::string_view>;
-    { Tool::parameters_schema } -> std::convertible_to<std::string_view>;
     { Tool::strict } -> std::convertible_to<bool>;
     { tool.run(std::move(parameters)) } -> std::same_as<nxt::task<std::string>>;
 };
+
+inline constexpr auto tool_schema_opts =
+    glz::opts{.error_on_missing_keys = true};
+
+template<typename Parameters>
+[[nodiscard]] inline nlohmann::json parameters_schema()
+{
+    auto schema = nlohmann::json::parse(
+        glz::ex::write_json_schema<Parameters, tool_schema_opts>());
+    schema.erase("title");
+    if (schema.contains("properties") && !schema.contains("required"))
+        schema["required"] = nlohmann::json::array();
+    return schema;
+}
 
 /// Function-call item emitted by a Responses model.
 struct function_call
@@ -89,8 +103,7 @@ function_tool_definition(const Tool &)
         {"type", "function"},
         {"name", std::string{tool_t::name}},
         {"description", std::string{tool_t::description}},
-        {"parameters", nlohmann::json::parse(
-                           std::string{tool_t::parameters_schema})},
+        {"parameters", parameters_schema<typename tool_t::parameters>()},
         {"strict", tool_t::strict},
     };
     return out;

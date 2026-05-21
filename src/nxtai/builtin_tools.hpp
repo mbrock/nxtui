@@ -35,8 +35,6 @@ struct current_time_tool
     static constexpr std::string_view name = "nxt_current_time";
     static constexpr std::string_view description =
         "Return the current local timestamp for the nxtllm process.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{},"required":[],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
@@ -59,8 +57,6 @@ struct terminal_size_tool
     static constexpr std::string_view name = "nxt_terminal_size";
     static constexpr std::string_view description =
         "Return the current terminal size used by the nxt UI runtime.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{},"required":[],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
@@ -89,13 +85,16 @@ struct echo_tool
     static constexpr std::string_view name = "nxt_echo";
     static constexpr std::string_view description =
         "Echo a short text string. Useful for checking that tool calling works.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{"text":{"type":"string","description":"Text to echo back."}},"required":["text"],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
     {
         std::string text;
+
+        struct glaze_json_schema
+        {
+            glz::schema text{.description = "Text to echo back."};
+        };
     };
 
     struct result

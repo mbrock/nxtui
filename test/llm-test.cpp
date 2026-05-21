@@ -102,18 +102,37 @@ struct test_echo_tool
 {
     static constexpr std::string_view name = "nxt_echo";
     static constexpr std::string_view description = "Echo text.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
     {
         std::string text;
+
+        struct glaze_json_schema
+        {
+            glz::schema text{.description = "Text to echo."};
+        };
     };
 
     nxt::task<std::string> run(parameters args) const
     {
         co_return args.text;
+    }
+};
+
+struct test_empty_tool
+{
+    static constexpr std::string_view name = "nxt_empty";
+    static constexpr std::string_view description = "No arguments.";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+    };
+
+    nxt::task<std::string> run(parameters) const
+    {
+        co_return "{}";
     }
 };
 
@@ -195,6 +214,31 @@ suite llm_tests = [] {
         expect(body["include"][0] == "reasoning.encrypted_content");
         expect(body["previous_response_id"] == "resp_123");
         expect(body["store"] == true);
+    };
+
+    "function tool definition derives parameter json schema"_test = [] {
+        auto definition =
+            nxt::ai::tools::function_tool_definition(test_echo_tool{});
+
+        expect(definition["type"] == "function");
+        expect(definition["name"] == "nxt_echo");
+        expect(definition["parameters"]["type"] == "object");
+        expect(!definition["parameters"].contains("title"));
+        expect(definition["parameters"]["additionalProperties"] == false);
+        expect(definition["parameters"]["required"] ==
+               nlohmann::json::array({"text"}));
+        expect(definition["parameters"]["properties"]["text"]["type"] ==
+               "string");
+        expect(
+            definition["parameters"]["properties"]["text"]["description"] ==
+            "Text to echo.");
+
+        auto empty_definition =
+            nxt::ai::tools::function_tool_definition(test_empty_tool{});
+        expect(empty_definition["parameters"]["properties"] ==
+               nlohmann::json::object());
+        expect(empty_definition["parameters"]["required"] ==
+               nlohmann::json::array());
     };
 
     "openai responses request builds stateless tool input history"_test = [] {

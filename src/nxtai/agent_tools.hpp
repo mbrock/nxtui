@@ -211,13 +211,17 @@ struct read_file_tool
         "Read a text file from the local filesystem. Returns "
         "JSON with the file path, byte count, and the file's "
         "contents truncated to 80 KiB.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file"}},"required":["path"],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
     {
         std::string path;
+
+        struct glaze_json_schema
+        {
+            glz::schema path{
+                .description = "Absolute or relative path to the file"};
+        };
     };
 
     struct result
@@ -265,14 +269,21 @@ struct rg_search_tool
         "Search for a regex pattern across files using ripgrep. "
         "Returns JSON with the matching lines (file:line:text). "
         "Use this to locate symbols, definitions, or usages.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern to search for (rg-style)"},"path":{"type":"string","description":"Directory or file to search; use \".\" for current working directory"}},"required":["pattern","path"],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
     {
         std::string pattern;
         std::string path = ".";
+
+        struct glaze_json_schema
+        {
+            glz::schema pattern{
+                .description = "Regex pattern to search for (rg-style)"};
+            glz::schema path{
+                .description =
+                    "Directory or file to search; use \".\" for current working directory"};
+        };
     };
 
     struct result
@@ -332,13 +343,16 @@ struct web_fetch_tool
         "lightpanda (a headless browser). Useful for reading "
         "documentation pages, blog posts, or any public web "
         "content. Renders JS before extracting.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{"url":{"type":"string","description":"HTTPS URL to fetch"}},"required":["url"],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
     {
         std::string url;
+
+        struct glaze_json_schema
+        {
+            glz::schema url{.description = "HTTPS URL to fetch"};
+        };
     };
 
     struct result
@@ -391,13 +405,18 @@ struct bash_tool
         "will be prompted to confirm or deny before the command "
         "runs. Use it for read-only inspections and idempotent "
         "operations; avoid destructive commands.";
-    static constexpr std::string_view parameters_schema =
-        R"json({"type":"object","properties":{"command":{"type":"string","description":"Full shell command line. Will be passed to /bin/bash -c."}},"required":["command"],"additionalProperties":false})json";
     static constexpr bool strict = true;
 
     struct parameters
     {
         std::string command;
+
+        struct glaze_json_schema
+        {
+            glz::schema command{
+                .description =
+                    "Full shell command line. Will be passed to /bin/bash -c."};
+        };
     };
 
     struct result
