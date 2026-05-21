@@ -120,6 +120,7 @@ public:
     {
         if (m_ares_channel != nullptr)
         {
+            std::scoped_lock lock{m_ares_channel_mutex};
             ares_destroy(m_ares_channel);
             m_ares_channel = nullptr;
         }
@@ -145,13 +146,16 @@ public:
         ares_addrinfo_hints hints{};
         hints.ai_family = AF_UNSPEC; // Request both IPv4 and IPv6
 
-        ares_getaddrinfo(
-            m_ares_channel,
-            hn.data().data(),
-            nullptr, // service name (port number or NULL)
-            &hints,
-            ares_dns_callback,
-            result_ptr.get());
+        {
+            std::scoped_lock lock{m_ares_channel_mutex};
+            ares_getaddrinfo(
+                m_ares_channel,
+                hn.data().data(),
+                nullptr, // service name (port number or NULL)
+                &hints,
+                ares_dns_callback,
+                result_ptr.get());
+        }
 
         // Suspend until this specific result is completed by ares.
         co_await resume_event;

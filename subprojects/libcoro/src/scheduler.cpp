@@ -408,12 +408,12 @@ auto scheduler::process_event_execute(detail::poll_info* pi, poll_status status)
 
         pi->m_poll_status = status;
 
-        while (pi->m_awaiting_coroutine == nullptr)
+        auto awaiting_coroutine = static_cast<void*>(nullptr);
+        while ((awaiting_coroutine = pi->m_awaiting_coroutine.load(std::memory_order::acquire)) == nullptr)
         {
-            std::atomic_thread_fence(std::memory_order::acquire);
         }
 
-        m_handles_to_resume.emplace_back(pi->m_awaiting_coroutine);
+        m_handles_to_resume.emplace_back(std::coroutine_handle<>::from_address(awaiting_coroutine));
     }
 }
 
@@ -455,19 +455,23 @@ auto scheduler::process_timeout_execute() -> void
                 m_io_notifier.unwatch(*pi);
             }
 
-            while (pi->m_awaiting_coroutine == nullptr)
+            pi->m_poll_status = coro::poll_status::timeout;
+
+            auto awaiting_coroutine = static_cast<void*>(nullptr);
+            while ((awaiting_coroutine = pi->m_awaiting_coroutine.load(std::memory_order::acquire)) == nullptr)
             {
-                std::atomic_thread_fence(std::memory_order::acquire);
             }
 
-            m_handles_to_resume.emplace_back(pi->m_awaiting_coroutine);
-            pi->m_poll_status = coro::poll_status::timeout;
+            m_handles_to_resume.emplace_back(std::coroutine_handle<>::from_address(awaiting_coroutine));
         }
     }
 
     // Update the time to the next smallest time point, re-take the current now time
     // since updating and resuming tasks could shift the time.
-    update_timeout(clock::now());
+    {
+        std::scoped_lock lk{m_timed_events_mutex};
+        update_timeout(clock::now());
+    }
 }
 
 auto scheduler::add_timer_token(time_point tp, detail::poll_info& pi) -> timed_events::iterator
