@@ -1,20 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["pyarrow"]
+# ///
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 
 def load_pyarrow():
-    try:
-        import pyarrow as pa  # noqa: F401
-        import pyarrow.ipc as ipc
-    except ImportError:
-        print(
-            "python pyarrow module not found; install pyarrow to inspect Arrow IPC traces",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    import pyarrow as pa  # noqa: F401
+    import pyarrow.ipc as ipc
+
     return ipc
 
 
@@ -89,7 +87,7 @@ def print_table(rows):
 
 def print_sse(table):
     for row in table.to_pylist():
-        if row.get("phase") != "sse_event":
+        if row.get("phase") not in {"sse_event", "llm"}:
             continue
         suffix = ""
         payload = row_payload(row)
@@ -113,6 +111,67 @@ def print_sse(table):
         )
 
 
+def frame_rows(table):
+    return [row for row in table.to_pylist() if row.get("phase") == "frame"]
+
+
+def print_frames(table):
+    rows = []
+    for row in frame_rows(table):
+        payload = row_payload(row)
+        rows.append(
+            {
+                "seq": row.get("seq"),
+                "elapsed_ms": row.get("elapsed_ms"),
+                "data": row.get("data"),
+                "cols": payload.get("cols") if isinstance(payload, dict) else "",
+                "rows": payload.get("rows") if isinstance(payload, dict) else "",
+                "bytes": payload.get("bytes") if isinstance(payload, dict) else "",
+            }
+        )
+    print_table(rows)
+
+
+CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ESC_RE = re.compile(r"\x1b.")
+
+
+def strip_ansi(text):
+    text = CSI_RE.sub("", text)
+    return ESC_RE.sub("", text)
+
+
+def print_frame(table, seq, plain):
+    candidates = frame_rows(table)
+    if seq is None:
+        if not candidates:
+            print("trace contains no frame rows", file=sys.stderr)
+            return 1
+        row = candidates[-1]
+    else:
+        matches = [row for row in candidates if row.get("seq") == seq]
+        if not matches:
+            print(f"trace contains no frame row with seq={seq}", file=sys.stderr)
+            return 1
+        row = matches[0]
+
+    payload = row.get("payload_bin")
+    if payload is None:
+        print(f"frame seq={row.get('seq')} has no payload_bin", file=sys.stderr)
+        return 1
+
+    rendered = bytes(payload)
+    if plain:
+        text = strip_ansi(rendered.decode("utf-8", "replace"))
+        sys.stdout.write(text)
+        if not text.endswith("\n"):
+            sys.stdout.write("\n")
+    else:
+        sys.stdout.buffer.write(rendered)
+        sys.stdout.buffer.write(b"\n")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="View an nxtllm Arrow IPC trace.",
@@ -127,6 +186,10 @@ def main():
     )
     parser.add_argument("--table", action="store_true", help="emit table output")
     parser.add_argument("--sse", action="store_true", help="emit linewise SSE log")
+    parser.add_argument("--frames", action="store_true", help="list recorded compositor frame snapshots")
+    parser.add_argument("--frame", action="store_true", help="print the last recorded frame as ANSI")
+    parser.add_argument("--frame-seq", type=int, help="print a specific recorded frame by seq")
+    parser.add_argument("--plain", action="store_true", help="strip ANSI when printing --frame")
     parser.add_argument("--schema", action="store_true", help="show Arrow schema")
     parser.add_argument("trace_path")
     args = parser.parse_args()
@@ -145,6 +208,13 @@ def main():
     if args.sse:
         print_sse(table)
         return 0
+
+    if args.frames:
+        print_frames(table)
+        return 0
+
+    if args.frame or args.frame_seq is not None:
+        return print_frame(table, args.frame_seq, args.plain)
 
     rows = compact_rows(table)
 

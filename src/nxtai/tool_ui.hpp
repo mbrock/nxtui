@@ -291,7 +291,12 @@ inline auto running_card(
             ? std::format("{:.1f}s", elapsed.count() / 1000.0)
             : std::string{};
     return hud_blocks::header_row(
-        frame, label, args_str, elapsed_str, display.color, faint);
+        frame,
+        label,
+        args_str,
+        elapsed_str,
+        display.color,
+        fg(nxt::Rgba8{tool_palette().fg_muted}));
 }
 
 inline auto done_card(
@@ -314,7 +319,12 @@ inline auto done_card(
     if (!summary.empty())
         meta += "  " + std::string{summary};
     return hud_blocks::header_row(
-        error ? "!" : "✓", label, args_str, meta, color, faint);
+        error ? "!" : "✓",
+        label,
+        args_str,
+        meta,
+        color,
+        fg(nxt::Rgba8{tool_palette().fg}));
 }
 
 inline auto folded_result_card(
@@ -373,7 +383,7 @@ inline auto denied_card(tool_display display, std::string_view args)
 inline auto queued_card(tool_display display, std::string_view args)
 {
     using namespace nxt::tui;
-    auto color = nxt::Rgba8{tool_palette().fg_subtle};
+    auto color = nxt::Rgba8{tool_palette().fg_muted};
     auto label = std::string{display.icon};
     auto args_str = std::string{args};
     if (args_str.size() > 70)
@@ -454,7 +464,7 @@ preview_spans(const tools::tool_result & result, std::size_t max_lines = 4)
     std::vector<Span> out;
     out.reserve(preview.size() + 1);
 
-    auto preview_color = nxt::Rgba8{tool_palette().fg_subtle};
+    auto preview_color = nxt::Rgba8{tool_palette().fg};
     for (auto & line : preview)
         out.push_back(span(std::move(line), fg(preview_color)));
 
@@ -462,7 +472,7 @@ preview_spans(const tools::tool_result & result, std::size_t max_lines = 4)
         auto more = total - preview.size();
         out.push_back(span(
             std::format("...{} more lines.", more),
-            fg(nxt::Rgba8{tool_palette().fg_subtle}) | faint));
+            fg(nxt::Rgba8{tool_palette().fg_muted})));
     }
 
     return out;
