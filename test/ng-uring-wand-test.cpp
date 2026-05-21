@@ -94,6 +94,30 @@ nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
         throw std::runtime_error{"poll did not report readable socket"};
 }
 
+nxt::rt::task<void> timeout_once()
+{
+    co_await nxt::rt::timeout_wish::after(1ms);
+}
+
+nxt::rt::task<void> poll_until_after_socket_send(int tx, int rx)
+{
+    auto message = std::string_view{"y"};
+    auto sent = co_await nxt::rt::send_some(tx, nxt::rt::as_bytes(message));
+    if (sent != message.size())
+        throw std::runtime_error{"short poll-until smoke send"};
+
+    auto result = co_await nxt::rt::poll_until_wish::after(rx, POLLIN, 1s);
+    if (result.timed_out || (result.events & POLLIN) == 0)
+        throw std::runtime_error{"poll-until did not report readable socket"};
+}
+
+nxt::rt::task<void> poll_until_timeout(int rx)
+{
+    auto result = co_await nxt::rt::poll_until_wish::after(rx, POLLIN, 1ms);
+    if (!result.timed_out)
+        throw std::runtime_error{"poll-until did not time out"};
+}
+
 nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
 {
     co_await nxt::rt::connect_wish::from(
@@ -199,6 +223,47 @@ try {
         auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
         auto task = poll_after_socket_send(first.get(), second.get());
+
+        deck.start(task);
+        pump_until_done(deck, wand, task);
+    }
+
+    {
+        auto deck = nxt::rt::deck{};
+        auto wand = nxt::rt::uring_wand{};
+        auto task = timeout_once();
+
+        deck.start(task);
+        pump_until_done(deck, wand, task);
+    }
+
+    {
+        auto sockets = std::array<int, 2>{-1, -1};
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+            throw std::runtime_error{"socketpair failed"};
+
+        auto first = unique_fd{sockets[0]};
+        auto second = unique_fd{sockets[1]};
+
+        auto deck = nxt::rt::deck{};
+        auto wand = nxt::rt::uring_wand{};
+        auto task = poll_until_after_socket_send(first.get(), second.get());
+
+        deck.start(task);
+        pump_until_done(deck, wand, task);
+    }
+
+    {
+        auto sockets = std::array<int, 2>{-1, -1};
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+            throw std::runtime_error{"socketpair failed"};
+
+        auto first = unique_fd{sockets[0]};
+        auto second = unique_fd{sockets[1]};
+
+        auto deck = nxt::rt::deck{};
+        auto wand = nxt::rt::uring_wand{};
+        auto task = poll_until_timeout(second.get());
 
         deck.start(task);
         pump_until_done(deck, wand, task);

@@ -213,6 +213,54 @@ public:
         return waiter<int>{*this, token, state};
     }
 
+    waiter<void> prepare(
+        deck &,
+        detail::promise_base &,
+        timeout_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<void>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        auto & op = std::get<timeout_wish>(*request);
+        auto * sqe = get_sqe();
+        io_uring_prep_timeout(sqe, &op.duration, 0, IORING_TIMEOUT_ETIME_SUCCESS);
+        attach_token(sqe, token);
+        completions_.emplace(
+            token,
+            std::make_unique<completion<void>>(request, state));
+        trace("uring prepare timeout token=" + std::to_string(token));
+        return waiter<void>{*this, token, state};
+    }
+
+    waiter<poll_until_result> prepare(
+        deck &,
+        detail::promise_base &,
+        poll_until_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<poll_until_result>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        auto & op = std::get<poll_until_wish>(*request);
+
+        auto * poll_sqe = get_sqe();
+        io_uring_prep_poll_add(poll_sqe, op.fd, op.events);
+        poll_sqe->flags |= IOSQE_IO_LINK;
+        attach_token(poll_sqe, token);
+
+        auto * timeout_sqe = get_sqe();
+        io_uring_prep_link_timeout(
+            timeout_sqe,
+            &op.timeout,
+            IORING_TIMEOUT_ETIME_SUCCESS);
+        attach_token(timeout_sqe, token);
+
+        completions_.emplace(
+            token,
+            std::make_unique<completion<poll_until_result>>(request, state));
+        trace("uring prepare poll-until token=" + std::to_string(token));
+        return waiter<poll_until_result>{*this, token, state};
+    }
+
     void suspend(wait_token token, parked_task task) override
     {
         trace("uring park token=" + std::to_string(token));
@@ -285,7 +333,9 @@ private:
         recv_some_wish,
         send_some_wish,
         connect_wish,
-        poll_wish>;
+        poll_wish,
+        timeout_wish,
+        poll_until_wish>;
 
     class completion_base
     {
@@ -314,23 +364,51 @@ private:
 
         void complete(int result) override
         {
-            if (result < 0) {
-                state_->set_exception(
-                    std::make_exception_ptr(
-                        std::runtime_error{
-                            "io_uring operation failed: "
-                            + std::to_string(-result)}));
-                return;
-            }
-
-            if constexpr (std::is_void_v<T>) {
-                state_->set_value();
-            } else if constexpr (std::is_same_v<T, int>) {
-                state_->set_value(result);
-            } else if constexpr (std::is_same_v<T, std::size_t>) {
-                state_->set_value(static_cast<std::size_t>(result));
+            if constexpr (std::is_same_v<T, poll_until_result>) {
+                if (result > 0) {
+                    state_->set_value(poll_until_result{
+                        .events = result,
+                        .timed_out = false,
+                    });
+                } else if (result == 0 || result == -ETIME || result == -ECANCELED) {
+                    state_->set_value(poll_until_result{
+                        .events = 0,
+                        .timed_out = true,
+                    });
+                } else {
+                    state_->set_exception(
+                        std::make_exception_ptr(
+                            std::runtime_error{
+                                "io_uring operation failed: "
+                                + std::to_string(-result)}));
+                }
             } else {
-                static_assert(std::is_void_v<T>, "unsupported uring result");
+                if constexpr (std::is_void_v<T>) {
+                    if (std::holds_alternative<timeout_wish>(*this->request_)
+                        && result == -ETIME) {
+                        state_->set_value();
+                        return;
+                    }
+                }
+
+                if (result < 0) {
+                    state_->set_exception(
+                        std::make_exception_ptr(
+                            std::runtime_error{
+                                "io_uring operation failed: "
+                                + std::to_string(-result)}));
+                    return;
+                }
+
+                if constexpr (std::is_void_v<T>) {
+                    state_->set_value();
+                } else if constexpr (std::is_same_v<T, int>) {
+                    state_->set_value(result);
+                } else if constexpr (std::is_same_v<T, std::size_t>) {
+                    state_->set_value(static_cast<std::size_t>(result));
+                } else {
+                    static_assert(std::is_void_v<T>, "unsupported uring result");
+                }
             }
         }
 

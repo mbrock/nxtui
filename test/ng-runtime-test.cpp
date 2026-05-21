@@ -80,6 +80,22 @@ struct manual_wand final : nxt::rt::wand
         throw std::runtime_error{"manual_wand does not implement poll"};
     }
 
+    nxt::rt::waiter<void> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::timeout_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement timeout"};
+    }
+
+    nxt::rt::waiter<nxt::rt::poll_until_result> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::poll_until_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement poll-until"};
+    }
+
     void suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
     {
         parked.push_back(

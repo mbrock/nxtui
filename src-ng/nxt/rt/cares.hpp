@@ -4,6 +4,7 @@
 
 #include <ares.h>
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <poll.h>
@@ -165,8 +166,12 @@ private:
         FD_ZERO(&read_fds);
         FD_ZERO(&write_fds);
 
+        auto timeout_storage = timeval{};
+        auto * timeout = ares_timeout(channel_.get(), nullptr, &timeout_storage);
         auto nfds = ares_fds(channel_.get(), &read_fds, &write_fds);
         if (nfds == 0) {
+            if (timeout != nullptr)
+                co_await timeout_wish::after(as_duration(*timeout));
             ares_process_fd(
                 channel_.get(),
                 ARES_SOCKET_BAD,
@@ -183,10 +188,27 @@ private:
             if (events == 0)
                 continue;
 
-            auto revents = co_await poll_wish{
-                .fd = fd,
-                .events = events,
-            };
+            auto result = timeout != nullptr
+                ? co_await poll_until_wish::after(
+                    fd,
+                    events,
+                    as_duration(*timeout))
+                : poll_until_result{
+                    .events = co_await poll_wish{
+                        .fd = fd,
+                        .events = events,
+                    },
+                    .timed_out = false,
+                };
+            if (result.timed_out) {
+                ares_process_fd(
+                    channel_.get(),
+                    ARES_SOCKET_BAD,
+                    ARES_SOCKET_BAD);
+                co_return;
+            }
+
+            auto revents = result.events;
             auto has_error = (revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
             auto read_fd = ((revents & POLLIN) || has_error)
                     && FD_ISSET(fd, &read_fds)
@@ -201,6 +223,12 @@ private:
         }
 
         ares_process_fd(channel_.get(), ARES_SOCKET_BAD, ARES_SOCKET_BAD);
+    }
+
+    static std::chrono::nanoseconds as_duration(timeval value)
+    {
+        return std::chrono::seconds{value.tv_sec}
+            + std::chrono::microseconds{value.tv_usec};
     }
 
     std::unique_ptr<ares_channel_t, channel_deleter> channel_;

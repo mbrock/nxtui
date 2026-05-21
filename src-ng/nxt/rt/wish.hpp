@@ -1,11 +1,13 @@
 #pragma once
 
 #include <coroutine>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
+#include <linux/time_types.h>
 #include <memory>
 #include <poll.h>
 #include <optional>
@@ -27,6 +29,20 @@ struct promise_base;
 }
 
 using wait_token = std::uint64_t;
+
+inline __kernel_timespec as_kernel_timespec(std::chrono::nanoseconds duration)
+{
+    if (duration < std::chrono::nanoseconds::zero())
+        duration = std::chrono::nanoseconds::zero();
+
+    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
+    auto nanoseconds =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(duration - seconds);
+    return __kernel_timespec{
+        .tv_sec = seconds.count(),
+        .tv_nsec = nanoseconds.count(),
+    };
+}
 
 /// A suspended coroutine parked inside a wand.
 ///
@@ -255,6 +271,51 @@ struct poll_wish
     waiter<int> operator co_await() const;
 };
 
+struct timeout_wish
+{
+    using result_type = void;
+
+    __kernel_timespec duration{};
+
+    static timeout_wish after(std::chrono::nanoseconds duration)
+    {
+        return timeout_wish{
+            .duration = as_kernel_timespec(duration),
+        };
+    }
+
+    waiter<void> operator co_await() const;
+};
+
+struct poll_until_result
+{
+    int events = 0;
+    bool timed_out = false;
+};
+
+struct poll_until_wish
+{
+    using result_type = poll_until_result;
+
+    int fd = -1;
+    short events = 0;
+    __kernel_timespec timeout{};
+
+    static poll_until_wish after(
+        int fd,
+        short events,
+        std::chrono::nanoseconds timeout)
+    {
+        return poll_until_wish{
+            .fd = fd,
+            .events = events,
+            .timeout = as_kernel_timespec(timeout),
+        };
+    }
+
+    waiter<poll_until_result> operator co_await() const;
+};
+
 /// Backend interface for staged platform/event-loop machinery.
 ///
 /// `prepare()` is called synchronously while a coroutine is running. It can
@@ -300,6 +361,16 @@ public:
         deck & d,
         detail::promise_base & promise,
         poll_wish wish) = 0;
+
+    virtual waiter<void> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        timeout_wish wish) = 0;
+
+    virtual waiter<poll_until_result> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        poll_until_wish wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void wave(deck & d) = 0;
