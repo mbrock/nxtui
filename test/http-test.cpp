@@ -9,7 +9,7 @@ namespace nxt::test {
 
 using namespace boost::ut;
 
-suite http_tests = [] {
+static suite http_tests = [] {
     "serializes minimal request"_test = [] {
         http::request req{
             .method = "POST",
@@ -70,8 +70,3 @@ suite http_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

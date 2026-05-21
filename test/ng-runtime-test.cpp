@@ -86,7 +86,7 @@ struct manual_wand final : nxt::rt::wand
     int waves = 0;
 };
 
-suite ng_runtime_tests = [] {
+static suite ng_runtime_tests = [] {
     "sync_wait returns a completed root task value"_test = [] {
         auto deck = nxt::rt::deck{};
 

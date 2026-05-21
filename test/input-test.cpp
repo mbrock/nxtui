@@ -10,7 +10,7 @@ using namespace boost::ut;
 using nxt::input::EventType;
 using nxt::input::Key;
 
-suite input_parser_tests = [] {
+static suite input_parser_tests = [] {
     "plain utf8 text"_test = [] {
         nxt::input::Parser parser;
         auto events = parser.feed("a\xc4\x89");
@@ -181,8 +181,3 @@ suite input_parser_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

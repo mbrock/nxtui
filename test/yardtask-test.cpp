@@ -63,7 +63,7 @@ nxt::yardtask<int> parent_spawns_child(nxt::scheduler & scheduler)
     co_return result + (has_structured_child ? 100 : 0);
 }
 
-suite yardtask_tests = [] {
+static suite yardtask_tests = [] {
     "awaited child inherits ambient context and parent relation"_test = [] {
         expect(nxt::sync_wait(parent_awaits_child()) == 11_i);
     };
@@ -87,8 +87,3 @@ suite yardtask_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

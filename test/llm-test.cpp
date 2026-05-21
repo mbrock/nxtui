@@ -166,7 +166,7 @@ struct test_empty_tool
     }
 };
 
-suite llm_tests = [] {
+static suite llm_tests = [] {
     using namespace std::literals;
 
     "openai responses request serializes response body"_test = [] {
@@ -609,8 +609,3 @@ suite llm_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

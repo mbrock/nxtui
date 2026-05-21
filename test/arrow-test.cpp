@@ -10,7 +10,7 @@ namespace nxt::test {
 
 using namespace boost::ut;
 
-suite arrow_tests = [] {
+static suite arrow_tests = [] {
     "ipc trace rows include wall-clock unix milliseconds"_test = [] {
         auto before = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch());
@@ -36,8 +36,3 @@ suite arrow_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

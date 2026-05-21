@@ -79,7 +79,7 @@ bool throws_exception(Fn fn)
     return false;
 }
 
-suite buffers_tests = [] {
+static suite buffers_tests = [] {
     "reader keeps read-ahead in its own buffer"_test = [] {
         auto chunks = std::array{"hello world"sv};
         nxt::io::string_source source{std::span{chunks}};
@@ -208,7 +208,7 @@ suite buffers_tests = [] {
     };
 };
 
-suite event_queue_tests = [] {
+static suite event_queue_tests = [] {
     "event queue publishes values until closed"_test = [] {
         auto events = nxt::channel<int>{};
 
@@ -238,8 +238,3 @@ suite event_queue_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

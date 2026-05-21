@@ -253,80 +253,22 @@ endif
 if get_option('tests')
   nxt_test_inc = include_directories('test')
 
-  nxt_raster_test = executable('raster-test',
-    'test/raster-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_core_dep],
-  )
-
-  nxt_http_test = executable('http-test',
-    'test/http-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_core_dep],
-  )
-
-  nxt_http_io_test = executable('http-io-test',
-    'test/http-io-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_buffers_test = executable('buffers-test',
-    'test/buffers-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_arrow_test = executable('arrow-test',
-    'test/arrow-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_input_test = executable('input-test',
-    'test/input-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_llm_test = executable('llm-test',
-    'test/llm-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_net_include_test = executable('net-include-test',
-    'test/net-include-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_terminal_test = executable('terminal-test',
-    'test/terminal-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_subprocess_test = executable('subprocess-test',
-    'test/subprocess-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_text_field_test = executable('text-field-test',
-    'test/text-field-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_trace_smoke_test = executable('trace-smoke-test',
-    'test/trace-smoke-test.cpp',
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
-
-  nxt_yardtask_test = executable('yardtask-test',
-    'test/yardtask-test.cpp',
+  nxt_tests = executable('nxt-tests',
+    files(
+      'test/arrow-test.cpp',
+      'test/buffers-test.cpp',
+      'test/http-io-test.cpp',
+      'test/http-test.cpp',
+      'test/input-test.cpp',
+      'test/llm-test.cpp',
+      'test/net-include-test.cpp',
+      'test/raster-test.cpp',
+      'test/subprocess-test.cpp',
+      'test/terminal-test.cpp',
+      'test/test-main.cpp',
+      'test/text-field-test.cpp',
+      'test/yardtask-test.cpp',
+    ),
     include_directories : [nxt_inc, nxt_test_inc],
     dependencies : [nxt_dep],
   )
@@ -336,17 +278,6 @@ if get_option('tests')
     include_directories : [nxt_ng_inc, nxt_test_inc],
   )
 
-  test('raster-test', nxt_raster_test)
-  test('arrow-test', nxt_arrow_test)
-  test('http-test', nxt_http_test)
-  test('http-io-test', nxt_http_io_test)
-  test('buffers-test', nxt_buffers_test)
-  test('input-test', nxt_input_test)
-  test('llm-test', nxt_llm_test)
-  test('net-include-test', nxt_net_include_test)
-  test('terminal-test', nxt_terminal_test)
-  test('subprocess-test', nxt_subprocess_test)
-  test('text-field-test', nxt_text_field_test)
-  test('yardtask-test', nxt_yardtask_test)
+  test('nxt-tests', nxt_tests)
   test('ng-runtime-test', nxt_ng_runtime_test)
 endif

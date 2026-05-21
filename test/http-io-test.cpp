@@ -14,7 +14,7 @@ namespace nxt::test {
 
 using namespace boost::ut;
 
-suite http_io_tests = [] {
+static suite http_io_tests = [] {
     namespace io_http = nxt::io::http;
     using namespace std::literals;
 
@@ -220,8 +220,3 @@ suite http_io_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

@@ -80,7 +80,7 @@ RenderChecker<Layout> renders(const Layout & layout)
 // Layout tests
 // ============================================================================
 
-suite layout_tests = [] {
+static suite layout_tests = [] {
     using namespace tui;
 
     "column"_test = [] {
@@ -163,7 +163,7 @@ suite layout_tests = [] {
 // Glyph table tests
 // ============================================================================
 
-suite glyph_table_tests = [] {
+static suite glyph_table_tests = [] {
     "owned lookup keys survive arena growth"_test = [] {
         GlyphTable glyphs;
         std::vector<GlyphTable::GlyphId> ids;
@@ -197,7 +197,7 @@ suite glyph_table_tests = [] {
 // Text writing tests
 // ============================================================================
 
-suite write_text_tests = [] {
+static suite write_text_tests = [] {
     "combining sequence is one glyph table entry"_test = [] {
         GlyphTable glyphs;
         Raster raster(3 * ch, 1 * ln, glyphs);
@@ -239,7 +239,7 @@ suite write_text_tests = [] {
 // Diff algorithm tests
 // ============================================================================
 
-suite diff_tests = [] {
+static suite diff_tests = [] {
     "no diff when identical"_test = [] {
         //  "    " -> "    " = no changes
         GlyphTable glyphs;
@@ -326,7 +326,7 @@ suite diff_tests = [] {
 // ANSI tests
 // ============================================================================
 
-suite ansi_tests = [] {
+static suite ansi_tests = [] {
     "terminal to ANSI coords"_test = [] {
         // Terminal (0,0) -> ANSI (1,1)
         auto to_ansi_col = [](int t) {
@@ -377,8 +377,3 @@ suite ansi_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

@@ -51,7 +51,7 @@ RenderedRow render_row(const Layout & layout, std::size_t width)
 // TextField (edit state)
 // ============================================================================
 
-suite text_field_state = [] {
+static suite text_field_state = [] {
     using nxt::tui::TextField;
     using nxt::utf8::byte_offset;
 
@@ -143,7 +143,7 @@ suite text_field_state = [] {
 // UTF-8 helpers
 // ============================================================================
 
-suite utf8_helpers = [] {
+static suite utf8_helpers = [] {
     using nxt::utf8::byte_offset;
     using nxt::utf8::grapheme_index;
 
@@ -249,7 +249,7 @@ suite utf8_helpers = [] {
 // text_field rendering
 // ============================================================================
 
-suite text_field_render = [] {
+static suite text_field_render = [] {
     using nxt::tui::TextField;
     using nxt::tui::text_field;
     using nxt::utf8::byte_offset;
@@ -310,7 +310,7 @@ suite text_field_render = [] {
 // apply_key
 // ============================================================================
 
-suite text_field_apply_key = [] {
+static suite text_field_apply_key = [] {
     using nxt::tui::TextField;
     using nxt::tui::apply_key;
     using nxt::input::Key;
@@ -357,8 +357,3 @@ suite text_field_apply_key = [] {
 
 }  // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

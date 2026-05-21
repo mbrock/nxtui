@@ -184,7 +184,7 @@ void append_runtime_block(
 // Regional TTY model tests
 // ============================================================================
 
-suite regional_tty_tests = [] {
+static suite regional_tty_tests = [] {
     "bottom fixed partition names the scroll margin"_test = [] {
         auto partition =
             rtty::screen_partition::for_bottom_fixed_height(6 * ln, 2 * ln);
@@ -312,7 +312,7 @@ suite regional_tty_tests = [] {
 // Compositor tests
 // ============================================================================
 
-suite compositor_tests = [] {
+static suite compositor_tests = [] {
     "renders text at correct position"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 5 * ln}, glyphs);
@@ -457,7 +457,7 @@ suite compositor_tests = [] {
 // HUD mode tests
 // ============================================================================
 
-suite hud_tests = [] {
+static suite hud_tests = [] {
     "HUD appears at bottom of terminal"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
@@ -926,7 +926,7 @@ suite hud_tests = [] {
 // Scroll region + HUD interaction
 // ============================================================================
 
-suite scroll_region_tests = [] {
+static suite scroll_region_tests = [] {
     "println scrolls content without affecting HUD"_test = [] {
         // 6 row terminal, 2 row HUD at bottom
         // Scroll region: rows 0-3, HUD: rows 4-5
@@ -1008,7 +1008,7 @@ suite scroll_region_tests = [] {
 // Diff rendering tests
 // ============================================================================
 
-suite diff_tests = [] {
+static suite diff_tests = [] {
     "only changed cells are re-rendered"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({10 * ch, 1 * ln}, glyphs);
@@ -1029,8 +1029,3 @@ suite diff_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}

@@ -18,7 +18,7 @@ std::string trimmed_row(const nxt::vterm::Terminal & term, int row)
     return text;
 }
 
-suite subprocess_tests = [] {
+static suite subprocess_tests = [] {
     "captures pty output into vterm asynchronously"_test = [] {
         auto scheduler = nxt::scheduler::make_unique();
         auto session = nxt::subprocess::PtySession::spawn({
@@ -182,8 +182,3 @@ suite subprocess_tests = [] {
 
 } // namespace nxt::test
 
-int main()
-{
-    using namespace boost::ut;
-    return cfg<override>.run({.report_errors = true});
-}
