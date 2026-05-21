@@ -36,7 +36,8 @@ nxt::yardtask<int> parent_awaits_child()
     co_return co_await child_reads_inherited_context();
 }
 
-nxt::yardtask<int> context_survives_libcoro_await(nxt::scheduler & scheduler)
+nxt::yardtask<int>
+context_survives_libcoro_await(nxt::scheduler & scheduler)
 {
     ambient_value.set(41);
     co_await scheduler.yield_for(1ms);
@@ -63,27 +64,32 @@ nxt::yardtask<int> parent_spawns_child(nxt::scheduler & scheduler)
     co_return result + (has_structured_child ? 100 : 0);
 }
 
-static suite yardtask_tests = [] {
-    "awaited child inherits ambient context and parent relation"_test = [] {
-        expect(nxt::sync_wait(parent_awaits_child()) == 11_i);
-    };
+static suite yardtask_tests{
+    "Yard tasks", [] {
+        "child tasks"_test = [] {
+            "inherit ambient context and parent relations when awaited"_test =
+                [] {
+                    expect(nxt::sync_wait(parent_awaits_child()) == 11_i);
+                };
 
-    "libcoro awaits preserve the ambient yard frame"_test = [] {
-        auto scheduler = nxt::scheduler::make_unique();
-        auto result = nxt::sync_wait(scheduler->schedule(
-            drive_yardtask(context_survives_libcoro_await(*scheduler))));
+            "preserve ambient yard frames through libcoro awaits"_test =
+                [] {
+                    auto scheduler = nxt::scheduler::make_unique();
+                    auto result =
+                        nxt::sync_wait(scheduler->schedule(drive_yardtask(
+                            context_survives_libcoro_await(*scheduler))));
 
-        expect(result == 41_i);
-    };
+                    expect(result == 41_i);
+                };
 
-    "spawned child is structured and joinable"_test = [] {
-        auto scheduler = nxt::scheduler::make_unique();
-        auto result = nxt::sync_wait(scheduler->schedule(
-            drive_yardtask(parent_spawns_child(*scheduler))));
+            "are structured and joinable when spawned"_test = [] {
+                auto scheduler = nxt::scheduler::make_unique();
+                auto result = nxt::sync_wait(scheduler->schedule(
+                    drive_yardtask(parent_spawns_child(*scheduler))));
 
-        expect(result == 121_i);
-    };
-};
+                expect(result == 121_i);
+            };
+        };
+    }};
 
 } // namespace nxt::test
-

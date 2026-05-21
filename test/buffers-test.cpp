@@ -79,162 +79,174 @@ bool throws_exception(Fn fn)
     return false;
 }
 
-static suite buffers_tests = [] {
-    "reader keeps read-ahead in its own buffer"_test = [] {
-        auto chunks = std::array{"hello world"sv};
-        nxt::io::string_source source{std::span{chunks}};
-        std::array<std::byte, 16> storage{};
-        nxt::io::byte_reader reader{source, std::span{storage}};
+static suite buffers_tests{
+    "Buffers", [] {
+        "reader"_test = [] {
+            "keeps read-ahead"_test = [] {
+                auto chunks = std::array{"hello world"sv};
+                nxt::io::string_source source{std::span{chunks}};
+                std::array<std::byte, 16> storage{};
+                nxt::io::byte_reader reader{source, std::span{storage}};
 
-        auto first = nxt::sync_wait(reader.take(5));
-        expect(nxt::io::as_string_view(first) == "hello"sv);
-        expect(nxt::io::as_string_view(reader.buffered()) == " world"sv);
+                auto first = nxt::sync_wait(reader.take(5));
+                expect(nxt::io::as_string_view(first) == "hello"sv);
+                expect(
+                    nxt::io::as_string_view(reader.buffered())
+                    == " world"sv);
 
-        reader.toss(1);
-        auto second = nxt::sync_wait(reader.take(5));
-        expect(nxt::io::as_string_view(second) == "world"sv);
-        expect(reader.buffered().empty());
-    };
+                reader.toss(1);
+                auto second = nxt::sync_wait(reader.take(5));
+                expect(nxt::io::as_string_view(second) == "world"sv);
+                expect(reader.buffered().empty());
+            };
 
-    "reader rebases borrowed storage while taking a delimiter"_test = [] {
-        auto chunks = std::array{"ab"sv, "cd"sv, "ef\nrest"sv};
-        nxt::io::string_source source{std::span{chunks}};
-        std::array<std::byte, 5> storage{};
-        nxt::io::byte_reader reader{source, std::span{storage}};
+            "rebases borrowed storage"_test = [] {
+                auto chunks = std::array{"ab"sv, "cd"sv, "ef\nrest"sv};
+                nxt::io::string_source source{std::span{chunks}};
+                std::array<std::byte, 5> storage{};
+                nxt::io::byte_reader reader{source, std::span{storage}};
 
-        auto prefix = nxt::sync_wait(reader.take(2));
-        expect(nxt::io::as_string_view(prefix) == "ab"sv);
+                auto prefix = nxt::sync_wait(reader.take(2));
+                expect(nxt::io::as_string_view(prefix) == "ab"sv);
 
-        auto line = nxt::sync_wait(reader.take_until("\n"sv));
-        expect(nxt::io::as_string_view(line) == "cdef"sv);
-        expect(reader.buffered().empty());
-    };
+                auto line = nxt::sync_wait(reader.take_until("\n"sv));
+                expect(nxt::io::as_string_view(line) == "cdef"sv);
+                expect(reader.buffered().empty());
+            };
 
-    "reader reports delimiter units that exceed buffer policy"_test = [] {
-        auto chunks = std::array{"abcdef"sv};
-        nxt::io::string_source source{std::span{chunks}};
-        std::array<std::byte, 4> storage{};
-        nxt::io::byte_reader reader{source, std::span{storage}};
+            "rejects oversized delimiter units"_test = [] {
+                auto chunks = std::array{"abcdef"sv};
+                nxt::io::string_source source{std::span{chunks}};
+                std::array<std::byte, 4> storage{};
+                nxt::io::byte_reader reader{source, std::span{storage}};
 
-        expect(throws_exception<nxt::io::buffer_error>([&] {
-            nxt::sync_wait(reader.take_until("\n"sv));
-        }));
-    };
+                expect(throws_exception<nxt::io::buffer_error>([&] {
+                    nxt::sync_wait(reader.take_until("\n"sv));
+                }));
+            };
 
-    "reader can adapt a char-oriented source"_test = [] {
-        scripted_char_source source{{"abc", "def"}};
-        std::array<std::byte, 8> storage{};
-        nxt::io::byte_reader reader{source, std::span{storage}};
+            "adapts char sources"_test = [] {
+                scripted_char_source source{{"abc", "def"}};
+                std::array<std::byte, 8> storage{};
+                nxt::io::byte_reader reader{source, std::span{storage}};
 
-        auto text = nxt::sync_wait(reader.take(6));
-        expect(nxt::io::as_string_view(text) == "abcdef"sv);
-    };
+                auto text = nxt::sync_wait(reader.take(6));
+                expect(nxt::io::as_string_view(text) == "abcdef"sv);
+            };
+        };
 
-    "writer buffers borrowed storage until flush"_test = [] {
-        nxt::io::string_sink sink;
-        std::array<std::byte, 8> storage{};
-        nxt::io::byte_writer writer{sink, std::span{storage}};
+        "writer"_test = [] {
+            "buffers until flush"_test = [] {
+                nxt::io::string_sink sink;
+                std::array<std::byte, 8> storage{};
+                nxt::io::byte_writer writer{sink, std::span{storage}};
 
-        nxt::sync_wait(writer.write_all("hello"sv));
-        expect(sink.text().empty());
-        expect(nxt::io::as_string_view(writer.buffered()) == "hello"sv);
+                nxt::sync_wait(writer.write_all("hello"sv));
+                expect(sink.text().empty());
+                expect(
+                    nxt::io::as_string_view(writer.buffered())
+                    == "hello"sv);
 
-        nxt::sync_wait(writer.flush());
-        expect(sink.text() == "hello");
-        expect(writer.buffered().empty());
-    };
+                nxt::sync_wait(writer.flush());
+                expect(sink.text() == "hello");
+                expect(writer.buffered().empty());
+            };
 
-    "writer exposes writable space with advance and undo"_test = [] {
-        nxt::io::string_sink sink;
-        std::array<std::byte, 8> storage{};
-        nxt::io::byte_writer writer{sink, std::span{storage}};
+            "supports advance and undo"_test = [] {
+                nxt::io::string_sink sink;
+                std::array<std::byte, 8> storage{};
+                nxt::io::byte_writer writer{sink, std::span{storage}};
 
-        auto writable = nxt::sync_wait(writer.writable(4));
-        auto text = std::as_bytes(std::span{"abcd"sv});
-        std::ranges::copy(text, writable.begin());
-        writer.advance(4);
-        writer.undo(1);
+                auto writable = nxt::sync_wait(writer.writable(4));
+                auto text = std::as_bytes(std::span{"abcd"sv});
+                std::ranges::copy(text, writable.begin());
+                writer.advance(4);
+                writer.undo(1);
 
-        nxt::sync_wait(writer.flush());
-        expect(sink.text() == "abc");
-    };
+                nxt::sync_wait(writer.flush());
+                expect(sink.text() == "abc");
+            };
 
-    "writer can adapt a char-oriented sink"_test = [] {
-        char_sink sink;
-        std::array<std::byte, 4> storage{};
-        nxt::io::byte_writer writer{sink, std::span{storage}};
+            "adapts char sinks"_test = [] {
+                char_sink sink;
+                std::array<std::byte, 4> storage{};
+                nxt::io::byte_writer writer{sink, std::span{storage}};
 
-        nxt::sync_wait(writer.write_all("hello world"sv));
-        nxt::sync_wait(writer.flush());
-        expect(sink.text() == "hello world");
-    };
+                nxt::sync_wait(writer.write_all("hello world"sv));
+                nxt::sync_wait(writer.flush());
+                expect(sink.text() == "hello world");
+            };
+        };
 
-    "reader streams exact bytes into writer"_test = [] {
-        auto chunks = std::array{"hello "sv, "world!"sv};
-        nxt::io::string_source source{std::span{chunks}};
-        nxt::io::string_sink sink;
-        std::array<std::byte, 6> read_storage{};
-        std::array<std::byte, 4> write_storage{};
-        nxt::io::byte_reader reader{source, std::span{read_storage}};
-        nxt::io::byte_writer writer{sink, std::span{write_storage}};
+        "reader and writer"_test = [] {
+            "streams exact bytes"_test = [] {
+                auto chunks = std::array{"hello "sv, "world!"sv};
+                nxt::io::string_source source{std::span{chunks}};
+                nxt::io::string_sink sink;
+                std::array<std::byte, 6> read_storage{};
+                std::array<std::byte, 4> write_storage{};
+                nxt::io::byte_reader reader{
+                    source, std::span{read_storage}};
+                nxt::io::byte_writer writer{sink, std::span{write_storage}};
 
-        nxt::sync_wait(reader.stream_exact(writer, 11));
-        nxt::sync_wait(writer.flush());
+                nxt::sync_wait(reader.stream_exact(writer, 11));
+                nxt::sync_wait(writer.flush());
 
-        expect(sink.text() == "hello world");
-        expect(nxt::io::as_string_view(reader.buffered()) == "!"sv);
-    };
+                expect(sink.text() == "hello world");
+                expect(nxt::io::as_string_view(reader.buffered()) == "!"sv);
+            };
 
-    "reader and writer check cancellation before suspending io"_test = [] {
-        auto chunks = std::array{"hello"sv};
-        nxt::io::string_source source{std::span{chunks}};
-        nxt::io::string_sink sink;
-        std::stop_source stop;
-        std::array<std::byte, 8> read_storage{};
-        std::array<std::byte, 8> write_storage{};
-        nxt::io::byte_reader reader{
-            source, std::span{read_storage}, stop.get_token()};
-        nxt::io::byte_writer writer{
-            sink, std::span{write_storage}, stop.get_token()};
+            "check cancellation before suspending I/O"_test = [] {
+                auto chunks = std::array{"hello"sv};
+                nxt::io::string_source source{std::span{chunks}};
+                nxt::io::string_sink sink;
+                std::stop_source stop;
+                std::array<std::byte, 8> read_storage{};
+                std::array<std::byte, 8> write_storage{};
+                nxt::io::byte_reader reader{
+                    source, std::span{read_storage}, stop.get_token()};
+                nxt::io::byte_writer writer{
+                    sink, std::span{write_storage}, stop.get_token()};
 
-        stop.request_stop();
+                stop.request_stop();
 
-        expect(throws_exception<nxt::io::operation_cancelled>([&] {
-            nxt::sync_wait(reader.fill(1));
-        }));
-        expect(throws_exception<nxt::io::operation_cancelled>([&] {
-            nxt::sync_wait(writer.write_all("hello world"sv));
-        }));
-    };
-};
+                expect(throws_exception<nxt::io::operation_cancelled>([&] {
+                    nxt::sync_wait(reader.fill(1));
+                }));
+                expect(throws_exception<nxt::io::operation_cancelled>([&] {
+                    nxt::sync_wait(writer.write_all("hello world"sv));
+                }));
+            };
+        };
+    }};
 
-static suite event_queue_tests = [] {
-    "event queue publishes values until closed"_test = [] {
-        auto events = nxt::channel<int>{};
+static suite event_queue_tests{
+    "Event queues", [] {
+        "publish values until closed"_test = [] {
+            auto events = nxt::channel<int>{};
 
-        expect(nxt::sync_wait(nxt::publish(events, 1)));
-        expect(nxt::sync_wait(nxt::publish(events, 2)));
+            expect(nxt::sync_wait(nxt::publish(events, 1)));
+            expect(nxt::sync_wait(nxt::publish(events, 2)));
 
-        auto first = nxt::sync_wait(nxt::next(events));
-        auto second = nxt::sync_wait(nxt::next(events));
-        expect(first && *first == 1_i);
-        expect(second && *second == 2_i);
+            auto first = nxt::sync_wait(nxt::next(events));
+            auto second = nxt::sync_wait(nxt::next(events));
+            expect(first && *first == 1_i);
+            expect(second && *second == 2_i);
 
-        nxt::sync_wait(nxt::close(events));
-        expect(!nxt::sync_wait(nxt::next(events)));
-        expect(!nxt::sync_wait(nxt::publish(events, 3)));
-    };
+            nxt::sync_wait(nxt::close(events));
+            expect(!nxt::sync_wait(nxt::next(events)));
+            expect(!nxt::sync_wait(nxt::publish(events, 3)));
+        };
 
-    "event queue cancel requests stop and closes"_test = [] {
-        auto events = nxt::channel<int>{};
+        "stop and close on cancellation"_test = [] {
+            auto events = nxt::channel<int>{};
 
-        expect(!events.stop_requested());
-        nxt::sync_wait(nxt::cancel(events));
-        expect(events.stop_requested());
-        expect(!nxt::sync_wait(nxt::next(events)));
-        expect(!nxt::sync_wait(nxt::publish(events, 1)));
-    };
-};
+            expect(!events.stop_requested());
+            nxt::sync_wait(nxt::cancel(events));
+            expect(events.stop_requested());
+            expect(!nxt::sync_wait(nxt::next(events)));
+            expect(!nxt::sync_wait(nxt::publish(events, 1)));
+        };
+    }};
 
 } // namespace nxt::test
-

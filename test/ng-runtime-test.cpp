@@ -99,10 +99,12 @@ struct manual_wand final : nxt::rt::wand
         nxt::rt::detail::promise_base &,
         nxt::rt::poll_until_wish) override
     {
-        throw std::runtime_error{"manual_wand does not implement poll-until"};
+        throw std::runtime_error{
+            "manual_wand does not implement poll-until"};
     }
 
-    void suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
+    void
+    suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
     {
         parked.push_back(
             parked_entry{
@@ -144,8 +146,8 @@ struct manual_wand final : nxt::rt::wand
 
 struct empty_then_string_source final : nxt::rt::byte_source
 {
-    nxt::rt::task<nxt::rt::read_result> read_some(
-        std::span<std::byte> dst) override
+    nxt::rt::task<nxt::rt::read_result>
+    read_some(std::span<std::byte> dst) override
     {
         if (!returned_empty) {
             returned_empty = true;
@@ -187,469 +189,523 @@ nxt::rt::task<int> read_ambient_int()
     co_return nxt::rt::env_require<ambient_int_key>();
 }
 
-static suite ng_runtime_tests = [] {
-    "sync_wait returns a completed root task value"_test = [] {
-        auto deck = nxt::rt::deck{};
+static suite ng_runtime_tests{
+    "Runtime", [] {
+        "deck"_test = [] {
+            "sync_wait returns completed root task values"_test = [] {
+                auto deck = nxt::rt::deck{};
 
-        expect(deck.sync_wait([]() -> nxt::rt::task<int> {
-            co_return 7;
-        }) == 7_i);
-    };
-
-    "awaited child resumes its awaiting task"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto events = std::vector<int>{};
-
-        auto child_body = [&events]() -> nxt::rt::task<int> {
-            events.push_back(2);
-            co_await nxt::rt::yield();
-            events.push_back(3);
-            co_return 4;
-        };
-
-        expect(deck.sync_wait([&events, child_body]() -> nxt::rt::task<int> {
-            events.push_back(1);
-            auto child = child_body();
-            auto child_id = child.id();
-
-            auto value = co_await child;
-
-            expect(child.id() == child_id);
-            events.push_back(4);
-            co_return value + 1;
-        }) == 5_i);
-
-        expect(events == std::vector<int>{1, 2, 3, 4})
-            << "child/continuation event order changed";
-    };
-
-    "yield re-enters through the deck pump"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto out = std::vector<int>{};
-
-        auto child_body =
-            [&out](int tag) -> nxt::rt::task<void> {
-            out.push_back(tag * 10 + 1);
-            co_await nxt::rt::yield();
-            out.push_back(tag * 10 + 2);
-        };
-
-        deck.sync_wait([&]() -> nxt::rt::task<void> {
-            auto first = child_body(1);
-            auto second = child_body(2);
-
-            co_await first;
-            co_await second;
-        });
-
-        expect(out == std::vector<int>{11, 12, 21, 22})
-            << "yield event order changed";
-    };
-
-    "run_ready only plays the initially ready round"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto events = std::vector<int>{};
-
-        // Pass state as a coroutine parameter instead of capturing it in a
-        // temporary coroutine lambda; captures live in the lambda object, while
-        // parameters live in the coroutine frame.
-        auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
-            events.push_back(1);
-            co_await nxt::rt::yield();
-            events.push_back(2);
-        };
-
-        auto task = task_body(events);
-        deck.start(task);
-        deck.run_ready();
-
-        expect(events == std::vector<int>{1})
-            << "run_ready should only play the first ready round";
-        expect(!deck.empty()) << "yielded task should be queued for next round";
-
-        deck.run_ready();
-
-        expect(events == std::vector<int>{1, 2})
-            << "second run_ready should play the yielded task";
-        expect(deck.empty()) << "deck should be empty after second round";
-    };
-
-    "run_until_idle keeps playing rounds until quiescence"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto events = std::vector<int>{};
-
-        // Same lifetime rule as above: coroutine parameters are frame state.
-        auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
-            events.push_back(1);
-            co_await nxt::rt::yield();
-            events.push_back(2);
-        };
-
-        auto task = task_body(events);
-        deck.start(task);
-        deck.run_until_idle();
-
-        expect(events == std::vector<int>{1, 2})
-            << "run_until_idle should play all rounds";
-        expect(deck.empty()) << "deck should be empty after run_until_idle";
-    };
-
-    "runtime env binding survives nested task awaits"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
-            co_return co_await nxt::rt::with_env<ambient_int_key>(
-                41,
-                [] {
-                    return read_ambient_int_after_yield();
-                });
-        });
-
-        expect(result == 41_i);
-    };
-
-    "runtime env binding restores outer binding"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
-            co_return co_await nxt::rt::with_env<ambient_int_key>(
-                10,
-                []() -> nxt::rt::task<int> {
-                    auto before = co_await read_ambient_int();
-                    auto inside = co_await nxt::rt::with_env<ambient_int_key>(
-                        20,
-                        [] {
-                            return read_ambient_int_after_yield();
-                        });
-                    auto after = co_await read_ambient_int();
-                    co_return before * 100 + inside * 10 + after;
-                });
-        });
-
-        expect(result == 1210_i);
-    };
-
-    "manual wish prepares and parks a typed waiter"_test = [] {
-        auto wand = manual_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto events = std::vector<int>{};
-
-        auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
-            events.push_back(1);
-            co_await nxt::rt::manual_wish{.token = 42};
-            events.push_back(2);
-        };
-
-        auto task = task_body(events);
-        deck.start(task);
-        deck.run_ready();
-
-        expect(events == std::vector<int>{1})
-            << "task should suspend before manual wish fulfillment";
-        expect(deck.empty()) << "manual wish should not requeue itself";
-        expect(wand.prepared == std::vector<nxt::rt::wait_token>{42})
-            << "wand should synchronously prepare the wish";
-        expect(wand.parked.size() == std::size_t{1})
-            << "waiter should park the suspended coroutine";
-        expect(wand.parked.front().token == std::uint64_t{42});
-
-        wand.fulfill(deck, 42);
-        deck.run_ready();
-
-        expect(events == std::vector<int>{1, 2})
-            << "fulfilled manual wish should resume the suspended task";
-    };
-
-    "run_ready waves the wand after staged wish preparation"_test = [] {
-        auto wand = manual_wand{};
-        auto deck = nxt::rt::deck{&wand};
-        auto events = std::vector<int>{};
-
-        auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
-            events.push_back(1);
-            co_await nxt::rt::manual_wish{.token = 7};
-            events.push_back(2);
-        };
-
-        auto task = task_body(events);
-        deck.start(task);
-        deck.run_ready();
-
-        expect(events == std::vector<int>{1});
-        expect(wand.prepared == std::vector<nxt::rt::wait_token>{7});
-        expect(wand.parked.size() == std::size_t{1});
-        expect(wand.waves == 1_i)
-            << "run_ready should wave the deck wand after the pump round";
-
-        wand.fulfill(deck, 7);
-        deck.run_ready();
-
-        expect(events == std::vector<int>{1, 2});
-        expect(wand.prepared.size() == std::size_t{1})
-            << "resuming after fulfillment should not prepare a second wish";
-        expect(wand.waves == 2_i);
-    };
-
-    "rt buffer source visits chunks through reused storage"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
-        auto source = nxt::rt::string_source{std::span{chunks}};
-        auto storage = std::array<std::byte, 3>{};
-        auto visited = std::vector<std::string>{};
-
-        auto total = deck.sync_wait([&]() -> nxt::rt::task<std::size_t> {
-            co_return co_await nxt::rt::for_each_chunk(
-                source,
-                std::span{storage},
-                [&visited](std::span<const std::byte> chunk) {
-                    visited.emplace_back(nxt::rt::as_string_view(chunk));
-                });
-        });
-
-        expect(total == std::size_t{7});
-        expect(visited == std::vector<std::string>{"abc", "def", "g"});
-    };
-
-    "exceptions propagate through sync_wait"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        auto threw = false;
-        try {
-            deck.sync_wait([]() -> nxt::rt::task<void> {
-                co_await nxt::rt::yield();
-                throw std::runtime_error{"boom"};
-            });
-        } catch (const std::runtime_error &) {
-            threw = true;
-        }
-        expect(threw);
-    };
-
-    "deck pump rejects reentrant calls from a running task"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        expect(deck.sync_wait([&deck]() -> nxt::rt::task<bool> {
-            try {
-                deck.run_ready();
-            } catch (const std::runtime_error &) {
-                co_return true;
-            }
-            co_return false;
-        }));
-    };
-
-    "pipe yields values to an awaiting task"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        auto numbers = []() -> nxt::rt::pipe<int> {
-            co_yield 1;
-            co_yield 2;
-            co_yield 3;
-        };
-
-        auto values = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
-            auto pipe = numbers();
-            auto out = std::vector<int>{};
-            while (auto value = co_await pipe.next())
-                out.push_back(*value);
-            co_return out;
-        });
-
-        expect(values == std::vector<int>{1, 2, 3});
-    };
-
-    "pipe can await between yielded values"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        auto paced_numbers = []() -> nxt::rt::pipe<int> {
-            co_yield 1;
-            co_await nxt::rt::yield();
-            co_yield 2;
-        };
-
-        auto values = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
-            auto pipe = paced_numbers();
-            auto out = std::vector<int>{};
-            while (auto value = co_await pipe.next())
-                out.push_back(*value);
-            co_return out;
-        });
-
-        expect(values == std::vector<int>{1, 2});
-    };
-
-    "pipe can await child tasks before yielding values"_test = [] {
-        auto deck = nxt::rt::deck{};
-
-        auto child = [](int value) -> nxt::rt::task<int> {
-            co_await nxt::rt::yield();
-            co_return value * 2;
-        };
-
-        auto doubled = [child]() -> nxt::rt::pipe<int> {
-            co_yield co_await child(2);
-            co_yield co_await child(3);
-        };
-
-        auto values = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
-            auto pipe = doubled();
-            auto out = std::vector<int>{};
-            while (auto value = co_await pipe.next())
-                out.push_back(*value);
-            co_return out;
-        });
-
-        expect(values == std::vector<int>{4, 6});
-    };
-
-    "pipe can await a wand wish before yielding again"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto wand = manual_wand{};
-        auto values = std::vector<int>{};
-
-        auto consumer_body =
-            [](std::vector<int> & values) -> nxt::rt::task<void> {
-                auto producer = []() -> nxt::rt::pipe<int> {
-                    co_yield 1;
-                    co_await nxt::rt::manual_wish{.token = 99};
-                    co_yield 2;
-                };
-                auto pipe = producer();
-                while (auto value = co_await pipe.next())
-                    values.push_back(*value);
+                expect(deck.sync_wait([]() -> nxt::rt::task<int> {
+                    co_return 7;
+                }) == 7_i);
             };
 
-        auto consumer = consumer_body(values);
+            "resumes tasks awaiting children"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
 
-        deck.start(consumer);
-        deck.run_until_idle(wand);
+                auto child_body = [&events]() -> nxt::rt::task<int> {
+                    events.push_back(2);
+                    co_await nxt::rt::yield();
+                    events.push_back(3);
+                    co_return 4;
+                };
 
-        expect(values == std::vector<int>{1});
-        expect(wand.parked.size() == std::size_t{1});
-        expect(wand.parked.front().token == std::uint64_t{99});
+                expect(
+                    deck.sync_wait(
+                        [&events, child_body]() -> nxt::rt::task<int> {
+                            events.push_back(1);
+                            auto child = child_body();
+                            auto child_id = child.id();
 
-        wand.fulfill(deck, 99);
-        deck.run_until_idle(wand);
+                            auto value = co_await child;
 
-        expect(values == std::vector<int>{1, 2});
-        expect(consumer.done());
-    };
+                            expect(child.id() == child_id);
+                            events.push_back(4);
+                            co_return value + 1;
+                        })
+                    == 5_i);
 
-    "pipe exceptions propagate to the awaiting task"_test = [] {
-        auto deck = nxt::rt::deck{};
+                expect(events == std::vector<int>{1, 2, 3, 4})
+                    << "child/continuation event order changed";
+            };
 
-        auto broken = []() -> nxt::rt::pipe<int> {
-            co_yield 1;
-            throw std::runtime_error{"pipe boom"};
-        };
+            "re-enters yielded tasks through the pump"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto out = std::vector<int>{};
 
-        auto threw = false;
-        try {
-            deck.sync_wait([&]() -> nxt::rt::task<void> {
-                auto pipe = broken();
-                while (co_await pipe.next()) {
+                auto child_body = [&out](int tag) -> nxt::rt::task<void> {
+                    out.push_back(tag * 10 + 1);
+                    co_await nxt::rt::yield();
+                    out.push_back(tag * 10 + 2);
+                };
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    auto first = child_body(1);
+                    auto second = child_body(2);
+
+                    co_await first;
+                    co_await second;
+                });
+
+                expect(out == std::vector<int>{11, 12, 21, 22})
+                    << "yield event order changed";
+            };
+
+            "run_ready only plays the initially ready round"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                // Pass state as a coroutine parameter instead of capturing
+                // it in a temporary coroutine lambda; captures live in the
+                // lambda object, while parameters live in the coroutine
+                // frame.
+                auto task_body =
+                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    events.push_back(1);
+                    co_await nxt::rt::yield();
+                    events.push_back(2);
+                };
+
+                auto task = task_body(events);
+                deck.start(task);
+                deck.run_ready();
+
+                expect(events == std::vector<int>{1})
+                    << "run_ready should only play the first ready round";
+                expect(!deck.empty())
+                    << "yielded task should be queued for next round";
+
+                deck.run_ready();
+
+                expect(events == std::vector<int>{1, 2})
+                    << "second run_ready should play the yielded task";
+                expect(deck.empty())
+                    << "deck should be empty after second round";
+            };
+
+            "run_until_idle plays rounds until quiescence"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                // Same lifetime rule as above: coroutine parameters are
+                // frame state.
+                auto task_body =
+                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    events.push_back(1);
+                    co_await nxt::rt::yield();
+                    events.push_back(2);
+                };
+
+                auto task = task_body(events);
+                deck.start(task);
+                deck.run_until_idle();
+
+                expect(events == std::vector<int>{1, 2})
+                    << "run_until_idle should play all rounds";
+                expect(deck.empty())
+                    << "deck should be empty after run_until_idle";
+            };
+
+            "propagates exceptions through sync_wait"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto threw = false;
+                try {
+                    deck.sync_wait([]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::yield();
+                        throw std::runtime_error{"boom"};
+                    });
+                } catch (const std::runtime_error &) {
+                    threw = true;
                 }
-            });
-        } catch (const std::runtime_error &) {
-            threw = true;
-        }
+                expect(threw);
+            };
 
-        expect(threw);
-    };
+            "rejects reentrant pump calls"_test = [] {
+                auto deck = nxt::rt::deck{};
 
-    "ng byte reader leaves protocol leftovers buffered"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto chunks = std::array{"abc--def--ghi"sv};
-        auto source = nxt::rt::string_source{std::span{chunks}};
-        auto storage = std::array<std::byte, 16>{};
-        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
-
-        auto parts = deck.sync_wait([&]() -> nxt::rt::task<std::vector<std::string>> {
-            auto out = std::vector<std::string>{};
-            out.emplace_back(nxt::rt::as_string_view(
-                co_await reader.take_until("--")));
-            out.emplace_back(nxt::rt::as_string_view(
-                co_await reader.take_until("--")));
-            out.emplace_back(nxt::rt::as_string_view(reader.buffered()));
-            co_return out;
-        });
-
-        expect(parts == std::vector<std::string>{"abc", "def", "ghi"});
-    };
-
-    "ng byte reader yields empty reads distinctly from eof"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto source = empty_then_string_source{};
-        auto storage = std::array<std::byte, 8>{};
-        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
-
-        auto parts = deck.sync_wait([&]() -> nxt::rt::task<std::vector<std::string>> {
-            auto out = std::vector<std::string>{};
-            while (auto chunk = co_await reader.take_some())
-                out.emplace_back(nxt::rt::as_string_view(*chunk));
-            co_return out;
-        });
-
-        expect(parts == std::vector<std::string>{"", "abc"});
-    };
-
-    "ng http chunked body pipe leaves next response buffered"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto chunks = std::array{
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-            "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
-            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"sv,
+                expect(deck.sync_wait([&deck]() -> nxt::rt::task<bool> {
+                    try {
+                        deck.run_ready();
+                    } catch (const std::runtime_error &) {
+                        co_return true;
+                    }
+                    co_return false;
+                }));
+            };
         };
-        auto source = nxt::rt::string_source{std::span{chunks}};
-        auto storage = std::array<std::byte, 256>{};
-        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
-        auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
-            auto first = co_await nxt::rt::http::read_response_head(reader);
-            expect(first.status == 200_i);
-            expect(nxt::rt::http::is_chunked(first));
+        "environment"_test = [] {
+            "survives nested task awaits"_test = [] {
+                auto deck = nxt::rt::deck{};
 
-            auto body = nxt::rt::http::read_response_body(reader, first);
-            auto text = std::string{};
-            while (auto chunk = co_await body.next())
-                text += nxt::rt::as_string_view(*chunk);
+                auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
+                    co_return co_await nxt::rt::with_env<ambient_int_key>(
+                        41, [] { return read_ambient_int_after_yield(); });
+                });
 
-            auto second = co_await nxt::rt::http::read_response_head(reader);
-            expect(second.status == 204_i);
-            expect(nxt::rt::http::content_length(second) == std::size_t{0});
-            co_return text;
-        });
+                expect(result == 41_i);
+            };
 
-        expect(result == "hello world");
-    };
+            "restores outer bindings"_test = [] {
+                auto deck = nxt::rt::deck{};
 
-    "ng http content-length body pipe leaves next response buffered"_test = [] {
-        auto deck = nxt::rt::deck{};
-        auto chunks = std::array{
-            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
-            "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"sv,
+                auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
+                    co_return co_await nxt::rt::with_env<ambient_int_key>(
+                        10, []() -> nxt::rt::task<int> {
+                            auto before = co_await read_ambient_int();
+                            auto inside = co_await nxt::rt::with_env<
+                                ambient_int_key>(20, [] {
+                                return read_ambient_int_after_yield();
+                            });
+                            auto after = co_await read_ambient_int();
+                            co_return before * 100 + inside * 10 + after;
+                        });
+                });
+
+                expect(result == 1210_i);
+            };
         };
-        auto source = nxt::rt::string_source{std::span{chunks}};
-        auto storage = std::array<std::byte, 128>{};
-        auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
-        auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
-            auto first = co_await nxt::rt::http::read_response_head(reader);
-            expect(first.status == 200_i);
+        "wishes"_test = [] {
+            "prepare and park typed waiters"_test = [] {
+                auto wand = manual_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto events = std::vector<int>{};
 
-            auto body = nxt::rt::http::read_response_body(reader, first);
-            auto text = std::string{};
-            while (auto chunk = co_await body.next())
-                text += nxt::rt::as_string_view(*chunk);
+                auto task_body =
+                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    events.push_back(1);
+                    co_await nxt::rt::manual_wish{.token = 42};
+                    events.push_back(2);
+                };
 
-            auto second = co_await nxt::rt::http::read_response_head(reader);
-            expect(second.status == 201_i);
-            co_return text;
-        });
+                auto task = task_body(events);
+                deck.start(task);
+                deck.run_ready();
 
-        expect(result == "hello");
-    };
-};
+                expect(events == std::vector<int>{1})
+                    << "task should suspend before manual wish fulfillment";
+                expect(deck.empty())
+                    << "manual wish should not requeue itself";
+                expect(
+                    wand.prepared == std::vector<nxt::rt::wait_token>{42})
+                    << "wand should synchronously prepare the wish";
+                expect(wand.parked.size() == std::size_t{1})
+                    << "waiter should park the suspended coroutine";
+                expect(wand.parked.front().token == std::uint64_t{42});
+
+                wand.fulfill(deck, 42);
+                deck.run_ready();
+
+                expect(events == std::vector<int>{1, 2})
+                    << "fulfilled manual wish should resume the suspended task";
+            };
+
+            "wave the wand after staged preparation"_test = [] {
+                auto wand = manual_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto events = std::vector<int>{};
+
+                auto task_body =
+                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    events.push_back(1);
+                    co_await nxt::rt::manual_wish{.token = 7};
+                    events.push_back(2);
+                };
+
+                auto task = task_body(events);
+                deck.start(task);
+                deck.run_ready();
+
+                expect(events == std::vector<int>{1});
+                expect(
+                    wand.prepared == std::vector<nxt::rt::wait_token>{7});
+                expect(wand.parked.size() == std::size_t{1});
+                expect(wand.waves == 1_i)
+                    << "run_ready should wave the deck wand after the pump round";
+
+                wand.fulfill(deck, 7);
+                deck.run_ready();
+
+                expect(events == std::vector<int>{1, 2});
+                expect(wand.prepared.size() == std::size_t{1})
+                    << "resuming after fulfillment should not prepare a second wish";
+                expect(wand.waves == 2_i);
+            };
+        };
+
+        "buffers"_test = [] {
+            "visit chunks through reused storage"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
+                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto storage = std::array<std::byte, 3>{};
+                auto visited = std::vector<std::string>{};
+
+                auto total =
+                    deck.sync_wait([&]() -> nxt::rt::task<std::size_t> {
+                        co_return co_await nxt::rt::for_each_chunk(
+                            source,
+                            std::span{storage},
+                            [&visited](std::span<const std::byte> chunk) {
+                                visited.emplace_back(
+                                    nxt::rt::as_string_view(chunk));
+                            });
+                    });
+
+                expect(total == std::size_t{7});
+                expect(
+                    visited == std::vector<std::string>{"abc", "def", "g"});
+            };
+
+            "leave protocol leftovers buffered"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto chunks = std::array{"abc--def--ghi"sv};
+                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto storage = std::array<std::byte, 16>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                auto parts = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::vector<std::string>> {
+                        auto out = std::vector<std::string>{};
+                        out.emplace_back(
+                            nxt::rt::as_string_view(
+                                co_await reader.take_until("--")));
+                        out.emplace_back(
+                            nxt::rt::as_string_view(
+                                co_await reader.take_until("--")));
+                        out.emplace_back(
+                            nxt::rt::as_string_view(reader.buffered()));
+                        co_return out;
+                    });
+
+                expect(
+                    parts == std::vector<std::string>{"abc", "def", "ghi"});
+            };
+
+            "distinguish empty reads from EOF"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto source = empty_then_string_source{};
+                auto storage = std::array<std::byte, 8>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                auto parts = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::vector<std::string>> {
+                        auto out = std::vector<std::string>{};
+                        while (auto chunk = co_await reader.take_some())
+                            out.emplace_back(
+                                nxt::rt::as_string_view(*chunk));
+                        co_return out;
+                    });
+
+                expect(parts == std::vector<std::string>{"", "abc"});
+            };
+        };
+
+        "pipes"_test = [] {
+            "yield values to awaiting tasks"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto numbers = []() -> nxt::rt::pipe<int> {
+                    co_yield 1;
+                    co_yield 2;
+                    co_yield 3;
+                };
+
+                auto values = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::vector<int>> {
+                        auto pipe = numbers();
+                        auto out = std::vector<int>{};
+                        while (auto value = co_await pipe.next())
+                            out.push_back(*value);
+                        co_return out;
+                    });
+
+                expect(values == std::vector<int>{1, 2, 3});
+            };
+
+            "await between yielded values"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto paced_numbers = []() -> nxt::rt::pipe<int> {
+                    co_yield 1;
+                    co_await nxt::rt::yield();
+                    co_yield 2;
+                };
+
+                auto values = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::vector<int>> {
+                        auto pipe = paced_numbers();
+                        auto out = std::vector<int>{};
+                        while (auto value = co_await pipe.next())
+                            out.push_back(*value);
+                        co_return out;
+                    });
+
+                expect(values == std::vector<int>{1, 2});
+            };
+
+            "await child tasks before yielding values"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto child = [](int value) -> nxt::rt::task<int> {
+                    co_await nxt::rt::yield();
+                    co_return value * 2;
+                };
+
+                auto doubled = [child]() -> nxt::rt::pipe<int> {
+                    co_yield co_await child(2);
+                    co_yield co_await child(3);
+                };
+
+                auto values = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::vector<int>> {
+                        auto pipe = doubled();
+                        auto out = std::vector<int>{};
+                        while (auto value = co_await pipe.next())
+                            out.push_back(*value);
+                        co_return out;
+                    });
+
+                expect(values == std::vector<int>{4, 6});
+            };
+
+            "await wishes before yielding again"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto wand = manual_wand{};
+                auto values = std::vector<int>{};
+
+                auto consumer_body =
+                    [](std::vector<int> & values) -> nxt::rt::task<void> {
+                    auto producer = []() -> nxt::rt::pipe<int> {
+                        co_yield 1;
+                        co_await nxt::rt::manual_wish{.token = 99};
+                        co_yield 2;
+                    };
+                    auto pipe = producer();
+                    while (auto value = co_await pipe.next())
+                        values.push_back(*value);
+                };
+
+                auto consumer = consumer_body(values);
+
+                deck.start(consumer);
+                deck.run_until_idle(wand);
+
+                expect(values == std::vector<int>{1});
+                expect(wand.parked.size() == std::size_t{1});
+                expect(wand.parked.front().token == std::uint64_t{99});
+
+                wand.fulfill(deck, 99);
+                deck.run_until_idle(wand);
+
+                expect(values == std::vector<int>{1, 2});
+                expect(consumer.done());
+            };
+
+            "propagate exceptions to awaiting tasks"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto broken = []() -> nxt::rt::pipe<int> {
+                    co_yield 1;
+                    throw std::runtime_error{"pipe boom"};
+                };
+
+                auto threw = false;
+                try {
+                    deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        auto pipe = broken();
+                        while (co_await pipe.next()) {
+                        }
+                    });
+                } catch (const std::runtime_error &) {
+                    threw = true;
+                }
+
+                expect(threw);
+            };
+        };
+
+        "HTTP bodies"_test = [] {
+            "leave the next response buffered after chunked bodies"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto chunks = std::array{
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                    "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+                    "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"sv,
+                };
+                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto storage = std::array<std::byte, 256>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                auto result =
+                    deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                        auto first =
+                            co_await nxt::rt::http::read_response_head(
+                                reader);
+                        expect(first.status == 200_i);
+                        expect(nxt::rt::http::is_chunked(first));
+
+                        auto body = nxt::rt::http::read_response_body(
+                            reader, first);
+                        auto text = std::string{};
+                        while (auto chunk = co_await body.next())
+                            text += nxt::rt::as_string_view(*chunk);
+
+                        auto second =
+                            co_await nxt::rt::http::read_response_head(
+                                reader);
+                        expect(second.status == 204_i);
+                        expect(
+                            nxt::rt::http::content_length(second)
+                            == std::size_t{0});
+                        co_return text;
+                    });
+
+                expect(result == "hello world");
+            };
+
+            "leave the next response buffered after content-length bodies"_test =
+                [] {
+                    auto deck = nxt::rt::deck{};
+                    auto chunks = std::array{
+                        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+                        "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"sv,
+                    };
+                    auto source = nxt::rt::string_source{std::span{chunks}};
+                    auto storage = std::array<std::byte, 128>{};
+                    auto reader =
+                        nxt::rt::byte_reader{source, std::span{storage}};
+
+                    auto result =
+                        deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                            auto first =
+                                co_await nxt::rt::http::read_response_head(
+                                    reader);
+                            expect(first.status == 200_i);
+
+                            auto body = nxt::rt::http::read_response_body(
+                                reader, first);
+                            auto text = std::string{};
+                            while (auto chunk = co_await body.next())
+                                text += nxt::rt::as_string_view(*chunk);
+
+                            auto second =
+                                co_await nxt::rt::http::read_response_head(
+                                    reader);
+                            expect(second.status == 201_i);
+                            co_return text;
+                        });
+
+                    expect(result == "hello");
+                };
+        };
+    }};
 
 } // namespace nxt::test
 

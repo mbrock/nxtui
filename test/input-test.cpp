@@ -10,174 +10,180 @@ using namespace boost::ut;
 using nxt::input::EventType;
 using nxt::input::Key;
 
-static suite input_parser_tests = [] {
-    "plain utf8 text"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("a\xc4\x89");
+static suite input_parser_tests{
+    "Input parser", [] {
+        "text"_test = [] {
+            "parses plain UTF-8"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("a\xc4\x89");
 
-        expect(events.size() == 2_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].text == "a");
-        expect(events[0].codepoint == std::uint32_t{97});
-        expect(events[1].key == Key::character);
-        expect(events[1].text == "\xc4\x89");
-        expect(events[1].codepoint == std::uint32_t{265});
-    };
+                expect(events.size() == 2_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].text == "a");
+                expect(events[0].codepoint == std::uint32_t{97});
+                expect(events[1].key == Key::character);
+                expect(events[1].text == "\xc4\x89");
+                expect(events[1].codepoint == std::uint32_t{265});
+            };
 
-    "simple controls"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\r\t\x7f");
+            "waits for partial UTF-8"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\xc4");
+                expect(events.empty());
 
-        expect(events.size() == 3_ul);
-        expect(events[0].key == Key::enter);
-        expect(events[1].key == Key::tab);
-        expect(events[2].key == Key::backspace);
-    };
+                events = parser.feed("\x89");
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].text == "\xc4\x89");
+                expect(events[0].codepoint == std::uint32_t{265});
+            };
 
-    "legacy ctrl letter fallback"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x01");
+            "advances past invalid bytes"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\xffx");
 
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].mods.ctrl);
-        expect(events[0].text == "a");
-    };
+                expect(events.size() == 2_ul);
+                expect(events[0].key == Key::unknown);
+                expect(events[1].key == Key::character);
+                expect(events[1].text == "x");
+            };
+        };
 
-    "kitty csi u modified character"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[97;5u");
+        "controls"_test = [] {
+            "parses simple keys"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\r\t\x7f");
 
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].codepoint == std::uint32_t{97});
-        expect(events[0].text == "a");
-        expect(events[0].mods.ctrl);
-        expect(!events[0].mods.alt);
-    };
+                expect(events.size() == 3_ul);
+                expect(events[0].key == Key::enter);
+                expect(events[1].key == Key::tab);
+                expect(events[2].key == Key::backspace);
+            };
 
-    "kitty csi u event type and associated text"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[97;1;97u\x1b[97;1:3;97u");
+            "falls back for legacy Ctrl letters"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x01");
 
-        expect(events.size() == 2_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].type == EventType::press);
-        expect(events[0].codepoint == std::uint32_t{97});
-        expect(events[0].text == "a");
-        expect(events[0].is_text());
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].mods.ctrl);
+                expect(events[0].text == "a");
+            };
+        };
 
-        expect(events[1].key == Key::character);
-        expect(events[1].type == EventType::release);
-        expect(events[1].text == "a");
-        expect(!events[1].is_text());
-    };
+        "Kitty CSI u"_test = [] {
+            "parses modified characters"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[97;5u");
 
-    "kitty csi u repeat text event"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[97;1:2;97u");
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].codepoint == std::uint32_t{97});
+                expect(events[0].text == "a");
+                expect(events[0].mods.ctrl);
+                expect(!events[0].mods.alt);
+            };
 
-        expect(events.size() == 1_ul);
-        expect(events[0].type == EventType::repeat);
-        expect(events[0].is_text());
-    };
+            "parses event type and associated text"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[97;1;97u\x1b[97;1:3;97u");
 
-    "kitty csi u alternate keys"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[61:43;6;43u");
+                expect(events.size() == 2_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].type == EventType::press);
+                expect(events[0].codepoint == std::uint32_t{97});
+                expect(events[0].text == "a");
+                expect(events[0].is_text());
 
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].codepoint == std::uint32_t{61});
-        expect(events[0].shifted_codepoint.has_value());
-        expect(*events[0].shifted_codepoint == std::uint32_t{43});
-        expect(events[0].mods.shift);
-        expect(events[0].mods.ctrl);
-        expect(events[0].text == "+");
-    };
+                expect(events[1].key == Key::character);
+                expect(events[1].type == EventType::release);
+                expect(events[1].text == "a");
+                expect(!events[1].is_text());
+            };
 
-    "kitty csi u associated text without key code"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[0;1;229u");
+            "parses repeat text events"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[97;1:2;97u");
 
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].codepoint == std::uint32_t{0});
-        expect(events[0].text == "\xc3\xa5");
-        expect(events[0].is_text());
-    };
+                expect(events.size() == 1_ul);
+                expect(events[0].type == EventType::repeat);
+                expect(events[0].is_text());
+            };
 
-    "kitty csi u ctrl c helper"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[99;5u");
+            "parses alternate keys"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[61:43;6;43u");
 
-        expect(events.size() == 1_ul);
-        expect(events[0].is_ctrl_c());
-        expect(!events[0].is_text());
-    };
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].codepoint == std::uint32_t{61});
+                expect(events[0].shifted_codepoint.has_value());
+                expect(*events[0].shifted_codepoint == std::uint32_t{43});
+                expect(events[0].mods.shift);
+                expect(events[0].mods.ctrl);
+                expect(events[0].text == "+");
+            };
 
-    "kitty csi u escape"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[27u");
+            "parses associated text without a key code"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[0;1;229u");
 
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::escape);
-    };
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::character);
+                expect(events[0].codepoint == std::uint32_t{0});
+                expect(events[0].text == "\xc3\xa5");
+                expect(events[0].is_text());
+            };
 
-    "kitty arrows and modifiers"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[1;6D\x1b[1C");
+            "recognizes Ctrl-C"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[99;5u");
 
-        expect(events.size() == 2_ul);
-        expect(events[0].key == Key::left);
-        expect(events[0].mods.shift);
-        expect(events[0].mods.ctrl);
-        expect(events[1].key == Key::right);
-    };
+                expect(events.size() == 1_ul);
+                expect(events[0].is_ctrl_c());
+                expect(!events[0].is_text());
+            };
 
-    "kitty tilde navigation"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[3~\x1b[5;3~");
+            "parses Escape"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[27u");
 
-        expect(events.size() == 2_ul);
-        expect(events[0].key == Key::delete_);
-        expect(events[1].key == Key::page_up);
-        expect(events[1].mods.alt);
-    };
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::escape);
+            };
 
-    "partial escape sequence waits"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\x1b[1;");
-        expect(events.empty());
+            "parses arrows and modifiers"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[1;6D\x1b[1C");
 
-        events = parser.feed("5A");
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::up);
-        expect(events[0].mods.ctrl);
-    };
+                expect(events.size() == 2_ul);
+                expect(events[0].key == Key::left);
+                expect(events[0].mods.shift);
+                expect(events[0].mods.ctrl);
+                expect(events[1].key == Key::right);
+            };
 
-    "partial utf8 waits"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\xc4");
-        expect(events.empty());
+            "parses tilde navigation keys"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[3~\x1b[5;3~");
 
-        events = parser.feed("\x89");
-        expect(events.size() == 1_ul);
-        expect(events[0].key == Key::character);
-        expect(events[0].text == "\xc4\x89");
-        expect(events[0].codepoint == std::uint32_t{265});
-    };
+                expect(events.size() == 2_ul);
+                expect(events[0].key == Key::delete_);
+                expect(events[1].key == Key::page_up);
+                expect(events[1].mods.alt);
+            };
 
-    "invalid utf8 byte advances"_test = [] {
-        nxt::input::Parser parser;
-        auto events = parser.feed("\xffx");
+            "waits for partial escape sequences"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[1;");
+                expect(events.empty());
 
-        expect(events.size() == 2_ul);
-        expect(events[0].key == Key::unknown);
-        expect(events[1].key == Key::character);
-        expect(events[1].text == "x");
-    };
-};
+                events = parser.feed("5A");
+                expect(events.size() == 1_ul);
+                expect(events[0].key == Key::up);
+                expect(events[0].mods.ctrl);
+            };
+        };
+    }};
 
 } // namespace nxt::test
-
