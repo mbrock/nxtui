@@ -317,6 +317,7 @@ suite llm_tests = [] {
     "tool ui argument summaries use concrete tool parameters"_test = [] {
         auto tool_list = nxt::ai::tools::tool_set{
             nxt::ai::agent_tools::rg_search_tool{},
+            nxt::ai::agent_tools::bash_tool{},
             test_echo_tool{},
         };
 
@@ -345,6 +346,20 @@ suite llm_tests = [] {
         auto echo_display =
             nxt::ai::tool_ui::display_for_call(tool_list, echo);
         expect(echo_display.icon == "echo"sv);
+
+        auto bash = nxt::ai::tools::function_call{
+            .name = "bash",
+            .arguments = R"({"command":"set -e\nprintf 'hi\tthere\n'"})",
+        };
+        expect(nxt::ai::tool_ui::args_summary(tool_list, bash) ==
+               "set -e printf 'hi there '");
+
+        auto failed = nxt::ai::tools::tool_result{
+            .failed = true,
+            .output = "bad\r\nthing\tfailed",
+        };
+        expect(nxt::ai::tool_ui::result_summary(failed) ==
+               "error: bad thing failed");
     };
 
     "response item projections derive messages and calls"_test = [] {
@@ -467,6 +482,16 @@ suite llm_tests = [] {
         expect(
             render_lines(layout, 20, 2)
             == std::vector<std::string>{"active-1", "active-2"});
+    };
+
+    "response output item type reads unquoted json string"_test = [] {
+        auto event = nxt::ai::responses::stream_event{
+            .type = "response.output_item.added",
+            .data =
+                R"({"type":"response.output_item.added","item":{"id":"rs_1","type":"reasoning","summary":[]}})",
+        };
+
+        expect(nxt::ai::response_turn::output_item_type(event) == "reasoning");
     };
 
     "output separator is one horizontal rule line"_test = [] {

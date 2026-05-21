@@ -14,8 +14,7 @@ namespace {
 
 [[nodiscard]] int row_index(const row_t row)
 {
-    return static_cast<int>(
-        (row - terminal_origin_v).count());
+    return static_cast<int>((row - terminal_origin_v).count());
 }
 
 [[nodiscard]] int row_count(const height_t rows)
@@ -47,14 +46,7 @@ namespace {
 [[nodiscard]] row_t scroll_bottom_for(
     const height_t hud_height, const height_t term_height)
 {
-    // Leave a 1-row "quiet zone" between the scroll region and the
-    // HUD. Without it, streaming `print()` text accumulates on the
-    // row directly above the HUD; the freshest characters land
-    // millimeters away from the HUD spinner and the line scrolls
-    // upward each time a `\n` arrives, which reads as flicker. With
-    // the gap, the bottom of the scroll region always has at least
-    // one blank row above the HUD so newly arriving text feels
-    // anchored to a stable position rather than nudging the HUD.
+    // Leave a 1-row quiet zone between the scroll region and the HUD.
     if (has_windowed_hud(hud_height, term_height))
         return hud_start_row_for(hud_height, term_height) - 2 * ln;
     return hud_start_row_for(hud_height, term_height) - 1 * ln;
@@ -99,6 +91,111 @@ void write_terminal_text(ansi::Writer & w, std::string_view text)
     }
 }
 
+struct HudGeometryChange
+{
+    height_t old_hud_height;
+    height_t old_term_height;
+    height_t new_hud_height;
+    height_t new_term_height;
+    bool old_windowed = false;
+    bool new_windowed = false;
+    int old_scroll_bottom = -1;
+    int new_scroll_bottom = -1;
+    bool initial_geometry = false;
+};
+
+HudGeometryChange describe_hud_change(
+    height_t old_hud_height,
+    height_t old_term_height,
+    height_t new_hud_height,
+    height_t new_term_height,
+    bool geometry_initialized)
+{
+    auto old_windowed =
+        has_windowed_hud(old_hud_height, old_term_height);
+    auto new_windowed =
+        has_windowed_hud(new_hud_height, new_term_height);
+    return HudGeometryChange{
+        .old_hud_height = old_hud_height,
+        .old_term_height = old_term_height,
+        .new_hud_height = new_hud_height,
+        .new_term_height = new_term_height,
+        .old_windowed = old_windowed,
+        .new_windowed = new_windowed,
+        .old_scroll_bottom =
+            old_windowed
+                ? row_index(
+                    scroll_bottom_for(old_hud_height, old_term_height))
+                : -1,
+        .new_scroll_bottom =
+            new_windowed
+                ? row_index(
+                    scroll_bottom_for(new_hud_height, new_term_height))
+                : -1,
+        .initial_geometry = !geometry_initialized,
+    };
+}
+
+void reserve_scrollback_space_for_hud(
+    ansi::Writer & wr,
+    const HudGeometryChange & change)
+{
+    if (change.initial_geometry)
+        return;
+
+    if (!change.old_windowed || !change.new_windowed
+        || change.new_scroll_bottom >= change.old_scroll_bottom)
+        return;
+
+    auto scroll_diff =
+        change.old_scroll_bottom - change.new_scroll_bottom;
+    wr.move_to(Pos::at(0 * ch, lines(change.old_scroll_bottom)));
+    wr.scroll_up(lines(scroll_diff));
+}
+
+void apply_scroll_region(
+    ansi::Writer & wr,
+    const HudGeometryChange & change,
+    row_t & hud_start_row)
+{
+    hud_start_row = hud_start_row_for(
+        change.new_hud_height, change.new_term_height);
+
+    if (!change.new_windowed) {
+        wr.reset_scroll_region();
+        return;
+    }
+
+    wr.set_scroll_region(
+        terminal_origin_v + 0 * ln,
+        scroll_bottom_for(change.new_hud_height, change.new_term_height));
+}
+
+void clear_chrome_rows(
+    ansi::Writer & wr,
+    const HudGeometryChange & change)
+{
+    if (change.initial_geometry)
+        return;
+
+    int clear_start = std::min(
+        chrome_start_row_for(
+            change.old_hud_height, change.old_term_height),
+        chrome_start_row_for(
+            change.new_hud_height, change.new_term_height));
+    if (change.old_term_height == 0 * ln)
+        clear_start = chrome_start_row_for(
+            change.new_hud_height, change.new_term_height);
+    clear_start =
+        std::clamp(clear_start, 0, row_count(change.new_term_height));
+
+    for (int row = clear_start; row < row_count(change.new_term_height);
+         ++row) {
+        wr.move_to(Pos::at(0 * ch, static_cast<std::size_t>(row) * ln));
+        wr.clear_line();
+    }
+}
+
 } // namespace
 
 TerminalCompositor::TerminalCompositor(
@@ -119,6 +216,9 @@ void TerminalCompositor::resize(nxt::Size size)
     auto raster_h = raster_height_for(hud_height_, size.h);
     front_ = Raster(size.w, raster_h, glyphs_);
     back_ = Raster(size.w, raster_h, glyphs_);
+
+    if (!geometry_initialized_)
+        return;
 
     // Clear the compositor-owned region, preserving cursor position. The next
     // render will redraw the HUD at the resized width.
@@ -167,19 +267,12 @@ void TerminalCompositor::set_hud_height(
 
     auto old_term_height = term_height_;
     auto old_hud_height = hud_height_;
-    auto old_has_windowed_hud =
-        has_windowed_hud(old_hud_height, old_term_height);
-    auto new_has_windowed_hud =
-        has_windowed_hud(new_hud_height, term_height);
-
-    auto old_scroll_bottom =
-        old_has_windowed_hud
-            ? row_index(scroll_bottom_for(old_hud_height, old_term_height))
-            : -1;
-    auto new_scroll_bottom =
-        new_has_windowed_hud
-            ? row_index(scroll_bottom_for(new_hud_height, term_height))
-            : -1;
+    auto change = describe_hud_change(
+        old_hud_height,
+        old_term_height,
+        new_hud_height,
+        term_height,
+        geometry_initialized_);
 
     hud_height_ = new_hud_height;
     term_height_ = term_height;
@@ -193,48 +286,16 @@ void TerminalCompositor::set_hud_height(
         wr.save_cursor();
         wr.reset();
 
-        // Shrink the scroll region only after pushing visible log lines up so
-        // they remain on screen when the HUD claims rows.
-        if (old_has_windowed_hud && new_has_windowed_hud
-            && new_scroll_bottom < old_scroll_bottom) {
-            auto scroll_diff = old_scroll_bottom - new_scroll_bottom;
-            wr.move_to(
-                Pos::at(0 * ch, lines(old_scroll_bottom)));
-            wr.scroll_up(lines(scroll_diff));
-        }
-
-        if (new_has_windowed_hud) {
-            hud_start_row_ =
-                hud_start_row_for(new_hud_height, term_height);
-            auto scroll_top = terminal_origin_v + 0 * ln;
-            auto scroll_bottom =
-                scroll_bottom_for(new_hud_height, term_height);
-            wr.set_scroll_region(scroll_top, scroll_bottom);
-        } else {
-            // Full-screen or no-HUD mode.
-            hud_start_row_ =
-                hud_start_row_for(new_hud_height, term_height);
-            wr.reset_scroll_region();
-        }
-
-        // Diff rendering will not write cells that are blank in both buffers,
-        // so explicitly clear rows entering or leaving HUD ownership.
-        int clear_start = std::min(
-            chrome_start_row_for(old_hud_height, old_term_height),
-            chrome_start_row_for(new_hud_height, term_height));
-        if (old_term_height == 0 * ln)
-            clear_start = chrome_start_row_for(new_hud_height, term_height);
-        clear_start = std::clamp(clear_start, 0, row_count(term_height));
-
-        for (int row = clear_start; row < row_count(term_height); ++row) {
-            wr.move_to(Pos::at(0 * ch, static_cast<std::size_t>(row) * ln));
-            wr.clear_line();
-        }
+        reserve_scrollback_space_for_hud(wr, change);
+        apply_scroll_region(wr, change, hud_start_row_);
+        clear_chrome_rows(wr, change);
 
         wr.restore_cursor();
         out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
         out.flush();
     }
+
+    geometry_initialized_ = true;
 
     // Resize rasters to match HUD height
     auto raster_w = front_.width();
@@ -246,6 +307,11 @@ void TerminalCompositor::set_hud_height(
 height_t TerminalCompositor::hud_height() const noexcept
 {
     return hud_height_;
+}
+
+int TerminalCompositor::scrollback_bottom_row() const noexcept
+{
+    return row_index(scroll_bottom_for(hud_height_, term_height_));
 }
 
 Raster & TerminalCompositor::back_buffer() noexcept

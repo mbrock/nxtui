@@ -143,46 +143,10 @@ bool prepare_api_key(llm_request & request)
     return false;
 }
 
-void queue_post_exit_summary(
-    nxt::ui::yard & self,
-    const nxt::ai::hud_blocks::State & hud,
-    const nxt::ai::agent::response_stream_result & response)
-{
-    auto block = std::string{};
-    auto wrap_width = nxt::ai::response_turn::stream_wrap_width(self);
-    auto message_style = nxt::tui::fg(nxt::Rgba8::yellow());
-
-    for (const auto & message :
-         nxt::ai::agent::message_blocks_from_items(response.output_items)) {
-        if (message.empty())
-            continue;
-        if (!block.empty())
-            block += "\n";
-        block += nxt::ai::tool_ui::render_for_scrollback(
-            self,
-            nxt::ai::response_turn::markdown_text_block(
-                message, message_style, wrap_width));
-        block += "\n";
-    }
-
-    if (!hud.rows.empty()) {
-        if (!block.empty())
-            block += "\n";
-        block += nxt::ai::tool_ui::render_for_scrollback(self, hud.view());
-        block += "\n";
-    }
-
-    if (!block.empty()) {
-        block.insert(block.begin(), '\n');
-        self.runtime().print_after_exit(std::move(block));
-    }
-}
-
 template<typename ToolSet>
 nxt::task<> run_agent_worker(
     nxt::ui::yard & self,
-    nxt::ai::agent::response_continuation<ToolSet> turn,
-    bool post_exit_summary = false)
+    nxt::ai::agent::response_continuation<ToolSet> turn)
 {
     auto hud = nxt::ai::hud_blocks::State{};
     while (turn.can_step()) {
@@ -197,8 +161,6 @@ nxt::task<> run_agent_worker(
         auto calls =
             nxt::ai::tools::function_calls_from_items(response.output_items);
         if (calls.empty()) {
-            if (post_exit_summary)
-                queue_post_exit_summary(self, hud, response);
             co_return;
         }
 
@@ -219,16 +181,14 @@ nxt::task<> run_agent_worker(
 template<typename ToolSet>
 nxt::task<> run_agent_turn(
     nxt::ui::yard & self,
-    nxt::ai::agent::response_continuation<ToolSet> turn,
-    bool post_exit_summary = false)
+    nxt::ai::agent::response_continuation<ToolSet> turn)
 {
-    co_await run_agent_worker(self, std::move(turn), post_exit_summary);
+    co_await run_agent_worker(self, std::move(turn));
 }
 
 nxt::task<> run_submitted_prompt(
     nxt::ui::yard & self,
-    llm_request request,
-    bool post_exit_summary = false)
+    llm_request request)
 {
     if (!prepare_api_key(request)) {
         self.println("error: OPENAI_API_KEY is not set");
@@ -239,8 +199,7 @@ nxt::task<> run_submitted_prompt(
     co_await run_agent_turn(
         self,
         nxt::ai::agent::response_continuation{
-            std::move(request), std::move(tools)},
-        post_exit_summary);
+            std::move(request), std::move(tools)});
 }
 
 nxt::task<> run_prompt_loop(nxt::ui::yard & self, llm_request request)
@@ -302,8 +261,7 @@ int main(int argc, char ** argv)
                 nxt::ui::yard & self) mutable -> nxt::task<> {
                 if (prompt) {
                     request.input = std::move(*prompt);
-                    co_await run_submitted_prompt(
-                        self, std::move(request), true);
+                    co_await run_submitted_prompt(self, std::move(request));
                     co_return;
                 }
 

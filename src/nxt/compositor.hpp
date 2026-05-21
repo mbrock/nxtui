@@ -33,6 +33,8 @@ public:
         height_t hud_height, height_t term_height, std::ostream & out);
     /// Current HUD height.
     [[nodiscard]] height_t hud_height() const noexcept;
+    /// Bottom row used for scrollback output in windowed HUD mode.
+    [[nodiscard]] int scrollback_bottom_row() const noexcept;
 
     /// Present changed back-buffer cells to stdout.
     void present_frame();
@@ -58,6 +60,7 @@ private:
     height_t term_height_{0 * ln};
     row_t hud_start_row_{
         terminal_origin_v + 0 * ln}; // row where HUD starts
+    bool geometry_initialized_ = false;
     // Non-owning; supplied by `set_output_mutex`. Null means callers
     // chose not to participate (tests with their own ostream).
     std::mutex * output_mutex_ = nullptr;

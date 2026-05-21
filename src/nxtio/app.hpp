@@ -431,6 +431,7 @@ private:
     std::atomic<std::uint64_t> damage_counter_{0};
     std::optional<int> scrollback_cursor_row_;
     bool scrollback_cursor_needs_move_{true};
+    bool scrollback_at_line_start_{true};
     std::vector<QueuedOutput> output_queue_;
     std::vector<std::string> post_exit_blocks_;
     nxt::height_t last_hud_height_{0 * ln};

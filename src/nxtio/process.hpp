@@ -692,24 +692,31 @@ void run2(UIRuntime & runtime, Body body)
 template<typename Body>
 int main(UIRuntimeOptions options, Body body)
 {
-    nxt::ui::UIRuntime runtime{options};
+    auto runtime = std::unique_ptr<nxt::ui::UIRuntime>{};
     int status = 0;
 
     nxt::io::try_catch([&] {
-        body(runtime);
+        runtime = std::make_unique<nxt::ui::UIRuntime>(options);
+        body(*runtime);
+        runtime.reset();
     }, [&] {
+        auto failure = std::current_exception();
         try {
-            runtime.mark_failed();
-            runtime.request_shutdown();
-            runtime.cleanup_for_crash();
+            if (runtime) {
+                runtime->mark_failed();
+                runtime->request_shutdown();
+                runtime->cleanup_for_crash();
+            }
         } catch (...) {
             // Preserve the original failure while still doing our best
             // to leave the terminal in a normal state.
         }
 
-        status = nxt::ui::report_exception(std::current_exception());
+        runtime.reset();
+        status = nxt::ui::report_exception(failure);
     });
 
+    runtime.reset();
     return status;
 }
 

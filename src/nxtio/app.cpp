@@ -301,14 +301,6 @@ resolve_trace_path(std::string_view run_id) noexcept
     return out;
 }
 
-[[nodiscard]] int
-scrollback_bottom_row(const height_t hud_h, const height_t term_h)
-{
-    if (hud_h > 0 * ln && hud_h < term_h)
-        return static_cast<int>((term_h - hud_h - 2 * ln).count());
-    return static_cast<int>((term_h - 1 * ln).count());
-}
-
 [[nodiscard]] int count_newlines(std::string_view text) noexcept
 {
     return static_cast<int>(std::ranges::count(text, '\n'));
@@ -854,20 +846,7 @@ void UIRuntime::update_hud_height(height_t hud_h)
     // subsequent output fills newly exposed rows from the top instead of
     // teleporting to the new bottom and leaving a blank pocket.
     if (hud_h != last_hud_height_) {
-        auto old_hud_h = last_hud_height_;
-        auto term_h = terminal_height();
-        if (scrollback_cursor_row_ && old_hud_h > 0 * ln
-            && old_hud_h < term_h && hud_h > 0 * ln && hud_h < term_h) {
-            auto old_bottom = scrollback_bottom_row(old_hud_h, term_h);
-            auto new_bottom = scrollback_bottom_row(hud_h, term_h);
-            if (new_bottom < old_bottom)
-                *scrollback_cursor_row_ = std::max(
-                    0, *scrollback_cursor_row_ - (old_bottom - new_bottom));
-            *scrollback_cursor_row_ =
-                std::min(*scrollback_cursor_row_, new_bottom);
-        } else {
-            scrollback_cursor_row_.reset();
-        }
+        scrollback_cursor_row_.reset();
         scrollback_cursor_needs_move_ = true;
         last_hud_height_ = hud_h;
     }
@@ -983,12 +962,17 @@ void UIRuntime::write_output(
                 << block_text;
             if (block_text.back() != '\n')
                 out << '\n';
+            scrollback_at_line_start_ = true;
         } else {
             out << output.text;
+            if (!output.text.empty())
+                scrollback_at_line_start_ = output.text.back() == '\n';
         }
         if (output.kind == QueuedOutput::Kind::line
             && (output.text.empty() || output.text.back() != '\n'))
             out << '\n';
+        if (output.kind == QueuedOutput::Kind::line)
+            scrollback_at_line_start_ = true;
         return;
     }
 
@@ -996,9 +980,7 @@ void UIRuntime::write_output(
     if (hud_h > 0 * ln && hud_h >= term_h)
         return;
 
-    // Match `compositor::scroll_bottom_for`: keep a 1-row gap between
-    // the scrollback writing line and the HUD when there is a HUD.
-    auto scroll_bottom = scrollback_bottom_row(hud_h, term_h);
+    auto scroll_bottom = compositor_->scrollback_bottom_row();
 
     std::string buf;
     ansi::Writer w(buf);
@@ -1015,19 +997,23 @@ void UIRuntime::write_output(
     if (output.kind == QueuedOutput::Kind::block) {
         if (block_text.empty())
             return;
-        w.text("\n");
+        if (!scrollback_at_line_start_)
+            w.text("\n");
         w.text(block_text);
         if (block_text.back() != '\n')
             w.text("\n");
-        w.text("\n");
         w.clear_line_from_cursor();
+        scrollback_at_line_start_ = true;
     } else {
         w.text(output.text);
+        if (!output.text.empty())
+            scrollback_at_line_start_ = output.text.back() == '\n';
     }
     if (output.kind == QueuedOutput::Kind::line) {
         w.clear_line_from_cursor();
         if (output.text.empty() || output.text.back() != '\n')
             w.text("\n");
+        scrollback_at_line_start_ = true;
     }
 
     out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
@@ -1051,8 +1037,8 @@ void UIRuntime::cleanup()
 {
     auto guard = std::scoped_lock{output_mutex_};
     flush_output_queue(std::cout);
-    // Leave the final HUD frame visible after the render loop exits. The
-    // terminal guard restores cursor state and scroll margins separately.
+    if (has_terminal_surface())
+        compositor_->set_hud_height(0 * ln, terminal_height(), std::cout);
     std::cout.flush();
 }
 
@@ -1061,11 +1047,11 @@ void UIRuntime::cleanup_for_crash()
     auto guard = std::scoped_lock{output_mutex_};
     flush_output_queue(std::cout);
     if (has_terminal_surface() && ansi::is_tty()) {
+        compositor_->set_hud_height(0 * ln, terminal_height(), std::cout);
+
         std::string buf;
         ansi::Writer w(buf);
         w.reset_scroll_region();
-        w.move_to(Pos::at(0 * ch, 0 * ln));
-        w.clear_screen();
         w.reset();
         w.show_cursor();
         std::cout.write(buf.data(), static_cast<std::streamsize>(buf.size()));

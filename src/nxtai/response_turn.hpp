@@ -393,6 +393,16 @@ inline bool is_function_call_item_event(const stream_event & event)
            || event.type == "response.function_call_arguments.done";
 }
 
+inline std::string output_item_type(const stream_event & event)
+{
+    auto item_type = glz::get_as_json<std::string, "/item/type">(event.data);
+    if (!item_type)
+        throw nxt::io::runtime_error{
+            "OpenAI output item event is missing item.type: "
+            + event_detail(event)};
+    return *item_type;
+}
+
 inline std::exception_ptr classify_response_failure(
     nxt::ui::UIRuntime & runtime,
     std::exception_ptr failure)
@@ -604,7 +614,7 @@ nxt::task<std::optional<openai::raw_json>> read_output_item(
     const stream_event & first,
     hud_blocks::State * hud = nullptr)
 {
-    auto item_type = glz::get_sv_json<"/item/type">(first.data);
+    auto item_type = output_item_type(first);
     
     if (item_type == "reasoning")
         co_return co_await read_reasoning_item(stream, self, hud);

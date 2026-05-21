@@ -97,10 +97,63 @@ concept has_parameters_summary =
         { Tool::parameters_summary(parameters) } -> std::same_as<std::string>;
     };
 
+inline std::string sanitize_display_text(std::string_view text)
+{
+    std::string out;
+    out.reserve(text.size());
+    std::size_t i = 0;
+    auto last_was_space = false;
+
+    auto push_space = [&] {
+        if (!last_was_space && !out.empty()) {
+            out.push_back(' ');
+            last_was_space = true;
+        }
+    };
+
+    while (i < text.size()) {
+        auto c = static_cast<unsigned char>(text[i]);
+        if (c == 0x1b) {
+            ++i;
+            if (i < text.size() && text[i] == '[') {
+                ++i;
+                while (i < text.size()) {
+                    auto x = static_cast<unsigned char>(text[i]);
+                    ++i;
+                    if (x >= 0x40 && x <= 0x7e)
+                        break;
+                }
+            } else if (i < text.size()) {
+                ++i;
+            }
+            push_space();
+            continue;
+        }
+        if (c == '\n' || c == '\r' || c == '\t') {
+            push_space();
+            ++i;
+            continue;
+        }
+        if (c < 0x20 || c == 0x7f) {
+            ++i;
+            continue;
+        }
+
+        out.push_back(static_cast<char>(c));
+        last_was_space = c == ' ';
+        ++i;
+    }
+
+    if (!out.empty() && out.back() == ' ')
+        out.pop_back();
+    return out;
+}
+
 inline std::string fallback_args_summary(const std::string & args_json)
 {
-    return args_json.size() > 50 ? args_json.substr(0, 47) + "..."
-                                 : args_json;
+    auto sanitized = sanitize_display_text(args_json);
+    return sanitized.size() > 50 ? sanitized.substr(0, 47) + "..."
+                                 : sanitized;
 }
 
 template<typename Tool>
@@ -149,7 +202,7 @@ args_summary(const ToolSet & tool_list, const tools::function_call & call)
 {
     if (auto summary =
             args_summary_for_known_tool(tool_list, call.name, call.arguments))
-        return *summary;
+        return sanitize_display_text(*summary);
     return fallback_args_summary(call.arguments);
 }
 
@@ -332,67 +385,23 @@ inline auto queued_card(tool_display display, std::string_view args)
 // One-line summary of the result (bytes/error).
 inline std::string result_summary(const tools::tool_result & result)
 {
-    if (result.failed)
-        return "error: " + result.output;
+    if (result.failed) {
+        auto output = sanitize_display_text(result.output);
+        if (output.size() > 80)
+            output = output.substr(0, 77) + "...";
+        return "error: " + output;
+    }
     if (!result.output.empty())
         return std::format("{} bytes", result.output.size());
     return {};
 }
 
-// Strip terminal control characters from a line before we
-// self.print it into scrollback. Without this, raw bash output
-// (especially from any tool that doesn't honor isatty) can embed
-// CR/ESC/control sequences that retarget the cursor, reset the
-// scroll region, or otherwise corrupt the HUD's geometry — at which
-// point the runtime's HUD region math diverges from what the
-// terminal believes is reserved, and the visible HUD "collapses".
+// Strip terminal control characters from a line before we self.print it into
+// scrollback. Display fields use the same sanitizer: they are one-line UI
+// labels, so embedded newlines/tabs become spaces rather than raster glyphs.
 inline std::string sanitize_line(std::string_view line)
 {
-    std::string out;
-    out.reserve(line.size());
-    std::size_t i = 0;
-    while (i < line.size()) {
-        auto c = static_cast<unsigned char>(line[i]);
-        if (c == 0x1b) {
-            // Skip an ESC + the next byte at minimum; for CSI
-            // sequences eat up to the final byte (0x40..0x7e).
-            ++i;
-            if (i < line.size() && line[i] == '[') {
-                ++i;
-                while (i < line.size()) {
-                    auto x = static_cast<unsigned char>(line[i]);
-                    ++i;
-                    if (x >= 0x40 && x <= 0x7e)
-                        break;
-                }
-            } else {
-                ++i;
-            }
-            continue;
-        }
-        if (c == '\r') {
-            // CR alone retargets the line cursor; ignore.
-            ++i;
-            continue;
-        }
-        if (c == '\t') {
-            out += "    ";
-            ++i;
-            continue;
-        }
-        if (c < 0x20 || c == 0x7f) {
-            // Other C0 controls — drop silently. (A visible
-            // marker is tempting but would only flag rare cases;
-            // in practice the safest thing is to elide them so
-            // there's no chance of leaking partial sequences into
-            // the outer terminal state.)
-            ++i;
-            continue;
-        }
-        out += static_cast<char>(c);
-        ++i;
-    }
-    return out;
+    return sanitize_display_text(line);
 }
 
 // Up to `max_lines` preview lines extracted from the result payload.
