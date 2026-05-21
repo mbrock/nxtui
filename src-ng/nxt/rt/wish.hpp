@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <type_traits>
 #include <utility>
@@ -187,6 +188,28 @@ struct read_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
+struct recv_some_wish
+{
+    using result_type = std::size_t;
+
+    int fd = -1;
+    std::span<std::byte> buffer;
+    int flags = 0;
+
+    waiter<std::size_t> operator co_await() const;
+};
+
+struct send_some_wish
+{
+    using result_type = std::size_t;
+
+    int fd = -1;
+    std::span<const std::byte> buffer;
+    int flags = 0;
+
+    waiter<std::size_t> operator co_await() const;
+};
+
 /// Backend interface for staged platform/event-loop machinery.
 ///
 /// `prepare()` is called synchronously while a coroutine is running. It can
@@ -212,6 +235,16 @@ public:
         deck & d,
         detail::promise_base & promise,
         read_some_wish wish) = 0;
+
+    virtual waiter<std::size_t> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        recv_some_wish wish) = 0;
+
+    virtual waiter<std::size_t> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        send_some_wish wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void wave(deck & d) = 0;

@@ -288,4 +288,23 @@ if get_option('tests')
 
   test('nxt-tests', nxt_tests)
   test('ng-runtime-test', nxt_ng_runtime_test)
+
+  if host_machine.system() == 'linux'
+    nxt_test_liburing_dep = dependency(
+      'liburing',
+      fallback : ['liburing', 'uring'],
+      required : false,
+    )
+  else
+    nxt_test_liburing_dep = disabler()
+  endif
+
+  if nxt_test_liburing_dep.found()
+    nxt_ng_uring_wand_test = executable('ng-uring-wand-test',
+      'test/ng-uring-wand-test.cpp',
+      include_directories : nxt_ng_inc,
+      dependencies : [nxt_test_liburing_dep],
+    )
+    test('ng-uring-wand-test', nxt_ng_uring_wand_test)
+  endif
 endif

@@ -48,6 +48,22 @@ struct manual_wand final : nxt::rt::wand
         throw std::runtime_error{"manual_wand does not implement read"};
     }
 
+    nxt::rt::waiter<std::size_t> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::recv_some_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement recv"};
+    }
+
+    nxt::rt::waiter<std::size_t> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::send_some_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement send"};
+    }
+
     void suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
     {
         parked.push_back(

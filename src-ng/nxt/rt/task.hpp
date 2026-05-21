@@ -439,6 +439,34 @@ inline waiter<std::size_t> read_some_wish::operator co_await() const
     return active_wand->prepare(*active_deck, *running, *this);
 }
 
+inline waiter<std::size_t> recv_some_wish::operator co_await() const
+{
+    auto * active_deck = detail::current_deck;
+    auto * active_wand = detail::current_wand;
+    auto * running = detail::current_promise;
+    if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
+        throw std::runtime_error{
+            "nxt::rt recv wish awaited without a running wand"};
+
+    trace("wish recv prepare fd=" + std::to_string(fd)
+        + " bytes=" + std::to_string(buffer.size()));
+    return active_wand->prepare(*active_deck, *running, *this);
+}
+
+inline waiter<std::size_t> send_some_wish::operator co_await() const
+{
+    auto * active_deck = detail::current_deck;
+    auto * active_wand = detail::current_wand;
+    auto * running = detail::current_promise;
+    if (active_deck == nullptr || active_wand == nullptr || running == nullptr)
+        throw std::runtime_error{
+            "nxt::rt send wish awaited without a running wand"};
+
+    trace("wish send prepare fd=" + std::to_string(fd)
+        + " bytes=" + std::to_string(buffer.size()));
+    return active_wand->prepare(*active_deck, *running, *this);
+}
+
 struct yield_awaiter
 {
     /// Yielding always suspends so the coroutine returns to the pump.

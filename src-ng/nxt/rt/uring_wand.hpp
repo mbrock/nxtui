@@ -123,6 +123,54 @@ public:
         return waiter<std::size_t>{*this, token, state};
     }
 
+    waiter<std::size_t> prepare(
+        deck &,
+        detail::promise_base &,
+        recv_some_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<std::size_t>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        auto const & op = std::get<recv_some_wish>(*request);
+        auto * sqe = get_sqe();
+        io_uring_prep_recv(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.flags);
+        attach_token(sqe, token);
+        completions_.emplace(
+            token,
+            std::make_unique<completion<std::size_t>>(request, state));
+        trace("uring prepare recv token=" + std::to_string(token));
+        return waiter<std::size_t>{*this, token, state};
+    }
+
+    waiter<std::size_t> prepare(
+        deck &,
+        detail::promise_base &,
+        send_some_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<std::size_t>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        auto const & op = std::get<send_some_wish>(*request);
+        auto * sqe = get_sqe();
+        io_uring_prep_send(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.flags);
+        attach_token(sqe, token);
+        completions_.emplace(
+            token,
+            std::make_unique<completion<std::size_t>>(request, state));
+        trace("uring prepare send token=" + std::to_string(token));
+        return waiter<std::size_t>{*this, token, state};
+    }
+
     void suspend(wait_token token, parked_task task) override
     {
         trace("uring park token=" + std::to_string(token));
@@ -191,7 +239,9 @@ private:
     using uring_wish = std::variant<
         manual_wish,
         openat_wish,
-        read_some_wish>;
+        read_some_wish,
+        recv_some_wish,
+        send_some_wish>;
 
     class completion_base
     {

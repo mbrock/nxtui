@@ -128,6 +128,45 @@ private:
     int fd_ = -1;
 };
 
+/// Byte source for a connected socket.
+class socket_source final : public byte_source
+{
+public:
+    explicit socket_source(int fd, int flags = 0) noexcept
+        : fd_(fd)
+        , flags_(flags)
+    {}
+
+    task<read_result> read_some(std::span<std::byte> dst) override
+    {
+        auto n = co_await recv_some_wish{
+            .fd = fd_,
+            .buffer = dst,
+            .flags = flags_,
+        };
+        co_return read_result{
+            .bytes = n,
+            .eof = n == 0,
+        };
+    }
+
+private:
+    int fd_ = -1;
+    int flags_ = 0;
+};
+
+inline task<std::size_t> send_some(
+    int fd,
+    std::span<const std::byte> buffer,
+    int flags = 0)
+{
+    co_return co_await send_some_wish{
+        .fd = fd,
+        .buffer = buffer,
+        .flags = flags,
+    };
+}
+
 /// Buffered asynchronous reader over a byte source.
 template<typename Source = byte_source>
 class byte_reader
