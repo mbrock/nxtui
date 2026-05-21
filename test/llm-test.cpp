@@ -436,16 +436,16 @@ suite llm_tests = [] {
         expect(!has_emphasis(spans[3].style.em, Emphasis::reverse));
     };
 
-    "markdown bold paragraph strips markers and pads vertically"_test = [] {
+    "markdown bold paragraph strips markers without vertical padding"_test = [] {
         auto layout = nxt::ai::response_turn::markdown_text_block(
             "**Foo bar**", {}, 80);
 
-        expect(layout.height_hint().min == 3 * ln);
+        expect(layout.height_hint().min == 1 * ln);
         expect(
             render_lines(layout)
-            == std::vector<std::string>{"", "Foo bar", ""});
+            == std::vector<std::string>{"Foo bar"});
         expect(has_emphasis(
-            rendered_emphasis(layout, 1, 0), Emphasis::bold));
+            rendered_emphasis(layout, 0, 0), Emphasis::bold));
     };
 
     "finished thought block folds to heading"_test = [] {

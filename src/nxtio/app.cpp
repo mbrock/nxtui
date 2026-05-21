@@ -292,20 +292,6 @@ resolve_trace_path(std::string_view run_id) noexcept
     return std::string{text};
 }
 
-[[nodiscard]] std::string horizontal_rule(std::size_t width)
-{
-    std::string out;
-    out.reserve(width * std::string_view{"─"}.size());
-    for (std::size_t i = 0; i < width; ++i)
-        out += "─";
-    return out;
-}
-
-[[nodiscard]] int count_newlines(std::string_view text) noexcept
-{
-    return static_cast<int>(std::ranges::count(text, '\n'));
-}
-
 void print_exception_tree(
     std::ostream & out,
     std::exception_ptr failure,
@@ -361,7 +347,7 @@ UIRuntime::UIRuntime(UIRuntimeOptions options)
     compositor_ =
         std::make_unique<TerminalCompositor>(terminal_size(), glyphs_);
     // Share the runtime's stdout mutex so compositor frame flushes
-    // serialize against print / println on other coroutine threads.
+    // serialize against scrollback block writes on other coroutine threads.
     compositor_->set_output_mutex(&output_mutex_);
 
     // Mirror stdout into a headless libvterm so snapshot() can render
@@ -436,36 +422,71 @@ std::uint64_t fnv1a(std::span<const std::uint8_t> bytes) noexcept
     return h;
 }
 
-std::vector<std::uint8_t> encode_raster_ansi(const Raster & raster)
+void append_u8(std::vector<std::uint8_t> & out, std::uint8_t value)
 {
-    // Store the frame as the same ANSI byte stream the terminal
-    // would receive. Self-contained — replay is just `printf` — and
-    // unicode-safe because the renderer already resolves glyph ids
-    // through the live `GlyphTable`. Bigger than a packed cell array
-    // in the worst case, but most frames compress well because few
-    // cells actually change style between adjacent runs.
-    auto text = nxt::ansi::render_raster(raster);
-    auto bytes = std::vector<std::uint8_t>{};
-    bytes.assign(
-        reinterpret_cast<const std::uint8_t *>(text.data()),
-        reinterpret_cast<const std::uint8_t *>(text.data()) + text.size());
-    return bytes;
+    out.push_back(value);
+}
+
+void append_u32(std::vector<std::uint8_t> & out, std::uint32_t value)
+{
+    out.push_back(static_cast<std::uint8_t>(value & 0xff));
+    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
+    out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xff));
+    out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xff));
+}
+
+void append_bytes(std::vector<std::uint8_t> & out, std::string_view bytes)
+{
+    out.insert(out.end(), bytes.begin(), bytes.end());
+}
+
+std::vector<std::uint8_t> encode_screen_raster(const Raster & raster)
+{
+    auto out = std::vector<std::uint8_t>{};
+    append_bytes(out, "NXTRAST1");
+    append_u32(out, static_cast<std::uint32_t>(raster.width().count()));
+    append_u32(out, static_cast<std::uint32_t>(raster.height().count()));
+
+    auto glyphs = raster.glyphs_2d();
+    auto fgs = raster.fgs_2d();
+    auto bgs = raster.bgs_2d();
+    auto ems = raster.ems_2d();
+    auto rows = glyphs.extent(0);
+    auto cols = glyphs.extent(1);
+    auto & glyph_table = raster.glyph_table();
+
+    for (std::size_t y = 0; y < rows; ++y) {
+        for (std::size_t x = 0; x < cols; ++x) {
+            auto text = glyph_table.get(glyphs[y, x]).value_or(" ");
+            append_u8(out, static_cast<std::uint8_t>(
+                               std::min<std::size_t>(text.size(), 255)));
+            append_bytes(out, text.substr(0, 255));
+            append_u32(out, fgs[y, x].value);
+            append_u32(out, bgs[y, x].value);
+            append_u8(out, static_cast<std::uint8_t>(ems[y, x]));
+        }
+    }
+
+    return out;
 }
 
 } // namespace
 
-void UIRuntime::record_frame_snapshot(const Raster & back)
+void UIRuntime::record_frame_snapshot()
 {
     if (!trace_.enabled())
         return;
+    if (vt_ == nullptr)
+        return;
 
-    auto bytes = encode_raster_ansi(back);
+    auto raster = visible_screen_raster();
+    auto bytes = encode_screen_raster(raster);
     auto hash = fnv1a(std::span<const std::uint8_t>{bytes});
     if (has_last_frame_hash_ && hash == last_frame_hash_)
         return;
 
-    auto cols = static_cast<std::uint64_t>(back.width().count());
-    auto rows = static_cast<std::uint64_t>(back.height().count());
+    auto cols = static_cast<std::uint64_t>(raster.width().count());
+    auto rows = static_cast<std::uint64_t>(raster.height().count());
 
     auto payload = FrameSnapshotPayload{
         .cols = cols,
@@ -476,14 +497,14 @@ void UIRuntime::record_frame_snapshot(const Raster & back)
 
     nxt::io::arrow::trace_row row;
     row.phase = "frame";
-    row.event_type = "ansi";
+    row.event_type = "screen";
     row.data = std::format(
         "{}x{} bytes={} hash={:016x}", cols, rows, bytes.size(), hash);
     row.payload_json = glz::ex::write_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     row.frame_seq = next_frame_seq_++;
-    row.payload_kind = "ansi";
+    row.payload_kind = "screen_raster_v1";
     row.payload_bin = std::move(bytes);
     trace_.add(std::move(row));
     last_frame_hash_ = hash;
@@ -730,13 +751,18 @@ void UIRuntime::render_impl(
     auto size = compositor_->size();
     render_fn(view, size);
     maybe_screenshot();
-    // Snapshot the freshly-rendered back buffer before present_frame
-    // copies it over the front: we want what the user is about to see,
-    // not the previous frame.
-    record_frame_snapshot(buffer);
     auto guard = std::scoped_lock{output_mutex_};
     compositor_->present_frame(std::cout);
     flush_output_queue(std::cout);
+    record_frame_snapshot();
+}
+
+Raster UIRuntime::visible_screen_raster()
+{
+    auto raster = Raster(terminal_size(), glyphs_);
+    auto view = raster.view();
+    nxt::tui::render_vterm_screen(view, raster.extent(), *vt_, {});
+    return raster;
 }
 
 void UIRuntime::maybe_screenshot() noexcept
@@ -787,12 +813,7 @@ void UIRuntime::capture_screenshot(std::string_view milestone) noexcept
                     / (screenshot_session_tag_ + "-"
                        + std::string{milestone} + ".png");
 
-        // Same vterm-driven render as snapshot(): the auto-shots also
-        // need to see HUD + scrollback, not just the HUD raster.
-        Size size{terminal_width(), terminal_height()};
-        nxt::Raster raster(size, glyphs_);
-        auto view = raster.view();
-        nxt::tui::render_vterm_screen(view, size, *vt_, {});
+        auto raster = visible_screen_raster();
         nxt::png::write(raster, path);
     } catch (...) {
         // Best-effort; never let screenshots break the run.
@@ -815,14 +836,7 @@ std::string UIRuntime::snapshot()
             return {};
         auto path = dir / (make_short_id() + ".png");
 
-        // Render the mirrored vterm screen (HUD + scrollback) into a
-        // fresh raster sized to the full terminal, then PNG-encode.
-        // This sees every byte that went to stdout, including the
-        // tool result cards that print() wrote directly to scrollback.
-        Size size{terminal_width(), terminal_height()};
-        nxt::Raster raster(size, glyphs_);
-        auto view = raster.view();
-        nxt::tui::render_vterm_screen(view, size, *vt_, {});
+        auto raster = visible_screen_raster();
         nxt::png::write(raster, path);
         auto path_str = path.string();
         snapshot_paths_.push_back(path_str);
@@ -840,18 +854,17 @@ void UIRuntime::update_hud_height(height_t hud_h)
     if (!has_terminal_surface())
         return;
 
-    // Keep a logical scrollback cursor row across HUD-height changes. When
-    // the HUD grows, the compositor scrolls visible log rows upward, so the
-    // cursor follows. When the HUD shrinks, leave the cursor where it was:
-    // subsequent output fills newly exposed rows from the top instead of
-    // teleporting to the new bottom and leaving a blank pocket.
-    if (hud_h != last_hud_height_) {
-        scrollback_cursor_row_.reset();
-        scrollback_cursor_needs_move_ = true;
-        last_hud_height_ = hud_h;
-    }
-
     compositor_->set_hud_height(hud_h, terminal_height());
+
+    if (hud_h != last_hud_height_) {
+        last_hud_height_ = hud_h;
+        if (scrollback_cursor_row_ && hud_h > 0 * ln
+            && hud_h < terminal_height()) {
+            *scrollback_cursor_row_ = compositor_->scrollback_bottom_row();
+            scrollback_cursor_needs_move_ = true;
+            scrollback_cursor_on_blank_ = true;
+        }
+    }
 }
 
 void UIRuntime::enqueue_output(QueuedOutput output)
@@ -865,19 +878,7 @@ void UIRuntime::enqueue_output(QueuedOutput output)
 
 void UIRuntime::println(std::string_view line)
 {
-    if (!has_terminal_surface()) {
-        std::cout << line;
-        if (line.empty() || line.back() != '\n')
-            std::cout << '\n';
-        std::cout.flush();
-        return;
-    }
-
-    enqueue_output(
-        QueuedOutput{
-            .kind = QueuedOutput::Kind::line,
-            .text = std::string{line},
-        });
+    print_block(line);
 }
 
 void UIRuntime::print_after_exit(std::string text)
@@ -886,26 +887,14 @@ void UIRuntime::print_after_exit(std::string text)
     post_exit_blocks_.push_back(std::move(text));
 }
 
-void UIRuntime::print(std::string_view text)
-{
-    if (!has_terminal_surface()) {
-        std::cout << text;
-        std::cout.flush();
-        return;
-    }
-
-    enqueue_output(
-        QueuedOutput{
-            .kind = QueuedOutput::Kind::text,
-            .text = std::string{text},
-        });
-}
-
 void UIRuntime::print_block(std::string_view text)
 {
     if (!has_terminal_surface()) {
-        std::cout << text;
-        if (text.empty() || text.back() != '\n')
+        auto block_text = trim_blank_boundary_lines(text);
+        if (block_text.empty())
+            return;
+        std::cout << block_text;
+        if (block_text.back() != '\n')
             std::cout << '\n';
         std::cout.flush();
         return;
@@ -913,7 +902,6 @@ void UIRuntime::print_block(std::string_view text)
 
     enqueue_output(
         QueuedOutput{
-            .kind = QueuedOutput::Kind::block,
             .text = std::string{text},
         });
 }
@@ -931,23 +919,15 @@ void UIRuntime::flush_output_queue(std::ostream & out)
 void UIRuntime::write_output(
     std::ostream & out, const QueuedOutput & output)
 {
-    auto block_text = output.kind == QueuedOutput::Kind::block
-                          ? trim_blank_boundary_lines(output.text)
-                          : std::string{};
+    auto block_text = trim_blank_boundary_lines(output.text);
+    if (block_text.empty())
+        return;
 
     if (!has_terminal_surface()) {
-        if (output.kind == QueuedOutput::Kind::block) {
-            if (block_text.empty())
-                return;
-            out << horizontal_rule(72) << '\n' << block_text;
-            if (block_text.back() != '\n')
-                out << '\n';
-        } else {
-            out << output.text;
-        }
-        if (output.kind == QueuedOutput::Kind::line
-            && (output.text.empty() || output.text.back() != '\n'))
+        out << block_text;
+        if (block_text.back() != '\n')
             out << '\n';
+        scrollback_has_output_ = true;
         return;
     }
 
@@ -955,24 +935,10 @@ void UIRuntime::write_output(
     auto term_h = terminal_height();
 
     if (hud_h == 0 * ln) {
-        if (output.kind == QueuedOutput::Kind::block) {
-            if (block_text.empty())
-                return;
-            out << horizontal_rule(terminal_width().count()) << '\n'
-                << block_text;
-            if (block_text.back() != '\n')
-                out << '\n';
-            scrollback_at_line_start_ = true;
-        } else {
-            out << output.text;
-            if (!output.text.empty())
-                scrollback_at_line_start_ = output.text.back() == '\n';
-        }
-        if (output.kind == QueuedOutput::Kind::line
-            && (output.text.empty() || output.text.back() != '\n'))
+        if (!scrollback_has_output_)
             out << '\n';
-        if (output.kind == QueuedOutput::Kind::line)
-            scrollback_at_line_start_ = true;
+        out << block_text;
+        scrollback_has_output_ = true;
         return;
     }
 
@@ -984,7 +950,6 @@ void UIRuntime::write_output(
 
     std::string buf;
     ansi::Writer w(buf);
-    auto leading_newline = false;
     if (!scrollback_cursor_row_)
         scrollback_cursor_row_ = scroll_bottom;
     if (scrollback_cursor_needs_move_) {
@@ -995,47 +960,15 @@ void UIRuntime::write_output(
         scrollback_cursor_needs_move_ = false;
     }
     w.reset();
-    if (output.kind == QueuedOutput::Kind::block) {
-        if (block_text.empty())
-            return;
-        if (!scrollback_at_line_start_) {
-            w.text("\n");
-            leading_newline = true;
-        }
-        w.text(block_text);
-        if (block_text.back() != '\n')
-            w.text("\n");
-        w.clear_line_from_cursor();
-        scrollback_at_line_start_ = true;
-    } else {
-        w.text(output.text);
-        if (!output.text.empty())
-            scrollback_at_line_start_ = output.text.back() == '\n';
-    }
-    if (output.kind == QueuedOutput::Kind::line) {
-        w.clear_line_from_cursor();
-        if (output.text.empty() || output.text.back() != '\n')
-            w.text("\n");
-        scrollback_at_line_start_ = true;
-    }
+    if (!scrollback_cursor_on_blank_)
+        w.text("\n");
+    w.text(block_text);
 
     out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-    auto advance_rows = 0;
-    if (output.kind == QueuedOutput::Kind::block) {
-        advance_rows = count_newlines(block_text);
-        if (block_text.empty() || block_text.back() != '\n')
-            ++advance_rows;
-        if (leading_newline)
-            ++advance_rows;
-    } else if (output.kind == QueuedOutput::Kind::line) {
-        advance_rows = std::max(1, count_newlines(output.text));
-    } else {
-        advance_rows = count_newlines(output.text);
-    }
-
     if (scrollback_cursor_row_)
-        *scrollback_cursor_row_ =
-            std::min(scroll_bottom, *scrollback_cursor_row_ + advance_rows);
+        *scrollback_cursor_row_ = scroll_bottom;
+    scrollback_cursor_on_blank_ = false;
+    scrollback_has_output_ = true;
 }
 
 void UIRuntime::cleanup()

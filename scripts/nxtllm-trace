@@ -124,6 +124,7 @@ def print_frames(table):
                 "seq": row.get("seq"),
                 "elapsed_ms": row.get("elapsed_ms"),
                 "data": row.get("data"),
+                "kind": row.get("payload_kind"),
                 "cols": payload.get("cols") if isinstance(payload, dict) else "",
                 "rows": payload.get("rows") if isinstance(payload, dict) else "",
                 "bytes": payload.get("bytes") if isinstance(payload, dict) else "",
@@ -139,6 +140,43 @@ ESC_RE = re.compile(r"\x1b.")
 def strip_ansi(text):
     text = CSI_RE.sub("", text)
     return ESC_RE.sub("", text)
+
+
+def read_u8(data, offset):
+    if offset + 1 > len(data):
+        raise ValueError("truncated screen raster")
+    return data[offset], offset + 1
+
+
+def read_u32(data, offset):
+    if offset + 4 > len(data):
+        raise ValueError("truncated screen raster")
+    value = int.from_bytes(data[offset:offset + 4], "little")
+    return value, offset + 4
+
+
+def decode_screen_raster(data):
+    magic = b"NXTRAST1"
+    if not data.startswith(magic):
+        raise ValueError("frame payload is not screen_raster_v1")
+    offset = len(magic)
+    cols, offset = read_u32(data, offset)
+    rows, offset = read_u32(data, offset)
+    lines = []
+    for _row in range(rows):
+        line = []
+        for _col in range(cols):
+            size, offset = read_u8(data, offset)
+            if offset + size > len(data):
+                raise ValueError("truncated screen raster glyph")
+            text = data[offset:offset + size].decode("utf-8", "replace")
+            offset += size
+            _fg, offset = read_u32(data, offset)
+            _bg, offset = read_u32(data, offset)
+            _em, offset = read_u8(data, offset)
+            line.append(text)
+        lines.append("".join(line))
+    return cols, rows, lines
 
 
 def print_frame(table, seq, plain):
@@ -161,14 +199,19 @@ def print_frame(table, seq, plain):
         return 1
 
     rendered = bytes(payload)
-    if plain:
-        text = strip_ansi(rendered.decode("utf-8", "replace"))
+    if row.get("payload_kind") == "screen_raster_v1":
+        _cols, _rows, lines = decode_screen_raster(rendered)
+        for line in lines:
+            print(line.rstrip())
+    else:
+        text = (
+            strip_ansi(rendered.decode("utf-8", "replace"))
+            if plain
+            else rendered.decode("utf-8", "replace")
+        )
         sys.stdout.write(text)
         if not text.endswith("\n"):
             sys.stdout.write("\n")
-    else:
-        sys.stdout.buffer.write(rendered)
-        sys.stdout.buffer.write(b"\n")
     return 0
 
 
@@ -187,9 +230,9 @@ def main():
     parser.add_argument("--table", action="store_true", help="emit table output")
     parser.add_argument("--sse", action="store_true", help="emit linewise SSE log")
     parser.add_argument("--frames", action="store_true", help="list recorded compositor frame snapshots")
-    parser.add_argument("--frame", action="store_true", help="print the last recorded frame as ANSI")
+    parser.add_argument("--frame", action="store_true", help="print the last recorded frame")
     parser.add_argument("--frame-seq", type=int, help="print a specific recorded frame by seq")
-    parser.add_argument("--plain", action="store_true", help="strip ANSI when printing --frame")
+    parser.add_argument("--plain", action="store_true", help="strip ANSI when printing legacy --frame payloads")
     parser.add_argument("--schema", action="store_true", help="show Arrow schema")
     parser.add_argument("trace_path")
     args = parser.parse_args()

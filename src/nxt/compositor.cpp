@@ -46,9 +46,8 @@ namespace {
 [[nodiscard]] row_t scroll_bottom_for(
     const height_t hud_height, const height_t term_height)
 {
-    // Leave a 1-row quiet zone between the scroll region and the HUD.
     if (has_windowed_hud(hud_height, term_height))
-        return hud_start_row_for(hud_height, term_height) - 2 * ln;
+        return hud_start_row_for(hud_height, term_height) - 1 * ln;
     return hud_start_row_for(hud_height, term_height) - 1 * ln;
 }
 
@@ -140,8 +139,27 @@ void reserve_scrollback_space_for_hud(
     ansi::Writer & wr,
     const HudGeometryChange & change)
 {
-    if (change.initial_geometry)
+    if (change.initial_geometry) {
+        if (change.new_windowed) {
+            // On process start, the shell command that launched us is already
+            // history, but it may still occupy wrapped rows just above the
+            // cursor. The current cursor row is the fresh line created by
+            // pressing Enter, so only rows above that need to be moved out
+            // from under the HUD.
+            auto reserved_rows =
+                std::max(0, row_count(change.new_hud_height) - 1);
+            wr.scroll_up(lines(reserved_rows));
+        }
         return;
+    }
+
+    if (!change.old_windowed && change.new_windowed) {
+        // Re-entering the HUD after it was fully hidden happens after live
+        // scrollback blocks have already been emitted. Those blocks may occupy
+        // the terminal's bottom rows, so reserve the whole incoming HUD area.
+        wr.scroll_up(change.new_hud_height);
+        return;
+    }
 
     if (!change.old_windowed || !change.new_windowed
         || change.new_scroll_bottom >= change.old_scroll_bottom)

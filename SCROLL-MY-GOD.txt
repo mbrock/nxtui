@@ -1,0 +1,251 @@
+SCROLL, MY GOD
+==============
+
+This file exists because terminal scrolling is the sort of thing that looks
+like arithmetic until it eats your command line, erases the foot of a box, or
+invents a blank row from nowhere.
+
+We have made the current behavior mostly work, but it is still too easy to
+reason about it in the wrong language. The code talks about rows, heights,
+cursor rows, HUD heights, scroll bottoms, chrome rows, and whether a value is
+an int or a row_t depending on which corner of the file you happen to be
+standing in. That is not a supple model. It is a bag of coordinates with a
+prayer taped to the side.
+
+The problem is not that the terminal is unknowable. The terminal has fairly
+specific semantics:
+
+- DECSTBM defines a scroll region with a top margin and a bottom margin.
+- LF/IND at the bottom margin scrolls that region.
+- SU scrolls a region explicitly.
+- CUP moves the cursor; it does not mean "append".
+- Resetting or changing the scroll region has cursor side effects.
+- Rows outside the scroll region are just terminal rows. They are not magically
+  owned by the HUD unless we explicitly own, clear, and render them.
+
+The problem is that our code often talks as if one integer can safely mean all
+of these:
+
+- a terminal row index
+- a row count
+- the last row of the scroll region
+- the first row of the HUD
+- a delta between two geometries
+- an invalid sentinel
+- the cursor row where the next scrollback block should begin
+
+That is how off-by-one bugs get invited back tomorrow morning.
+
+
+The Current Domain
+------------------
+
+The runtime is not a fullscreen app, at least not in the normal nxtllm shape.
+It is a terminal guest that temporarily keeps a live HUD at the bottom while
+also emitting durable scrollback blocks above it.
+
+The durable scrollback is line/block oriented. We do not support arbitrary
+"print some bytes wherever the cursor currently is" semantics in the scroller.
+Every durable thing we print should be a complete block of terminal lines.
+
+The HUD is temporary chrome. It can grow, shrink, disappear, and reappear. Its
+rows should not end up in shell history after exit. Its transitions may need to
+move existing terminal content so old scrollback is preserved.
+
+The scroll region is the terminal mechanism that lets the scrollback move while
+the HUD stays put. Its bottom margin must be the actual final row that should
+participate in LF/IND scrolling. It must not secretly mean "one row above the
+row above the HUD because we want a vibe gap."
+
+
+Better Words
+------------
+
+The code wants a small geometry model that names actual domain facts.
+
+For example:
+
+    struct TerminalRows {
+        row_t top;
+        row_t bottom_exclusive;
+    };
+
+    struct ScrollRegion {
+        row_t top_margin;
+        row_t bottom_margin;
+    };
+
+    struct HudRegion {
+        row_t top;
+        row_t bottom_exclusive;
+    };
+
+    struct ChromeRegion {
+        row_t top;
+        row_t bottom_exclusive;
+    };
+
+    struct WindowedHudGeometry {
+        TerminalRows terminal;
+        ScrollRegion scroll_region;
+        HudRegion hud;
+        std::optional<ChromeRegion> spacer;
+    };
+
+The important part is not the exact names. The important part is that a bottom
+margin is not a count, a HUD top is not an append cursor, and a spacer row is
+not smuggled into the scroll region by subtracting two.
+
+If we want a blank spacer between scrollback and HUD, it should be a real
+chrome region:
+
+- It has a top and bottom.
+- The compositor owns it.
+- It is cleared deliberately.
+- It is not part of the DECSTBM scroll region unless we actually want it to
+  scroll.
+- It is not confused with the scrollback append cursor.
+
+
+Better Events
+-------------
+
+The hardest bugs came from transitions, so the model should name transitions.
+
+Useful transition names:
+
+- initial terminal attachment
+- enter windowed HUD from hidden
+- leave windowed HUD to hidden
+- grow windowed HUD
+- shrink windowed HUD
+- resize terminal while windowed
+- commit scrollback block while windowed
+- commit scrollback block while hidden
+
+Each transition should have a plain-English contract.
+
+For example:
+
+    enter windowed HUD from hidden:
+        Existing durable terminal content may occupy the terminal bottom.
+        Reserve enough rows for the incoming HUD before rendering it.
+        Install a scroll region ending immediately above the HUD.
+        Clear the HUD rows.
+        The next scrollback append cursor is on a blank bottom-margin row.
+
+    commit scrollback block while windowed:
+        If the append cursor is on previous content, emit LF to allocate the
+        first row of the block.
+        If geometry just produced a blank bottom-margin row, write there
+        directly.
+        Write the block.
+        Stop on the block's final visible row. Do not add a trailing LF merely
+        because strings usually like newlines.
+
+    initial terminal attachment:
+        The user has already pressed Enter in their shell.
+        The cursor is already on a fresh row.
+        Wrapped command-line rows above it are historical content.
+        Reserve only the rows that would otherwise be covered by the HUD.
+
+Those contracts are more valuable than comments explaining arithmetic after the
+fact. The code should read like these contracts.
+
+
+Better State
+------------
+
+The scrollback writer needs a small state object, not a couple of fields
+floating around UIRuntime.
+
+Something like:
+
+    struct ScrollbackAppendState {
+        row_t cursor_row;
+        bool cursor_needs_move;
+        bool cursor_is_blank;
+    };
+
+Or better, this state could be hidden behind methods:
+
+    append_state.after_geometry_change(geometry);
+    append_state.write_block(writer, geometry, block);
+    append_state.after_hud_hidden();
+
+The current `scrollback_cursor_on_blank_` flag is a clue. It describes a real
+domain distinction:
+
+- "the cursor is sitting on the previous block's final row"
+- "the cursor is sitting on a blank row that geometry already reserved"
+
+That distinction matters. It should be a first-class idea, not a lucky boolean
+beside several other lucky fields.
+
+
+Better Tests
+------------
+
+The vterm tests became useful once they stopped testing abstract wishes and
+started setting up real terminal states:
+
+    old shell content
+    wrapped command rows
+    cursor at the fresh post-Enter line
+    HUD enters
+    scrollback block commits
+    HUD grows
+    HUD hides
+    HUD re-enters
+
+We should keep extending tests in that style. They should say what the terminal
+screen contains before and after each transition. They should also assert the
+geometry facts:
+
+- scroll region bottom is zero-based row N
+- DECSTBM is set to rows A..B
+- HUD starts at row H
+- append cursor is on row B
+- append cursor is blank or not blank
+
+If we can draw the before and after screen in a test, we probably understand
+the behavior. If we cannot, we are probably guessing.
+
+
+The Shape Of A Lucid Refactor
+-----------------------------
+
+Move the geometry arithmetic out of TerminalCompositor's loose helpers and into
+a small module whose entire job is to answer:
+
+- What regions exist?
+- Which rows are owned by scrollback?
+- Which rows are owned by HUD/chrome?
+- What scroll action is required when moving from old geometry to new geometry?
+- Where should the next durable block append?
+
+Then TerminalCompositor can become less of an oracle and more of a renderer:
+
+    auto transition = geometry.transition_to(next_hud_height, terminal_height);
+    transition.emit_terminal_reservation(writer);
+    writer.set_scroll_region(transition.new_scroll_region);
+    transition.clear_chrome(writer);
+    render_hud_at(transition.new_hud_region);
+
+And the scrollback writer can become:
+
+    append_state.sync_to(geometry);
+    append_state.append_block(writer, geometry, block);
+
+That is the Eric Evans-ish move here: make the code speak the language of the
+domain, so wrong ideas become hard to express. A function named
+`scroll_bottom_for()` should not be able to secretly create a spacer. A raw int
+should not be able to impersonate a row count on Monday and a margin on
+Tuesday. A HUD transition should not happen as scattered side effects in three
+places.
+
+The goal is not more abstraction for its own sake. The goal is to make the
+next bug look stupid at compile time, or at least look obviously wrong in a
+three-line test.
+
+May the bottom margin be the bottom margin.

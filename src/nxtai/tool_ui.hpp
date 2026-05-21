@@ -17,6 +17,7 @@
 #include <nxt/tui.hpp>
 #include <nxtai/agent_trace.hpp>
 #include <nxtai/hud_blocks.hpp>
+#include <nxtai/scrollback_debug.hpp>
 #include <nxtai/tools.hpp>
 #include <nxtio/input.hpp>
 #include <nxtio/process.hpp>
@@ -573,9 +574,11 @@ std::string render_for_scrollback(nxt::ui::yard & self, L && layout)
     auto height = layout.height_hint().min;
     if (height.count() == 0)
         height = 1 * nxt::ln;
+    auto width = self.runtime().terminal_width();
+    if (width > 2 * nxt::ch)
+        width = width - 2 * nxt::ch;
 
-    nxt::Raster raster(
-        self.runtime().terminal_width(), height, self.runtime().glyphs());
+    nxt::Raster raster(width, height, self.runtime().glyphs());
     auto view = raster.view();
     layout.render(view, raster.extent());
     return nxt::ansi::render_raster(raster);
@@ -596,22 +599,18 @@ inline void commit_tool_result(
     auto summary = result_summary(result);
     auto preview = preview_spans(result, 4);
     auto is_error = result.failed;
-    self.print_block(render_for_scrollback(
-        self,
+    auto body = scrollback_box(
         column(
             done_card(display, args_short, elapsed, summary, is_error),
             list(preview, [](const Span & line) {
                 return styled_text(line);
-            }))));
+            })));
+    self.print_block(render_for_scrollback(
+        self,
+        body));
 
-    auto folded = folded_result_card(
-        display, args_short, elapsed, summary, is_error);
-    if (hud) {
-        hud->add(folded);
-        self.draw(hud->view());
-    } else {
-        self.draw(folded);
-    }
+    (void) hud;
+    self.draw(nxt::tui::AnyLayout{});
 }
 
 // ============================================================================
@@ -702,15 +701,10 @@ inline nxt::task<tools::tool_result> run_one_or_deny(
         auto args_short = args_summary(tool_list, call);
         auto display = display_for_call(tool_list, call);
         auto denied = denied_card(display, args_short);
-        auto block = render_for_scrollback(self, denied);
-        block += "\n";
+        auto block = render_for_scrollback(self, scrollback_box(denied));
         self.print_block(block);
-        if (hud) {
-            hud->add(denied);
-            self.draw(denied);
-        } else {
-            self.draw(nxt::tui::AnyLayout{});
-        }
+        (void) hud;
+        self.draw(nxt::tui::AnyLayout{});
         agent_trace::record_tool_call(self, call);
         auto denial = tools::tool_result{
             .failed = true,

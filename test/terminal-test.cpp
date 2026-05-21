@@ -80,6 +80,27 @@ void write_at(vterm::Terminal & term, row_t row, std::string_view text)
     term.write(buf);
 }
 
+void move_cursor_to(vterm::Terminal & term, row_t row)
+{
+    ansi::mode = ansi::Mode::enabled;
+    std::string buf;
+    nxt::ansi::Writer w(buf);
+    w.move_to(Pos{terminal_origin + 0 * ch, row});
+    term.write(buf);
+}
+
+std::string apply_onlcr(std::string_view text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (auto ch : text) {
+        if (ch == '\n')
+            out.push_back('\r');
+        out.push_back(ch);
+    }
+    return out;
+}
+
 /// Emit a line at the scroll region bottom (simulates println).
 void println_at(vterm::Terminal & term, row_t row, std::string_view text)
 {
@@ -90,7 +111,54 @@ void println_at(vterm::Terminal & term, row_t row, std::string_view text)
     w.text(text);
     w.clear_line_from_cursor();
     w.text("\n");
-    term.write(buf);
+    term.write(apply_onlcr(buf));
+}
+
+void block_at(
+    vterm::Terminal & term,
+    row_t row,
+    std::string_view text,
+    bool finish_at_next_line = true)
+{
+    ansi::mode = ansi::Mode::enabled;
+    std::string buf;
+    nxt::ansi::Writer w(buf);
+    w.move_to(Pos{terminal_origin + 0 * ch, row});
+    w.reset();
+    w.text(text);
+    if (finish_at_next_line)
+        w.text("\n");
+    term.write(apply_onlcr(buf));
+}
+
+void block_next(
+    vterm::Terminal & term,
+    std::string_view text,
+    bool finish_at_next_line = true)
+{
+    ansi::mode = ansi::Mode::enabled;
+    std::string buf;
+    nxt::ansi::Writer w(buf);
+    w.reset();
+    w.text(text);
+    if (finish_at_next_line)
+        w.text("\n");
+    term.write(apply_onlcr(buf));
+}
+
+void first_runtime_block_at(
+    vterm::Terminal & term,
+    row_t row,
+    std::string_view text)
+{
+    ansi::mode = ansi::Mode::enabled;
+    std::string buf;
+    nxt::ansi::Writer w(buf);
+    w.move_to(Pos{terminal_origin + 0 * ch, row});
+    w.reset();
+    w.text("\n");
+    w.text(text);
+    term.write(apply_onlcr(buf));
 }
 
 // ============================================================================
@@ -266,6 +334,130 @@ suite hud_tests = [] {
         // clang-format on
     };
 
+    "initial HUD install scrolls existing bottom prompt above HUD"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 12 * ln}, glyphs);
+        vterm::Terminal term(12, 20);
+
+        write_at(term, terminal_origin_v + 10 * ln, "PROMPT command");
+        move_cursor_to(term, terminal_origin_v + 11 * ln);
+
+        set_hud_height(compositor, term, 2 * ln, 12 * ln);
+
+        auto layout =
+            tui::column(tui::text("HUD-LINE-1"), tui::text("HUD-LINE-2"));
+        term.write(render_to_string(compositor, layout, {20 * ch, 2 * ln}));
+
+        check_display(
+            term,
+            {
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "PROMPT command",
+                "HUD-LINE-1",
+                "HUD-LINE-2",
+            });
+    };
+
+    "initial HUD install leaves an empty first scrollback output row"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 12 * ln}, glyphs);
+        vterm::Terminal term(12, 20);
+
+        write_at(term, terminal_origin_v + 8 * ln, "PROMPT row 1");
+        write_at(term, terminal_origin_v + 9 * ln, "PROMPT row 2");
+        write_at(term, terminal_origin_v + 10 * ln, "PROMPT row 3");
+        move_cursor_to(term, terminal_origin_v + 11 * ln);
+
+        set_hud_height(compositor, term, 2 * ln, 12 * ln);
+
+        first_runtime_block_at(
+            term,
+            terminal_origin_v
+                + static_cast<std::size_t>(
+                    compositor.scrollback_bottom_row())
+                    * ln,
+            "FIRST BLOCK");
+
+        auto layout =
+            tui::column(tui::text("HUD-LINE-1"), tui::text("HUD-LINE-2"));
+        term.write(render_to_string(compositor, layout, {20 * ch, 2 * ln}));
+
+        check_display(
+            term,
+            {
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "PROMPT row 1",
+                "PROMPT row 2",
+                "PROMPT row 3",
+                "FIRST BLOCK",
+                "HUD-LINE-1",
+                "HUD-LINE-2",
+            });
+    };
+
+    "initial HUD install and first block preserve wrapped shell command"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
+        vterm::Terminal term(6, 20);
+
+        write_at(term, terminal_origin_v + 0 * ln, "a");
+        write_at(term, terminal_origin_v + 1 * ln, "a");
+        write_at(term, terminal_origin_v + 2 * ln, "XXXX");
+        write_at(term, terminal_origin_v + 3 * ln, "YYYY");
+        write_at(term, terminal_origin_v + 4 * ln, "ZZ");
+        move_cursor_to(term, terminal_origin_v + 5 * ln);
+
+        set_hud_height(compositor, term, 2 * ln, 6 * ln);
+        expect(compositor.scrollback_bottom_row() == 3_i)
+            << "scrollback_bottom_row is a zero-based row index";
+
+        auto layout = tui::column(tui::text("1hud"), tui::text("2hud"));
+        term.write(render_to_string(compositor, layout, {20 * ch, 2 * ln}));
+
+        check_display(
+            term,
+            {
+                "a",
+                "XXXX",
+                "YYYY",
+                "ZZ",
+                "1hud",
+                "2hud",
+            });
+
+        first_runtime_block_at(
+            term,
+            terminal_origin_v
+                + static_cast<std::size_t>(
+                    compositor.scrollback_bottom_row())
+                    * ln,
+            "1txt\n2txt");
+
+        check_display(
+            term,
+            {
+                "YYYY",
+                "ZZ",
+                "1txt",
+                "2txt",
+                "1hud",
+                "2hud",
+            });
+    };
+
     "full screen mode when HUD equals terminal height"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 3 * ln}, glyphs);
@@ -347,6 +539,71 @@ suite hud_tests = [] {
             });
     };
 
+    "growing HUD preserves a box footer at the old scroll bottom"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
+        vterm::Terminal term(6, 20);
+
+        set_hud_height(compositor, term, 1 * ln, 6 * ln);
+        block_at(
+            term,
+            terminal_origin_v
+                + static_cast<std::size_t>(
+                    compositor.scrollback_bottom_row())
+                    * ln,
+            "╭──╮\n"
+            "│A │\n"
+            "╰──╯",
+            false);
+
+        set_hud_height(compositor, term, 2 * ln, 6 * ln);
+
+        auto layout = tui::column(tui::text("HUD-1"), tui::text("HUD-2"));
+        term.write(render_to_string(compositor, layout, {20 * ch, 2 * ln}));
+
+        check_display(
+            term,
+            {
+                "",
+                "╭──╮",
+                "│A │",
+                "╰──╯",
+                "HUD-1",
+                "HUD-2",
+            });
+    };
+
+    "entering HUD from zero preserves a box footer at the bottom"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
+        vterm::Terminal term(6, 20);
+
+        set_hud_height(compositor, term, 0 * ln, 6 * ln);
+        block_at(
+            term,
+            terminal_origin_v + 5 * ln,
+            "╭──╮\n"
+            "│A │\n"
+            "╰──╯",
+            false);
+
+        set_hud_height(compositor, term, 2 * ln, 6 * ln);
+
+        auto layout = tui::column(tui::text("HUD-1"), tui::text("HUD-2"));
+        term.write(render_to_string(compositor, layout, {20 * ch, 2 * ln}));
+
+        check_display(
+            term,
+            {
+                "",
+                "╭──╮",
+                "│A │",
+                "╰──╯",
+                "HUD-1",
+                "HUD-2",
+            });
+    };
+
     "output after shrinking HUD scrolls up to existing log content"_test = [] {
         GlyphTable glyphs;
         ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
@@ -368,13 +625,56 @@ suite hud_tests = [] {
                 "",
             });
 
-        println_at(term, terminal_origin_v + 2 * ln, "NEXT");
+        first_runtime_block_at(
+            term,
+            terminal_origin_v
+                + static_cast<std::size_t>(
+                    compositor.scrollback_bottom_row())
+                    * ln,
+            "NEXT");
 
         check_display(
             term,
             {
                 "BOTTOM",
+                "",
+                "",
                 "NEXT",
+                "",
+                "",
+            });
+    };
+
+    "block output newline stacks next block without spacer row"_test = [] {
+        GlyphTable glyphs;
+        ui::TerminalCompositor compositor({20 * ch, 12 * ln}, glyphs);
+        vterm::Terminal term(12, 20);
+
+        set_hud_height(compositor, term, 2 * ln, 12 * ln);
+
+        block_at(
+            term,
+            terminal_origin_v + 1 * ln,
+            "╭────────╮\n"
+            "│ first  │\n"
+            "╰────────╯");
+        block_next(
+            term,
+            "╭────────╮\n"
+            "│ second │\n"
+            "╰────────╯");
+
+        check_display(
+            term,
+            {
+                "",
+                "╭────────╮",
+                "│ first  │",
+                "╰────────╯",
+                "╭────────╮",
+                "│ second │",
+                "╰────────╯",
+                "",
                 "",
                 "",
                 "",

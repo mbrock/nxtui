@@ -29,13 +29,6 @@ class ProcessHandle;
 
 struct OutputMessage
 {
-    enum class Kind {
-        print,
-        line,
-        block,
-    };
-
-    Kind kind = Kind::print;
     std::string text;
 };
 
@@ -43,20 +36,10 @@ struct OutputPublisher
 {
     std::function<void(OutputMessage)> publish;
 
-    void print(std::string_view text) const
-    {
-        publish(
-            OutputMessage{
-                .kind = OutputMessage::Kind::print,
-                .text = std::string{text},
-            });
-    }
-
     void println(std::string_view line) const
     {
         publish(
             OutputMessage{
-                .kind = OutputMessage::Kind::line,
                 .text = std::string{line},
             });
     }
@@ -65,7 +48,6 @@ struct OutputPublisher
     {
         publish(
             OutputMessage{
-                .kind = OutputMessage::Kind::block,
                 .text = std::string{text},
             });
     }
@@ -92,12 +74,7 @@ inline OutputPublisher runtime_output(UIRuntime & runtime)
     return OutputPublisher{
         .publish =
             [&runtime](OutputMessage message) {
-                if (message.kind == OutputMessage::Kind::line)
-                    runtime.println(message.text);
-                else if (message.kind == OutputMessage::Kind::block)
-                    runtime.print_block(message.text);
-                else
-                    runtime.print(message.text);
+                runtime.print_block(message.text);
             },
     };
 }
@@ -174,12 +151,6 @@ public:
         scope_->context().output.println(line);
     }
 
-    /// Print without a trailing newline.
-    void print(std::string_view text) const
-    {
-        scope_->context().output.print(text);
-    }
-
     /// Print a complete block to the scrollback as one coherent output.
     void print_block(std::string_view text) const
     {
@@ -198,7 +169,7 @@ public:
             runtime().terminal_width(), height, runtime().glyphs());
         auto view = raster.view();
         layout.render(view, raster.extent());
-        print(ansi::render_raster(raster));
+        print_block(ansi::render_raster(raster));
     }
 
     void print(tui::Span span) const

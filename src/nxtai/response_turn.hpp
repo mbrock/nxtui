@@ -4,10 +4,12 @@
 
 #include "nxt/tui.hpp"
 #include "nxt/utf8.hpp"
+#include <nxt/ansi.hpp>
 #include <nxtai/agent.hpp>
 #include <nxtai/agent_trace.hpp>
 #include <nxtai/hud_blocks.hpp>
 #include <nxtai/responses.hpp>
+#include <nxtai/scrollback_debug.hpp>
 #include <nxtai/tools.hpp>
 #include <nxtio/arrow.hpp>
 #include <nxtio/async.hpp>
@@ -44,8 +46,8 @@ inline nxt::io::net::endpoint openai_responses_endpoint()
 inline std::size_t stream_wrap_width(nxt::ui::yard & self)
 {
     auto columns = self.runtime().terminal_width().count();
-    if (columns > 32)
-        return columns - 8;
+    if (columns > 36)
+        return columns - 12;
     return std::max<std::size_t>(1, columns);
 }
 
@@ -214,23 +216,15 @@ inline auto markdown_text_block(
 
         auto content = paragraph.text;
         auto paragraph_style = base_style;
-        auto padded = false;
         if (content.size() >= 4 && content.starts_with("**")
             && content.ends_with("**")) {
             content.remove_prefix(2);
             content.remove_suffix(2);
             paragraph_style = paragraph_style | tui::bold;
-            padded = true;
         }
-
-        if (padded)
-            push_blank_once();
 
         for (const auto & line : wrap_stream_text(content, wrap_width))
             lines.push_back(parse_inline_markdown(line, paragraph_style));
-
-        if (padded)
-            push_blank_once();
 
         saw_paragraph = true;
     }
@@ -316,6 +310,22 @@ inline auto pending_stream_block(
 inline auto output_separator()
 {
     return tui::fixed_height(1 * ln, tui::hrule());
+}
+
+template<nxt::tui::Layout L>
+std::string render_scrollback_layout(nxt::ui::yard & self, L && layout)
+{
+    auto height = layout.height_hint().min;
+    if (height.count() == 0)
+        height = 1 * ln;
+    auto width = self.runtime().terminal_width();
+    if (width > 2 * ch)
+        width = width - 2 * ch;
+
+    nxt::Raster raster(width, height, self.runtime().glyphs());
+    auto view = raster.view();
+    layout.render(view, raster.extent());
+    return nxt::ansi::render_raster(raster);
 }
 
 inline void for_complete_words(std::string & text, bool finish, auto fn)
@@ -478,7 +488,6 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
     std::string_view delta_event_type,
     tui::Style style,
     bool fold_when_done,
-    bool separate_before_commit,
     hud_blocks::State * hud)
 {
     auto text = std::string{};
@@ -514,23 +523,19 @@ nxt::task<std::optional<openai::raw_json>> read_text_delta_item(
         trim_trailing_space(block);
         if (fold_when_done && (!block.empty() || drew_pending)) {
             if (!block.empty()) {
-                self.print(markdown_text_block(block, style, wrap_width));
-                self.print("\n\n");
+                self.print_block(render_scrollback_layout(
+                    self,
+                    scrollback_box(
+                        markdown_text_block(block, style, wrap_width))));
             }
-            if (hud) {
-                hud->add(folded_thought_block());
+            if (hud)
                 self.draw(hud->view());
-            } else {
-                self.draw(folded_thought_block());
-            }
+            else
+                self.draw(nxt::tui::AnyLayout{});
         } else if (!block.empty()) {
-            if (separate_before_commit) {
-                self.print("\n");
-                self.print(output_separator());
-                self.print("\n");
-            }
-            self.print(markdown_text_block(block, style, wrap_width));
-            self.print("\n");
+            self.print_block(render_scrollback_layout(
+                self,
+                scrollback_box(markdown_text_block(block, style, wrap_width))));
             if (hud)
                 self.draw(hud->view());
             else
@@ -586,7 +591,6 @@ read_reasoning_item(
         "response.reasoning_summary_text.delta",
         nxt::tui::fg(nxt::Rgba8::cyan()),
         true,
-        false,
         hud);
 }
 
@@ -603,7 +607,6 @@ read_message_item(
         "response.output_text.delta",
         nxt::tui::fg(nxt::Rgba8::yellow()),
         false,
-        true,
         hud);
 }
 

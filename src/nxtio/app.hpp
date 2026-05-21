@@ -154,16 +154,12 @@ public:
         render_frame(layout);
     }
 
-    /// Queue a line for the scroll region (only works when HUD
-    /// height < terminal). In full-screen mode, this is a no-op.
+    /// Queue a one-line block for the scrollback.
     void println(std::string_view line);
 
-    /// Queue text for the scroll region cursor. Output is drained during frame
-    /// presentation so it cannot interleave with HUD rendering.
-    void print(std::string_view text);
-
-    /// Queue a complete block of scrollback output. The block is emitted as one
-    /// coherent terminal write during the next frame presentation.
+    /// Queue a complete block of scrollback lines. Scroller output is always
+    /// atomic line blocks; arbitrary cursor-relative text is intentionally not
+    /// supported here.
     void print_block(std::string_view text);
 
     /// Queue text to print after TerminalGuard restores the terminal.
@@ -320,11 +316,10 @@ public:
         std::string_view name,
         std::string_view status = {});
 
-    /// Emit a `frame` row carrying the current back-buffer raster as a
-    /// packed binary payload. Skips emission when the raster is byte-
-    /// identical to the previous frame (so an idle HUD does not flood
-    /// the trace).
-    void record_frame_snapshot(const Raster & back);
+    /// Emit a `frame` row carrying the current visible terminal screen as a
+    /// packed raster payload. Skips emission when the raster is byte-identical
+    /// to the previous frame (so an idle HUD does not flood the trace).
+    void record_frame_snapshot();
 
     /// Emit an `input` row describing one decoded key event.
     void record_input_event(const nxt::input::KeyEvent & event);
@@ -341,9 +336,9 @@ public:
     /// stream the real terminal saw (HUD frames + scrollback).
     void record_tty_bytes(std::string_view bytes);
 
-    /// Mutex serializing access to queued scrollback output and writes to
-    /// `std::cout`. Body coroutines enqueue output under this lock; the render
-    /// loop drains it and presents the HUD while holding the same lock.
+    /// Mutex serializing queued scrollback blocks and writes to `std::cout`.
+    /// Body coroutines enqueue output under this lock; the render loop drains
+    /// it and presents the HUD while holding the same lock.
     [[nodiscard]] std::mutex & output_mutex() noexcept
     {
         return output_mutex_;
@@ -352,13 +347,6 @@ public:
 private:
     struct QueuedOutput
     {
-        enum class Kind {
-            text,
-            line,
-            block,
-        };
-
-        Kind kind = Kind::text;
         std::string text;
     };
 
@@ -402,7 +390,13 @@ private:
             hud_rows,
             static_cast<std::size_t>(term_h.count()));
 
-        update_hud_height(hud_rows * ln);
+        auto next_hud_height = hud_rows * ln;
+        {
+            auto guard = std::scoped_lock{output_mutex_};
+            flush_output_queue(std::cout);
+        }
+
+        update_hud_height(next_hud_height);
 
         render_impl([&layout](RasterView & view, Size size) {
             layout.render(view, size);
@@ -431,7 +425,8 @@ private:
     std::atomic<std::uint64_t> damage_counter_{0};
     std::optional<int> scrollback_cursor_row_;
     bool scrollback_cursor_needs_move_{true};
-    bool scrollback_at_line_start_{true};
+    bool scrollback_cursor_on_blank_{false};
+    bool scrollback_has_output_{false};
     std::vector<QueuedOutput> output_queue_;
     std::vector<std::string> post_exit_blocks_;
     nxt::height_t last_hud_height_{0 * ln};
@@ -456,6 +451,7 @@ private:
     std::vector<std::string> snapshot_paths_;
     void maybe_screenshot() noexcept;
     void capture_screenshot(std::string_view milestone) noexcept;
+    Raster visible_screen_raster();
 
     // Mirror of everything written to stdout, fed into a headless
     // libvterm. `vt_` models the same screen the real terminal sees,
