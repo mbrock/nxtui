@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <string_view>
 #include <utility>
@@ -29,6 +31,7 @@ struct test_case
         auto failures_before = failures;
         ++tests_run;
         std::cout << "[ RUN      ] " << name << '\n';
+        auto start = std::chrono::steady_clock::now();
         try {
             std::forward<F>(f)();
         } catch (const std::exception & e) {
@@ -40,10 +43,18 @@ struct test_case
             std::cerr << name << ": unexpected non-std exception\n";
         }
 
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start);
+        auto elapsed_ms =
+            static_cast<double>(elapsed.count()) / 1000.0;
         if (failures == failures_before)
-            std::cout << "[       OK ] " << name << '\n';
+            std::cout << "[       OK ] " << name << " (" << std::fixed
+                      << std::setprecision(3) << elapsed_ms
+                      << " ms)\n";
         else
-            std::cout << "[  FAILED  ] " << name << '\n';
+            std::cout << "[  FAILED  ] " << name << " (" << std::fixed
+                      << std::setprecision(3) << elapsed_ms
+                      << " ms)\n";
     }
 };
 
