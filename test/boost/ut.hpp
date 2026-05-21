@@ -8,6 +8,7 @@
 namespace boost::ut {
 
 inline int failures = 0;
+inline int tests_run = 0;
 
 struct suite
 {
@@ -25,6 +26,9 @@ struct test_case
     template<typename F>
     void operator=(F && f) const
     {
+        auto failures_before = failures;
+        ++tests_run;
+        std::cout << "[ RUN      ] " << name << '\n';
         try {
             std::forward<F>(f)();
         } catch (const std::exception & e) {
@@ -35,6 +39,11 @@ struct test_case
             ++failures;
             std::cerr << name << ": unexpected non-std exception\n";
         }
+
+        if (failures == failures_before)
+            std::cout << "[       OK ] " << name << '\n';
+        else
+            std::cout << "[  FAILED  ] " << name << '\n';
     }
 };
 
@@ -96,6 +105,11 @@ struct config
 {
     int run(run_options = {}) const
     {
+        std::cout << "[==========] " << tests_run << " tests ran\n";
+        if (failures == 0)
+            std::cout << "[  PASSED  ] " << tests_run << " tests\n";
+        else
+            std::cout << "[  FAILED  ] " << failures << " expectations\n";
         return failures == 0 ? 0 : 1;
     }
 };
