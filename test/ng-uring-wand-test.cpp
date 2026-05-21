@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <netinet/in.h>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -77,6 +78,14 @@ nxt::rt::task<std::string> echo_over_socketpair(int tx, int rx)
     co_return std::string{nxt::rt::as_string_view(*chunk)};
 }
 
+nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
+{
+    co_await nxt::rt::connect_wish::from(
+        fd,
+        reinterpret_cast<sockaddr const *>(&address),
+        sizeof(address));
+}
+
 template<typename T>
 T pump_until_done(
     nxt::rt::deck & deck,
@@ -97,25 +106,93 @@ T pump_until_done(
     return std::move(task).result();
 }
 
+void pump_until_done(
+    nxt::rt::deck & deck,
+    nxt::rt::uring_wand & wand,
+    nxt::rt::task<void> & task)
+{
+    for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
+        if (!deck.empty())
+            deck.run_ready(wand);
+        wand.poll(deck);
+        if (deck.empty() && !task.done())
+            std::this_thread::sleep_for(1ms);
+    }
+
+    if (!task.done())
+        throw std::runtime_error{"uring socket smoke test did not complete"};
+
+    std::move(task).result();
+}
+
+sockaddr_in loopback_listener_address(int fd)
+{
+    auto address = sockaddr_in{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+
+    if (::bind(
+            fd,
+            reinterpret_cast<sockaddr const *>(&address),
+            sizeof(address)) != 0)
+        throw std::runtime_error{"bind failed"};
+    if (::listen(fd, 1) != 0)
+        throw std::runtime_error{"listen failed"};
+
+    auto size = socklen_t{sizeof(address)};
+    if (::getsockname(
+            fd,
+            reinterpret_cast<sockaddr *>(&address),
+            &size) != 0)
+        throw std::runtime_error{"getsockname failed"};
+
+    return address;
+}
+
 } // namespace
 
 int main()
 try {
-    auto sockets = std::array<int, 2>{-1, -1};
-    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
-        throw std::runtime_error{"socketpair failed"};
+    {
+        auto sockets = std::array<int, 2>{-1, -1};
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+            throw std::runtime_error{"socketpair failed"};
 
-    auto first = unique_fd{sockets[0]};
-    auto second = unique_fd{sockets[1]};
+        auto first = unique_fd{sockets[0]};
+        auto second = unique_fd{sockets[1]};
 
-    auto deck = nxt::rt::deck{};
-    auto wand = nxt::rt::uring_wand{};
-    auto task = echo_over_socketpair(first.get(), second.get());
+        auto deck = nxt::rt::deck{};
+        auto wand = nxt::rt::uring_wand{};
+        auto task = echo_over_socketpair(first.get(), second.get());
 
-    deck.start(task);
-    auto echoed = pump_until_done(deck, wand, task);
-    if (echoed != "socket wish smoke")
-        throw std::runtime_error{"socket echo mismatch"};
+        deck.start(task);
+        auto echoed = pump_until_done(deck, wand, task);
+        if (echoed != "socket wish smoke")
+            throw std::runtime_error{"socket echo mismatch"};
+    }
+
+    {
+        auto listener = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+        if (listener.get() < 0)
+            throw std::runtime_error{"listener socket failed"};
+        auto address = loopback_listener_address(listener.get());
+
+        auto client = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+        if (client.get() < 0)
+            throw std::runtime_error{"client socket failed"};
+
+        auto deck = nxt::rt::deck{};
+        auto wand = nxt::rt::uring_wand{};
+        auto task = connect_to(client.get(), address);
+
+        deck.start(task);
+        pump_until_done(deck, wand, task);
+
+        auto accepted = unique_fd{::accept(listener.get(), nullptr, nullptr)};
+        if (accepted.get() < 0)
+            throw std::runtime_error{"accept failed"};
+    }
 
     return 0;
 } catch (std::exception const & error) {

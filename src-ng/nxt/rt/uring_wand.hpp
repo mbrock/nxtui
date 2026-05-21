@@ -171,6 +171,29 @@ public:
         return waiter<std::size_t>{*this, token, state};
     }
 
+    waiter<void> prepare(
+        deck &,
+        detail::promise_base &,
+        connect_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<void>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        auto const & op = std::get<connect_wish>(*request);
+        auto * sqe = get_sqe();
+        io_uring_prep_connect(
+            sqe,
+            op.fd,
+            op.sockaddr_ptr(),
+            op.address_size);
+        attach_token(sqe, token);
+        completions_.emplace(
+            token,
+            std::make_unique<completion<void>>(request, state));
+        trace("uring prepare connect token=" + std::to_string(token));
+        return waiter<void>{*this, token, state};
+    }
+
     void suspend(wait_token token, parked_task task) override
     {
         trace("uring park token=" + std::to_string(token));
@@ -241,7 +264,8 @@ private:
         openat_wish,
         read_some_wish,
         recv_some_wish,
-        send_some_wish>;
+        send_some_wish,
+        connect_wish>;
 
     class completion_base
     {

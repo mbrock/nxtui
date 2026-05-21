@@ -3,6 +3,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <fcntl.h>
 #include <memory>
@@ -210,6 +211,39 @@ struct send_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
+struct connect_wish
+{
+    using result_type = void;
+
+    int fd = -1;
+    sockaddr_storage address{};
+    socklen_t address_size = 0;
+
+    static connect_wish from(
+        int fd,
+        sockaddr const * address,
+        socklen_t address_size)
+    {
+        if (address_size > sizeof(sockaddr_storage))
+            throw std::runtime_error{"connect address is too large"};
+
+        auto wish = connect_wish{
+            .fd = fd,
+            .address = {},
+            .address_size = address_size,
+        };
+        std::memcpy(&wish.address, address, address_size);
+        return wish;
+    }
+
+    [[nodiscard]] sockaddr const * sockaddr_ptr() const noexcept
+    {
+        return reinterpret_cast<sockaddr const *>(&address);
+    }
+
+    waiter<void> operator co_await() const;
+};
+
 /// Backend interface for staged platform/event-loop machinery.
 ///
 /// `prepare()` is called synchronously while a coroutine is running. It can
@@ -245,6 +279,11 @@ public:
         deck & d,
         detail::promise_base & promise,
         send_some_wish wish) = 0;
+
+    virtual waiter<void> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        connect_wish wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void wave(deck & d) = 0;
