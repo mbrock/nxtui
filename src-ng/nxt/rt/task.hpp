@@ -5,11 +5,13 @@
 #include <coroutine>
 #include <exception>
 #include <functional>
+#include <optional>
 #include <string>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace nxt::rt {
 
@@ -380,6 +382,188 @@ with_env(typename Key::value_type value, Fn && fn)
         co_await child;
     } else {
         co_return co_await child;
+    }
+}
+
+class task_zone
+{
+public:
+    task_zone() = default;
+
+    task_zone(const task_zone &) = delete;
+    task_zone & operator=(const task_zone &) = delete;
+    task_zone(task_zone &&) = delete;
+    task_zone & operator=(task_zone &&) = delete;
+
+    void spawn(task<void> child)
+    {
+        auto * current = detail::current_env;
+        auto * active_deck =
+            current == nullptr ? nullptr : current->current_deck;
+        if (current == nullptr || active_deck == nullptr)
+            throw std::runtime_error{
+                "nxt::rt zone spawn used without a running deck"};
+
+        auto handle = child.handle();
+        if (!handle || handle.done())
+            return;
+
+        handle.promise().env.bindings = current->bindings;
+        children_.push_back(std::move(child));
+        active_deck->start(children_.back());
+    }
+
+    [[nodiscard]] task<void> join();
+
+private:
+    std::vector<task<void>> children_;
+};
+
+struct task_zone_key
+{
+    using value_type = task_zone *;
+    static constexpr auto name = "task-zone";
+};
+
+inline task_zone * current_zone() noexcept
+{
+    auto * value = env_get<task_zone_key>();
+    if (value == nullptr)
+        return nullptr;
+    return *value;
+}
+
+inline task_zone & require_current_zone()
+{
+    auto * zone = current_zone();
+    if (zone == nullptr)
+        throw std::runtime_error{"nxt::rt operation used without task zone"};
+    return *zone;
+}
+
+inline void spawn(task<void> child)
+{
+    require_current_zone().spawn(std::move(child));
+}
+
+namespace detail {
+
+class started_task_awaiter
+{
+public:
+    explicit started_task_awaiter(task<void> & child) noexcept
+        : handle_(child.handle())
+    {}
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return !handle_ || handle_.done();
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting) const
+    {
+        auto * current = detail::current_env;
+        auto * awaiting_promise =
+            current == nullptr ? nullptr : current->current_promise;
+        if (awaiting_promise == nullptr)
+            throw std::runtime_error{
+                "nxt::rt zone join used without a running task"};
+
+        handle_.promise().set_continuation(awaiting, awaiting_promise);
+    }
+
+    void await_resume() const
+    {
+        if (handle_)
+            handle_.promise().result();
+    }
+
+private:
+    task<void>::coroutine_handle handle_;
+};
+
+template<stored_task_factory Fn>
+[[nodiscard]] task<stored_task_result_t<Fn>>
+run_zone_body(task_zone & zone, Fn fn)
+{
+    auto error = std::exception_ptr{};
+
+    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
+        try {
+            co_await std::invoke(fn);
+        } catch (...) {
+            error = std::current_exception();
+        }
+
+        try {
+            co_await zone.join();
+        } catch (...) {
+            if (!error)
+                error = std::current_exception();
+        }
+        if (error)
+            std::rethrow_exception(error);
+    } else {
+        using result_type = std::remove_cv_t<stored_task_result_t<Fn>>;
+        auto result = std::optional<result_type>{};
+
+        try {
+            result.emplace(co_await std::invoke(fn));
+        } catch (...) {
+            error = std::current_exception();
+        }
+
+        try {
+            co_await zone.join();
+        } catch (...) {
+            if (!error)
+                error = std::current_exception();
+        }
+        if (error)
+            std::rethrow_exception(error);
+        co_return std::move(*result);
+    }
+}
+
+} // namespace detail
+
+inline task<void> task_zone::join()
+{
+    auto error = std::exception_ptr{};
+    for (auto i = std::size_t{0}; i < children_.size(); ++i) {
+        try {
+            co_await detail::started_task_awaiter{children_[i]};
+        } catch (...) {
+            if (!error)
+                error = std::current_exception();
+        }
+    }
+
+    if (error)
+        std::rethrow_exception(error);
+}
+
+template<typename Fn>
+    requires stored_task_factory<std::decay_t<Fn>>
+[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
+with_zone(Fn && fn)
+{
+    using factory_type = std::decay_t<Fn>;
+    auto zone = task_zone{};
+    auto body = detail::run_zone_body(
+        zone,
+        factory_type{std::forward<Fn>(fn)});
+
+    auto run_bound = [body = std::move(body)]() mutable {
+        return std::move(body);
+    };
+
+    if constexpr (std::is_void_v<stored_task_result_t<factory_type>>) {
+        co_await with_env<task_zone_key>(&zone, std::move(run_bound));
+    } else {
+        co_return co_await with_env<task_zone_key>(
+            &zone,
+            std::move(run_bound));
     }
 }
 

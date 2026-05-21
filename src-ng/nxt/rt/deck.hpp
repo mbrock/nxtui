@@ -47,6 +47,13 @@ template<typename Fn>
 concept task_factory =
     std::invocable<Fn> && is_task_v<std::invoke_result_t<Fn>>;
 
+template<typename Fn>
+concept stored_task_factory =
+    std::invocable<Fn &> && is_task_v<std::invoke_result_t<Fn &>>;
+
+template<typename Fn>
+using stored_task_result_t = task_result_t<std::invoke_result_t<Fn &>>;
+
 namespace detail {
 
 struct promise_base;

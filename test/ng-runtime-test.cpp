@@ -189,6 +189,27 @@ nxt::rt::task<int> read_ambient_int()
     co_return nxt::rt::env_require<ambient_int_key>();
 }
 
+nxt::rt::task<void> record_after_yield(std::vector<int> & events, int value)
+{
+    events.push_back(value * 10 + 1);
+    co_await nxt::rt::yield();
+    events.push_back(value * 10 + 2);
+}
+
+nxt::rt::task<void> record_current_zone(
+    std::vector<nxt::rt::task_zone *> & zones)
+{
+    co_await nxt::rt::yield();
+    zones.push_back(nxt::rt::current_zone());
+}
+
+nxt::rt::task<void> throw_after_yield(std::vector<int> & events)
+{
+    events.push_back(1);
+    co_await nxt::rt::yield();
+    throw std::runtime_error{"zone child boom"};
+}
+
 static suite ng_runtime_tests{
     "Runtime", [] {
         "deck"_test = [] {
@@ -363,6 +384,123 @@ static suite ng_runtime_tests{
                 });
 
                 expect(result == 1210_i);
+            };
+        };
+
+        "zones"_test = [] {
+            "bind the current zone while the body runs"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto seen = deck.sync_wait([]() -> nxt::rt::task<bool> {
+                    co_return co_await nxt::rt::with_zone(
+                        []() -> nxt::rt::task<bool> {
+                            auto * before = nxt::rt::current_zone();
+                            co_await nxt::rt::yield();
+                            auto * after = nxt::rt::current_zone();
+                            co_return before != nullptr && before == after;
+                        });
+                });
+
+                expect(seen);
+            };
+
+            "join spawned tasks before the zone exits"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::spawn(record_after_yield(events, 1));
+                        events.push_back(2);
+                        co_return;
+                    });
+                    events.push_back(3);
+                    co_return;
+                });
+
+                expect(events == std::vector<int>{2, 11, 12, 3});
+            };
+
+            "let spawned tasks inherit the current zone"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto zones = std::vector<nxt::rt::task_zone *>{};
+                auto expected = static_cast<nxt::rt::task_zone *>(nullptr);
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        expected = nxt::rt::current_zone();
+                        nxt::rt::spawn(record_current_zone(zones));
+                        co_return;
+                    });
+                    co_return;
+                });
+
+                expect(expected != nullptr);
+                expect(zones == std::vector<nxt::rt::task_zone *>{expected});
+            };
+
+            "allow children to spawn more work into the same zone"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                auto parent = [&events]() -> nxt::rt::task<void> {
+                    events.push_back(1);
+                    co_await nxt::rt::yield();
+                    nxt::rt::spawn(record_after_yield(events, 2));
+                    events.push_back(3);
+                    co_return;
+                };
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::spawn(parent());
+                        co_return;
+                    });
+                    events.push_back(4);
+                    co_return;
+                });
+
+                expect(events == std::vector<int>{1, 3, 21, 22, 4});
+            };
+
+            "reject spawn outside a zone"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto rejected = deck.sync_wait([]() -> nxt::rt::task<bool> {
+                    try {
+                        nxt::rt::spawn([]() -> nxt::rt::task<void> {
+                            co_return;
+                        }());
+                    } catch (const std::runtime_error &) {
+                        co_return true;
+                    }
+                    co_return false;
+                });
+
+                expect(rejected);
+            };
+
+            "propagate child exceptions after joining siblings"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+                auto threw = false;
+
+                try {
+                    deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::with_zone(
+                            [&]() -> nxt::rt::task<void> {
+                                nxt::rt::spawn(throw_after_yield(events));
+                                nxt::rt::spawn(record_after_yield(events, 2));
+                                co_return;
+                            });
+                        co_return;
+                    });
+                } catch (const std::runtime_error &) {
+                    threw = true;
+                }
+
+                expect(threw);
+                expect(events == std::vector<int>{1, 21, 22});
             };
         };
 
