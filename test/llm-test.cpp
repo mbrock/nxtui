@@ -3,6 +3,7 @@
 #include <nxtai/response_turn.hpp>
 #include <nxtai/tool_ui.hpp>
 #include <nxtai/tools.hpp>
+#include <nxtai/tools/subprocess.hpp>
 
 #include <boost/ut.hpp>
 #include <glaze/json/json_ptr.hpp>
@@ -360,6 +361,18 @@ suite llm_tests = [] {
         };
         expect(nxt::ai::tool_ui::result_summary(failed) ==
                "error: bad thing failed");
+    };
+
+    "agent subprocess drains fast command output at eof"_test = [] {
+        auto scheduler = nxt::scheduler::make_unique();
+        for (auto i = 0; i < 20; ++i) {
+            auto output = nxt::sync_wait(scheduler->schedule(
+                nxt::ai::agent_tools::run_subprocess_async(
+                    *scheduler,
+                    std::vector<std::string>{
+                        "/bin/bash", "-c", "printf 'hello\\n'"})));
+            expect(output == "hello\n");
+        }
     };
 
     "response item projections derive messages and calls"_test = [] {

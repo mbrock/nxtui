@@ -112,9 +112,10 @@ run_subprocess_async(
             std::chrono::milliseconds{200});
         if (status == nxt::poll_status::timeout)
             continue;
-        if (status == nxt::poll_status::closed
-            || status == nxt::poll_status::error)
-            break;
+        auto pipe_finished =
+            status == nxt::poll_status::closed
+            || status == nxt::poll_status::error
+            || status == nxt::poll_status::cancelled;
 
         while (true) {
             std::array<char, 4096> buf{};
@@ -135,11 +136,16 @@ run_subprocess_async(
             }
             if (errno == EINTR)
                 continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (pipe_finished)
+                    done = true;
                 break;
+            }
             done = true;
             break;
         }
+        if (pipe_finished)
+            done = true;
     }
 
     ::close(pipefd[0]);
