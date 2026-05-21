@@ -22,7 +22,7 @@ T pump_until_done(
 {
     for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
         if (!deck.empty())
-            deck.run_ready(wand);
+            deck.run_ready();
         wand.poll(deck);
         if (deck.empty() && !task.done())
             std::this_thread::sleep_for(1ms);
@@ -44,8 +44,8 @@ nxt::rt::task<std::vector<nxt::rt::resolved_address>> resolve_localhost()
 
 int main()
 try {
-    auto deck = nxt::rt::deck{};
     auto wand = nxt::rt::uring_wand{};
+    auto deck = nxt::rt::deck{&wand};
     auto task = resolve_localhost();
 
     deck.start(task);

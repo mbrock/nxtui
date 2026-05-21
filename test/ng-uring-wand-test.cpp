@@ -134,7 +134,7 @@ T pump_until_done(
 {
     for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
         if (!deck.empty())
-            deck.run_ready(wand);
+            deck.run_ready();
         wand.poll(deck);
         if (deck.empty() && !task.done())
             std::this_thread::sleep_for(1ms);
@@ -153,7 +153,7 @@ void pump_until_done(
 {
     for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
         if (!deck.empty())
-            deck.run_ready(wand);
+            deck.run_ready();
         wand.poll(deck);
         if (deck.empty() && !task.done())
             std::this_thread::sleep_for(1ms);
@@ -202,8 +202,8 @@ try {
         auto first = unique_fd{sockets[0]};
         auto second = unique_fd{sockets[1]};
 
-        auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto task = echo_over_socketpair(first.get(), second.get());
 
         deck.start(task);
@@ -220,8 +220,8 @@ try {
         auto first = unique_fd{sockets[0]};
         auto second = unique_fd{sockets[1]};
 
-        auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto task = poll_after_socket_send(first.get(), second.get());
 
         deck.start(task);
@@ -229,8 +229,8 @@ try {
     }
 
     {
-        auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto task = timeout_once();
 
         deck.start(task);
@@ -245,8 +245,8 @@ try {
         auto first = unique_fd{sockets[0]};
         auto second = unique_fd{sockets[1]};
 
-        auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto task = poll_until_after_socket_send(first.get(), second.get());
 
         deck.start(task);
@@ -261,8 +261,8 @@ try {
         auto first = unique_fd{sockets[0]};
         auto second = unique_fd{sockets[1]};
 
-        auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto task = poll_until_timeout(second.get());
 
         deck.start(task);
@@ -279,8 +279,8 @@ try {
         if (client.get() < 0)
             throw std::runtime_error{"client socket failed"};
 
-        auto deck = nxt::rt::deck{};
         auto wand = nxt::rt::uring_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto task = connect_to(client.get(), address);
 
         deck.start(task);

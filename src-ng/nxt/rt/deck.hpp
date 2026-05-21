@@ -57,6 +57,9 @@ class deck
 {
 public:
     deck() = default;
+    explicit deck(wand * w) noexcept
+        : wand_(w)
+    {}
 
     deck(const deck &) = delete;
     deck & operator=(const deck &) = delete;
@@ -69,6 +72,18 @@ public:
     /// just ambient observation; durable task storage is a separate design
     /// question and does not live in this seed deck.
     [[nodiscard]] task_id current_task_id() const noexcept;
+
+    /// Set the backend used by closed wish operations resumed by this deck.
+    void set_wand(wand * w) noexcept
+    {
+        wand_ = w;
+    }
+
+    /// Return the backend currently attached to this deck, if any.
+    [[nodiscard]] wand * current_wand() const noexcept
+    {
+        return wand_;
+    }
 
     /// True when no coroutine handles are queued for the pump.
     [[nodiscard]] bool empty() const noexcept
@@ -89,7 +104,11 @@ public:
     /// unexpectedly resume sibling work in the middle of its own turn.
     void run_ready()
     {
-        run_ready_with(nullptr);
+        run_ready_with();
+        if (wand_ != nullptr) {
+            trace("deck wave wand");
+            wand_->wave(*this);
+        }
     }
 
     /// Pump one ready round with `w` as the active backend, then wave it.
@@ -99,9 +118,8 @@ public:
     /// submit whatever platform work it staged during coroutine execution.
     void run_ready(wand & w)
     {
-        run_ready_with(&w);
-        trace("deck wave wand");
-        w.wave(*this);
+        auto guard = wand_swap{*this, &w};
+        run_ready();
     }
 
     /// Keep pumping ready rounds until no work is queued.
@@ -123,7 +141,28 @@ public:
     }
 
 private:
-    void run_ready_with(wand * w)
+    struct wand_swap
+    {
+        deck & d;
+        wand * previous = nullptr;
+
+        wand_swap(deck & d, wand * next) noexcept
+            : d(d)
+            , previous(d.wand_)
+        {
+            d.wand_ = next;
+        }
+
+        wand_swap(const wand_swap &) = delete;
+        wand_swap & operator=(const wand_swap &) = delete;
+
+        ~wand_swap()
+        {
+            d.wand_ = previous;
+        }
+    };
+
+    void run_ready_with()
     {
         auto * env = current_env();
         if (env != nullptr && env->current_promise != nullptr)
@@ -134,7 +173,7 @@ private:
         trace("deck round begin size=" + std::to_string(round.size()));
 
         for (auto const & item : round)
-            item.resume_if_ready(*this, w);
+            item.resume_if_ready(*this);
         trace("deck round end ready=" + std::to_string(ready_.size()));
     }
 
@@ -190,7 +229,7 @@ private:
         /// `run_ready()`. Each item only needs to restore its own promise as
         /// the ambient current task before transferring control to the
         /// compiler/runtime handle.
-        void resume_if_ready(deck & d, wand * w) const;
+        void resume_if_ready(deck & d) const;
 
         // The compiler/runtime handle used to resume the coroutine frame.
         std::coroutine_handle<> handle;
@@ -203,6 +242,7 @@ private:
     void enqueue(std::coroutine_handle<> handle, detail::promise_base * promise);
 
     std::deque<ready_item> ready_;
+    wand * wand_ = nullptr;
 };
 
 /// Awaitable that moves the current coroutine to the back of the active deck.

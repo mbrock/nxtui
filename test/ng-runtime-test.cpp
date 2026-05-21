@@ -330,8 +330,8 @@ static suite ng_runtime_tests = [] {
     };
 
     "manual wish prepares and parks a typed waiter"_test = [] {
-        auto deck = nxt::rt::deck{};
         auto wand = manual_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto events = std::vector<int>{};
 
         auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
@@ -342,7 +342,7 @@ static suite ng_runtime_tests = [] {
 
         auto task = task_body(events);
         deck.start(task);
-        deck.run_ready(wand);
+        deck.run_ready();
 
         expect(events == std::vector<int>{1})
             << "task should suspend before manual wish fulfillment";
@@ -354,15 +354,15 @@ static suite ng_runtime_tests = [] {
         expect(wand.parked.front().token == std::uint64_t{42});
 
         wand.fulfill(deck, 42);
-        deck.run_ready(wand);
+        deck.run_ready();
 
         expect(events == std::vector<int>{1, 2})
             << "fulfilled manual wish should resume the suspended task";
     };
 
     "run_ready waves the wand after staged wish preparation"_test = [] {
-        auto deck = nxt::rt::deck{};
         auto wand = manual_wand{};
+        auto deck = nxt::rt::deck{&wand};
         auto events = std::vector<int>{};
 
         auto task_body = [](std::vector<int> & events) -> nxt::rt::task<void> {
@@ -373,16 +373,16 @@ static suite ng_runtime_tests = [] {
 
         auto task = task_body(events);
         deck.start(task);
-        deck.run_ready(wand);
+        deck.run_ready();
 
         expect(events == std::vector<int>{1});
         expect(wand.prepared == std::vector<nxt::rt::wait_token>{7});
         expect(wand.parked.size() == std::size_t{1});
         expect(wand.waves == 1_i)
-            << "run_ready(wand) should wave after the pump round";
+            << "run_ready should wave the deck wand after the pump round";
 
         wand.fulfill(deck, 7);
-        deck.run_ready(wand);
+        deck.run_ready();
 
         expect(events == std::vector<int>{1, 2});
         expect(wand.prepared.size() == std::size_t{1})

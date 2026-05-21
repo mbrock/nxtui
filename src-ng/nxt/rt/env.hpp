@@ -55,7 +55,6 @@ struct missing_env : std::runtime_error
 struct runtime_env
 {
     deck * current_deck = nullptr;
-    wand * current_wand = nullptr;
     detail::promise_base * current_promise = nullptr;
     env_binding_base * bindings = nullptr;
 
