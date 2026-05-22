@@ -232,6 +232,17 @@ struct read_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
+struct write_some_wish
+{
+    using result_type = std::size_t;
+
+    int fd = -1;
+    std::span<const std::byte> buffer;
+    off_t offset = -1;
+
+    waiter<std::size_t> operator co_await() const;
+};
+
 struct recv_some_wish
 {
     using result_type = std::size_t;
@@ -377,6 +388,11 @@ public:
         deck & d,
         detail::promise_base & promise,
         read_some_wish wish) = 0;
+
+    virtual waiter<std::size_t> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        write_some_wish wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,

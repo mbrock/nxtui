@@ -167,6 +167,18 @@ inline task<std::size_t> send_some(
     };
 }
 
+inline task<std::size_t> write_some(
+    int fd,
+    std::span<const std::byte> buffer,
+    off_t offset = -1)
+{
+    co_return co_await write_some_wish{
+        .fd = fd,
+        .buffer = buffer,
+        .offset = offset,
+    };
+}
+
 /// Buffered asynchronous reader over a byte source.
 template<typename Source = byte_source>
 class byte_reader

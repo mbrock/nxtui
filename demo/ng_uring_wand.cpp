@@ -1,3 +1,4 @@
+#include <nxt/rt/buffers.hpp>
 #include <nxt/rt/uring_wand.hpp>
 
 #include <algorithm>
@@ -6,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fcntl.h>
-#include <iomanip>
+#include <format>
 #include <iostream>
 #include <span>
 #include <stdexcept>
@@ -194,10 +195,11 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
     };
 }
 
+template<typename T>
 void pump_until_done(
     nxt::rt::deck & deck,
     nxt::rt::uring_wand & wand,
-    nxt::rt::task<std::vector<listing_entry>> & task)
+    nxt::rt::task<T> & task)
 {
     for (auto spins = 0; spins != 10000 && !task.done(); ++spins) {
         if (!deck.empty())
@@ -211,18 +213,41 @@ void pump_until_done(
         throw std::runtime_error{"demo task did not complete"};
 }
 
-void print_entries(std::vector<listing_entry> const & entries)
+nxt::rt::task<void> write_all(int fd, std::string text)
+{
+    auto remaining = nxt::rt::as_bytes(std::string_view{text});
+    while (!remaining.empty()) {
+        auto written = co_await nxt::rt::write_some(fd, remaining);
+        if (written == 0)
+            throw std::runtime_error{"write made no progress"};
+        remaining = remaining.subspan(written);
+    }
+}
+
+nxt::rt::task<void> print_entries(
+    int fd,
+    std::vector<listing_entry> const & entries)
 {
     auto width = std::size_t{1};
     for (auto const & entry : entries)
         width = std::max(width, std::to_string(entry.stat.stx_size).size());
 
     for (auto const & entry : entries) {
-        std::cout
-            << mode_string(entry.stat.stx_mode) << ' '
-            << std::setw(static_cast<int>(width)) << entry.stat.stx_size << ' '
-            << entry.name << '\n';
+        co_await write_all(
+            fd,
+            std::format(
+                "{} {:>{}} {}\n",
+                mode_string(entry.stat.stx_mode),
+                entry.stat.stx_size,
+                width,
+                entry.name));
     }
+}
+
+nxt::rt::task<void> list_and_print(std::string path)
+{
+    auto entries = co_await list_path(std::move(path));
+    co_await print_entries(STDOUT_FILENO, entries);
 }
 
 } // namespace
@@ -235,12 +260,12 @@ try {
 
     auto wand = nxt::rt::uring_wand{};
     auto deck = nxt::rt::deck{&wand};
-    auto task = list_path(path);
+    auto task = list_and_print(path);
 
     deck.start(task);
     pump_until_done(deck, wand, task);
 
-    print_entries(std::move(task).result());
+    std::move(task).result();
     return 0;
 } catch (std::exception const & error) {
     std::cerr << "ng-uring-wand-demo: " << error.what() << '\n';

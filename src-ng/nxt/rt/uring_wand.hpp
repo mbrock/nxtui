@@ -144,6 +144,22 @@ public:
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
+        write_some_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<std::size_t>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        completions_.emplace(
+            token,
+            std::make_unique<completion<std::size_t>>(request, state));
+        pending_submissions_.push_back(token);
+        trace("uring prepare write token=" + std::to_string(token));
+        return waiter<std::size_t>{*this, token, state};
+    }
+
+    waiter<std::size_t> prepare(
+        deck &,
+        detail::promise_base &,
         recv_some_wish wish) override
     {
         auto token = next_token_++;
@@ -329,6 +345,7 @@ private:
         statx_wish,
         getdents64_wish,
         read_some_wish,
+        write_some_wish,
         recv_some_wish,
         send_some_wish,
         connect_wish,
@@ -550,6 +567,19 @@ private:
     {
         auto * sqe = get_sqe();
         io_uring_prep_read(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.offset);
+        attach_token(sqe, token);
+        return true;
+    }
+
+    bool stage_one(deck &, wait_token token, write_some_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_write(
             sqe,
             op.fd,
             op.buffer.data(),

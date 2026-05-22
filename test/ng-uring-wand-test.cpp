@@ -211,6 +211,16 @@ nxt::rt::task<std::vector<std::string>> read_current_directory_names()
     co_return names;
 }
 
+nxt::rt::task<void> write_to_fd(int fd, std::string_view text)
+{
+    auto written = co_await nxt::rt::write_some_wish{
+        .fd = fd,
+        .buffer = nxt::rt::as_bytes(text),
+    };
+    if (written != text.size())
+        throw std::runtime_error{"short write wish"};
+}
+
 template<typename T>
 T pump_until_done(
     nxt::rt::deck & deck,
@@ -360,6 +370,32 @@ static suite ng_uring_wand_tests{
 
                 expect(std::ranges::find(names, ".") != names.end());
                 expect(std::ranges::find(names, "..") != names.end());
+            };
+        };
+
+        "file descriptor I/O"_test = [] {
+            "write wishes write to file descriptors"_test = [] {
+                auto fds = std::array<int, 2>{-1, -1};
+                if (::pipe(fds.data()) != 0)
+                    throw std::runtime_error{"pipe failed"};
+
+                auto rx = unique_fd{fds[0]};
+                auto tx = unique_fd{fds[1]};
+
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = write_to_fd(tx.get(), "wishful stdout");
+
+                deck.start(task);
+                pump_until_done(deck, wand, task);
+
+                auto buffer = std::array<char, 32>{};
+                auto n = ::read(rx.get(), buffer.data(), buffer.size());
+                if (n < 0)
+                    throw std::runtime_error{"pipe read failed"};
+
+                expect(std::string_view{buffer.data(), static_cast<std::size_t>(n)}
+                    == "wishful stdout");
             };
         };
 

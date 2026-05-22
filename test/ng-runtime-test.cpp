@@ -74,6 +74,14 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
+        nxt::rt::write_some_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement write"};
+    }
+
+    nxt::rt::waiter<std::size_t> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
         nxt::rt::recv_some_wish) override
     {
         throw std::runtime_error{"manual_wand does not implement recv"};
