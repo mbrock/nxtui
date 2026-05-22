@@ -18,10 +18,10 @@
 namespace nxt::rt {
 
 template<typename T>
-class subtask;
+class deed;
 
 template<typename T>
-class catching_subtask;
+class catching_deed;
 
 namespace detail {
 
@@ -497,7 +497,7 @@ struct child_record final : child_record_base
     {
         ensure_done();
         if (result_taken)
-            throw runtime_error{"nxt::rt subtask result already taken"};
+            throw runtime_error{"nxt::rt deed result already taken"};
         result_taken = true;
         return std::move(handle.promise()).result();
     }
@@ -506,7 +506,7 @@ struct child_record final : child_record_base
     {
         if (!done())
             throw runtime_error{
-                "nxt::rt subtask result read before zone join"};
+                "nxt::rt deed result read before zone join"};
     }
 
     handle_type handle;
@@ -556,7 +556,7 @@ struct child_record<void> final : child_record_base
     {
         ensure_done();
         if (result_taken)
-            throw runtime_error{"nxt::rt subtask result already taken"};
+            throw runtime_error{"nxt::rt deed result already taken"};
         result_taken = true;
         handle.promise().result();
     }
@@ -565,7 +565,7 @@ struct child_record<void> final : child_record_base
     {
         if (!done())
             throw runtime_error{
-                "nxt::rt subtask result read before zone join"};
+                "nxt::rt deed result read before zone join"};
     }
 
     handle_type handle;
@@ -576,14 +576,14 @@ struct child_record<void> final : child_record_base
 } // namespace detail
 
 template<typename T>
-class subtask
+class deed
 {
 public:
-    subtask() = default;
-    subtask(const subtask &) = delete;
-    subtask & operator=(const subtask &) = delete;
-    subtask(subtask &&) noexcept = default;
-    subtask & operator=(subtask &&) noexcept = default;
+    deed() = default;
+    deed(const deed &) = delete;
+    deed & operator=(const deed &) = delete;
+    deed(deed &&) noexcept = default;
+    deed & operator=(deed &&) noexcept = default;
 
     [[nodiscard]] std::exception_ptr exception() const
     {
@@ -595,20 +595,20 @@ public:
         return record().take_result();
     }
 
-    [[nodiscard]] catching_subtask<T> cope() &&;
+    [[nodiscard]] catching_deed<T> cope() &&;
 
 private:
     friend class task_zone;
-    friend class catching_subtask<T>;
+    friend class catching_deed<T>;
 
-    explicit subtask(std::shared_ptr<detail::child_record<T>> record) noexcept
+    explicit deed(std::shared_ptr<detail::child_record<T>> record) noexcept
         : record_(std::move(record))
     {}
 
     [[nodiscard]] detail::child_record<T> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty subtask handle"};
+            throw runtime_error{"nxt::rt empty deed handle"};
         return *record_;
     }
 
@@ -616,14 +616,14 @@ private:
 };
 
 template<>
-class subtask<void>
+class deed<void>
 {
 public:
-    subtask() = default;
-    subtask(const subtask &) = delete;
-    subtask & operator=(const subtask &) = delete;
-    subtask(subtask &&) noexcept = default;
-    subtask & operator=(subtask &&) noexcept = default;
+    deed() = default;
+    deed(const deed &) = delete;
+    deed & operator=(const deed &) = delete;
+    deed(deed &&) noexcept = default;
+    deed & operator=(deed &&) noexcept = default;
 
     [[nodiscard]] std::exception_ptr exception() const
     {
@@ -635,13 +635,13 @@ public:
         record().take_result();
     }
 
-    [[nodiscard]] catching_subtask<void> cope() &&;
+    [[nodiscard]] catching_deed<void> cope() &&;
 
 private:
     friend class task_zone;
-    friend class catching_subtask<void>;
+    friend class catching_deed<void>;
 
-    explicit subtask(
+    explicit deed(
         std::shared_ptr<detail::child_record<void>> record) noexcept
         : record_(std::move(record))
     {}
@@ -649,7 +649,7 @@ private:
     [[nodiscard]] detail::child_record<void> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty subtask handle"};
+            throw runtime_error{"nxt::rt empty deed handle"};
         return *record_;
     }
 
@@ -657,14 +657,14 @@ private:
 };
 
 template<typename T>
-class catching_subtask
+class catching_deed
 {
 public:
-    catching_subtask() = default;
-    catching_subtask(const catching_subtask &) = delete;
-    catching_subtask & operator=(const catching_subtask &) = delete;
-    catching_subtask(catching_subtask &&) noexcept = default;
-    catching_subtask & operator=(catching_subtask &&) noexcept = default;
+    catching_deed() = default;
+    catching_deed(const catching_deed &) = delete;
+    catching_deed & operator=(const catching_deed &) = delete;
+    catching_deed(catching_deed &&) noexcept = default;
+    catching_deed & operator=(catching_deed &&) noexcept = default;
 
     [[nodiscard]] std::expected<T, std::exception_ptr> get() &&
     {
@@ -678,9 +678,9 @@ public:
     }
 
 private:
-    friend class subtask<T>;
+    friend class deed<T>;
 
-    explicit catching_subtask(
+    explicit catching_deed(
         std::shared_ptr<detail::child_record<T>> record) noexcept
         : record_(std::move(record))
     {}
@@ -688,7 +688,7 @@ private:
     [[nodiscard]] detail::child_record<T> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty catching_subtask handle"};
+            throw runtime_error{"nxt::rt empty catching_deed handle"};
         return *record_;
     }
 
@@ -696,14 +696,14 @@ private:
 };
 
 template<>
-class catching_subtask<void>
+class catching_deed<void>
 {
 public:
-    catching_subtask() = default;
-    catching_subtask(const catching_subtask &) = delete;
-    catching_subtask & operator=(const catching_subtask &) = delete;
-    catching_subtask(catching_subtask &&) noexcept = default;
-    catching_subtask & operator=(catching_subtask &&) noexcept = default;
+    catching_deed() = default;
+    catching_deed(const catching_deed &) = delete;
+    catching_deed & operator=(const catching_deed &) = delete;
+    catching_deed(catching_deed &&) noexcept = default;
+    catching_deed & operator=(catching_deed &&) noexcept = default;
 
     [[nodiscard]] std::expected<void, std::exception_ptr> get() &&
     {
@@ -718,9 +718,9 @@ public:
     }
 
 private:
-    friend class subtask<void>;
+    friend class deed<void>;
 
-    explicit catching_subtask(
+    explicit catching_deed(
         std::shared_ptr<detail::child_record<void>> record) noexcept
         : record_(std::move(record))
     {}
@@ -728,7 +728,7 @@ private:
     [[nodiscard]] detail::child_record<void> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty catching_subtask handle"};
+            throw runtime_error{"nxt::rt empty catching_deed handle"};
         return *record_;
     }
 
@@ -736,22 +736,22 @@ private:
 };
 
 template<typename T>
-inline catching_subtask<T> subtask<T>::cope() &&
+inline catching_deed<T> deed<T>::cope() &&
 {
     auto child = std::move(record_);
     if (!child)
-        throw runtime_error{"nxt::rt empty subtask handle"};
+        throw runtime_error{"nxt::rt empty deed handle"};
     child->caught = true;
-    return catching_subtask<T>{std::move(child)};
+    return catching_deed<T>{std::move(child)};
 }
 
-inline catching_subtask<void> subtask<void>::cope() &&
+inline catching_deed<void> deed<void>::cope() &&
 {
     auto child = std::move(record_);
     if (!child)
-        throw runtime_error{"nxt::rt empty subtask handle"};
+        throw runtime_error{"nxt::rt empty deed handle"};
     child->caught = true;
-    return catching_subtask<void>{std::move(child)};
+    return catching_deed<void>{std::move(child)};
 }
 
 class task_zone
@@ -765,7 +765,7 @@ public:
     task_zone & operator=(task_zone &&) = delete;
 
     template<typename T>
-    subtask<T> spawn(task<T> child)
+    deed<T> spawn(task<T> child)
     {
         auto * current = detail::current_env;
         auto * active_deck =
@@ -789,7 +789,7 @@ public:
 
         children_.push_back(record);
         active_deck->enqueue(handle, &handle.promise());
-        return subtask<T>{std::move(record)};
+        return deed<T>{std::move(record)};
     }
 
     [[nodiscard]] task<void> join();
@@ -821,7 +821,7 @@ inline task_zone & require_current_zone()
 }
 
 template<typename T>
-subtask<T> spawn(task<T> child)
+deed<T> spawn(task<T> child)
 {
     return require_current_zone().spawn(std::move(child));
 }

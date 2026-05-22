@@ -546,9 +546,9 @@ static suite ng_runtime_tests{
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::subtask<int>> {
+                        -> nxt::rt::task<nxt::rt::deed<int>> {
                         co_return co_await nxt::rt::with_zone(
-                            []() -> nxt::rt::task<nxt::rt::subtask<int>> {
+                            []() -> nxt::rt::task<nxt::rt::deed<int>> {
                                 auto child =
                                     nxt::rt::spawn(value_after_yield(42));
                                 co_return std::move(child);
@@ -561,8 +561,8 @@ static suite ng_runtime_tests{
             "return several spawned task results"_test = [] {
                 auto deck = nxt::rt::deck{};
                 using children_type = std::tuple<
-                    nxt::rt::subtask<int>,
-                    nxt::rt::subtask<int>>;
+                    nxt::rt::deed<int>,
+                    nxt::rt::deed<int>>;
 
                 auto children =
                     deck.sync_wait([]() -> nxt::rt::task<children_type> {
@@ -583,15 +583,15 @@ static suite ng_runtime_tests{
                 expect(std::move(second).get() == 20_i);
             };
 
-            "fail the zone for uncoped returned subtasks"_test = [] {
+            "fail the zone for uncoped returned deeds"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto threw = false;
 
                 try {
                     (void)deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::subtask<int>> {
+                        -> nxt::rt::task<nxt::rt::deed<int>> {
                         co_return co_await nxt::rt::with_zone(
-                            []() -> nxt::rt::task<nxt::rt::subtask<int>> {
+                            []() -> nxt::rt::task<nxt::rt::deed<int>> {
                                 auto child =
                                     nxt::rt::spawn(throw_int_after_yield());
                                 co_return std::move(child);
@@ -604,16 +604,16 @@ static suite ng_runtime_tests{
                 expect(threw);
             };
 
-            "let coped subtasks report failure as expected"_test = [] {
+            "let coped deeds report failure as expected"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::catching_subtask<int>> {
+                        -> nxt::rt::task<nxt::rt::catching_deed<int>> {
                         co_return co_await nxt::rt::with_zone(
                             []()
                                 -> nxt::rt::task<
-                                    nxt::rt::catching_subtask<int>> {
+                                    nxt::rt::catching_deed<int>> {
                                 auto child =
                                     nxt::rt::spawn(throw_int_after_yield())
                                         .cope();
@@ -625,16 +625,16 @@ static suite ng_runtime_tests{
                 expect(!result.has_value());
             };
 
-            "let coped subtasks report success as expected"_test = [] {
+            "let coped deeds report success as expected"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::catching_subtask<int>> {
+                        -> nxt::rt::task<nxt::rt::catching_deed<int>> {
                         co_return co_await nxt::rt::with_zone(
                             []()
                                 -> nxt::rt::task<
-                                    nxt::rt::catching_subtask<int>> {
+                                    nxt::rt::catching_deed<int>> {
                                 auto child =
                                     nxt::rt::spawn(value_after_yield(99))
                                         .cope();
