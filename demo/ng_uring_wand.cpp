@@ -213,8 +213,9 @@ void pump_until_done(
         throw std::runtime_error{"demo task did not complete"};
 }
 
+template<typename Sink>
 nxt::rt::task<void> print_entries(
-    nxt::rt::byte_sink & sink,
+    nxt::rt::byte_writer<Sink> & writer,
     std::vector<listing_entry> const & entries)
 {
     auto width = std::size_t{1};
@@ -222,8 +223,7 @@ nxt::rt::task<void> print_entries(
         width = std::max(width, std::to_string(entry.stat.stx_size).size());
 
     for (auto const & entry : entries) {
-        co_await nxt::rt::write_all(
-            sink,
+        co_await writer.write(
             std::format(
                 "{} {:>{}} {}\n",
                 mode_string(entry.stat.stx_mode),
@@ -231,13 +231,16 @@ nxt::rt::task<void> print_entries(
                 width,
                 entry.name));
     }
+    co_await writer.flush();
 }
 
 nxt::rt::task<void> list_and_print(std::string path)
 {
     auto entries = co_await list_path(std::move(path));
     auto out = nxt::rt::fd_sink{STDOUT_FILENO};
-    co_await print_entries(out, entries);
+    auto storage = std::array<std::byte, 4096>{};
+    auto writer = nxt::rt::byte_writer{out, std::span{storage}};
+    co_await print_entries(writer, entries);
 }
 
 } // namespace

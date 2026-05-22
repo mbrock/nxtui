@@ -253,6 +253,71 @@ inline task<void> write_all(byte_sink & sink, std::string text)
     co_await write_all(sink, as_bytes(std::string_view{text}));
 }
 
+/// Buffered asynchronous writer over a byte sink.
+template<typename Sink = byte_sink>
+class byte_writer
+{
+public:
+    byte_writer(Sink & sink, std::span<std::byte> buffer)
+        : sink_(&sink)
+        , buffer_(buffer)
+    {
+        if (buffer.empty())
+            throw buffer_error{"writer buffer is empty"};
+    }
+
+    [[nodiscard]] std::span<const std::byte> buffered() const noexcept
+    {
+        return std::span<const std::byte>{buffer_}.first(end_);
+    }
+
+    [[nodiscard]] std::size_t buffered_size() const noexcept
+    {
+        return end_;
+    }
+
+    [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
+    {
+        return buffer_.subspan(end_);
+    }
+
+    task<void> flush()
+    {
+        co_await write_all(*sink_, buffered());
+        end_ = 0;
+    }
+
+    task<void> write(std::span<const std::byte> bytes)
+    {
+        auto remaining = bytes;
+        while (!remaining.empty()) {
+            if (remaining.size() >= buffer_.size()) {
+                co_await flush();
+                co_await write_all(*sink_, remaining);
+                co_return;
+            }
+
+            if (unused_capacity().empty())
+                co_await flush();
+
+            auto n = std::min(unused_capacity().size(), remaining.size());
+            std::memcpy(buffer_.data() + end_, remaining.data(), n);
+            end_ += n;
+            remaining = remaining.subspan(n);
+        }
+    }
+
+    task<void> write(std::string text)
+    {
+        co_await write(as_bytes(std::string_view{text}));
+    }
+
+private:
+    Sink * sink_;
+    std::span<std::byte> buffer_;
+    std::size_t end_ = 0;
+};
+
 /// Buffered asynchronous reader over a byte source.
 template<typename Source = byte_source>
 class byte_reader

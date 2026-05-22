@@ -1191,6 +1191,26 @@ static suite ng_runtime_tests{
 
                 expect(sink.text == "abcdef");
             };
+
+            "byte_writer buffers bytes until flush"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto sink = chunking_string_sink{64};
+                auto storage = std::array<std::byte, 4>{};
+                auto writer =
+                    nxt::rt::byte_writer{sink, std::span{storage}};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await writer.write(std::string{"ab"});
+                    expect(sink.text.empty());
+                    co_await writer.write(std::string{"cd"});
+                    expect(sink.text.empty());
+                    co_await writer.write(std::string{"e"});
+                    expect(sink.text == "abcd");
+                    co_await writer.flush();
+                });
+
+                expect(sink.text == "abcde");
+            };
         };
 
         "pipes"_test = [] {
