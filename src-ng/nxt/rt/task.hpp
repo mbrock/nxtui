@@ -1688,6 +1688,22 @@ inline waiter<int> openat_wish::operator co_await() const
         *this);
 }
 
+inline waiter<struct statx> statx_wish::operator co_await() const
+{
+    auto context = detail::current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr)
+        throw runtime_error{
+            "nxt::rt statx wish awaited without a running wand"};
+
+    trace("wish statx prepare path=" + path);
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        *this);
+}
+
 inline waiter<std::size_t> read_some_wish::operator co_await() const
 {
     auto context = detail::current_wish_context();

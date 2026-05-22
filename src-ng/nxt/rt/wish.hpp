@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <type_traits>
 #include <utility>
@@ -197,6 +198,19 @@ struct openat_wish
     waiter<int> operator co_await() const;
 };
 
+struct statx_wish
+{
+    using result_type = struct statx;
+
+    int dirfd = AT_FDCWD;
+    std::string path;
+    int flags = AT_SYMLINK_NOFOLLOW;
+    unsigned mask = STATX_BASIC_STATS;
+    struct statx result{};
+
+    waiter<struct statx> operator co_await() const;
+};
+
 struct read_some_wish
 {
     using result_type = std::size_t;
@@ -338,6 +352,11 @@ public:
         deck & d,
         detail::promise_base & promise,
         openat_wish wish) = 0;
+
+    virtual waiter<struct statx> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        statx_wish wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,

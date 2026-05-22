@@ -91,6 +91,22 @@ public:
         return waiter<int>{*this, token, state};
     }
 
+    waiter<struct statx> prepare(
+        deck &,
+        detail::promise_base &,
+        statx_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<struct statx>>();
+        auto request = std::make_shared<uring_wish>(std::move(wish));
+        completions_.emplace(
+            token,
+            std::make_unique<completion<struct statx>>(request, state));
+        pending_submissions_.push_back(token);
+        trace("uring prepare statx token=" + std::to_string(token));
+        return waiter<struct statx>{*this, token, state};
+    }
+
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
@@ -292,6 +308,7 @@ private:
     using uring_wish = std::variant<
         manual_wish,
         openat_wish,
+        statx_wish,
         read_some_wish,
         recv_some_wish,
         send_some_wish,
@@ -330,7 +347,7 @@ private:
             return cancel_requested_;
         }
 
-        [[nodiscard]] uring_wish const & request() const noexcept
+        [[nodiscard]] uring_wish & request() noexcept
         {
             return *request_;
         }
@@ -402,6 +419,8 @@ private:
                     state_->set_value(result);
                 } else if constexpr (std::is_same_v<T, std::size_t>) {
                     state_->set_value(static_cast<std::size_t>(result));
+                } else if constexpr (std::is_same_v<T, struct statx>) {
+                    state_->set_value(std::get<statx_wish>(*this->request_).result);
                 } else {
                     static_assert(std::is_void_v<T>, "unsupported uring result");
                 }
@@ -448,10 +467,10 @@ private:
         }
     }
 
-    void stage_submission(wait_token token, uring_wish const & request)
+    void stage_submission(wait_token token, uring_wish & request)
     {
         std::visit(
-            [this, token](auto const & op) {
+            [this, token](auto & op) {
                 stage_one(token, op);
             },
             request);
@@ -473,6 +492,19 @@ private:
             op.path.c_str(),
             op.flags,
             op.mode);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, statx_wish & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_statx(
+            sqe,
+            op.dirfd,
+            op.path.c_str(),
+            op.flags,
+            op.mask,
+            &op.result);
         attach_token(sqe, token);
     }
 

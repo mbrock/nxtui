@@ -47,6 +47,14 @@ struct manual_wand final : nxt::rt::wand
         throw std::runtime_error{"manual_wand does not implement openat"};
     }
 
+    nxt::rt::waiter<struct statx> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::statx_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement statx"};
+    }
+
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,

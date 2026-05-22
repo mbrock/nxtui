@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -162,6 +163,14 @@ nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
         sizeof(address));
 }
 
+nxt::rt::task<struct statx> stat_current_directory()
+{
+    co_return co_await nxt::rt::statx_wish{
+        .path = ".",
+        .mask = STATX_TYPE,
+    };
+}
+
 template<typename T>
 T pump_until_done(
     nxt::rt::deck & deck,
@@ -285,6 +294,20 @@ static suite ng_uring_wand_tests{
                 auto accepted =
                     unique_fd{::accept(listener.get(), nullptr, nullptr)};
                 expect(accepted.get() >= 0);
+            };
+        };
+
+        "file I/O"_test = [] {
+            "statx wishes return file metadata"_test = [] {
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = stat_current_directory();
+
+                deck.start(task);
+                auto stat = pump_until_done(deck, wand, task);
+
+                expect((stat.stx_mask & STATX_TYPE) != 0);
+                expect(S_ISDIR(stat.stx_mode));
             };
         };
 
