@@ -25,6 +25,23 @@ struct header
     std::string value;
 };
 
+struct url
+{
+    bool tls = false;
+    std::string host;
+    std::string port;
+    std::string target = "/";
+};
+
+struct request
+{
+    std::string method = "GET";
+    std::string target = "/";
+    std::string host;
+    std::vector<header> headers;
+    std::string body;
+};
+
 struct response_head
 {
     std::string version;
@@ -46,6 +63,45 @@ inline bool iequals(std::string_view a, std::string_view b)
         && std::ranges::equal(a, b, {}, ascii_lower, ascii_lower);
 }
 
+inline url parse_url(std::string_view text)
+{
+    auto tls = false;
+    if (text.starts_with("http://")) {
+        text.remove_prefix(std::string_view{"http://"}.size());
+    } else if (text.starts_with("https://")) {
+        text.remove_prefix(std::string_view{"https://"}.size());
+        tls = true;
+    } else {
+        throw protocol_error{"only http:// and https:// URLs are supported"};
+    }
+
+    auto slash = text.find('/');
+    auto authority = text.substr(0, slash);
+    auto target = slash == std::string_view::npos ? std::string_view{"/"}
+                                                  : text.substr(slash);
+    if (authority.empty())
+        throw protocol_error{"URL host is empty"};
+
+    auto parsed = url{
+        .tls = tls,
+        .host = {},
+        .port = tls ? "443" : "80",
+        .target = std::string{target},
+    };
+
+    auto colon = authority.rfind(':');
+    if (colon != std::string_view::npos) {
+        parsed.host = authority.substr(0, colon);
+        parsed.port = authority.substr(colon + 1);
+        if (parsed.host.empty() || parsed.port.empty())
+            throw protocol_error{"invalid URL authority"};
+    } else {
+        parsed.host = authority;
+    }
+
+    return parsed;
+}
+
 inline std::string_view trim_ascii(std::string_view text)
 {
     while (!text.empty() && (text.front() == ' ' || text.front() == '\t'))
@@ -53,6 +109,60 @@ inline std::string_view trim_ascii(std::string_view text)
     while (!text.empty() && (text.back() == ' ' || text.back() == '\t'))
         text.remove_suffix(1);
     return text;
+}
+
+inline bool is_default_port(const url & parsed)
+{
+    return (!parsed.tls && parsed.port == "80")
+        || (parsed.tls && parsed.port == "443");
+}
+
+inline std::string host_header(const url & parsed)
+{
+    if (is_default_port(parsed))
+        return parsed.host;
+    return parsed.host + ":" + parsed.port;
+}
+
+inline std::string serialize(const request & req)
+{
+    auto out = std::string{};
+    out += req.method;
+    out += ' ';
+    out += req.target;
+    out += " HTTP/1.1\r\n";
+
+    if (!req.host.empty()) {
+        out += "Host: ";
+        out += req.host;
+        out += "\r\n";
+    }
+
+    auto has_content_length = false;
+    auto has_connection = false;
+    for (auto const & h : req.headers) {
+        has_content_length =
+            has_content_length || iequals(h.name, "content-length");
+        has_connection = has_connection || iequals(h.name, "connection");
+
+        out += h.name;
+        out += ": ";
+        out += h.value;
+        out += "\r\n";
+    }
+
+    if (!has_content_length) {
+        out += "Content-Length: ";
+        out += std::to_string(req.body.size());
+        out += "\r\n";
+    }
+
+    if (!has_connection)
+        out += "Connection: close\r\n";
+
+    out += "\r\n";
+    out += req.body;
+    return out;
 }
 
 inline response_head parse_response_head(std::span<const std::byte> bytes)

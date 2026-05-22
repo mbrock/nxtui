@@ -47,8 +47,14 @@ if ng_ls_demo_available
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : ng_ls_demo_dependencies,
   )
+
+  executable('ng-http-client-demo',
+    'ng_http_client_demo.cpp',
+    include_directories : [nxt_inc, nxt_ng_inc],
+    dependencies : ng_ls_demo_dependencies + [nxt_libcoro_dep],
+  )
 else
-  message('no ng ls demo runtime found; skipping ng-ls-demo')
+  message('no ng demo runtime found; skipping ng-ls-demo and ng-http-client-demo')
 endif
 
 if host_machine.system() == 'linux' and not nxt_liburing_dep.found()

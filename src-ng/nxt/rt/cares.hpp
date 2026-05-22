@@ -17,6 +17,16 @@
 
 namespace nxt::rt {
 
+#if defined(__GNUC__) || defined(__clang__)
+#define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN \
+    _Pragma("GCC diagnostic push") \
+    _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#define NXT_RT_CARES_IGNORE_DEPRECATED_END _Pragma("GCC diagnostic pop")
+#else
+#define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
+#define NXT_RT_CARES_IGNORE_DEPRECATED_END
+#endif
+
 struct resolved_address
 {
     int family = AF_UNSPEC;
@@ -39,7 +49,9 @@ public:
         ensure_library();
 
         ares_channel_t * channel = nullptr;
+        NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
         auto rc = ares_init(&channel);
+        NXT_RT_CARES_IGNORE_DEPRECATED_END
         if (rc != ARES_SUCCESS)
             throw runtime_error{
                 "ares_init failed: " + std::string{ares_strerror(rc)}};
@@ -168,7 +180,9 @@ private:
 
         auto timeout_storage = timeval{};
         auto * timeout = ares_timeout(channel_.get(), nullptr, &timeout_storage);
+        NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
         auto nfds = ares_fds(channel_.get(), &read_fds, &write_fds);
+        NXT_RT_CARES_IGNORE_DEPRECATED_END
         if (nfds == 0) {
             if (timeout != nullptr)
                 co_await op::timeout::after(as_duration(*timeout));
@@ -233,5 +247,8 @@ private:
 
     std::unique_ptr<ares_channel_t, channel_deleter> channel_;
 };
+
+#undef NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
+#undef NXT_RT_CARES_IGNORE_DEPRECATED_END
 
 } // namespace nxt::rt

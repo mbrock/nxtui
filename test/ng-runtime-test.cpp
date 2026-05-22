@@ -1613,6 +1613,38 @@ static suite ng_runtime_tests{
             };
         };
 
+        "HTTP requests"_test = [] {
+            "parse simple URLs"_test = [] {
+                auto url = nxt::rt::http::parse_url(
+                    "http://example.test:8080/path?q=1");
+
+                expect(!url.tls);
+                expect(url.host == "example.test");
+                expect(url.port == "8080");
+                expect(url.target == "/path?q=1");
+                expect(nxt::rt::http::host_header(url)
+                       == "example.test:8080");
+            };
+
+            "serialize HTTP/1.1 requests"_test = [] {
+                auto wire = nxt::rt::http::serialize(
+                    nxt::rt::http::request{
+                        .method = "GET",
+                        .target = "/hello",
+                        .host = "example.test",
+                        .headers = {{"Accept", "*/*"}},
+                        .body = {},
+                    });
+
+                expect(wire == "GET /hello HTTP/1.1\r\n"
+                               "Host: example.test\r\n"
+                               "Accept: */*\r\n"
+                               "Content-Length: 0\r\n"
+                               "Connection: close\r\n"
+                               "\r\n");
+            };
+        };
+
         "HTTP bodies"_test = [] {
             "the next response remains buffered after chunked bodies"_test = [] {
                 auto deck = nxt::rt::deck{};
