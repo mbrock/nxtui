@@ -29,106 +29,6 @@ struct ambient_int_key
 
 struct manual_wand final : nxt::rt::wand
 {
-    nxt::rt::waiter<void> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::manual wish) override
-    {
-        prepared.push_back(wish.token);
-        auto state = std::make_shared<nxt::rt::wait_state<void>>();
-        states.push_back(state);
-        return nxt::rt::waiter<void>{*this, wish.token, state};
-    }
-
-    nxt::rt::waiter<int> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::openat) override
-    {
-        throw std::runtime_error{"manual_wand does not implement openat"};
-    }
-
-    nxt::rt::waiter<struct statx> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::statx) override
-    {
-        throw std::runtime_error{"manual_wand does not implement statx"};
-    }
-
-    nxt::rt::waiter<std::size_t> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::getdents64) override
-    {
-        throw std::runtime_error{"manual_wand does not implement getdents64"};
-    }
-
-    nxt::rt::waiter<std::size_t> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::read_some) override
-    {
-        throw std::runtime_error{"manual_wand does not implement read"};
-    }
-
-    nxt::rt::waiter<std::size_t> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::write_some) override
-    {
-        throw std::runtime_error{"manual_wand does not implement write"};
-    }
-
-    nxt::rt::waiter<std::size_t> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::recv_some) override
-    {
-        throw std::runtime_error{"manual_wand does not implement recv"};
-    }
-
-    nxt::rt::waiter<std::size_t> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::send_some) override
-    {
-        throw std::runtime_error{"manual_wand does not implement send"};
-    }
-
-    nxt::rt::waiter<void> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::connect) override
-    {
-        throw std::runtime_error{"manual_wand does not implement connect"};
-    }
-
-    nxt::rt::waiter<int> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::poll) override
-    {
-        throw std::runtime_error{"manual_wand does not implement poll"};
-    }
-
-    nxt::rt::waiter<void> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::timeout) override
-    {
-        throw std::runtime_error{"manual_wand does not implement timeout"};
-    }
-
-    nxt::rt::waiter<nxt::rt::poll_until_result> prepare(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::op::poll_until) override
-    {
-        throw std::runtime_error{
-            "manual_wand does not implement poll-until"};
-    }
-
     void
     suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
     {
@@ -163,6 +63,25 @@ struct manual_wand final : nxt::rt::wand
         }
     }
 
+protected:
+    nxt::rt::wait_token prepare_wish(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
+        nxt::rt::detail::prepared_wish packet) override
+    {
+        auto * wish = std::get_if<nxt::rt::op::manual>(&packet.wish);
+        if (wish == nullptr)
+            throw std::runtime_error{
+                "manual_wand only implements manual wishes"};
+
+        prepared.push_back(wish->token);
+        states.push_back(
+            std::static_pointer_cast<nxt::rt::wait_state<void>>(
+                packet.state));
+        return wish->token;
+    }
+
+public:
     struct parked_entry
     {
         nxt::rt::wait_token token = 0;

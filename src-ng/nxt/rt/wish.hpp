@@ -16,16 +16,19 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace nxt::rt {
 
 class deck;
 class wand;
+class uring_submission;
 
 namespace detail {
 struct promise_base;
@@ -190,27 +193,32 @@ namespace op {
 struct manual
 {
     using result_type = void;
+    static constexpr std::string_view name = "manual";
 
     wait_token token = 0;
 
+    bool stage_uring(uring_submission & submission);
     waiter<void> operator co_await() const;
 };
 
 struct openat
 {
     using result_type = int;
+    static constexpr std::string_view name = "openat";
 
     int dirfd = AT_FDCWD;
     std::string path;
     int flags = O_RDONLY;
     mode_t mode = 0;
 
+    bool stage_uring(uring_submission & submission);
     waiter<int> operator co_await() const;
 };
 
 struct statx
 {
     using result_type = statx_result;
+    static constexpr std::string_view name = "statx";
 
     int dirfd = AT_FDCWD;
     std::string path;
@@ -218,66 +226,78 @@ struct statx
     unsigned mask = STATX_BASIC_STATS;
     statx_result result{};
 
+    bool stage_uring(uring_submission & submission);
     waiter<statx_result> operator co_await() const;
 };
 
 struct getdents64
 {
     using result_type = std::size_t;
+    static constexpr std::string_view name = "getdents64";
 
     int fd = -1;
     std::span<std::byte> buffer;
 
+    bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
 };
 
 struct read_some
 {
     using result_type = std::size_t;
+    static constexpr std::string_view name = "read";
 
     int fd = -1;
     std::span<std::byte> buffer;
     off_t offset = -1;
 
+    bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
 };
 
 struct write_some
 {
     using result_type = std::size_t;
+    static constexpr std::string_view name = "write";
 
     int fd = -1;
     std::span<const std::byte> buffer;
     off_t offset = -1;
 
+    bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
 };
 
 struct recv_some
 {
     using result_type = std::size_t;
+    static constexpr std::string_view name = "recv";
 
     int fd = -1;
     std::span<std::byte> buffer;
     int flags = 0;
 
+    bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
 };
 
 struct send_some
 {
     using result_type = std::size_t;
+    static constexpr std::string_view name = "send";
 
     int fd = -1;
     std::span<const std::byte> buffer;
     int flags = 0;
 
+    bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
 };
 
 struct connect
 {
     using result_type = void;
+    static constexpr std::string_view name = "connect";
 
     int fd = -1;
     sockaddr_storage address{};
@@ -305,22 +325,26 @@ struct connect
         return reinterpret_cast<sockaddr const *>(&address);
     }
 
+    bool stage_uring(uring_submission & submission);
     waiter<void> operator co_await() const;
 };
 
 struct poll
 {
     using result_type = int;
+    static constexpr std::string_view name = "poll";
 
     int fd = -1;
     short events = 0;
 
+    bool stage_uring(uring_submission & submission);
     waiter<int> operator co_await() const;
 };
 
 struct timeout
 {
     using result_type = void;
+    static constexpr std::string_view name = "timeout";
 
     __kernel_timespec duration{};
 
@@ -331,12 +355,14 @@ struct timeout
         };
     }
 
+    bool stage_uring(uring_submission & submission);
     waiter<void> operator co_await() const;
 };
 
 struct poll_until
 {
     using result_type = poll_until_result;
+    static constexpr std::string_view name = "poll-until";
 
     int fd = -1;
     short events = 0;
@@ -354,10 +380,35 @@ struct poll_until
         };
     }
 
+    bool stage_uring(uring_submission & submission);
     waiter<poll_until_result> operator co_await() const;
 };
 
 } // namespace op
+
+using wish_variant = std::variant<
+    op::manual,
+    op::openat,
+    op::statx,
+    op::getdents64,
+    op::read_some,
+    op::write_some,
+    op::recv_some,
+    op::send_some,
+    op::connect,
+    op::poll,
+    op::timeout,
+    op::poll_until>;
+
+namespace detail {
+
+struct prepared_wish
+{
+    wish_variant wish;
+    std::shared_ptr<void> state;
+};
+
+} // namespace detail
 
 /// Backend interface for staged platform/event-loop machinery.
 ///
@@ -370,69 +421,33 @@ class wand
 public:
     virtual ~wand() = default;
 
-    virtual waiter<void> prepare(
+    template<typename Wish>
+    waiter<typename Wish::result_type> prepare(
         deck & d,
         detail::promise_base & promise,
-        op::manual wish) = 0;
-
-    virtual waiter<int> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::openat wish) = 0;
-
-    virtual waiter<statx_result> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::statx wish) = 0;
-
-    virtual waiter<std::size_t> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::getdents64 wish) = 0;
-
-    virtual waiter<std::size_t> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::read_some wish) = 0;
-
-    virtual waiter<std::size_t> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::write_some wish) = 0;
-
-    virtual waiter<std::size_t> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::recv_some wish) = 0;
-
-    virtual waiter<std::size_t> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::send_some wish) = 0;
-
-    virtual waiter<void> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::connect wish) = 0;
-
-    virtual waiter<int> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::poll wish) = 0;
-
-    virtual waiter<void> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::timeout wish) = 0;
-
-    virtual waiter<poll_until_result> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        op::poll_until wish) = 0;
+        Wish wish)
+    {
+        using result_type = typename Wish::result_type;
+        auto state = std::make_shared<wait_state<result_type>>();
+        auto token = prepare_wish(
+            d,
+            promise,
+            detail::prepared_wish{
+                .wish = wish_variant{std::move(wish)},
+                .state = state,
+            });
+        return waiter<result_type>{*this, token, state};
+    }
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void cancel(wait_token token) = 0;
     virtual void wave(deck & d) = 0;
+
+protected:
+    virtual wait_token prepare_wish(
+        deck & d,
+        detail::promise_base & promise,
+        detail::prepared_wish wish) = 0;
 };
 
 } // namespace nxt::rt
