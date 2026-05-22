@@ -12,6 +12,7 @@
 #endif
 
 #include <cerrno>
+#include <cstdint>
 #include <exception>
 #include <fcntl.h>
 #include <iomanip>
@@ -208,18 +209,37 @@ void dump_hex(std::span<const std::byte> bytes)
     std::cerr.fill(fill);
 }
 
-std::uint16_t get_u16(std::span<const std::byte> input)
+std::uint16_t parse_u16(std::span<const std::byte> input)
 {
     return static_cast<std::uint16_t>(
         (std::to_integer<std::uint16_t>(input[0]) << 8)
         | std::to_integer<std::uint16_t>(input[1]));
 }
 
-std::uint32_t get_u24(std::span<const std::byte> input)
+std::uint32_t parse_u24(std::span<const std::byte> input)
 {
     return (std::to_integer<std::uint32_t>(input[0]) << 16)
         | (std::to_integer<std::uint32_t>(input[1]) << 8)
         | std::to_integer<std::uint32_t>(input[2]);
+}
+
+template<typename Reader>
+nxt::rt::task<std::uint8_t> read_u8(Reader & reader)
+{
+    auto bytes = co_await reader.take(1);
+    co_return std::to_integer<std::uint8_t>(bytes[0]);
+}
+
+template<typename Reader>
+nxt::rt::task<std::uint16_t> read_u16(Reader & reader)
+{
+    co_return parse_u16(co_await reader.take(2));
+}
+
+template<typename Reader>
+nxt::rt::task<std::uint32_t> read_u24(Reader & reader)
+{
+    co_return parse_u24(co_await reader.take(3));
 }
 
 std::string_view tls_record_type_name(std::uint8_t type)
@@ -258,45 +278,42 @@ std::string_view tls_handshake_type_name(std::uint8_t type)
     }
 }
 
-void describe_tls_records(std::span<const std::byte> bytes)
+struct tls_record
 {
-    auto offset = std::size_t{0};
-    auto record_index = std::size_t{0};
-    while (offset + 5 <= bytes.size()) {
-        auto header = bytes.subspan(offset, 5);
-        auto type = std::to_integer<std::uint8_t>(header[0]);
-        auto version = get_u16(header.subspan(1, 2));
-        auto length = get_u16(header.subspan(3, 2));
-        auto payload_offset = offset + 5;
+    std::uint8_t type = 0;
+    std::uint16_t version = 0;
+    bytes payload;
+};
 
-        std::cerr << "record " << record_index << ": "
-                  << tls_record_type_name(type) << " type=" << unsigned{type}
-                  << " version=0x" << std::hex << version << std::dec
-                  << " length=" << length << '\n';
+template<typename Reader>
+nxt::rt::task<tls_record> read_tls_record(Reader & reader)
+{
+    auto type = co_await read_u8(reader);
+    auto version = co_await read_u16(reader);
+    auto length = co_await read_u16(reader);
+    auto payload = co_await reader.take(length);
+    co_return tls_record{
+        .type = type,
+        .version = version,
+        .payload = bytes{payload.begin(), payload.end()},
+    };
+}
 
-        if (payload_offset + length > bytes.size()) {
-            std::cerr << "  partial record body: have "
-                      << (bytes.size() - payload_offset) << " bytes\n";
-            return;
-        }
+void describe_tls_record(std::size_t index, tls_record const & record)
+{
+    std::cerr << "record " << index << ": " << tls_record_type_name(record.type)
+              << " type=" << unsigned{record.type} << " version=0x" << std::hex
+              << record.version << std::dec
+              << " length=" << record.payload.size() << '\n';
 
-        if (type == 22 && length >= 4) {
-            auto payload = bytes.subspan(payload_offset, length);
-            auto handshake_type = std::to_integer<std::uint8_t>(payload[0]);
-            auto handshake_length = get_u24(payload.subspan(1, 3));
-            std::cerr << "  handshake: "
-                      << tls_handshake_type_name(handshake_type)
-                      << " type=" << unsigned{handshake_type}
-                      << " length=" << handshake_length << '\n';
-        }
-
-        offset = payload_offset + length;
-        ++record_index;
+    if (record.type == 22 && record.payload.size() >= 4) {
+        auto handshake_type =
+            std::to_integer<std::uint8_t>(record.payload[0]);
+        auto handshake_length = parse_u24(std::span{record.payload}.subspan(1, 3));
+        std::cerr << "  handshake: " << tls_handshake_type_name(handshake_type)
+                  << " type=" << unsigned{handshake_type}
+                  << " length=" << handshake_length << '\n';
     }
-
-    if (offset != bytes.size())
-        std::cerr << "trailing partial record header: " << (bytes.size() - offset)
-                  << " bytes\n";
 }
 
 nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
@@ -312,21 +329,19 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     co_await socket_output.write_all(hello);
 
     auto source = nxt::rt::socket_source{socket.get()};
-    auto input_storage = std::vector<std::byte>(4096);
+    auto input_storage = std::vector<std::byte>(18 * 1024);
     auto reader = nxt::rt::byte_reader<nxt::rt::socket_source>{
         source,
         std::span{input_storage},
     };
 
-    auto answer = co_await reader.take_some();
-    if (!answer) {
-        std::cerr << "server closed without sending a TLS record\n";
-        co_return;
-    }
-
-    std::cerr << "received " << answer->size() << " bytes\n";
-    describe_tls_records(*answer);
-    dump_hex(*answer);
+    auto index = std::size_t{0};
+    do {
+        auto record = co_await read_tls_record(reader);
+        describe_tls_record(index, record);
+        dump_hex(record.payload);
+        ++index;
+    } while (reader.buffered_size() > 0);
 }
 
 nxt::rt::task<void> fetch(nxt::rt::http::url url)
