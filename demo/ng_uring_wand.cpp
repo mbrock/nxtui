@@ -149,7 +149,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     while (true) {
         auto header = linux_dirent64_header{};
         try {
-            header = co_await reader.peek_struct<linux_dirent64_header>();
+            header = co_await reader.take_struct<linux_dirent64_header>();
         } catch (const nxt::rt::end_of_stream &) {
             break;
         }
@@ -157,10 +157,10 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         if (header.d_reclen < sizeof(linux_dirent64_header))
             throw std::runtime_error{"getdents64 returned a short entry"};
 
-        auto record = co_await reader.peek(header.d_reclen);
+        auto rest =
+            co_await reader.take(header.d_reclen - sizeof(linux_dirent64_header));
         auto name = std::string_view{
-            reinterpret_cast<const char *>(
-                record.data() + sizeof(linux_dirent64_header))};
+            reinterpret_cast<const char *>(rest.data())};
         if (!hidden_or_dot(name)) {
             auto stat = co_await nxt::rt::statx_wish{
                 .dirfd = dir.get(),
@@ -174,8 +174,6 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
                     .stat = stat,
                 });
         }
-
-        reader.toss(header.d_reclen);
     }
 
     std::ranges::sort(
