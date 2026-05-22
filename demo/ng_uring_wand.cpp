@@ -142,7 +142,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     auto storage = std::array<std::byte, 16 * 1024>{};
     auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
-    auto entries = std::vector<listing_entry>{};
+    auto names = std::vector<std::string>{};
     while (true) {
         auto header = linux_dirent64_header{};
         try {
@@ -157,20 +157,25 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         auto name = co_await reader.take_string_view(
             header.d_reclen - sizeof(linux_dirent64_header));
         name = name.substr(0, name.find('\0'));
-        if (!hidden_or_dot(name)) {
-            auto stat = co_await nxt::rt::statx_wish{
-                .dirfd = dir.get(),
-                .path = std::string{name},
-                .flags = AT_SYMLINK_NOFOLLOW,
-                .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
-            };
-            entries.push_back(
-                listing_entry{
-                    .name = std::string{name},
-                    .stat = stat,
-                });
-        }
+        if (!hidden_or_dot(name))
+            names.emplace_back(name);
     }
+
+    auto entries = co_await nxt::rt::when_all_range(
+        names | std::views::transform(
+            [dirfd = dir.get()](std::string const & name)
+                -> nxt::rt::task<listing_entry> {
+                auto stat = co_await nxt::rt::statx_wish{
+                    .dirfd = dirfd,
+                    .path = name,
+                    .flags = AT_SYMLINK_NOFOLLOW,
+                    .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
+                };
+                co_return listing_entry{
+                    .name = name,
+                    .stat = stat,
+                };
+            }));
 
     std::ranges::sort(
         entries,

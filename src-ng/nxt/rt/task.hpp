@@ -1353,6 +1353,34 @@ when_all(Tasks... tasks)
 }
 
 template<std::ranges::input_range Range>
+    requires is_task_v<std::ranges::range_value_t<Range>>
+        && (!std::is_void_v<
+            task_result_t<std::ranges::range_value_t<Range>>>)
+[[nodiscard]] task<
+    std::vector<task_result_t<std::ranges::range_value_t<Range>>>>
+when_all_range(Range tasks)
+{
+    using result_type = task_result_t<std::ranges::range_value_t<Range>>;
+    using deed_type = catching_deed<result_type>;
+
+    auto deeds = co_await with_zone(
+        stop_on_failure{},
+        [tasks = std::move(tasks)](auto & policy) mutable
+            -> task<std::vector<deed_type>> {
+            auto out = std::vector<deed_type>{};
+            for (auto child : tasks)
+                out.push_back(policy.fork(std::move(child)).cope());
+            co_return out;
+        });
+
+    auto out = std::vector<result_type>{};
+    out.reserve(deeds.size());
+    for (auto & deed : deeds)
+        out.push_back(detail::take_deed_result(std::move(deed)));
+    co_return out;
+}
+
+template<std::ranges::input_range Range>
 [[nodiscard]] task<void> for_each_task(Range tasks)
 {
     for (auto child : tasks) {
