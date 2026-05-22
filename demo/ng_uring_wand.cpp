@@ -81,6 +81,30 @@ struct listing_entry
     struct statx stat{};
 };
 
+class dirents_source final : public nxt::rt::byte_source
+{
+public:
+    explicit dirents_source(int fd) noexcept
+        : fd_(fd)
+    {}
+
+    nxt::rt::task<nxt::rt::read_result>
+    read_some(std::span<std::byte> dst) override
+    {
+        auto n = co_await nxt::rt::getdents64_wish{
+            .fd = fd_,
+            .buffer = dst,
+        };
+        co_return nxt::rt::read_result{
+            .bytes = n,
+            .eof = n == 0,
+        };
+    }
+
+private:
+    int fd_ = -1;
+};
+
 std::string mode_string(mode_t mode)
 {
     auto result = std::string{"----------"};
@@ -131,20 +155,15 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         .mode = 0,
     };
     auto dir = unique_fd{fd};
+    auto source = dirents_source{dir.get()};
+    auto storage = std::array<std::byte, 16 * 1024>{};
+    auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
     auto entries = std::vector<listing_entry>{};
-    auto storage = std::array<std::byte, 16 * 1024>{};
-    while (true) {
-        auto bytes = co_await nxt::rt::getdents64_wish{
-            .fd = dir.get(),
-            .buffer = storage,
-        };
-        if (bytes == 0)
-            break;
-
-        for (auto offset = std::size_t{}; offset < bytes;) {
+    while (auto chunk = co_await reader.take_some()) {
+        for (auto offset = std::size_t{}; offset < chunk->size();) {
             auto const * entry = reinterpret_cast<linux_dirent64 const *>(
-                storage.data() + offset);
+                chunk->data() + offset);
             if (entry->d_reclen == 0)
                 throw std::runtime_error{
                     "getdents64 returned a zero-length entry"};
