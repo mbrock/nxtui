@@ -1,6 +1,6 @@
-#include <nxt/rt/buffers.hpp>
 #include <nxt/rt/uring_wand.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -8,10 +8,15 @@
 #include <fcntl.h>
 #include <iomanip>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -60,48 +65,141 @@ private:
     int fd_ = -1;
 };
 
-struct file_digest
+struct linux_dirent64
 {
-    std::size_t bytes = 0;
-    std::uint64_t fnv1a = 14695981039346656037ull;
+    std::uint64_t d_ino;
+    std::int64_t d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[];
 };
 
-void update_fnv1a(file_digest & digest, std::span<const std::byte> bytes)
+struct listing_entry
 {
-    for (auto byte : bytes) {
-        digest.fnv1a ^= static_cast<std::uint8_t>(byte);
-        digest.fnv1a *= 1099511628211ull;
+    std::string name;
+    struct statx stat{};
+};
+
+std::string mode_string(mode_t mode)
+{
+    auto result = std::string{"----------"};
+
+    if (S_ISDIR(mode))
+        result[0] = 'd';
+    else if (S_ISLNK(mode))
+        result[0] = 'l';
+    else if (S_ISCHR(mode))
+        result[0] = 'c';
+    else if (S_ISBLK(mode))
+        result[0] = 'b';
+    else if (S_ISFIFO(mode))
+        result[0] = 'p';
+    else if (S_ISSOCK(mode))
+        result[0] = 's';
+
+    constexpr auto bits = std::array{
+        S_IRUSR, S_IWUSR, S_IXUSR,
+        S_IRGRP, S_IWGRP, S_IXGRP,
+        S_IROTH, S_IWOTH, S_IXOTH,
+    };
+    constexpr auto chars = std::array{
+        'r', 'w', 'x',
+        'r', 'w', 'x',
+        'r', 'w', 'x',
+    };
+
+    for (auto i = std::size_t{}; i != bits.size(); ++i) {
+        if ((mode & bits[i]) != 0)
+            result[i + 1] = chars[i];
     }
+
+    return result;
 }
 
-nxt::rt::task<file_digest> hash_file_with_wand(std::string path)
+bool hidden_or_dot(std::string_view name)
+{
+    return name.empty() || name.front() == '.';
+}
+
+nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
 {
     auto fd = co_await nxt::rt::openat_wish{
         .dirfd = AT_FDCWD,
         .path = std::move(path),
-        .flags = O_RDONLY,
+        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
         .mode = 0,
     };
-    auto owned_fd = unique_fd{fd};
-    auto source = nxt::rt::fd_source{owned_fd.get()};
-    auto buffer = std::array<std::byte, 4096>{};
-    auto digest = file_digest{};
+    auto dir = unique_fd{fd};
 
-    digest.bytes = co_await nxt::rt::for_each_chunk(
-        source,
-        std::span{buffer},
-        [&digest](std::span<const std::byte> chunk) {
-            update_fnv1a(digest, chunk);
-        });
-    co_return digest;
+    auto entries = std::vector<listing_entry>{};
+    auto storage = std::array<std::byte, 16 * 1024>{};
+    while (true) {
+        auto bytes = co_await nxt::rt::getdents64_wish{
+            .fd = dir.get(),
+            .buffer = storage,
+        };
+        if (bytes == 0)
+            break;
+
+        for (auto offset = std::size_t{}; offset < bytes;) {
+            auto const * entry = reinterpret_cast<linux_dirent64 const *>(
+                storage.data() + offset);
+            if (entry->d_reclen == 0)
+                throw std::runtime_error{
+                    "getdents64 returned a zero-length entry"};
+
+            auto name = std::string_view{entry->d_name};
+            if (!hidden_or_dot(name)) {
+                auto stat = co_await nxt::rt::statx_wish{
+                    .dirfd = dir.get(),
+                    .path = std::string{name},
+                    .flags = AT_SYMLINK_NOFOLLOW,
+                    .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
+                };
+                entries.push_back(
+                    listing_entry{
+                        .name = std::string{name},
+                        .stat = stat,
+                    });
+            }
+
+            offset += entry->d_reclen;
+        }
+    }
+
+    std::ranges::sort(
+        entries,
+        {},
+        &listing_entry::name);
+    co_return entries;
+}
+
+nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
+{
+    auto stat = co_await nxt::rt::statx_wish{
+        .dirfd = AT_FDCWD,
+        .path = path,
+        .flags = AT_SYMLINK_NOFOLLOW,
+        .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
+    };
+
+    if (S_ISDIR(stat.stx_mode))
+        co_return co_await list_directory(std::move(path));
+
+    co_return std::vector<listing_entry>{
+        listing_entry{
+            .name = std::move(path),
+            .stat = stat,
+        },
+    };
 }
 
 void pump_until_done(
     nxt::rt::deck & deck,
     nxt::rt::uring_wand & wand,
-    nxt::rt::task<file_digest> & task)
+    nxt::rt::task<std::vector<listing_entry>> & task)
 {
-    for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
+    for (auto spins = 0; spins != 10000 && !task.done(); ++spins) {
         if (!deck.empty())
             deck.run_ready();
         wand.poll(deck);
@@ -113,27 +211,36 @@ void pump_until_done(
         throw std::runtime_error{"demo task did not complete"};
 }
 
+void print_entries(std::vector<listing_entry> const & entries)
+{
+    auto width = std::size_t{1};
+    for (auto const & entry : entries)
+        width = std::max(width, std::to_string(entry.stat.stx_size).size());
+
+    for (auto const & entry : entries) {
+        std::cout
+            << mode_string(entry.stat.stx_mode) << ' '
+            << std::setw(static_cast<int>(width)) << entry.stat.stx_size << ' '
+            << entry.name << '\n';
+    }
+}
+
 } // namespace
 
 int main(int argc, char ** argv)
 try {
     auto path = argc > 1
         ? std::string{argv[1]}
-        : std::string{"/etc/hostname"};
+        : std::string{"."};
 
     auto wand = nxt::rt::uring_wand{};
     auto deck = nxt::rt::deck{&wand};
-    auto task = hash_file_with_wand(path);
+    auto task = list_path(path);
 
     deck.start(task);
     pump_until_done(deck, wand, task);
 
-    auto digest = std::move(task).result();
-    std::cout
-        << path << '\n'
-        << "bytes " << digest.bytes << '\n'
-        << "fnv1a 0x" << std::hex << std::setw(16) << std::setfill('0')
-        << digest.fnv1a << '\n';
+    print_entries(std::move(task).result());
     return 0;
 } catch (std::exception const & error) {
     std::cerr << "ng-uring-wand-demo: " << error.what() << '\n';
