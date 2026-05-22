@@ -66,13 +66,12 @@ private:
     int fd_ = -1;
 };
 
-struct linux_dirent64
+struct [[gnu::packed]] linux_dirent64_header
 {
     std::uint64_t d_ino;
     std::int64_t d_off;
     unsigned short d_reclen;
     unsigned char d_type;
-    char d_name[];
 };
 
 struct listing_entry
@@ -147,31 +146,36 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
     auto entries = std::vector<listing_entry>{};
-    while (auto chunk = co_await reader.take_some()) {
-        for (auto offset = std::size_t{}; offset < chunk->size();) {
-            auto const * entry = reinterpret_cast<linux_dirent64 const *>(
-                chunk->data() + offset);
-            if (entry->d_reclen == 0)
-                throw std::runtime_error{
-                    "getdents64 returned a zero-length entry"};
-
-            auto name = std::string_view{entry->d_name};
-            if (!hidden_or_dot(name)) {
-                auto stat = co_await nxt::rt::statx_wish{
-                    .dirfd = dir.get(),
-                    .path = std::string{name},
-                    .flags = AT_SYMLINK_NOFOLLOW,
-                    .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
-                };
-                entries.push_back(
-                    listing_entry{
-                        .name = std::string{name},
-                        .stat = stat,
-                    });
-            }
-
-            offset += entry->d_reclen;
+    while (true) {
+        auto header = linux_dirent64_header{};
+        try {
+            header = co_await reader.peek_struct<linux_dirent64_header>();
+        } catch (const nxt::rt::end_of_stream &) {
+            break;
         }
+
+        if (header.d_reclen < sizeof(linux_dirent64_header))
+            throw std::runtime_error{"getdents64 returned a short entry"};
+
+        auto record = co_await reader.peek(header.d_reclen);
+        auto name = std::string_view{
+            reinterpret_cast<const char *>(
+                record.data() + sizeof(linux_dirent64_header))};
+        if (!hidden_or_dot(name)) {
+            auto stat = co_await nxt::rt::statx_wish{
+                .dirfd = dir.get(),
+                .path = std::string{name},
+                .flags = AT_SYMLINK_NOFOLLOW,
+                .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
+            };
+            entries.push_back(
+                listing_entry{
+                    .name = std::string{name},
+                    .stat = stat,
+                });
+        }
+
+        reader.toss(header.d_reclen);
     }
 
     std::ranges::sort(

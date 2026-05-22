@@ -1216,6 +1216,33 @@ static suite ng_runtime_tests{
                 expect(result == "xy");
             };
 
+            "byte_reader peeks and takes copied structs"_test = [] {
+                struct pair
+                {
+                    unsigned char a = 0;
+                    unsigned char b = 0;
+                };
+
+                auto deck = nxt::rt::deck{};
+                auto chunks = std::array{"abcd"sv};
+                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    auto first = co_await reader.peek_struct<pair>();
+                    expect(first.a == static_cast<unsigned char>('a'));
+                    expect(first.b == static_cast<unsigned char>('b'));
+                    expect(reader.buffered_size() == std::size_t{4});
+
+                    auto second = co_await reader.take_struct<pair>();
+                    expect(second.a == static_cast<unsigned char>('a'));
+                    expect(second.b == static_cast<unsigned char>('b'));
+                    expect(reader.buffered_size() == std::size_t{2});
+                });
+            };
+
             "byte_writer buffers bytes until flush"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto sink = chunking_string_sink{64};

@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace nxt::rt {
 
@@ -412,6 +413,16 @@ public:
         co_return buffered().first(n);
     }
 
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    task<T> peek_struct()
+    {
+        auto bytes = co_await peek(sizeof(T));
+        auto value = T{};
+        std::memcpy(&value, bytes.data(), sizeof(T));
+        co_return value;
+    }
+
     /// Consume and return the next borrowed chunk, up to `limit` bytes.
     ///
     /// The returned span may be empty. `std::nullopt` is the EOF signal.
@@ -444,6 +455,15 @@ public:
         auto out = co_await peek(n);
         toss(n);
         co_return out;
+    }
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    task<T> take_struct()
+    {
+        auto value = co_await peek_struct<T>();
+        toss(sizeof(T));
+        co_return value;
     }
 
     task<std::span<const std::byte>>
