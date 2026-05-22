@@ -67,12 +67,10 @@ public:
 
         auto state = std::make_shared<wait_state<void>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto * sqe = get_sqe();
-        io_uring_prep_nop(sqe);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<void>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare manual token=" + std::to_string(token));
         return waiter<void>{*this, token, state};
     }
@@ -85,18 +83,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<int>>();
         auto request = std::make_shared<uring_wish>(std::move(wish));
-        auto const & op = std::get<openat_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_openat(
-            sqe,
-            op.dirfd,
-            op.path.c_str(),
-            op.flags,
-            op.mode);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<int>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare openat token=" + std::to_string(token));
         return waiter<int>{*this, token, state};
     }
@@ -109,18 +99,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<std::size_t>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto const & op = std::get<read_some_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_read(
-            sqe,
-            op.fd,
-            op.buffer.data(),
-            op.buffer.size(),
-            op.offset);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<std::size_t>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare read token=" + std::to_string(token));
         return waiter<std::size_t>{*this, token, state};
     }
@@ -133,18 +115,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<std::size_t>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto const & op = std::get<recv_some_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_recv(
-            sqe,
-            op.fd,
-            op.buffer.data(),
-            op.buffer.size(),
-            op.flags);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<std::size_t>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare recv token=" + std::to_string(token));
         return waiter<std::size_t>{*this, token, state};
     }
@@ -157,18 +131,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<std::size_t>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto const & op = std::get<send_some_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_send(
-            sqe,
-            op.fd,
-            op.buffer.data(),
-            op.buffer.size(),
-            op.flags);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<std::size_t>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare send token=" + std::to_string(token));
         return waiter<std::size_t>{*this, token, state};
     }
@@ -181,17 +147,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<void>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto const & op = std::get<connect_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_connect(
-            sqe,
-            op.fd,
-            op.sockaddr_ptr(),
-            op.address_size);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<void>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare connect token=" + std::to_string(token));
         return waiter<void>{*this, token, state};
     }
@@ -204,13 +163,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<int>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto const & op = std::get<poll_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_poll_add(sqe, op.fd, op.events);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<int>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare poll token=" + std::to_string(token));
         return waiter<int>{*this, token, state};
     }
@@ -223,13 +179,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<void>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto & op = std::get<timeout_wish>(*request);
-        auto * sqe = get_sqe();
-        io_uring_prep_timeout(sqe, &op.duration, 0, IORING_TIMEOUT_ETIME_SUCCESS);
-        attach_token(sqe, token);
         completions_.emplace(
             token,
             std::make_unique<completion<void>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare timeout token=" + std::to_string(token));
         return waiter<void>{*this, token, state};
     }
@@ -242,23 +195,10 @@ public:
         auto token = next_token_++;
         auto state = std::make_shared<wait_state<poll_until_result>>();
         auto request = std::make_shared<uring_wish>(wish);
-        auto & op = std::get<poll_until_wish>(*request);
-
-        auto * poll_sqe = get_sqe();
-        io_uring_prep_poll_add(poll_sqe, op.fd, op.events);
-        poll_sqe->flags |= IOSQE_IO_LINK;
-        attach_token(poll_sqe, token);
-
-        auto * timeout_sqe = get_sqe();
-        io_uring_prep_link_timeout(
-            timeout_sqe,
-            &op.timeout,
-            IORING_TIMEOUT_ETIME_SUCCESS);
-        attach_token(timeout_sqe, token);
-
         completions_.emplace(
             token,
             std::make_unique<completion<poll_until_result>>(request, state));
+        pending_submissions_.push_back(token);
         trace("uring prepare poll-until token=" + std::to_string(token));
         return waiter<poll_until_result>{*this, token, state};
     }
@@ -274,15 +214,16 @@ public:
         auto found = completions_.find(token);
         if (found == completions_.end())
             return;
-        if (!pending_cancellations_.insert(token).second)
-            return;
-
         found->second->request_cancel();
+        if (found->second->submitted()
+            && !pending_cancellations_.insert(token).second)
+            return;
         trace("uring request cancel token=" + std::to_string(token));
     }
 
-    void wave(deck &) override
+    void wave(deck & d) override
     {
+        stage_submissions(d);
         stage_cancellations();
         trace("uring wave submit");
         auto rc = io_uring_submit(&ring_);
@@ -374,14 +315,30 @@ private:
             cancel_requested_ = true;
         }
 
+        void mark_submitted() noexcept
+        {
+            submitted_ = true;
+        }
+
+        [[nodiscard]] bool submitted() const noexcept
+        {
+            return submitted_;
+        }
+
         [[nodiscard]] bool cancel_requested() const noexcept
         {
             return cancel_requested_;
         }
 
+        [[nodiscard]] uring_wish const & request() const noexcept
+        {
+            return *request_;
+        }
+
     protected:
         std::shared_ptr<uring_wish> request_;
         bool cancel_requested_ = false;
+        bool submitted_ = false;
     };
 
     template<typename T>
@@ -468,6 +425,137 @@ private:
         io_uring_sqe_set_data64(sqe, static_cast<std::uint64_t>(token));
     }
 
+    void stage_submissions(deck & d)
+    {
+        auto tokens = std::vector<wait_token>{};
+        tokens.swap(pending_submissions_);
+
+        for (auto token : tokens) {
+            auto found = completions_.find(token);
+            if (found == completions_.end())
+                continue;
+
+            auto & completion = *found->second;
+            if (completion.cancel_requested()) {
+                completion.complete(-ECANCELED);
+                completions_.erase(found);
+                fulfill(d, token);
+                continue;
+            }
+
+            stage_submission(token, completion.request());
+            completion.mark_submitted();
+        }
+    }
+
+    void stage_submission(wait_token token, uring_wish const & request)
+    {
+        std::visit(
+            [this, token](auto const & op) {
+                stage_one(token, op);
+            },
+            request);
+    }
+
+    void stage_one(wait_token token, manual_wish const &)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_nop(sqe);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, openat_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_openat(
+            sqe,
+            op.dirfd,
+            op.path.c_str(),
+            op.flags,
+            op.mode);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, read_some_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_read(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.offset);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, recv_some_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_recv(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.flags);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, send_some_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_send(
+            sqe,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size(),
+            op.flags);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, connect_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_connect(
+            sqe,
+            op.fd,
+            op.sockaddr_ptr(),
+            op.address_size);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, poll_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_poll_add(sqe, op.fd, op.events);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, timeout_wish const & op)
+    {
+        auto * sqe = get_sqe();
+        io_uring_prep_timeout(
+            sqe,
+            &op.duration,
+            0,
+            IORING_TIMEOUT_ETIME_SUCCESS);
+        attach_token(sqe, token);
+    }
+
+    void stage_one(wait_token token, poll_until_wish const & op)
+    {
+        auto * poll_sqe = get_sqe();
+        io_uring_prep_poll_add(poll_sqe, op.fd, op.events);
+        poll_sqe->flags |= IOSQE_IO_LINK;
+        attach_token(poll_sqe, token);
+
+        auto * timeout_sqe = get_sqe();
+        io_uring_prep_link_timeout(
+            timeout_sqe,
+            &op.timeout,
+            IORING_TIMEOUT_ETIME_SUCCESS);
+        attach_token(timeout_sqe, token);
+    }
+
     void stage_cancellations()
     {
         for (auto token : pending_cancellations_) {
@@ -504,6 +592,7 @@ private:
     wait_token next_token_ = 1;
     std::unordered_map<wait_token, std::unique_ptr<completion_base>> completions_;
     std::unordered_map<wait_token, parked_task> waiters_;
+    std::vector<wait_token> pending_submissions_;
     std::unordered_set<wait_token> pending_cancellations_;
 };
 
