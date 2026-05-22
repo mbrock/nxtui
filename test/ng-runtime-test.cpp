@@ -1192,6 +1192,30 @@ static suite ng_runtime_tests{
                 expect(sink.text == "abcdef");
             };
 
+            "task_byte_source reads through a task callable"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto read = [](std::span<std::byte> dst)
+                    -> nxt::rt::task<nxt::rt::read_result> {
+                    auto text = std::string_view{"xy"};
+                    std::memcpy(dst.data(), text.data(), text.size());
+                    co_return nxt::rt::read_result{
+                        .bytes = text.size(),
+                        .eof = true,
+                    };
+                };
+                auto source = nxt::rt::task_byte_source{read};
+                auto storage = std::array<std::byte, 4>{};
+
+                auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                    auto read = co_await source.read_some(storage);
+                    co_return std::string{
+                        nxt::rt::as_string_view(
+                            std::span{storage}.first(read.bytes))};
+                });
+
+                expect(result == "xy");
+            };
+
             "byte_writer buffers bytes until flush"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto sink = chunking_string_sink{64};

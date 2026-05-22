@@ -3,8 +3,10 @@
 #include "nxt/rt/task.hpp"
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -65,6 +67,31 @@ public:
     virtual ~byte_source() = default;
 
     virtual task<read_result> read_some(std::span<std::byte> dst) = 0;
+};
+
+template<typename Read>
+concept byte_read_task =
+    std::invocable<Read &, std::span<std::byte>>
+    && std::same_as<
+        std::invoke_result_t<Read &, std::span<std::byte>>,
+        task<read_result>>;
+
+/// Byte source backed by a callable returning `task<read_result>`.
+template<byte_read_task Read>
+class task_byte_source final : public byte_source
+{
+public:
+    explicit task_byte_source(Read read)
+        : read_(std::move(read))
+    {}
+
+    task<read_result> read_some(std::span<std::byte> dst) override
+    {
+        co_return co_await std::invoke(read_, dst);
+    }
+
+private:
+    Read read_;
 };
 
 /// Runtime-polymorphic byte sink.

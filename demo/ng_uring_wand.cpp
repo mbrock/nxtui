@@ -81,30 +81,6 @@ struct listing_entry
     struct statx stat{};
 };
 
-class dirents_source final : public nxt::rt::byte_source
-{
-public:
-    explicit dirents_source(int fd) noexcept
-        : fd_(fd)
-    {}
-
-    nxt::rt::task<nxt::rt::read_result>
-    read_some(std::span<std::byte> dst) override
-    {
-        auto n = co_await nxt::rt::getdents64_wish{
-            .fd = fd_,
-            .buffer = dst,
-        };
-        co_return nxt::rt::read_result{
-            .bytes = n,
-            .eof = n == 0,
-        };
-    }
-
-private:
-    int fd_ = -1;
-};
-
 std::string mode_string(mode_t mode)
 {
     auto result = std::string{"----------"};
@@ -155,7 +131,18 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         .mode = 0,
     };
     auto dir = unique_fd{fd};
-    auto source = dirents_source{dir.get()};
+    auto source = nxt::rt::task_byte_source{
+        [fd = dir.get()](std::span<std::byte> dst)
+            -> nxt::rt::task<nxt::rt::read_result> {
+            auto n = co_await nxt::rt::getdents64_wish{
+                .fd = fd,
+                .buffer = dst,
+            };
+            co_return nxt::rt::read_result{
+                .bytes = n,
+                .eof = n == 0,
+            };
+        }};
     auto storage = std::array<std::byte, 16 * 1024>{};
     auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
