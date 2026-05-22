@@ -1,5 +1,7 @@
 #include "nxtio/subprocess.hpp"
 
+#include "nxt/unique-fd.hpp"
+
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -17,57 +19,6 @@
 
 namespace nxt::subprocess {
 namespace {
-
-class UniqueFd
-{
-public:
-    explicit UniqueFd(int fd = -1) noexcept
-        : fd_(fd)
-    {
-    }
-
-    ~UniqueFd()
-    {
-        reset();
-    }
-
-    UniqueFd(const UniqueFd &) = delete;
-    UniqueFd & operator=(const UniqueFd &) = delete;
-
-    UniqueFd(UniqueFd && other) noexcept
-        : fd_(std::exchange(other.fd_, -1))
-    {
-    }
-
-    UniqueFd & operator=(UniqueFd && other) noexcept
-    {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, -1);
-        }
-        return *this;
-    }
-
-    [[nodiscard]] int get() const noexcept
-    {
-        return fd_;
-    }
-
-    [[nodiscard]] int release() noexcept
-    {
-        return std::exchange(fd_, -1);
-    }
-
-    void reset(int fd = -1) noexcept
-    {
-        if (fd_ >= 0)
-            ::close(fd_);
-        fd_ = fd;
-    }
-
-private:
-    int fd_ = -1;
-};
 
 [[noreturn]] void throw_errno(std::string_view what)
 {
@@ -113,9 +64,9 @@ void set_winsize(int fd, Size size)
         throw_errno("ioctl(TIOCSWINSZ)");
 }
 
-UniqueFd open_pty_master()
+nxt::unique_fd open_pty_master()
 {
-    UniqueFd master(::posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC));
+    nxt::unique_fd master(::posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC));
     if (master.get() < 0)
         throw_errno("posix_openpt");
     if (::grantpt(master.get()) < 0)
@@ -437,7 +388,7 @@ PtySession PtySession::spawn(const SpawnOptions & options)
 
     auto master = open_pty_master();
     auto slave_name = pty_slave_name(master.get());
-    UniqueFd slave(::open(slave_name.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC));
+    nxt::unique_fd slave(::open(slave_name.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC));
     if (slave.get() < 0)
         throw_errno("open pty slave");
 

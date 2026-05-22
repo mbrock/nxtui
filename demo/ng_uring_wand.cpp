@@ -1,5 +1,6 @@
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/uring_wand.hpp>
+#include <nxt/unique-fd.hpp>
 
 #include <algorithm>
 #include <array>
@@ -14,54 +15,10 @@
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
 namespace {
-
-class unique_fd
-{
-public:
-    explicit unique_fd(int fd = -1) noexcept
-        : fd_(fd)
-    {}
-
-    unique_fd(const unique_fd &) = delete;
-    unique_fd & operator=(const unique_fd &) = delete;
-
-    unique_fd(unique_fd && other) noexcept
-        : fd_(std::exchange(other.fd_, -1))
-    {}
-
-    unique_fd & operator=(unique_fd && other) noexcept
-    {
-        if (this != &other) {
-            close();
-            fd_ = std::exchange(other.fd_, -1);
-        }
-        return *this;
-    }
-
-    ~unique_fd()
-    {
-        close();
-    }
-
-    [[nodiscard]] int get() const noexcept
-    {
-        return fd_;
-    }
-
-private:
-    void close() noexcept
-    {
-        if (fd_ >= 0)
-            ::close(std::exchange(fd_, -1));
-    }
-
-    int fd_ = -1;
-};
 
 struct [[gnu::packed]] linux_dirent64_header
 {
@@ -126,7 +83,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
         .mode = 0,
     };
-    auto dir = unique_fd{fd};
+    auto dir = nxt::unique_fd{fd};
     auto source = nxt::rt::task_byte_source{
         [fd = dir.get()](std::span<std::byte> dst)
             -> nxt::rt::task<nxt::rt::read_result> {

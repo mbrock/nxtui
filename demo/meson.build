@@ -34,7 +34,7 @@ endif
 if nxt_liburing_dep.found()
   executable('ng-uring-wand-demo',
     'ng_uring_wand.cpp',
-    include_directories : nxt_ng_inc,
+    include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : [nxt_liburing_dep],
   )
 else

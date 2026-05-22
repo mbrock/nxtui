@@ -1,5 +1,6 @@
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/uring_wand.hpp>
+#include <nxt/unique-fd.hpp>
 
 #include "test.hpp"
 
@@ -26,49 +27,6 @@ using namespace std::chrono_literals;
 namespace nxt::test {
 
 using namespace boost::ut;
-
-class unique_fd
-{
-public:
-    explicit unique_fd(int fd = -1) noexcept
-        : fd_(fd)
-    {}
-
-    unique_fd(const unique_fd &) = delete;
-    unique_fd & operator=(const unique_fd &) = delete;
-
-    unique_fd(unique_fd && other) noexcept
-        : fd_(std::exchange(other.fd_, -1))
-    {}
-
-    unique_fd & operator=(unique_fd && other) noexcept
-    {
-        if (this != &other) {
-            close();
-            fd_ = std::exchange(other.fd_, -1);
-        }
-        return *this;
-    }
-
-    ~unique_fd()
-    {
-        close();
-    }
-
-    [[nodiscard]] int get() const noexcept
-    {
-        return fd_;
-    }
-
-private:
-    void close() noexcept
-    {
-        if (fd_ >= 0)
-            ::close(std::exchange(fd_, -1));
-    }
-
-    int fd_ = -1;
-};
 
 nxt::rt::task<std::string> echo_over_socketpair(int tx, int rx)
 {
@@ -189,7 +147,7 @@ nxt::rt::task<std::vector<std::string>> read_current_directory_names()
         .path = ".",
         .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
     };
-    auto dir = unique_fd{fd};
+    auto dir = nxt::unique_fd{fd};
 
     auto storage = std::array<std::byte, 4096>{};
     auto bytes = co_await nxt::rt::op::getdents64{
@@ -272,8 +230,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -290,8 +248,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -304,12 +262,12 @@ static suite ng_uring_wand_tests{
             };
 
             "loopback listeners accept connected clients"_test = [] {
-                auto listener = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+                auto listener = nxt::unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
                 if (listener.get() < 0)
                     throw std::runtime_error{"listener socket failed"};
                 auto address = loopback_listener_address(listener.get());
 
-                auto client = unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+                auto client = nxt::unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
                 if (client.get() < 0)
                     throw std::runtime_error{"client socket failed"};
 
@@ -321,7 +279,7 @@ static suite ng_uring_wand_tests{
                 pump_until_done(deck, wand, task);
 
                 auto accepted =
-                    unique_fd{::accept(listener.get(), nullptr, nullptr)};
+                    nxt::unique_fd{::accept(listener.get(), nullptr, nullptr)};
                 expect(accepted.get() >= 0);
             };
         };
@@ -358,8 +316,8 @@ static suite ng_uring_wand_tests{
                 if (::pipe(fds.data()) != 0)
                     throw std::runtime_error{"pipe failed"};
 
-                auto rx = unique_fd{fds[0]};
-                auto tx = unique_fd{fds[1]};
+                auto rx = nxt::unique_fd{fds[0]};
+                auto tx = nxt::unique_fd{fds[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -395,8 +353,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -414,8 +372,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -432,8 +390,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -453,8 +411,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -472,8 +430,8 @@ static suite ng_uring_wand_tests{
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
 
-                auto first = unique_fd{sockets[0]};
-                auto second = unique_fd{sockets[1]};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
 
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
