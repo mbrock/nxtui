@@ -192,6 +192,11 @@ private:
     int fd_ = -1;
 };
 
+inline fd_sink standard_output() noexcept
+{
+    return fd_sink{STDOUT_FILENO};
+}
+
 /// Byte source for a connected socket.
 class socket_source final : public byte_source
 {
@@ -447,7 +452,22 @@ private:
 inline byte_writer<fd_sink> standard_output_writer(
     std::size_t buffer_size = 4096)
 {
-    return byte_writer<fd_sink>{fd_sink{STDOUT_FILENO}, buffer_size};
+    return byte_writer<fd_sink>{standard_output(), buffer_size};
+}
+
+template<typename Sink, typename Chunks>
+    requires detail::byte_writer_chunk<Chunks>
+        || detail::byte_writer_chunk_range<Chunks>
+inline task<void> write_all(
+    Sink && sink,
+    Chunks && chunks,
+    std::size_t buffer_size = 4096)
+{
+    auto writer = byte_writer<std::remove_reference_t<Sink>>{
+        std::forward<Sink>(sink),
+        buffer_size,
+    };
+    co_await writer.write_all(std::forward<Chunks>(chunks));
 }
 
 /// Buffered asynchronous reader over a byte source.

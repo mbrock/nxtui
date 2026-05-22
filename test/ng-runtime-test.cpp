@@ -1362,6 +1362,38 @@ static suite ng_runtime_tests{
                         expect(sink.text == "abcdef");
                         expect(writer.buffered_size() == std::size_t{0});
                     };
+
+                    "free write_all borrows lvalue sinks"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto chunks =
+                            std::vector<std::string>{"ab", "cd", "e"};
+
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await nxt::rt::write_all(
+                                sink,
+                                chunks,
+                                std::size_t{4});
+                        });
+
+                        expect(sink.text == "abcde");
+                    };
+
+                    "free write_all owns rvalue sinks"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto text = std::make_shared<std::string>();
+                        auto chunks =
+                            std::vector<std::string>{"ab", "cd", "e"};
+
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await nxt::rt::write_all(
+                                shared_string_sink{text},
+                                chunks,
+                                std::size_t{4});
+                        });
+
+                        expect(*text == "abcde");
+                    };
                 };
 
                 "with owned sink and storage"_test = [] {

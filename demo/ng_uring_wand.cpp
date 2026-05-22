@@ -163,8 +163,6 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
 
 nxt::rt::task<void> list_and_print(std::string path)
 {
-    auto writer = nxt::rt::standard_output_writer();
-
     auto entries = co_await list_path(std::move(path));
     auto lines = entries
         | std::views::transform([](listing_entry const & entry) {
@@ -175,7 +173,7 @@ nxt::rt::task<void> list_and_print(std::string path)
                 entry.name);
         });
 
-    co_await writer.write_all(lines);
+    co_await nxt::rt::write_all(nxt::rt::standard_output(), lines);
 }
 
 } // namespace
