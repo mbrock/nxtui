@@ -429,6 +429,43 @@ static suite ng_runtime_tests{
 
                 expect(deck.sync_wait(std::move(task)));
             };
+
+            "then transforms task values"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto result = deck.sync_wait(
+                    nxt::rt::then(value_after_yield(20), [](int value) {
+                        return value + 1;
+                    }));
+
+                expect(result == 21_i);
+            };
+
+            "let_value chains task values"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto result = deck.sync_wait(
+                    nxt::rt::let_value(value_after_yield(20), [](int value) {
+                        return value_after_yield(value + 2);
+                    }));
+
+                expect(result == 22_i);
+            };
+
+            "task adaptors pipe through then and let_value"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto result = deck.sync_wait(
+                    value_after_yield(10)
+                    | nxt::rt::then([](int value) {
+                        return value * 2;
+                    })
+                    | nxt::rt::let_value([](int value) {
+                        return value_after_yield(value + 5);
+                    }));
+
+                expect(result == 25_i);
+            };
         };
 
         "environment"_test = [] {

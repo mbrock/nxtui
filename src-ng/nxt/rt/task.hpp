@@ -992,6 +992,146 @@ deed<T> fork(task<T> child)
     return require_current_zone().fork(std::move(child));
 }
 
+namespace detail {
+
+template<typename T, typename F>
+struct then_result
+{
+    using type = std::invoke_result_t<F &, T>;
+};
+
+template<typename F>
+struct then_result<void, F>
+{
+    using type = std::invoke_result_t<F &>;
+};
+
+template<typename T, typename F>
+using then_result_t = typename then_result<T, F>::type;
+
+template<typename T, typename F>
+struct let_value_result
+{
+    using type = task_result_t<std::invoke_result_t<F &, T>>;
+};
+
+template<typename F>
+struct let_value_result<void, F>
+{
+    using type = task_result_t<std::invoke_result_t<F &>>;
+};
+
+template<typename T, typename F>
+using let_value_result_t = typename let_value_result<T, F>::type;
+
+} // namespace detail
+
+template<typename T, typename F>
+[[nodiscard]] task<detail::then_result_t<T, F>> then(task<T> child, F fn)
+{
+    using result_type = detail::then_result_t<T, F>;
+
+    if constexpr (std::is_void_v<T>) {
+        co_await child;
+        if constexpr (std::is_void_v<result_type>) {
+            std::invoke(fn);
+            co_return;
+        } else {
+            co_return std::invoke(fn);
+        }
+    } else {
+        auto value = co_await child;
+        if constexpr (std::is_void_v<result_type>) {
+            std::invoke(fn, std::move(value));
+            co_return;
+        } else {
+            co_return std::invoke(fn, std::move(value));
+        }
+    }
+}
+
+template<typename T, typename F>
+[[nodiscard]] task<detail::let_value_result_t<T, F>>
+let_value(task<T> child, F fn)
+{
+    using result_type = detail::let_value_result_t<T, F>;
+
+    if constexpr (std::is_void_v<T>) {
+        co_await child;
+        auto next = std::invoke(fn);
+        if constexpr (std::is_void_v<result_type>) {
+            co_await next;
+        } else {
+            co_return co_await next;
+        }
+    } else {
+        auto value = co_await child;
+        auto next = std::invoke(fn, std::move(value));
+        if constexpr (std::is_void_v<result_type>) {
+            co_await next;
+        } else {
+            co_return co_await next;
+        }
+    }
+}
+
+template<typename F>
+class then_closure
+{
+public:
+    explicit then_closure(F fn)
+        : fn_(std::move(fn))
+    {}
+
+    template<typename T>
+    [[nodiscard]] auto operator()(task<T> child) &&
+    {
+        return then(std::move(child), std::move(fn_));
+    }
+
+private:
+    F fn_;
+};
+
+template<typename F>
+[[nodiscard]] auto then(F fn)
+{
+    return then_closure<std::decay_t<F>>{std::forward<F>(fn)};
+}
+
+template<typename F>
+class let_value_closure
+{
+public:
+    explicit let_value_closure(F fn)
+        : fn_(std::move(fn))
+    {}
+
+    template<typename T>
+    [[nodiscard]] auto operator()(task<T> child) &&
+    {
+        return let_value(std::move(child), std::move(fn_));
+    }
+
+private:
+    F fn_;
+};
+
+template<typename F>
+[[nodiscard]] auto let_value(F fn)
+{
+    return let_value_closure<std::decay_t<F>>{std::forward<F>(fn)};
+}
+
+template<typename T, typename Adaptor>
+    requires requires(task<T> child, Adaptor adaptor) {
+        std::move(adaptor)(std::move(child));
+    }
+[[nodiscard]] auto operator|(task<T> child, Adaptor adaptor)
+{
+    return std::move(adaptor)(std::move(child));
+}
+
 class stop_on_failure
 {
 public:
