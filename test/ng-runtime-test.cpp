@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -507,6 +508,22 @@ static suite ng_runtime_tests{
                     }));
 
                 expect(result == 25_i);
+            };
+
+            "for_each_task awaits lazy ranges of tasks"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto values = std::array{1, 2, 3};
+                auto events = std::vector<int>{};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::for_each_task(
+                        values | std::views::transform(
+                            [&](int value) {
+                                return record_after_yield(events, value);
+                            }));
+                });
+
+                expect(events == std::vector<int>{11, 12, 21, 22, 31, 32});
             };
         };
 

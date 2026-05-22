@@ -226,22 +226,22 @@ nxt::rt::task<void> print_entries(
     nxt::rt::byte_writer<Sink> & writer,
     std::vector<listing_entry> const & entries)
 {
-    auto width = std::size_t{1};
-    for (auto size : entries | std::views::transform(
-             [](listing_entry const & entry) {
-                 return std::to_string(entry.stat.stx_size).size();
-             }))
-        width = std::max(width, size);
+    auto widths = entries | std::views::transform(
+        [](listing_entry const & entry) {
+            return std::to_string(entry.stat.stx_size).size();
+        });
+    auto width = entries.empty() ? std::size_t{1} : std::ranges::max(widths);
 
-    for (auto const & entry : entries) {
-        co_await writer.write(
-            std::format(
-                "{} {:>{}} {}\n",
-                mode_string(entry.stat.stx_mode),
-                entry.stat.stx_size,
-                width,
-                entry.name));
-    }
+    co_await nxt::rt::for_each_task(
+        entries | std::views::transform(
+            [&](listing_entry const & entry) {
+                return writer.write(std::format(
+                    "{} {:>{}} {}\n",
+                    mode_string(entry.stat.stx_mode),
+                    entry.stat.stx_size,
+                    width,
+                    entry.name));
+            }));
     co_await writer.flush();
 }
 

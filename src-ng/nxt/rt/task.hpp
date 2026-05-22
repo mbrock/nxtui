@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <stop_token>
 #include <string>
 #include <stdexcept>
@@ -1349,6 +1350,19 @@ when_all(Tasks... tasks)
     co_return detail::take_all_or_throw(
         deeds,
         std::make_index_sequence<count>{});
+}
+
+template<std::ranges::input_range Range>
+[[nodiscard]] task<void> for_each_task(Range tasks)
+{
+    for (auto child : tasks) {
+        using child_type = std::remove_cvref_t<decltype(child)>;
+        if constexpr (std::is_void_v<task_result_t<child_type>>) {
+            co_await std::move(child);
+        } else {
+            (void)co_await std::move(child);
+        }
+    }
 }
 
 template<typename T, typename... Rest>
