@@ -583,12 +583,11 @@ static suite ng_runtime_tests{
                 expect(std::move(second).get() == 20_i);
             };
 
-            "fail the zone for uncoped returned deeds"_test = [] {
+            "return failed deeds for caller observation"_test = [] {
                 auto deck = nxt::rt::deck{};
-                auto threw = false;
 
-                try {
-                    (void)deck.sync_wait([]()
+                auto child =
+                    deck.sync_wait([]()
                         -> nxt::rt::task<nxt::rt::deed<int>> {
                         co_return co_await nxt::rt::with_zone(
                             []() -> nxt::rt::task<nxt::rt::deed<int>> {
@@ -597,11 +596,33 @@ static suite ng_runtime_tests{
                                 co_return std::move(child);
                             });
                     });
+
+                auto threw = false;
+                try {
+                    (void)std::move(child).get();
                 } catch (const std::exception &) {
                     threw = true;
                 }
 
                 expect(threw);
+            };
+
+            "allow observed deed failures inside the zone"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto observed = false;
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        auto child =
+                            nxt::rt::spawn(throw_int_after_yield());
+                        co_await nxt::rt::yield();
+                        co_await nxt::rt::yield();
+                        observed = child.exception() != nullptr;
+                        co_return;
+                    });
+                });
+
+                expect(observed);
             };
 
             "let coped deeds report failure as expected"_test = [] {

@@ -452,7 +452,8 @@ struct child_record_base
     [[nodiscard]] virtual std::exception_ptr failure() = 0;
     [[nodiscard]] virtual task<void> join() = 0;
 
-    bool caught = false;
+    bool contained = false;
+    bool observed = false;
 };
 
 template<typename T>
@@ -498,6 +499,7 @@ struct child_record final : child_record_base
         ensure_done();
         if (result_taken)
             throw runtime_error{"nxt::rt deed result already taken"};
+        observed = true;
         result_taken = true;
         return std::move(handle.promise()).result();
     }
@@ -557,6 +559,7 @@ struct child_record<void> final : child_record_base
         ensure_done();
         if (result_taken)
             throw runtime_error{"nxt::rt deed result already taken"};
+        observed = true;
         result_taken = true;
         handle.promise().result();
     }
@@ -587,7 +590,9 @@ public:
 
     [[nodiscard]] std::exception_ptr exception() const
     {
-        return record().failure();
+        auto & child = record();
+        child.observed = true;
+        return child.failure();
     }
 
     [[nodiscard]] T get() &&
@@ -627,7 +632,9 @@ public:
 
     [[nodiscard]] std::exception_ptr exception() const
     {
-        return record().failure();
+        auto & child = record();
+        child.observed = true;
+        return child.failure();
     }
 
     void get() &&
@@ -741,7 +748,7 @@ inline catching_deed<T> deed<T>::cope() &&
     auto child = std::move(record_);
     if (!child)
         throw runtime_error{"nxt::rt empty deed handle"};
-    child->caught = true;
+    child->contained = true;
     return catching_deed<T>{std::move(child)};
 }
 
@@ -750,7 +757,7 @@ inline catching_deed<void> deed<void>::cope() &&
     auto child = std::move(record_);
     if (!child)
         throw runtime_error{"nxt::rt empty deed handle"};
-    child->caught = true;
+    child->contained = true;
     return catching_deed<void>{std::move(child)};
 }
 
@@ -878,7 +885,8 @@ inline task<void> task_zone::join()
         try {
             auto & child = *children_[i];
             co_await child.join();
-            if (!child.caught) {
+            auto const exported = children_[i].use_count() > 1;
+            if (!child.contained && !child.observed && !exported) {
                 if (auto failure = child.failure())
                     exceptions.push_back(std::move(failure));
             }
