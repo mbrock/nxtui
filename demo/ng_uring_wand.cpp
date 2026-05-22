@@ -213,19 +213,8 @@ void pump_until_done(
         throw std::runtime_error{"demo task did not complete"};
 }
 
-nxt::rt::task<void> write_all(int fd, std::string text)
-{
-    auto remaining = nxt::rt::as_bytes(std::string_view{text});
-    while (!remaining.empty()) {
-        auto written = co_await nxt::rt::write_some(fd, remaining);
-        if (written == 0)
-            throw std::runtime_error{"write made no progress"};
-        remaining = remaining.subspan(written);
-    }
-}
-
 nxt::rt::task<void> print_entries(
-    int fd,
+    nxt::rt::byte_sink & sink,
     std::vector<listing_entry> const & entries)
 {
     auto width = std::size_t{1};
@@ -233,8 +222,8 @@ nxt::rt::task<void> print_entries(
         width = std::max(width, std::to_string(entry.stat.stx_size).size());
 
     for (auto const & entry : entries) {
-        co_await write_all(
-            fd,
+        co_await nxt::rt::write_all(
+            sink,
             std::format(
                 "{} {:>{}} {}\n",
                 mode_string(entry.stat.stx_mode),
@@ -247,7 +236,8 @@ nxt::rt::task<void> print_entries(
 nxt::rt::task<void> list_and_print(std::string path)
 {
     auto entries = co_await list_path(std::move(path));
-    co_await print_entries(STDOUT_FILENO, entries);
+    auto out = nxt::rt::fd_sink{STDOUT_FILENO};
+    co_await print_entries(out, entries);
 }
 
 } // namespace

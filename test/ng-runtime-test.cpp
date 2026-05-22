@@ -209,6 +209,24 @@ struct empty_then_string_source final : nxt::rt::byte_source
     bool returned_empty = false;
 };
 
+struct chunking_string_sink final : nxt::rt::byte_sink
+{
+    explicit chunking_string_sink(std::size_t limit)
+        : limit(limit)
+    {}
+
+    nxt::rt::task<std::size_t>
+    write_some(std::span<const std::byte> src) override
+    {
+        auto n = std::min(limit, src.size());
+        text += nxt::rt::as_string_view(src.first(n));
+        co_return n;
+    }
+
+    std::string text;
+    std::size_t limit = 1;
+};
+
 nxt::rt::task<int> read_ambient_int_after_yield()
 {
     co_await nxt::rt::yield();
@@ -1159,6 +1177,19 @@ static suite ng_runtime_tests{
                     });
 
                 expect(parts == std::vector<std::string>{"", "abc"});
+            };
+
+            "write_all drains borrowed bytes into sinks"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto sink = chunking_string_sink{2};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::write_all(
+                        sink,
+                        std::string{"abcdef"});
+                });
+
+                expect(sink.text == "abcdef");
             };
         };
 

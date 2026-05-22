@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace nxt::rt {
@@ -64,6 +65,15 @@ public:
     virtual ~byte_source() = default;
 
     virtual task<read_result> read_some(std::span<std::byte> dst) = 0;
+};
+
+/// Runtime-polymorphic byte sink.
+class byte_sink
+{
+public:
+    virtual ~byte_sink() = default;
+
+    virtual task<std::size_t> write_some(std::span<const std::byte> src) = 0;
 };
 
 /// Borrowed in-memory source exposed through the byte-source vtable.
@@ -128,6 +138,27 @@ private:
     int fd_ = -1;
 };
 
+/// Byte sink for a file descriptor.
+class fd_sink final : public byte_sink
+{
+public:
+    explicit fd_sink(int fd) noexcept
+        : fd_(fd)
+    {}
+
+    task<std::size_t> write_some(std::span<const std::byte> src) override
+    {
+        co_return co_await write_some_wish{
+            .fd = fd_,
+            .buffer = src,
+            .offset = -1,
+        };
+    }
+
+private:
+    int fd_ = -1;
+};
+
 /// Byte source for a connected socket.
 class socket_source final : public byte_source
 {
@@ -147,6 +178,29 @@ public:
         co_return read_result{
             .bytes = n,
             .eof = n == 0,
+        };
+    }
+
+private:
+    int fd_ = -1;
+    int flags_ = 0;
+};
+
+/// Byte sink for a connected socket.
+class socket_sink final : public byte_sink
+{
+public:
+    explicit socket_sink(int fd, int flags = 0) noexcept
+        : fd_(fd)
+        , flags_(flags)
+    {}
+
+    task<std::size_t> write_some(std::span<const std::byte> src) override
+    {
+        co_return co_await send_some_wish{
+            .fd = fd_,
+            .buffer = src,
+            .flags = flags_,
         };
     }
 
@@ -177,6 +231,26 @@ inline task<std::size_t> write_some(
         .buffer = buffer,
         .offset = offset,
     };
+}
+
+inline task<void> write_all(
+    byte_sink & sink,
+    std::span<const std::byte> bytes)
+{
+    auto remaining = bytes;
+    while (!remaining.empty()) {
+        auto written = co_await sink.write_some(remaining);
+        if (written == 0)
+            throw buffer_error{"sink write made no progress"};
+        if (written > remaining.size())
+            throw buffer_error{"sink overreported written bytes"};
+        remaining = remaining.subspan(written);
+    }
+}
+
+inline task<void> write_all(byte_sink & sink, std::string text)
+{
+    co_await write_all(sink, as_bytes(std::string_view{text}));
 }
 
 /// Buffered asynchronous reader over a byte source.
