@@ -606,7 +606,33 @@ struct tls13_read_keys
     std::uint64_t sequence = 0;
 };
 
-tls13_read_keys derive_server_handshake_read_keys(
+struct tls13_handshake_keys
+{
+    std::array<std::byte, nxt::crypto::sha256_len> secret{};
+    tls13_read_keys client;
+    tls13_read_keys server;
+};
+
+struct tls13_application_keys
+{
+    tls13_read_keys client;
+    tls13_read_keys server;
+};
+
+tls13_read_keys derive_traffic_keys(
+    std::array<std::byte, nxt::crypto::sha256_len> traffic_secret)
+{
+    return tls13_read_keys{
+        .traffic_secret = traffic_secret,
+        .key = hkdf_expand_label(
+            traffic_secret, "key", {}, nxt::crypto::aes128_key_len),
+        .iv = hkdf_expand_label(
+            traffic_secret, "iv", {}, nxt::crypto::aes_gcm_nonce_len),
+        .sequence = 0,
+    };
+}
+
+tls13_handshake_keys derive_tls13_handshake_keys(
     std::span<const std::byte> shared_secret,
     std::span<const std::byte> transcript)
 {
@@ -617,14 +643,30 @@ tls13_read_keys derive_server_handshake_read_keys(
         nxt::crypto::hkdf_extract_sha256(derived_secret, shared_secret);
     auto server_traffic_secret =
         derive_secret(handshake_secret, "s hs traffic", transcript);
+    auto client_traffic_secret =
+        derive_secret(handshake_secret, "c hs traffic", transcript);
 
-    return tls13_read_keys{
-        .traffic_secret = server_traffic_secret,
-        .key = hkdf_expand_label(
-            server_traffic_secret, "key", {}, nxt::crypto::aes128_key_len),
-        .iv = hkdf_expand_label(
-            server_traffic_secret, "iv", {}, nxt::crypto::aes_gcm_nonce_len),
-        .sequence = 0,
+    return tls13_handshake_keys{
+        .secret = handshake_secret,
+        .client = derive_traffic_keys(client_traffic_secret),
+        .server = derive_traffic_keys(server_traffic_secret),
+    };
+}
+
+tls13_application_keys derive_tls13_application_keys(
+    std::span<const std::byte> handshake_secret,
+    std::span<const std::byte> transcript)
+{
+    auto zero = bytes(nxt::crypto::sha256_len);
+    auto derived_secret = derive_secret(handshake_secret, "derived", {});
+    auto master_secret = nxt::crypto::hkdf_extract_sha256(derived_secret, zero);
+    auto client_traffic_secret =
+        derive_secret(master_secret, "c ap traffic", transcript);
+    auto server_traffic_secret =
+        derive_secret(master_secret, "s ap traffic", transcript);
+    return tls13_application_keys{
+        .client = derive_traffic_keys(client_traffic_secret),
+        .server = derive_traffic_keys(server_traffic_secret),
     };
 }
 
@@ -685,6 +727,30 @@ tls13_plaintext open_tls13_record(
         .content = std::move(*plaintext),
         .inner_type = inner_type,
     };
+}
+
+bytes seal_tls13_record(
+    tls13_read_keys & keys,
+    std::uint8_t inner_type,
+    std::span<const std::byte> content)
+{
+    auto inner = bytes{content.begin(), content.end()};
+    put_u8(inner, inner_type);
+
+    auto aad = bytes{};
+    put_u8(aad, 23);
+    put_u16(aad, 0x0303);
+    put_u16(
+        aad,
+        static_cast<std::uint16_t>(inner.size() + nxt::crypto::aes_gcm_tag_len));
+
+    auto nonce = tls13_record_nonce(keys.iv, keys.sequence++);
+    auto ciphertext = nxt::crypto::aes128gcm_seal(keys.key, nonce, aad, inner);
+
+    auto record = bytes{};
+    put_bytes(record, aad);
+    put_bytes(record, ciphertext);
+    return record;
 }
 
 tls13_certificate parse_tls13_certificate(std::span<const std::byte> message)
@@ -793,6 +859,48 @@ bool verify_certificate_verify(
         p256_public_key, message, certificate_verify.signature);
 }
 
+bytes parse_tls13_finished(std::span<const std::byte> message)
+{
+    auto cursor = byte_cursor{message};
+    require_tls(cursor.take_u8() == 20, "expected finished message");
+    auto length = cursor.take_u24();
+    auto verify_data = cursor.take(length);
+    require_tls(cursor.empty(), "unexpected bytes after finished message");
+    return bytes{verify_data.begin(), verify_data.end()};
+}
+
+bytes finished_verify_data(
+    std::span<const std::byte> traffic_secret,
+    std::span<const std::byte> transcript)
+{
+    auto finished_key = hkdf_expand_label(
+        traffic_secret, "finished", {}, nxt::crypto::sha256_len);
+    auto transcript_hash = nxt::crypto::sha256(transcript);
+    auto hmac = nxt::crypto::hmac_sha256(finished_key, transcript_hash);
+    return bytes{hmac.begin(), hmac.end()};
+}
+
+bool verify_finished(
+    std::span<const std::byte> traffic_secret,
+    std::span<const std::byte> transcript,
+    std::span<const std::byte> received)
+{
+    auto expected = finished_verify_data(traffic_secret, transcript);
+    return std::ranges::equal(expected, received);
+}
+
+bytes make_finished_message(
+    std::span<const std::byte> traffic_secret,
+    std::span<const std::byte> transcript)
+{
+    auto verify_data = finished_verify_data(traffic_secret, transcript);
+    auto message = bytes{};
+    put_u8(message, 20);
+    put_u24(message, static_cast<std::uint32_t>(verify_data.size()));
+    put_bytes(message, verify_data);
+    return message;
+}
+
 nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
 {
     auto socket = co_await connect_tcp(url.host, url.port);
@@ -826,9 +934,9 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
 
     auto index = std::size_t{1};
     auto transcript = join_bytes(hello.handshake, server_hello.handshake);
-    auto server_read_keys =
-        derive_server_handshake_read_keys(*shared_secret, transcript);
-    std::cerr << "derived server handshake AES-128-GCM key and IV\n";
+    auto handshake_keys =
+        derive_tls13_handshake_keys(*shared_secret, transcript);
+    std::cerr << "derived handshake AES-128-GCM keys and IVs\n";
 
     record = co_await read_tls_record(reader);
     describe_tls_record(index, record);
@@ -840,8 +948,9 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     }
 
     auto leaf_public_key = std::optional<bytes>{};
+    auto saw_server_finished = false;
     while (true) {
-        auto plaintext = open_tls13_record(server_read_keys, record);
+        auto plaintext = open_tls13_record(handshake_keys.server, record);
         std::cerr << "decrypted inner record: "
                   << tls_record_type_name(plaintext.inner_type)
                   << " type=" << unsigned{plaintext.inner_type}
@@ -869,16 +978,73 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
                         *leaf_public_key, transcript, cert_verify);
                     require_tls(ok, "CertificateVerify signature failed");
                     std::cerr << "verified CertificateVerify signature\n";
+                } else if (type == 20) {
+                    auto received = parse_tls13_finished(message);
+                    auto ok = verify_finished(
+                        handshake_keys.server.traffic_secret,
+                        transcript,
+                        received);
+                    require_tls(ok, "server Finished verification failed");
+                    std::cerr << "verified server Finished\n";
+                    saw_server_finished = true;
                 }
                 put_bytes(transcript, message);
             }
         }
 
-        if (reader.buffered_size() == 0)
+        if (saw_server_finished)
             break;
+        require_tls(reader.buffered_size() > 0, "server flight ended before Finished");
         ++index;
         record = co_await read_tls_record(reader);
         describe_tls_record(index, record);
+    }
+
+    auto application_keys =
+        derive_tls13_application_keys(handshake_keys.secret, transcript);
+    std::cerr << "derived application AES-128-GCM keys and IVs\n";
+
+    auto client_finished =
+        make_finished_message(handshake_keys.client.traffic_secret, transcript);
+    auto encrypted_finished = seal_tls13_record(
+        handshake_keys.client, 22, client_finished);
+    co_await socket_output.write_all(encrypted_finished);
+    put_bytes(transcript, client_finished);
+    std::cerr << "sent encrypted client Finished\n";
+
+    auto request = nxt::rt::http::request{
+        .method = "GET",
+        .target = url.target,
+        .host = nxt::rt::http::host_header(url),
+        .headers =
+            {
+                {"User-Agent", "nxt-ng-tls-demo/0"},
+                {"Accept", "*/*"},
+            },
+        .body = {},
+    };
+    auto request_text = nxt::rt::http::serialize(request);
+    auto encrypted_request = seal_tls13_record(
+        application_keys.client, 23, nxt::rt::as_bytes(request_text));
+    co_await socket_output.write_all(encrypted_request);
+    std::cerr << "sent encrypted HTTP request\n";
+
+    while (true) {
+        record = co_await read_tls_record(reader);
+        describe_tls_record(++index, record);
+        auto plaintext = open_tls13_record(application_keys.server, record);
+        std::cerr << "decrypted application record: "
+                  << tls_record_type_name(plaintext.inner_type)
+                  << " type=" << unsigned{plaintext.inner_type}
+                  << " length=" << plaintext.content.size() << '\n';
+        if (plaintext.inner_type == 23) {
+            auto stdout_sink = nxt::rt::standard_output();
+            co_await nxt::rt::write_all(stdout_sink, plaintext.content);
+        } else if (plaintext.inner_type == 21) {
+            std::cerr << "received encrypted TLS alert\n";
+            dump_hex(plaintext.content);
+            break;
+        }
     }
 }
 
