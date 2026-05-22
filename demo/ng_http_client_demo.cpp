@@ -113,6 +113,42 @@ std::string make_https_request(nxt::rt::http::url const & url)
     return nxt::rt::http::serialize(request);
 }
 
+struct http_response_progress
+{
+    std::string bytes;
+    std::optional<std::size_t> body_offset;
+    std::optional<std::size_t> content_length;
+    bool chunked = false;
+
+    bool append(std::span<const std::byte> chunk)
+    {
+        bytes.append(
+            reinterpret_cast<const char *>(chunk.data()), chunk.size());
+
+        if (!body_offset) {
+            auto head_end = bytes.find("\r\n\r\n");
+            if (head_end == std::string::npos)
+                return false;
+
+            auto head_text = std::string_view{bytes}.substr(0, head_end);
+            auto head = nxt::rt::http::parse_response_head(
+                std::as_bytes(std::span{head_text}));
+            body_offset = head_end + 4;
+            content_length = nxt::rt::http::content_length(head);
+            chunked = nxt::rt::http::is_chunked(head);
+        }
+
+        if (chunked)
+            return bytes.find("\r\n0\r\n\r\n", *body_offset)
+                   != std::string::npos;
+
+        if (content_length)
+            return bytes.size() - *body_offset >= *content_length;
+
+        return false;
+    }
+};
+
 nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
 {
     auto socket = co_await connect_tcp(url.host, url.port);
@@ -242,7 +278,7 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     co_await socket_output.write_all(encrypted_request);
     std::cerr << "sent encrypted HTTP request\n";
 
-    auto http_plaintext = std::string{};
+    auto http_response = http_response_progress{};
     while (true) {
         record = co_await nxt::tls::read_tls_record(reader);
         nxt::tls::describe_tls_record(++index, record);
@@ -255,11 +291,8 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
         if (plaintext.inner_type == 23) {
             auto stdout_sink = nxt::rt::standard_output();
             co_await nxt::rt::write_all(stdout_sink, plaintext.content);
-            http_plaintext.append(
-                reinterpret_cast<const char *>(plaintext.content.data()),
-                plaintext.content.size());
-            if (http_plaintext.find("\r\n0\r\n\r\n") != std::string::npos) {
-                std::cerr << "saw HTTP chunked terminator\n";
+            if (http_response.append(plaintext.content)) {
+                std::cerr << "read complete HTTP response body\n";
                 break;
             }
         } else if (plaintext.inner_type == 21) {
