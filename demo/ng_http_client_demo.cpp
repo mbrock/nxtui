@@ -14,6 +14,7 @@
 #include <exception>
 #include <fcntl.h>
 #include <iostream>
+#include <ranges>
 #include <span>
 #include <string>
 #include <sys/socket.h>
@@ -30,40 +31,35 @@ void set_close_on_exec(int fd)
         (void)::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 }
 
+nxt::rt::task<nxt::unique_fd> connect_address(
+    nxt::rt::resolved_address address)
+{
+    auto fd = nxt::unique_fd{::socket(
+        address.family,
+        address.socktype == 0 ? SOCK_STREAM : address.socktype,
+        address.protocol)};
+    if (fd.get() < 0)
+        throw nxt::rt::runtime_error{
+            "socket: " + std::string{std::generic_category().message(errno)}};
+
+    set_close_on_exec(fd.get());
+    co_await nxt::rt::op::connect::from(
+        fd.get(), address.sockaddr_ptr(), address.address_size);
+    co_return std::move(fd);
+}
+
 nxt::rt::task<nxt::unique_fd>
 connect_tcp(std::string host, std::string port)
 {
     auto resolver = nxt::rt::cares_resolver{};
     auto addresses = co_await resolver.getaddrinfo(host, port);
-    auto failures = std::vector<std::string>{};
-
-    for (auto const & address : addresses) {
-        auto fd = nxt::unique_fd{::socket(
-            address.family,
-            address.socktype == 0 ? SOCK_STREAM : address.socktype,
-            address.protocol)};
-        if (fd.get() < 0) {
-            failures.push_back(
-                "socket: " + std::string{std::generic_category().message(
-                                errno)});
-            continue;
-        }
-        set_close_on_exec(fd.get());
-
-        try {
-            co_await nxt::rt::op::connect::from(
-                fd.get(), address.sockaddr_ptr(), address.address_size);
-            co_return std::move(fd);
-        } catch (std::exception const & error) {
-            failures.push_back(error.what());
-        }
-    }
-
-    if (failures.empty())
+    if (addresses.empty())
         throw nxt::rt::runtime_error{"no addresses resolved for " + host};
 
-    throw nxt::rt::runtime_error{
-        "connect failed for " + host + ":" + port + ": " + failures.back()};
+    co_return co_await nxt::rt::wait_any_range(
+        addresses | std::views::transform([](auto const & address) {
+            return connect_address(address);
+        }));
 }
 
 nxt::rt::task<void> fetch(nxt::rt::http::url url)

@@ -481,6 +481,27 @@ static suite ng_runtime_tests{
 
                 expect(result == std::vector<int>{10, 20, 30});
             };
+
+            "wait_any_range awaits lazy ranges concurrently"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto values = std::array{5, 6};
+                auto events = std::vector<int>{};
+
+                auto result = deck.sync_wait([&]() -> nxt::rt::task<int> {
+                    co_return co_await nxt::rt::wait_any_range(
+                        values | std::views::transform(
+                            [&](int value) {
+                                if (value == 5)
+                                    return value_after_yield(value);
+                                return value_after_two_yields_or_stop(
+                                    events,
+                                    value);
+                            }));
+                });
+
+                expect(result == 5_i);
+                expect(events == std::vector<int>{6});
+            };
         };
 
         "environment"_test = [] {

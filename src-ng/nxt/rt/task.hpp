@@ -1393,6 +1393,40 @@ template<std::ranges::input_range Range>
     }
 }
 
+template<std::ranges::input_range Range>
+    requires is_task_v<std::ranges::range_value_t<Range>>
+        && (!std::is_void_v<
+            task_result_t<std::ranges::range_value_t<Range>>>)
+[[nodiscard]] task<task_result_t<std::ranges::range_value_t<Range>>>
+wait_any_range(Range tasks)
+{
+    using result_type = task_result_t<std::ranges::range_value_t<Range>>;
+    using deed_type = catching_deed<result_type>;
+
+    auto deeds = co_await with_zone(
+        stop_on_success{},
+        [tasks = std::move(tasks)](auto & policy) mutable
+            -> task<std::vector<deed_type>> {
+            auto out = std::vector<deed_type>{};
+            for (auto child : tasks)
+                out.push_back(policy.fork(std::move(child)).cope());
+            if (out.empty())
+                throw runtime_error{"wait_any_range used with no tasks"};
+            co_return out;
+        });
+
+    auto exceptions = std::vector<std::exception_ptr>{};
+    for (auto & deed : deeds) {
+        auto value = std::move(deed).get();
+        if (value)
+            co_return std::move(*value);
+        exceptions.push_back(value.error());
+    }
+
+    throw_exceptions("wait_any tasks failed", std::move(exceptions));
+    throw logic_error{"wait_any_range returned without result"};
+}
+
 template<typename T, typename... Rest>
     requires (std::same_as<task<T>, std::remove_cvref_t<Rest>> && ...)
 [[nodiscard]] task<T> wait_any(task<T> first, Rest... rest)
