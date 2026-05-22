@@ -39,6 +39,9 @@ inline task_id_source task_ids;
 /// what happens at initial and final suspension points.
 struct promise_base
 {
+    using stop_callback_type =
+        std::stop_callback<std::function<void()>>;
+
     /// Awaited by the compiler when the coroutine body reaches its end.
     ///
     /// We use final suspend to enqueue the awaiting continuation instead
@@ -97,6 +100,36 @@ struct promise_base
         continuation_promise = promise;
     }
 
+    void follow_stop(promise_base & parent)
+    {
+        parent_stop_callback.reset();
+        auto token = parent.stop_token();
+        if (!token.stop_possible())
+            return;
+
+        parent_stop_callback =
+            std::make_unique<stop_callback_type>(
+                token,
+                [this] {
+                    request_stop();
+                });
+    }
+
+    bool request_stop() noexcept
+    {
+        return stop_.request_stop();
+    }
+
+    [[nodiscard]] bool stop_requested() const noexcept
+    {
+        return stop_.stop_requested();
+    }
+
+    [[nodiscard]] std::stop_token stop_token() const noexcept
+    {
+        return stop_.get_token();
+    }
+
     void resume_continuation() noexcept
     {
         auto * current = detail::current_env;
@@ -122,6 +155,11 @@ struct promise_base
     promise_base * continuation_promise = nullptr;
     /// Inheritable runtime environment captured by this coroutine frame.
     runtime_env env;
+    /// Propagates stop from the task awaiting this task.
+    std::unique_ptr<stop_callback_type> parent_stop_callback;
+
+private:
+    std::stop_source stop_;
 };
 
 /// Promise for non-void task results.
@@ -252,6 +290,7 @@ public:
             auto & promise = coroutine_.promise();
             promise.env.bindings = current->bindings;
             promise.set_continuation(awaiting, awaiting_promise);
+            promise.follow_stop(*awaiting_promise);
             active_deck->enqueue(coroutine_, &promise);
         }
 
@@ -318,6 +357,25 @@ public:
     [[nodiscard]] coroutine_handle handle() const noexcept
     {
         return coroutine_;
+    }
+
+    bool request_stop() noexcept
+    {
+        if (!coroutine_)
+            return false;
+        return coroutine_.promise().request_stop();
+    }
+
+    [[nodiscard]] bool stop_requested() const noexcept
+    {
+        return coroutine_ && coroutine_.promise().stop_requested();
+    }
+
+    [[nodiscard]] std::stop_token stop_token() const noexcept
+    {
+        if (!coroutine_)
+            return {};
+        return coroutine_.promise().stop_token();
     }
 
     /// Transfer frame ownership to low-level runtime machinery.
@@ -452,6 +510,7 @@ struct child_record_base
     [[nodiscard]] virtual bool done() const noexcept = 0;
     [[nodiscard]] virtual std::exception_ptr failure() = 0;
     [[nodiscard]] virtual task<void> join() = 0;
+    virtual void request_stop() noexcept = 0;
 
     bool contained = false;
     bool observed = false;
@@ -493,6 +552,12 @@ struct child_record final : child_record_base
             return std::current_exception();
         }
         return {};
+    }
+
+    void request_stop() noexcept override
+    {
+        if (handle)
+            handle.promise().request_stop();
     }
 
     [[nodiscard]] T take_result()
@@ -553,6 +618,12 @@ struct child_record<void> final : child_record_base
             return std::current_exception();
         }
         return {};
+    }
+
+    void request_stop() noexcept override
+    {
+        if (handle)
+            handle.promise().request_stop();
     }
 
     void take_result()
@@ -776,6 +847,8 @@ public:
     {
         stopping_ = true;
         stop_.request_stop();
+        for (auto & child : children_)
+            child->request_stop();
     }
 
     [[nodiscard]] bool stopping() const noexcept
@@ -853,18 +926,35 @@ inline task_zone & require_current_zone()
     return *zone;
 }
 
+inline std::stop_token current_task_stop_token() noexcept
+{
+    auto * env = current_env();
+    if (env == nullptr || env->current_promise == nullptr)
+        return {};
+    return env->current_promise->stop_token();
+}
+
+inline bool task_stop_requested() noexcept
+{
+    auto * env = current_env();
+    return env != nullptr
+        && env->current_promise != nullptr
+        && env->current_promise->stop_requested();
+}
+
 inline std::stop_token current_stop_token() noexcept
 {
     auto * zone = current_zone();
     if (zone == nullptr)
-        return {};
+        return current_task_stop_token();
     return zone->stop_token();
 }
 
 inline bool stop_requested() noexcept
 {
     auto * zone = current_zone();
-    return zone != nullptr && zone->stop_requested();
+    return task_stop_requested()
+        || (zone != nullptr && zone->stop_requested());
 }
 
 inline void throw_if_stop_requested()
@@ -957,6 +1047,11 @@ with_zone(Fn && fn)
     auto body = detail::run_zone_body(
         zone,
         factory_type{std::forward<Fn>(fn)});
+    auto stop_zone = [&zone] {
+        zone.stop();
+    };
+    auto stop_zone_callback =
+        std::stop_callback{current_task_stop_token(), stop_zone};
 
     auto run_bound = [body = std::move(body)]() mutable {
         return std::move(body);

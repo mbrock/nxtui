@@ -231,6 +231,14 @@ nxt::rt::task<void> record_stop_state_after_yield(
     events.push_back(nxt::rt::stop_requested() ? value : -value);
 }
 
+nxt::rt::task<void> record_task_stop_state_after_yield(
+    std::vector<int> & events,
+    int value)
+{
+    co_await nxt::rt::yield();
+    events.push_back(nxt::rt::task_stop_requested() ? value : -value);
+}
+
 static suite ng_runtime_tests{
     "Runtime", [] {
         "deck"_test = [] {
@@ -375,6 +383,17 @@ static suite ng_runtime_tests{
                     }
                     co_return false;
                 }));
+            };
+
+            "tasks observe their own stop request"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto task = []() -> nxt::rt::task<bool> {
+                    co_return nxt::rt::task_stop_requested();
+                }();
+                task.request_stop();
+
+                expect(deck.sync_wait(std::move(task)));
             };
         };
 
@@ -732,6 +751,47 @@ static suite ng_runtime_tests{
 
                 expect(threw);
                 expect(events == std::vector<int>{2});
+            };
+
+            "request task stop on forked children when the zone stops"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::fork(
+                            record_task_stop_state_after_yield(events, 3));
+                        nxt::rt::require_current_zone().stop();
+                        co_return;
+                    });
+                });
+
+                expect(events == std::vector<int>{3});
+            };
+
+            "stop a hosted zone when its parent task is stopped"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                auto task = [&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::fork(
+                            record_stop_state_after_yield(events, 4));
+                        events.push_back(100);
+                        co_await nxt::rt::yield();
+                        co_return;
+                    });
+                }();
+
+                deck.start(task);
+                for (auto i = 0; i != 8 && events.empty(); ++i)
+                    deck.run_ready();
+
+                expect(events == std::vector<int>{100});
+                task.request_stop();
+                deck.run_until_idle();
+
+                expect(events == std::vector<int>{100, 4});
             };
         };
 
