@@ -147,6 +147,27 @@ struct chunking_string_sink final : nxt::rt::byte_sink
     std::size_t limit = 1;
 };
 
+struct shared_string_sink final : nxt::rt::byte_sink
+{
+    explicit shared_string_sink(
+        std::shared_ptr<std::string> text,
+        std::size_t limit = 64)
+        : text(std::move(text))
+        , limit(limit)
+    {}
+
+    nxt::rt::task<std::size_t>
+    write_some(std::span<const std::byte> src) override
+    {
+        auto n = std::min(limit, src.size());
+        *text += nxt::rt::as_string_view(src.first(n));
+        co_return n;
+    }
+
+    std::shared_ptr<std::string> text;
+    std::size_t limit = 1;
+};
+
 nxt::rt::task<int> read_ambient_int_after_yield()
 {
     co_await nxt::rt::yield();
@@ -1229,6 +1250,41 @@ static suite ng_runtime_tests{
                 });
 
                 expect(sink.text == "abcde");
+            };
+
+            "byte_writer can own its buffer"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto sink = chunking_string_sink{64};
+                auto writer = nxt::rt::byte_writer{sink, std::size_t{4}};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await writer.write(std::string{"ab"});
+                    expect(sink.text.empty());
+                    co_await writer.write(std::string{"cd"});
+                    expect(sink.text.empty());
+                    co_await writer.flush();
+                });
+
+                expect(sink.text == "abcd");
+            };
+
+            "byte_writer can own its sink and buffer"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto text = std::make_shared<std::string>();
+                auto writer = nxt::rt::byte_writer{
+                    shared_string_sink{text},
+                    std::size_t{4},
+                };
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await writer.write(std::string{"abc"});
+                    expect(text->empty());
+                    co_await writer.write(std::string{"de"});
+                    expect(*text == "abcd");
+                    co_await writer.flush();
+                });
+
+                expect(*text == "abcde");
             };
         };
 

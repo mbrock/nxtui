@@ -8,12 +8,16 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unistd.h>
+#include <utility>
+#include <vector>
 
 namespace nxt::rt {
 
@@ -294,6 +298,60 @@ public:
             throw buffer_error{"writer buffer is empty"};
     }
 
+    byte_writer(Sink & sink, std::size_t buffer_size)
+        : owned_buffer_(buffer_size)
+        , sink_(&sink)
+        , buffer_(owned_buffer_)
+    {
+        if (owned_buffer_.empty())
+            throw buffer_error{"writer buffer is empty"};
+    }
+
+    byte_writer(Sink && sink, std::size_t buffer_size)
+        : owned_sink_(std::make_unique<Sink>(std::move(sink)))
+        , owned_buffer_(buffer_size)
+        , sink_(owned_sink_.get())
+        , buffer_(owned_buffer_)
+    {
+        if (owned_buffer_.empty())
+            throw buffer_error{"writer buffer is empty"};
+    }
+
+    byte_writer(const byte_writer &) = delete;
+    byte_writer & operator=(const byte_writer &) = delete;
+
+    byte_writer(byte_writer && other) noexcept
+        : owned_sink_(std::move(other.owned_sink_))
+        , owned_buffer_(std::move(other.owned_buffer_))
+        , sink_(owned_sink_ ? owned_sink_.get() : other.sink_)
+        , buffer_(owned_buffer_.empty()
+            ? other.buffer_
+            : std::span<std::byte>{owned_buffer_})
+        , end_(other.end_)
+    {
+        other.sink_ = nullptr;
+        other.buffer_ = {};
+        other.end_ = 0;
+    }
+
+    byte_writer & operator=(byte_writer && other) noexcept
+    {
+        if (this != &other) {
+            owned_sink_ = std::move(other.owned_sink_);
+            owned_buffer_ = std::move(other.owned_buffer_);
+            sink_ = owned_sink_ ? owned_sink_.get() : other.sink_;
+            buffer_ = owned_buffer_.empty()
+                ? other.buffer_
+                : std::span<std::byte>{owned_buffer_};
+            end_ = other.end_;
+
+            other.sink_ = nullptr;
+            other.buffer_ = {};
+            other.end_ = 0;
+        }
+        return *this;
+    }
+
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
         return std::span<const std::byte>{buffer_}.first(end_);
@@ -341,10 +399,18 @@ public:
     }
 
 private:
+    std::unique_ptr<Sink> owned_sink_;
+    std::vector<std::byte> owned_buffer_;
     Sink * sink_;
     std::span<std::byte> buffer_;
     std::size_t end_ = 0;
 };
+
+inline byte_writer<fd_sink> standard_output_writer(
+    std::size_t buffer_size = 4096)
+{
+    return byte_writer<fd_sink>{fd_sink{STDOUT_FILENO}, buffer_size};
+}
 
 /// Buffered asynchronous reader over a byte source.
 template<typename Source = byte_source>

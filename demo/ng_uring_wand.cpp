@@ -163,9 +163,7 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
 
 nxt::rt::task<void> list_and_print(std::string path)
 {
-    auto out = nxt::rt::fd_sink{STDOUT_FILENO};
-    auto storage = std::array<std::byte, 4096>{};
-    auto writer = nxt::rt::byte_writer{out, std::span{storage}};
+    auto writer = nxt::rt::standard_output_writer();
 
     auto entries = co_await list_path(std::move(path));
     auto tasks = entries
