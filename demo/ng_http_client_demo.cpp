@@ -1,9 +1,11 @@
 #include "nxt/rt/task.hpp"
+#include <nxt/http.hpp>
 #include <nxt/crypto.hpp>
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/cares.hpp>
 #include <nxt/rt/http.hpp>
 #include <nxt/unique-fd.hpp>
+#include <nxtai/responses.hpp>
 
 #if defined(__linux__)
 #include <nxt/rt/uring_wand.hpp>
@@ -20,6 +22,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <fcntl.h>
 #include <iomanip>
@@ -889,6 +892,46 @@ bool verify_finished(
     return std::ranges::equal(expected, received);
 }
 
+std::string make_https_request(nxt::rt::http::url const & url)
+{
+    if (url.host == "api.openai.com") {
+        auto * api_key = std::getenv("OPENAI_API_KEY");
+        require_tls(
+            api_key != nullptr && std::string_view{api_key}.size() > 0,
+            "OPENAI_API_KEY is not set");
+        auto request = nxt::ai::responses::openai_responses_request{
+            .api_key = api_key,
+            .model = "gpt-5-mini",
+            .input =
+                "Reply in one short sentence from a handmade TLS 1.3 client.",
+            .max_output_tokens = 64,
+            .reasoning_effort = "minimal",
+            .reasoning_summary = "",
+            .store = false,
+        };
+        auto http_request =
+            nxt::ai::responses::openai_responses_http_request(request);
+        for (auto & header : http_request.headers) {
+            if (header.name == "Connection")
+                header.value = "close";
+        }
+        return nxt::http::serialize(http_request);
+    }
+
+    auto request = nxt::rt::http::request{
+        .method = "GET",
+        .target = url.target,
+        .host = nxt::rt::http::host_header(url),
+        .headers =
+            {
+                {"User-Agent", "nxt-ng-tls-demo/0"},
+                {"Accept", "*/*"},
+            },
+        .body = {},
+    };
+    return nxt::rt::http::serialize(request);
+}
+
 bytes make_finished_message(
     std::span<const std::byte> traffic_secret,
     std::span<const std::byte> transcript)
@@ -1012,23 +1055,13 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     put_bytes(transcript, client_finished);
     std::cerr << "sent encrypted client Finished\n";
 
-    auto request = nxt::rt::http::request{
-        .method = "GET",
-        .target = url.target,
-        .host = nxt::rt::http::host_header(url),
-        .headers =
-            {
-                {"User-Agent", "nxt-ng-tls-demo/0"},
-                {"Accept", "*/*"},
-            },
-        .body = {},
-    };
-    auto request_text = nxt::rt::http::serialize(request);
+    auto request_text = make_https_request(url);
     auto encrypted_request = seal_tls13_record(
         application_keys.client, 23, nxt::rt::as_bytes(request_text));
     co_await socket_output.write_all(encrypted_request);
     std::cerr << "sent encrypted HTTP request\n";
 
+    auto http_plaintext = std::string{};
     while (true) {
         record = co_await read_tls_record(reader);
         describe_tls_record(++index, record);
@@ -1040,6 +1073,13 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
         if (plaintext.inner_type == 23) {
             auto stdout_sink = nxt::rt::standard_output();
             co_await nxt::rt::write_all(stdout_sink, plaintext.content);
+            http_plaintext.append(
+                reinterpret_cast<const char *>(plaintext.content.data()),
+                plaintext.content.size());
+            if (http_plaintext.find("\r\n0\r\n\r\n") != std::string::npos) {
+                std::cerr << "saw HTTP chunked terminator\n";
+                break;
+            }
         } else if (plaintext.inner_type == 21) {
             std::cerr << "received encrypted TLS alert\n";
             dump_hex(plaintext.content);
