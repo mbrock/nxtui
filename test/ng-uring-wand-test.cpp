@@ -94,7 +94,7 @@ nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
     if (sent != message.size())
         throw std::runtime_error{"short poll smoke send"};
 
-    auto revents = co_await nxt::rt::poll_wish{
+    auto revents = co_await nxt::rt::op::poll{
         .fd = rx,
         .events = POLLIN,
     };
@@ -104,7 +104,7 @@ nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
 
 nxt::rt::task<void> timeout_once()
 {
-    co_await nxt::rt::timeout_wish::after(1ms);
+    co_await nxt::rt::op::timeout::after(1ms);
 }
 
 nxt::rt::task<void> poll_until_after_socket_send(int tx, int rx)
@@ -114,21 +114,21 @@ nxt::rt::task<void> poll_until_after_socket_send(int tx, int rx)
     if (sent != message.size())
         throw std::runtime_error{"short poll-until smoke send"};
 
-    auto result = co_await nxt::rt::poll_until_wish::after(rx, POLLIN, 1s);
+    auto result = co_await nxt::rt::op::poll_until::after(rx, POLLIN, 1s);
     if (result.timed_out || (result.events & POLLIN) == 0)
         throw std::runtime_error{"poll-until did not report readable socket"};
 }
 
 nxt::rt::task<void> poll_until_timeout(int rx)
 {
-    auto result = co_await nxt::rt::poll_until_wish::after(rx, POLLIN, 1ms);
+    auto result = co_await nxt::rt::op::poll_until::after(rx, POLLIN, 1ms);
     if (!result.timed_out)
         throw std::runtime_error{"poll-until did not time out"};
 }
 
 nxt::rt::task<void> poll_forever(int rx)
 {
-    (void)co_await nxt::rt::poll_wish{
+    (void)co_await nxt::rt::op::poll{
         .fd = rx,
         .events = POLLIN,
     };
@@ -147,7 +147,7 @@ nxt::rt::task<void> poll_after_send_with_timeout(int tx, int rx)
 nxt::rt::task<void> poll_until_stopped(int rx)
 {
     try {
-        (void)co_await nxt::rt::poll_wish{
+        (void)co_await nxt::rt::op::poll{
             .fd = rx,
             .events = POLLIN,
         };
@@ -160,7 +160,7 @@ nxt::rt::task<void> poll_until_stopped(int rx)
 
 nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
 {
-    co_await nxt::rt::connect_wish::from(
+    co_await nxt::rt::op::connect::from(
         fd,
         reinterpret_cast<sockaddr const *>(&address),
         sizeof(address));
@@ -168,7 +168,7 @@ nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
 
 nxt::rt::task<struct statx> stat_current_directory()
 {
-    co_return co_await nxt::rt::statx_wish{
+    co_return co_await nxt::rt::op::statx{
         .path = ".",
         .mask = STATX_TYPE,
     };
@@ -185,14 +185,14 @@ struct linux_dirent64
 
 nxt::rt::task<std::vector<std::string>> read_current_directory_names()
 {
-    auto fd = co_await nxt::rt::openat_wish{
+    auto fd = co_await nxt::rt::op::openat{
         .path = ".",
         .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
     };
     auto dir = unique_fd{fd};
 
     auto storage = std::array<std::byte, 4096>{};
-    auto bytes = co_await nxt::rt::getdents64_wish{
+    auto bytes = co_await nxt::rt::op::getdents64{
         .fd = dir.get(),
         .buffer = storage,
     };
@@ -212,7 +212,7 @@ nxt::rt::task<std::vector<std::string>> read_current_directory_names()
 
 nxt::rt::task<void> write_to_fd(int fd, std::string_view text)
 {
-    auto written = co_await nxt::rt::write_some_wish{
+    auto written = co_await nxt::rt::op::write_some{
         .fd = fd,
         .buffer = nxt::rt::as_bytes(text),
     };

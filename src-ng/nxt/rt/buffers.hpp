@@ -151,7 +151,7 @@ public:
 
     task<read_result> read_some(std::span<std::byte> dst) override
     {
-        auto n = co_await read_some_wish{
+        auto n = co_await op::read_some{
             .fd = fd_,
             .buffer = dst,
             .offset = -1,
@@ -176,7 +176,7 @@ public:
 
     task<std::size_t> write_some(std::span<const std::byte> src) override
     {
-        co_return co_await write_some_wish{
+        co_return co_await op::write_some{
             .fd = fd_,
             .buffer = src,
             .offset = -1,
@@ -198,7 +198,7 @@ public:
 
     task<read_result> read_some(std::span<std::byte> dst) override
     {
-        auto n = co_await recv_some_wish{
+        auto n = co_await op::recv_some{
             .fd = fd_,
             .buffer = dst,
             .flags = flags_,
@@ -225,7 +225,7 @@ public:
 
     task<std::size_t> write_some(std::span<const std::byte> src) override
     {
-        co_return co_await send_some_wish{
+        co_return co_await op::send_some{
             .fd = fd_,
             .buffer = src,
             .flags = flags_,
@@ -242,7 +242,7 @@ inline task<std::size_t> send_some(
     std::span<const std::byte> buffer,
     int flags = 0)
 {
-    co_return co_await send_some_wish{
+    co_return co_await op::send_some{
         .fd = fd,
         .buffer = buffer,
         .flags = flags,
@@ -254,7 +254,7 @@ inline task<std::size_t> write_some(
     std::span<const std::byte> buffer,
     off_t offset = -1)
 {
-    co_return co_await write_some_wish{
+    co_return co_await op::write_some{
         .fd = fd,
         .buffer = buffer,
         .offset = offset,

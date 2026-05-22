@@ -32,7 +32,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<void> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::manual_wish wish) override
+        nxt::rt::op::manual wish) override
     {
         prepared.push_back(wish.token);
         auto state = std::make_shared<nxt::rt::wait_state<void>>();
@@ -43,7 +43,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<int> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::openat_wish) override
+        nxt::rt::op::openat) override
     {
         throw std::runtime_error{"manual_wand does not implement openat"};
     }
@@ -51,7 +51,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<struct statx> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::statx_wish) override
+        nxt::rt::op::statx) override
     {
         throw std::runtime_error{"manual_wand does not implement statx"};
     }
@@ -59,7 +59,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::getdents64_wish) override
+        nxt::rt::op::getdents64) override
     {
         throw std::runtime_error{"manual_wand does not implement getdents64"};
     }
@@ -67,7 +67,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::read_some_wish) override
+        nxt::rt::op::read_some) override
     {
         throw std::runtime_error{"manual_wand does not implement read"};
     }
@@ -75,7 +75,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::write_some_wish) override
+        nxt::rt::op::write_some) override
     {
         throw std::runtime_error{"manual_wand does not implement write"};
     }
@@ -83,7 +83,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::recv_some_wish) override
+        nxt::rt::op::recv_some) override
     {
         throw std::runtime_error{"manual_wand does not implement recv"};
     }
@@ -91,7 +91,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::send_some_wish) override
+        nxt::rt::op::send_some) override
     {
         throw std::runtime_error{"manual_wand does not implement send"};
     }
@@ -99,7 +99,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<void> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::connect_wish) override
+        nxt::rt::op::connect) override
     {
         throw std::runtime_error{"manual_wand does not implement connect"};
     }
@@ -107,7 +107,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<int> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::poll_wish) override
+        nxt::rt::op::poll) override
     {
         throw std::runtime_error{"manual_wand does not implement poll"};
     }
@@ -115,7 +115,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<void> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::timeout_wish) override
+        nxt::rt::op::timeout) override
     {
         throw std::runtime_error{"manual_wand does not implement timeout"};
     }
@@ -123,7 +123,7 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<nxt::rt::poll_until_result> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
-        nxt::rt::poll_until_wish) override
+        nxt::rt::op::poll_until) override
     {
         throw std::runtime_error{
             "manual_wand does not implement poll-until"};
@@ -1068,7 +1068,7 @@ static suite ng_runtime_tests{
                 auto task_body =
                     [](std::vector<int> & events) -> nxt::rt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::manual_wish{.token = 42};
+                    co_await nxt::rt::op::manual{.token = 42};
                     events.push_back(2);
                 };
 
@@ -1102,7 +1102,7 @@ static suite ng_runtime_tests{
                 auto task_body =
                     [](std::vector<int> & events) -> nxt::rt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::manual_wish{.token = 7};
+                    co_await nxt::rt::op::manual{.token = 7};
                     events.push_back(2);
                 };
 
@@ -1131,7 +1131,7 @@ static suite ng_runtime_tests{
                 auto deck = nxt::rt::deck{&wand};
 
                 auto task = []() -> nxt::rt::task<void> {
-                    co_await nxt::rt::manual_wish{.token = 99};
+                    co_await nxt::rt::op::manual{.token = 99};
                 }();
 
                 deck.start(task);
@@ -1390,7 +1390,7 @@ static suite ng_runtime_tests{
                     [](std::vector<int> & values) -> nxt::rt::task<void> {
                     auto producer = []() -> nxt::rt::pipe<int> {
                         co_yield 1;
-                        co_await nxt::rt::manual_wish{.token = 99};
+                        co_await nxt::rt::op::manual{.token = 99};
                         co_yield 2;
                     };
                     auto pipe = producer();

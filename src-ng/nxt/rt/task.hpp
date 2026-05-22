@@ -1428,7 +1428,7 @@ template<typename T, typename... Rest>
 [[nodiscard]] inline task<void> timeout_after(
     std::chrono::nanoseconds duration)
 {
-    co_await timeout_wish::after(duration);
+    co_await op::timeout::after(duration);
     throw timeout_error{};
 }
 
@@ -1698,7 +1698,7 @@ inline void waiter<T>::await_suspend(
         });
 }
 
-inline waiter<void> manual_wish::operator co_await() const
+inline waiter<void> op::manual::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1714,7 +1714,7 @@ inline waiter<void> manual_wish::operator co_await() const
         *this);
 }
 
-inline waiter<int> openat_wish::operator co_await() const
+inline waiter<int> op::openat::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1730,7 +1730,7 @@ inline waiter<int> openat_wish::operator co_await() const
         *this);
 }
 
-inline waiter<struct statx> statx_wish::operator co_await() const
+inline waiter<statx_result> op::statx::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1746,7 +1746,7 @@ inline waiter<struct statx> statx_wish::operator co_await() const
         *this);
 }
 
-inline waiter<std::size_t> getdents64_wish::operator co_await() const
+inline waiter<std::size_t> op::getdents64::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1763,7 +1763,7 @@ inline waiter<std::size_t> getdents64_wish::operator co_await() const
         *this);
 }
 
-inline waiter<std::size_t> read_some_wish::operator co_await() const
+inline waiter<std::size_t> op::read_some::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1780,7 +1780,7 @@ inline waiter<std::size_t> read_some_wish::operator co_await() const
         *this);
 }
 
-inline waiter<std::size_t> write_some_wish::operator co_await() const
+inline waiter<std::size_t> op::write_some::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1797,7 +1797,7 @@ inline waiter<std::size_t> write_some_wish::operator co_await() const
         *this);
 }
 
-inline waiter<std::size_t> recv_some_wish::operator co_await() const
+inline waiter<std::size_t> op::recv_some::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1814,7 +1814,7 @@ inline waiter<std::size_t> recv_some_wish::operator co_await() const
         *this);
 }
 
-inline waiter<std::size_t> send_some_wish::operator co_await() const
+inline waiter<std::size_t> op::send_some::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1831,7 +1831,7 @@ inline waiter<std::size_t> send_some_wish::operator co_await() const
         *this);
 }
 
-inline waiter<void> connect_wish::operator co_await() const
+inline waiter<void> op::connect::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1847,7 +1847,7 @@ inline waiter<void> connect_wish::operator co_await() const
         *this);
 }
 
-inline waiter<int> poll_wish::operator co_await() const
+inline waiter<int> op::poll::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1864,7 +1864,7 @@ inline waiter<int> poll_wish::operator co_await() const
         *this);
 }
 
-inline waiter<void> timeout_wish::operator co_await() const
+inline waiter<void> op::timeout::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr
@@ -1880,7 +1880,7 @@ inline waiter<void> timeout_wish::operator co_await() const
         *this);
 }
 
-inline waiter<poll_until_result> poll_until_wish::operator co_await() const
+inline waiter<poll_until_result> op::poll_until::operator co_await() const
 {
     auto context = detail::current_wish_context();
     if (context.active_deck == nullptr

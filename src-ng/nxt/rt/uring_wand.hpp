@@ -16,6 +16,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/syscall.h>
 #include <unordered_set>
 #include <unordered_map>
@@ -63,196 +64,98 @@ public:
     waiter<void> prepare(
         deck &,
         detail::promise_base &,
-        manual_wish wish) override
+        op::manual wish) override
     {
         auto token = wish.token;
-        if (token == 0)
-            token = next_token_++;
-
-        auto state = std::make_shared<wait_state<void>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<void>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare manual token=" + std::to_string(token));
-        return waiter<void>{*this, token, state};
+        return prepare_wish(std::move(wish), "manual", token);
     }
 
     waiter<int> prepare(
         deck &,
         detail::promise_base &,
-        openat_wish wish) override
+        op::openat wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<int>>();
-        auto request = std::make_shared<uring_wish>(std::move(wish));
-        completions_.emplace(
-            token,
-            std::make_unique<completion<int>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare openat token=" + std::to_string(token));
-        return waiter<int>{*this, token, state};
+        return prepare_wish(std::move(wish), "openat");
     }
 
-    waiter<struct statx> prepare(
+    waiter<statx_result> prepare(
         deck &,
         detail::promise_base &,
-        statx_wish wish) override
+        op::statx wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<struct statx>>();
-        auto request = std::make_shared<uring_wish>(std::move(wish));
-        completions_.emplace(
-            token,
-            std::make_unique<completion<struct statx>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare statx token=" + std::to_string(token));
-        return waiter<struct statx>{*this, token, state};
+        return prepare_wish(std::move(wish), "statx");
     }
 
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
-        getdents64_wish wish) override
+        op::getdents64 wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<std::size_t>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<std::size_t>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare getdents64 token=" + std::to_string(token));
-        return waiter<std::size_t>{*this, token, state};
+        return prepare_wish(std::move(wish), "getdents64");
     }
 
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
-        read_some_wish wish) override
+        op::read_some wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<std::size_t>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<std::size_t>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare read token=" + std::to_string(token));
-        return waiter<std::size_t>{*this, token, state};
+        return prepare_wish(std::move(wish), "read");
     }
 
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
-        write_some_wish wish) override
+        op::write_some wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<std::size_t>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<std::size_t>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare write token=" + std::to_string(token));
-        return waiter<std::size_t>{*this, token, state};
+        return prepare_wish(std::move(wish), "write");
     }
 
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
-        recv_some_wish wish) override
+        op::recv_some wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<std::size_t>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<std::size_t>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare recv token=" + std::to_string(token));
-        return waiter<std::size_t>{*this, token, state};
+        return prepare_wish(std::move(wish), "recv");
     }
 
     waiter<std::size_t> prepare(
         deck &,
         detail::promise_base &,
-        send_some_wish wish) override
+        op::send_some wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<std::size_t>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<std::size_t>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare send token=" + std::to_string(token));
-        return waiter<std::size_t>{*this, token, state};
+        return prepare_wish(std::move(wish), "send");
     }
 
     waiter<void> prepare(
         deck &,
         detail::promise_base &,
-        connect_wish wish) override
+        op::connect wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<void>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<void>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare connect token=" + std::to_string(token));
-        return waiter<void>{*this, token, state};
+        return prepare_wish(std::move(wish), "connect");
     }
 
     waiter<int> prepare(
         deck &,
         detail::promise_base &,
-        poll_wish wish) override
+        op::poll wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<int>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<int>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare poll token=" + std::to_string(token));
-        return waiter<int>{*this, token, state};
+        return prepare_wish(std::move(wish), "poll");
     }
 
     waiter<void> prepare(
         deck &,
         detail::promise_base &,
-        timeout_wish wish) override
+        op::timeout wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<void>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<void>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare timeout token=" + std::to_string(token));
-        return waiter<void>{*this, token, state};
+        return prepare_wish(std::move(wish), "timeout");
     }
 
     waiter<poll_until_result> prepare(
         deck &,
         detail::promise_base &,
-        poll_until_wish wish) override
+        op::poll_until wish) override
     {
-        auto token = next_token_++;
-        auto state = std::make_shared<wait_state<poll_until_result>>();
-        auto request = std::make_shared<uring_wish>(wish);
-        completions_.emplace(
-            token,
-            std::make_unique<completion<poll_until_result>>(request, state));
-        pending_submissions_.push_back(token);
-        trace("uring prepare poll-until token=" + std::to_string(token));
-        return waiter<poll_until_result>{*this, token, state};
+        return prepare_wish(std::move(wish), "poll-until");
     }
 
     void suspend(wait_token token, parked_task task) override
@@ -385,18 +288,18 @@ private:
     }
 
     using uring_wish = std::variant<
-        manual_wish,
-        openat_wish,
-        statx_wish,
-        getdents64_wish,
-        read_some_wish,
-        write_some_wish,
-        recv_some_wish,
-        send_some_wish,
-        connect_wish,
-        poll_wish,
-        timeout_wish,
-        poll_until_wish>;
+        op::manual,
+        op::openat,
+        op::statx,
+        op::getdents64,
+        op::read_some,
+        op::write_some,
+        op::recv_some,
+        op::send_some,
+        op::connect,
+        op::poll,
+        op::timeout,
+        op::poll_until>;
 
     class completion_base
     {
@@ -478,7 +381,7 @@ private:
                 }
             } else {
                 if constexpr (std::is_void_v<T>) {
-                    if (std::holds_alternative<timeout_wish>(*this->request_)
+                    if (std::holds_alternative<op::timeout>(*this->request_)
                         && result == -ETIME) {
                         state_->set_value();
                         return;
@@ -500,8 +403,8 @@ private:
                     state_->set_value(result);
                 } else if constexpr (std::is_same_v<T, std::size_t>) {
                     state_->set_value(static_cast<std::size_t>(result));
-                } else if constexpr (std::is_same_v<T, struct statx>) {
-                    state_->set_value(std::get<statx_wish>(*this->request_).result);
+                } else if constexpr (std::is_same_v<T, statx_result>) {
+                    state_->set_value(std::get<op::statx>(*this->request_).result);
                 } else {
                     static_assert(std::is_void_v<T>, "unsupported uring result");
                 }
@@ -511,6 +414,27 @@ private:
     private:
         std::shared_ptr<wait_state<T>> state_;
     };
+
+    template<typename Wish>
+    waiter<typename Wish::result_type> prepare_wish(
+        Wish wish,
+        std::string_view name,
+        wait_token token = 0)
+    {
+        if (token == 0)
+            token = next_token_++;
+
+        using result_type = typename Wish::result_type;
+        auto state = std::make_shared<wait_state<result_type>>();
+        auto request = std::make_shared<uring_wish>(std::move(wish));
+        completions_.emplace(
+            token,
+            std::make_unique<completion<result_type>>(request, state));
+        pending_submissions_.push_back(token);
+        trace("uring prepare " + std::string{name}
+            + " token=" + std::to_string(token));
+        return waiter<result_type>{*this, token, state};
+    }
 
     io_uring_sqe * get_sqe()
     {
@@ -557,7 +481,7 @@ private:
             request);
     }
 
-    bool stage_one(deck &, wait_token token, manual_wish const &)
+    bool stage_one(deck &, wait_token token, op::manual const &)
     {
         auto * sqe = get_sqe();
         io_uring_prep_nop(sqe);
@@ -565,7 +489,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, openat_wish const & op)
+    bool stage_one(deck &, wait_token token, op::openat const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_openat(
@@ -578,7 +502,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, statx_wish & op)
+    bool stage_one(deck &, wait_token token, op::statx & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_statx(
@@ -592,7 +516,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck & d, wait_token token, getdents64_wish const & op)
+    bool stage_one(deck & d, wait_token token, op::getdents64 const & op)
     {
         auto result = ::syscall(
             SYS_getdents64,
@@ -608,7 +532,7 @@ private:
         return false;
     }
 
-    bool stage_one(deck &, wait_token token, read_some_wish const & op)
+    bool stage_one(deck &, wait_token token, op::read_some const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_read(
@@ -621,7 +545,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, write_some_wish const & op)
+    bool stage_one(deck &, wait_token token, op::write_some const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_write(
@@ -634,7 +558,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, recv_some_wish const & op)
+    bool stage_one(deck &, wait_token token, op::recv_some const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_recv(
@@ -647,7 +571,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, send_some_wish const & op)
+    bool stage_one(deck &, wait_token token, op::send_some const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_send(
@@ -660,7 +584,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, connect_wish const & op)
+    bool stage_one(deck &, wait_token token, op::connect const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_connect(
@@ -672,7 +596,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, poll_wish const & op)
+    bool stage_one(deck &, wait_token token, op::poll const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_poll_add(sqe, op.fd, op.events);
@@ -680,7 +604,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, timeout_wish const & op)
+    bool stage_one(deck &, wait_token token, op::timeout const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_timeout(
@@ -692,7 +616,7 @@ private:
         return true;
     }
 
-    bool stage_one(deck &, wait_token token, poll_until_wish const & op)
+    bool stage_one(deck &, wait_token token, op::poll_until const & op)
     {
         auto * poll_sqe = get_sqe();
         io_uring_prep_poll_add(poll_sqe, op.fd, op.events);

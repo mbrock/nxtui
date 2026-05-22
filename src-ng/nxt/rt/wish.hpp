@@ -173,11 +173,21 @@ inline void waiter<void>::await_resume()
     state_->take();
 }
 
+struct poll_until_result
+{
+    int events = 0;
+    bool timed_out = false;
+};
+
+using statx_result = struct statx;
+
+namespace op {
+
 /// Closed operation type for deterministic/manual tests.
 ///
 /// This is deliberately more like a tiny SQE recipe than a generic variant:
 /// the operation owns its input parameters and names its result type.
-struct manual_wish
+struct manual
 {
     using result_type = void;
 
@@ -186,7 +196,7 @@ struct manual_wish
     waiter<void> operator co_await() const;
 };
 
-struct openat_wish
+struct openat
 {
     using result_type = int;
 
@@ -198,20 +208,20 @@ struct openat_wish
     waiter<int> operator co_await() const;
 };
 
-struct statx_wish
+struct statx
 {
-    using result_type = struct statx;
+    using result_type = statx_result;
 
     int dirfd = AT_FDCWD;
     std::string path;
     int flags = AT_SYMLINK_NOFOLLOW;
     unsigned mask = STATX_BASIC_STATS;
-    struct statx result{};
+    statx_result result{};
 
-    waiter<struct statx> operator co_await() const;
+    waiter<statx_result> operator co_await() const;
 };
 
-struct getdents64_wish
+struct getdents64
 {
     using result_type = std::size_t;
 
@@ -221,7 +231,7 @@ struct getdents64_wish
     waiter<std::size_t> operator co_await() const;
 };
 
-struct read_some_wish
+struct read_some
 {
     using result_type = std::size_t;
 
@@ -232,7 +242,7 @@ struct read_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
-struct write_some_wish
+struct write_some
 {
     using result_type = std::size_t;
 
@@ -243,7 +253,7 @@ struct write_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
-struct recv_some_wish
+struct recv_some
 {
     using result_type = std::size_t;
 
@@ -254,7 +264,7 @@ struct recv_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
-struct send_some_wish
+struct send_some
 {
     using result_type = std::size_t;
 
@@ -265,7 +275,7 @@ struct send_some_wish
     waiter<std::size_t> operator co_await() const;
 };
 
-struct connect_wish
+struct connect
 {
     using result_type = void;
 
@@ -273,7 +283,7 @@ struct connect_wish
     sockaddr_storage address{};
     socklen_t address_size = 0;
 
-    static connect_wish from(
+    static connect from(
         int fd,
         sockaddr const * address,
         socklen_t address_size)
@@ -281,13 +291,13 @@ struct connect_wish
         if (address_size > sizeof(sockaddr_storage))
             throw runtime_error{"connect address is too large"};
 
-        auto wish = connect_wish{
+        auto op = connect{
             .fd = fd,
             .address = {},
             .address_size = address_size,
         };
-        std::memcpy(&wish.address, address, address_size);
-        return wish;
+        std::memcpy(&op.address, address, address_size);
+        return op;
     }
 
     [[nodiscard]] sockaddr const * sockaddr_ptr() const noexcept
@@ -298,7 +308,7 @@ struct connect_wish
     waiter<void> operator co_await() const;
 };
 
-struct poll_wish
+struct poll
 {
     using result_type = int;
 
@@ -308,15 +318,15 @@ struct poll_wish
     waiter<int> operator co_await() const;
 };
 
-struct timeout_wish
+struct timeout
 {
     using result_type = void;
 
     __kernel_timespec duration{};
 
-    static timeout_wish after(std::chrono::nanoseconds duration)
+    static timeout after(std::chrono::nanoseconds duration)
     {
-        return timeout_wish{
+        return timeout{
             .duration = as_kernel_timespec(duration),
         };
     }
@@ -324,13 +334,7 @@ struct timeout_wish
     waiter<void> operator co_await() const;
 };
 
-struct poll_until_result
-{
-    int events = 0;
-    bool timed_out = false;
-};
-
-struct poll_until_wish
+struct poll_until
 {
     using result_type = poll_until_result;
 
@@ -338,12 +342,12 @@ struct poll_until_wish
     short events = 0;
     __kernel_timespec timeout{};
 
-    static poll_until_wish after(
+    static poll_until after(
         int fd,
         short events,
         std::chrono::nanoseconds timeout)
     {
-        return poll_until_wish{
+        return poll_until{
             .fd = fd,
             .events = events,
             .timeout = as_kernel_timespec(timeout),
@@ -352,6 +356,8 @@ struct poll_until_wish
 
     waiter<poll_until_result> operator co_await() const;
 };
+
+} // namespace op
 
 /// Backend interface for staged platform/event-loop machinery.
 ///
@@ -367,62 +373,62 @@ public:
     virtual waiter<void> prepare(
         deck & d,
         detail::promise_base & promise,
-        manual_wish wish) = 0;
+        op::manual wish) = 0;
 
     virtual waiter<int> prepare(
         deck & d,
         detail::promise_base & promise,
-        openat_wish wish) = 0;
+        op::openat wish) = 0;
 
-    virtual waiter<struct statx> prepare(
+    virtual waiter<statx_result> prepare(
         deck & d,
         detail::promise_base & promise,
-        statx_wish wish) = 0;
-
-    virtual waiter<std::size_t> prepare(
-        deck & d,
-        detail::promise_base & promise,
-        getdents64_wish wish) = 0;
+        op::statx wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,
         detail::promise_base & promise,
-        read_some_wish wish) = 0;
+        op::getdents64 wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,
         detail::promise_base & promise,
-        write_some_wish wish) = 0;
+        op::read_some wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,
         detail::promise_base & promise,
-        recv_some_wish wish) = 0;
+        op::write_some wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,
         detail::promise_base & promise,
-        send_some_wish wish) = 0;
+        op::recv_some wish) = 0;
+
+    virtual waiter<std::size_t> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        op::send_some wish) = 0;
 
     virtual waiter<void> prepare(
         deck & d,
         detail::promise_base & promise,
-        connect_wish wish) = 0;
+        op::connect wish) = 0;
 
     virtual waiter<int> prepare(
         deck & d,
         detail::promise_base & promise,
-        poll_wish wish) = 0;
+        op::poll wish) = 0;
 
     virtual waiter<void> prepare(
         deck & d,
         detail::promise_base & promise,
-        timeout_wish wish) = 0;
+        op::timeout wish) = 0;
 
     virtual waiter<poll_until_result> prepare(
         deck & d,
         detail::promise_base & promise,
-        poll_until_wish wish) = 0;
+        op::poll_until wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
     virtual void cancel(wait_token token) = 0;

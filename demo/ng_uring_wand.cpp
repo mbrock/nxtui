@@ -120,7 +120,7 @@ bool hidden_or_dot(std::string_view name)
 
 nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
 {
-    auto fd = co_await nxt::rt::openat_wish{
+    auto fd = co_await nxt::rt::op::openat{
         .dirfd = AT_FDCWD,
         .path = std::move(path),
         .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
@@ -130,7 +130,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     auto source = nxt::rt::task_byte_source{
         [fd = dir.get()](std::span<std::byte> dst)
             -> nxt::rt::task<nxt::rt::read_result> {
-            auto n = co_await nxt::rt::getdents64_wish{
+            auto n = co_await nxt::rt::op::getdents64{
                 .fd = fd,
                 .buffer = dst,
             };
@@ -165,7 +165,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         names | std::views::transform(
             [dirfd = dir.get()](std::string const & name)
                 -> nxt::rt::task<listing_entry> {
-                auto stat = co_await nxt::rt::statx_wish{
+                auto stat = co_await nxt::rt::op::statx{
                     .dirfd = dirfd,
                     .path = name,
                     .flags = AT_SYMLINK_NOFOLLOW,
@@ -186,7 +186,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
 
 nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
 {
-    auto stat = co_await nxt::rt::statx_wish{
+    auto stat = co_await nxt::rt::op::statx{
         .dirfd = AT_FDCWD,
         .path = path,
         .flags = AT_SYMLINK_NOFOLLOW,

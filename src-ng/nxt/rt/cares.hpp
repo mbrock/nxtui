@@ -171,7 +171,7 @@ private:
         auto nfds = ares_fds(channel_.get(), &read_fds, &write_fds);
         if (nfds == 0) {
             if (timeout != nullptr)
-                co_await timeout_wish::after(as_duration(*timeout));
+                co_await op::timeout::after(as_duration(*timeout));
             ares_process_fd(
                 channel_.get(),
                 ARES_SOCKET_BAD,
@@ -189,12 +189,12 @@ private:
                 continue;
 
             auto result = timeout != nullptr
-                ? co_await poll_until_wish::after(
+                ? co_await op::poll_until::after(
                     fd,
                     events,
                     as_duration(*timeout))
                 : poll_until_result{
-                    .events = co_await poll_wish{
+                    .events = co_await op::poll{
                         .fd = fd,
                         .events = events,
                     },
