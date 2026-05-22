@@ -1,3 +1,4 @@
+#include "nxt/rt/task.hpp"
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
@@ -171,22 +172,18 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
     };
 }
 
-nxt::rt::task<void> print_entries(std::vector<listing_entry> entries)
+nxt::rt::task<void> list_and_print(std::string path)
 {
     co_await nxt::rt::write_all(
         nxt::rt::standard_output(),
-        entries | std::views::transform([](listing_entry const & entry) {
-            return std::format(
-                "{} {:>8} {}\n",
-                mode_string(entry.stat.stx_mode),
-                entry.stat.stx_size,
-                entry.name);
-        }));
-}
-
-nxt::rt::task<void> list_and_print(std::string path)
-{
-    co_await (list_path(std::move(path)) | nxt::rt::let_value(print_entries));
+        (co_await list_path(std::move(path)))
+            | std::views::transform([](listing_entry const & entry) {
+                  return std::format(
+                      "{} {:>8} {}\n",
+                      mode_string(entry.stat.stx_mode),
+                      entry.stat.stx_size,
+                      entry.name);
+              }));
 }
 
 } // namespace
