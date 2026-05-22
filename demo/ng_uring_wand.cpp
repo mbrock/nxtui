@@ -83,11 +83,6 @@ std::string mode_string(mode_t mode)
     return result;
 }
 
-bool hidden_or_dot(std::string_view name)
-{
-    return name.empty() || name.front() == '.';
-}
-
 nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
 {
     auto fd = co_await nxt::rt::op::openat{
@@ -98,8 +93,8 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     };
     auto dir = nxt::unique_fd{fd};
     auto source = nxt::rt::task_byte_source{
-        [fd = dir.get()](std::span<std::byte> dst)
-            -> nxt::rt::task<std::size_t> {
+        [fd = dir.get()](
+            std::span<std::byte> dst) -> nxt::rt::task<std::size_t> {
             co_return co_await nxt::rt::op::getdents64{
                 .fd = fd,
                 .buffer = dst,
@@ -109,15 +104,15 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     auto reader = nxt::rt::byte_reader{source, std::span{storage}};
 
     auto names = std::vector<std::string>{};
-    while (auto header = co_await reader.take_struct<linux_dirent64_header>()) {
+    while (auto header =
+               co_await reader.take_struct<linux_dirent64_header>()) {
         if (header->d_reclen < sizeof(linux_dirent64_header))
             throw std::runtime_error{"getdents64 returned a short entry"};
 
         auto name = co_await reader.take_string_view(
             header->d_reclen - sizeof(linux_dirent64_header));
         name = name.substr(0, name.find('\0'));
-        if (!hidden_or_dot(name))
-            names.emplace_back(name);
+        names.emplace_back(name);
     }
 
     auto entries = co_await nxt::rt::when_all_range(
