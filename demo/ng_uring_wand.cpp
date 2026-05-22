@@ -52,14 +52,26 @@ std::string mode_string(mode_t mode)
         result[0] = 's';
 
     constexpr auto bits = std::array{
-        S_IRUSR, S_IWUSR, S_IXUSR,
-        S_IRGRP, S_IWGRP, S_IXGRP,
-        S_IROTH, S_IWOTH, S_IXOTH,
+        S_IRUSR,
+        S_IWUSR,
+        S_IXUSR,
+        S_IRGRP,
+        S_IWGRP,
+        S_IXGRP,
+        S_IROTH,
+        S_IWOTH,
+        S_IXOTH,
     };
     constexpr auto chars = std::array{
-        'r', 'w', 'x',
-        'r', 'w', 'x',
-        'r', 'w', 'x',
+        'r',
+        'w',
+        'x',
+        'r',
+        'w',
+        'x',
+        'r',
+        'w',
+        'x',
     };
 
     for (auto i = std::size_t{}; i != bits.size(); ++i) {
@@ -119,9 +131,10 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
     }
 
     auto entries = co_await nxt::rt::when_all_range(
-        names | std::views::transform(
-            [dirfd = dir.get()](std::string const & name)
-                -> nxt::rt::task<listing_entry> {
+        names
+        | std::views::transform(
+            [dirfd = dir.get()](
+                std::string const & name) -> nxt::rt::task<listing_entry> {
                 auto stat = co_await nxt::rt::op::statx{
                     .dirfd = dirfd,
                     .path = name,
@@ -134,10 +147,7 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
                 };
             }));
 
-    std::ranges::sort(
-        entries,
-        {},
-        &listing_entry::name);
+    std::ranges::sort(entries, {}, &listing_entry::name);
     co_return entries;
 }
 
@@ -163,26 +173,23 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
 
 nxt::rt::task<void> list_and_print(std::string path)
 {
-    auto entries = co_await list_path(std::move(path));
-    auto lines = entries
-        | std::views::transform([](listing_entry const & entry) {
-            return std::format(
-                "{} {:>8} {}\n",
-                mode_string(entry.stat.stx_mode),
-                entry.stat.stx_size,
-                entry.name);
-        });
-
-    co_await nxt::rt::write_all(nxt::rt::standard_output(), lines);
+    co_await nxt::rt::write_all(
+        nxt::rt::standard_output(),
+        co_await list_path(std::move(path))
+            | std::views::transform([](listing_entry const & entry) {
+                  return std::format(
+                      "{} {:>8} {}\n",
+                      mode_string(entry.stat.stx_mode),
+                      entry.stat.stx_size,
+                      entry.name);
+              }));
 }
 
 } // namespace
 
 int main(int argc, char ** argv)
 try {
-    auto path = argc > 1
-        ? std::string{argv[1]}
-        : std::string{"."};
+    auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
     auto wand = nxt::rt::uring_wand{};
     auto deck = nxt::rt::deck{&wand};
