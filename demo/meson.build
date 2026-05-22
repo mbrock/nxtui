@@ -51,7 +51,7 @@ if ng_ls_demo_available
   executable('ng-http-client-demo',
     'ng_http_client_demo.cpp',
     include_directories : [nxt_inc, nxt_ng_inc],
-    dependencies : ng_ls_demo_dependencies + [nxt_libcoro_dep],
+    dependencies : ng_ls_demo_dependencies + [nxt_core_dep, nxt_libcoro_dep],
   )
 else
   message('no ng demo runtime found; skipping ng-ls-demo and ng-http-client-demo')
