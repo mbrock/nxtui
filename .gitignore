@@ -13,6 +13,7 @@
 # Meson fallback downloads created by optional subprojects. The checked-in
 # wraps/vendor trees stay visible, but configure-time downloads should not.
 /subprojects/apache-arrow-nanoarrow-*/
+/subprojects/aws-lc-*/
 /subprojects/flatcc-*/
 /subprojects/flatcc.wrap
 /subprojects/packagecache/*

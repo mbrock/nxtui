@@ -30,6 +30,21 @@ nxt_libcoro_dep = declare_dependency(
   ],
 )
 
+nxt_awslc_options = cmake.subproject_options()
+nxt_awslc_options.add_cmake_defines({
+  'BUILD_LIBSSL': false,
+  'BUILD_TESTING': false,
+  'BUILD_TOOL': false,
+  'DISABLE_GO': true,
+  'DISABLE_PERL': true,
+})
+
+nxt_awslc_project = cmake.subproject(
+  'aws-lc',
+  options : nxt_awslc_options,
+)
+nxt_awslc_dep = nxt_awslc_project.dependency('crypto')
+
 glaze_dep = declare_dependency(
   include_directories : include_directories('vendor/glaze/include'),
 )
@@ -109,12 +124,14 @@ nxt_ng_inc = include_directories(
 )
 
 nxt_core_deps = []
+nxt_core_deps += nxt_awslc_dep
 nxt_core_deps += utf8proc_dep
 nxt_core_deps += nxt_libvterm_dep
 
 nxt_core_sources = files(
   'src/nxt/ansi.cpp',
   'src/nxt/compositor.cpp',
+  'src/nxt/crypto.cpp',
   'src/nxt/glyph-table.cpp',
   'src/nxt/raster.cpp',
 )
@@ -262,6 +279,7 @@ if get_option('tests')
     files(
       'test/arrow-test.cpp',
       'test/buffers-test.cpp',
+      'test/crypto-test.cpp',
       'test/http-io-test.cpp',
       'test/http-test.cpp',
       'test/input-test.cpp',
