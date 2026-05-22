@@ -8,9 +8,11 @@
 #define NXT_RT_HAS_LIBURING 0
 #endif
 
+#include <algorithm>
+#include <cstdint>
 #include <cerrno>
 #include <exception>
-#include <cstdint>
+#include <ranges>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -296,22 +298,45 @@ public:
             if (cqe == nullptr)
                 return;
 
-            auto token =
-                static_cast<wait_token>(io_uring_cqe_get_data64(cqe));
-            auto result = cqe->res;
-            io_uring_cqe_seen(&ring_, cqe);
+            handle_cqe(d, cqe);
+        }
+    }
 
-            if (is_cancel_token(token)) {
-                trace("uring cancel complete token="
-                    + std::to_string(original_token(token))
-                    + " result=" + std::to_string(result));
+    void wait(deck & d)
+    {
+        auto * cqe = static_cast<io_uring_cqe *>(nullptr);
+        while (true) {
+            auto rc = io_uring_wait_cqe(&ring_, &cqe);
+            if (rc == -EINTR)
                 continue;
+            if (rc < 0)
+                throw runtime_error{
+                    "io_uring_wait_cqe failed: " + std::to_string(-rc)};
+            break;
+        }
+
+        if (cqe != nullptr)
+            handle_cqe(d, cqe);
+        poll(d);
+    }
+
+    template<typename T>
+    void run_until_done(deck & d, task<T> & root)
+    {
+        while (!root.done()) {
+            if (!d.empty())
+                d.run_ready();
+            poll(d);
+            if (d.empty() && !root.done()) {
+                if (has_pending_work()) {
+                    wave(d);
+                    poll(d);
+                    continue;
+                }
+                if (!has_submitted_completions())
+                    throw runtime_error{"nxt::rt uring wand deadlock"};
+                wait(d);
             }
-
-            trace("uring complete token=" + std::to_string(token)
-                + " result=" + std::to_string(result));
-
-            complete(d, token, result);
         }
     }
 
@@ -339,6 +364,26 @@ public:
     }
 
 private:
+    void handle_cqe(deck & d, io_uring_cqe * cqe)
+    {
+        auto token =
+            static_cast<wait_token>(io_uring_cqe_get_data64(cqe));
+        auto result = cqe->res;
+        io_uring_cqe_seen(&ring_, cqe);
+
+        if (is_cancel_token(token)) {
+            trace("uring cancel complete token="
+                + std::to_string(original_token(token))
+                + " result=" + std::to_string(result));
+            return;
+        }
+
+        trace("uring complete token=" + std::to_string(token)
+            + " result=" + std::to_string(result));
+
+        complete(d, token, result);
+    }
+
     using uring_wish = std::variant<
         manual_wish,
         openat_wish,
@@ -693,6 +738,20 @@ private:
     static wait_token original_token(wait_token token) noexcept
     {
         return token & ~cancel_token_bit;
+    }
+
+    [[nodiscard]] bool has_submitted_completions() const noexcept
+    {
+        return std::ranges::any_of(
+            completions_,
+            [](auto const & entry) {
+                return entry.second->submitted();
+            });
+    }
+
+    [[nodiscard]] bool has_pending_work() const noexcept
+    {
+        return !pending_submissions_.empty() || !pending_cancellations_.empty();
     }
 
     io_uring ring_{};

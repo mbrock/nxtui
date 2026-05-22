@@ -3,15 +3,10 @@
 
 #include "test.hpp"
 
-#include <chrono>
 #include <netinet/in.h>
-#include <stdexcept>
 #include <sys/socket.h>
-#include <thread>
 #include <utility>
 #include <vector>
-
-using namespace std::chrono_literals;
 
 namespace nxt::test {
 
@@ -23,17 +18,7 @@ T pump_until_done(
     nxt::rt::uring_wand & wand,
     nxt::rt::task<T> & task)
 {
-    for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
-        if (!deck.empty())
-            deck.run_ready();
-        wand.poll(deck);
-        if (deck.empty() && !task.done())
-            std::this_thread::sleep_for(1ms);
-    }
-
-    if (!task.done())
-        throw std::runtime_error{"c-ares resolver smoke test did not complete"};
-
+    wand.run_until_done(deck, task);
     return std::move(task).result();
 }
 

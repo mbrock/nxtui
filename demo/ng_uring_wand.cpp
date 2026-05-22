@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <fcntl.h>
@@ -15,12 +14,9 @@
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
-#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
-
-using namespace std::chrono_literals;
 
 namespace {
 
@@ -203,24 +199,6 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
     };
 }
 
-template<typename T>
-void pump_until_done(
-    nxt::rt::deck & deck,
-    nxt::rt::uring_wand & wand,
-    nxt::rt::task<T> & task)
-{
-    for (auto spins = 0; spins != 10000 && !task.done(); ++spins) {
-        if (!deck.empty())
-            deck.run_ready();
-        wand.poll(deck);
-        if (deck.empty() && !task.done())
-            std::this_thread::sleep_for(1ms);
-    }
-
-    if (!task.done())
-        throw std::runtime_error{"demo task did not complete"};
-}
-
 nxt::rt::task<void> list_and_print(std::string path)
 {
     auto out = nxt::rt::fd_sink{STDOUT_FILENO};
@@ -257,7 +235,7 @@ try {
     auto task = list_and_print(path);
 
     deck.start(task);
-    pump_until_done(deck, wand, task);
+    wand.run_until_done(deck, task);
 
     std::move(task).result();
     return 0;

@@ -17,7 +17,6 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <sys/socket.h>
-#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -227,17 +226,7 @@ T pump_until_done(
     nxt::rt::uring_wand & wand,
     nxt::rt::task<T> & task)
 {
-    for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
-        if (!deck.empty())
-            deck.run_ready();
-        wand.poll(deck);
-        if (deck.empty() && !task.done())
-            std::this_thread::sleep_for(1ms);
-    }
-
-    if (!task.done())
-        throw std::runtime_error{"uring socket smoke test did not complete"};
-
+    wand.run_until_done(deck, task);
     return std::move(task).result();
 }
 
@@ -246,17 +235,7 @@ void pump_until_done(
     nxt::rt::uring_wand & wand,
     nxt::rt::task<void> & task)
 {
-    for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
-        if (!deck.empty())
-            deck.run_ready();
-        wand.poll(deck);
-        if (deck.empty() && !task.done())
-            std::this_thread::sleep_for(1ms);
-    }
-
-    if (!task.done())
-        throw std::runtime_error{"uring socket smoke test did not complete"};
-
+    wand.run_until_done(deck, task);
     std::move(task).result();
 }
 
@@ -465,17 +444,7 @@ static suite ng_uring_wand_tests{
                 expect(!task.done());
 
                 task.request_stop();
-                for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
-                    if (!deck.empty())
-                        deck.run_ready();
-                    wand.wave(deck);
-                    wand.poll(deck);
-                    if (deck.empty() && !task.done())
-                        std::this_thread::sleep_for(1ms);
-                }
-
-                if (!task.done())
-                    throw std::runtime_error{"poll cancellation did not complete"};
+                wand.run_until_done(deck, task);
                 std::move(task).result();
             };
 
