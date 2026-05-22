@@ -223,6 +223,19 @@ nxt::rt::task<int> value_after_yield(int value)
     co_return value;
 }
 
+nxt::rt::task<int> value_after_two_yields_or_stop(
+    std::vector<int> & events,
+    int value)
+{
+    co_await nxt::rt::yield();
+    co_await nxt::rt::yield();
+    if (nxt::rt::stop_requested()) {
+        events.push_back(value);
+        throw nxt::rt::operation_cancelled{};
+    }
+    co_return -value;
+}
+
 nxt::rt::task<int> throw_int_after_yield()
 {
     co_await nxt::rt::yield();
@@ -858,6 +871,39 @@ static suite ng_runtime_tests{
 
                 expect(std::move(child).get() == 123_i);
                 expect(events == std::vector<int>{3});
+            };
+
+            "wait_any returns the first successful task"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                auto result =
+                    deck.sync_wait([&]() -> nxt::rt::task<int> {
+                        co_return co_await nxt::rt::wait_any(
+                            value_after_yield(5),
+                            value_after_two_yields_or_stop(events, 6));
+                    });
+
+                expect(result == 5_i);
+                expect(events == std::vector<int>{6});
+            };
+
+            "wait_any groups failures when all tasks fail"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto grouped = false;
+
+                try {
+                    (void)deck.sync_wait([]() -> nxt::rt::task<int> {
+                        co_return co_await nxt::rt::wait_any(
+                            throw_int_after_yield(),
+                            throw_int_after_yield());
+                    });
+                } catch (const nxt::rt::exception_group & group) {
+                    grouped = true;
+                    expect(group.exceptions().size() == std::size_t{2});
+                }
+
+                expect(grouped);
             };
         };
 

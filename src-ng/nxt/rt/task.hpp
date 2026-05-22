@@ -12,6 +12,7 @@
 #include <string>
 #include <stdexcept>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1079,6 +1080,170 @@ private:
 
     std::shared_ptr<state> state_;
 };
+
+namespace detail {
+
+template<typename, typename T>
+using repeat_type = T;
+
+template<typename T, typename Tuple, std::size_t... Is>
+[[nodiscard]] T take_first_success_or_throw(
+    Tuple & deeds,
+    std::index_sequence<Is...>)
+{
+    auto exceptions = std::vector<std::exception_ptr>{};
+    auto result = std::optional<T>{};
+
+    auto inspect = [&](auto index) {
+        if (result)
+            return;
+
+        auto value = std::move(std::get<index>(deeds)).get();
+        if (value) {
+            result.emplace(std::move(*value));
+        } else {
+            exceptions.push_back(value.error());
+        }
+    };
+
+    (inspect(std::integral_constant<std::size_t, Is>{}), ...);
+
+    if (result)
+        return std::move(*result);
+    throw_exceptions("wait_any tasks failed", std::move(exceptions));
+}
+
+template<typename Tuple, std::size_t... Is>
+void take_first_void_success_or_throw(
+    Tuple & deeds,
+    std::index_sequence<Is...>)
+{
+    auto exceptions = std::vector<std::exception_ptr>{};
+    auto succeeded = false;
+
+    auto inspect = [&](auto index) {
+        if (succeeded)
+            return;
+
+        auto value = std::move(std::get<index>(deeds)).get();
+        if (value) {
+            succeeded = true;
+        } else {
+            exceptions.push_back(value.error());
+        }
+    };
+
+    (inspect(std::integral_constant<std::size_t, Is>{}), ...);
+
+    if (succeeded)
+        return;
+    throw_exceptions("wait_any tasks failed", std::move(exceptions));
+}
+
+template<typename T>
+task<T> stop_zone_on_completion(task<T> child)
+{
+    try {
+        if constexpr (std::is_void_v<T>) {
+            co_await child;
+            require_current_zone().stop();
+            co_return;
+        } else {
+            auto value = co_await child;
+            require_current_zone().stop();
+            co_return value;
+        }
+    } catch (...) {
+        if (auto * zone = current_zone())
+            zone->stop();
+        throw;
+    }
+}
+
+} // namespace detail
+
+template<typename T, typename... Rest>
+    requires (std::same_as<task<T>, std::remove_cvref_t<Rest>> && ...)
+[[nodiscard]] task<T> wait_any(task<T> first, Rest... rest)
+{
+    using deeds_type =
+        std::tuple<
+            catching_deed<T>,
+            detail::repeat_type<Rest, catching_deed<T>>...>;
+    constexpr auto count = std::size_t{1 + sizeof...(Rest)};
+
+    auto deeds = co_await with_zone(
+        stop_on_success{},
+        [first = std::move(first),
+         ... rest = std::move(rest)](
+            auto & policy) mutable -> task<deeds_type> {
+            co_return deeds_type{
+                policy.fork(std::move(first)).cope(),
+                policy.fork(std::move(rest)).cope()...,
+            };
+        });
+
+    if constexpr (std::is_void_v<T>) {
+        detail::take_first_void_success_or_throw(
+            deeds,
+            std::make_index_sequence<count>{});
+    } else {
+        co_return detail::take_first_success_or_throw<T>(
+            deeds,
+            std::make_index_sequence<count>{});
+    }
+}
+
+[[nodiscard]] inline task<void> timeout_after(
+    std::chrono::nanoseconds duration)
+{
+    co_await timeout_wish::after(duration);
+    throw timeout_error{};
+}
+
+template<typename T>
+[[nodiscard]] task<T> with_timeout(
+    std::chrono::nanoseconds duration,
+    task<T> body)
+{
+    using deeds_type =
+        std::tuple<catching_deed<T>, catching_deed<void>>;
+
+    auto deeds = co_await with_zone(
+        [duration, body = std::move(body)]() mutable
+            -> task<deeds_type> {
+            auto body_deed =
+                fork(detail::stop_zone_on_completion(std::move(body)))
+                    .cope();
+            auto timeout_deed =
+                fork(detail::stop_zone_on_completion(
+                    timeout_after(duration))).cope();
+            co_return deeds_type{
+                std::move(body_deed),
+                std::move(timeout_deed),
+            };
+        });
+
+    auto body_result = std::move(std::get<0>(deeds)).get();
+    if (body_result) {
+        if constexpr (std::is_void_v<T>) {
+            co_return;
+        } else {
+            co_return std::move(*body_result);
+        }
+    }
+
+    auto timeout_result = std::move(std::get<1>(deeds)).get();
+    if (!timeout_result)
+        rethrow(timeout_result.error());
+    rethrow(body_result.error());
+
+    if constexpr (std::is_void_v<T>) {
+        co_return;
+    } else {
+        throw logic_error{"nxt::rt with_timeout returned without result"};
+    }
+}
 
 namespace detail {
 

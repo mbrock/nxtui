@@ -61,6 +61,14 @@ public:
     {}
 };
 
+class timeout_error : public runtime_error
+{
+public:
+    timeout_error()
+        : runtime_error{"nxt::rt operation timed out"}
+    {}
+};
+
 [[noreturn]] inline void rethrow(std::exception_ptr failure)
 {
 #ifdef NXT_HAVE_CPPTRACE

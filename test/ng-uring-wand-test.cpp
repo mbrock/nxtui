@@ -122,6 +122,24 @@ nxt::rt::task<void> poll_until_timeout(int rx)
         throw std::runtime_error{"poll-until did not time out"};
 }
 
+nxt::rt::task<void> poll_forever(int rx)
+{
+    (void)co_await nxt::rt::poll_wish{
+        .fd = rx,
+        .events = POLLIN,
+    };
+}
+
+nxt::rt::task<void> poll_with_timeout(int rx)
+{
+    co_await nxt::rt::with_timeout(1ms, poll_forever(rx));
+}
+
+nxt::rt::task<void> poll_after_send_with_timeout(int tx, int rx)
+{
+    co_await nxt::rt::with_timeout(1s, poll_after_socket_send(tx, rx));
+}
+
 nxt::rt::task<void> poll_until_stopped(int rx)
 {
     try {
@@ -348,6 +366,49 @@ static suite ng_uring_wand_tests{
                 if (!task.done())
                     throw std::runtime_error{"poll cancellation did not complete"};
                 std::move(task).result();
+            };
+
+            "with_timeout returns when the body wins"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
+
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
+
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task =
+                    poll_after_send_with_timeout(first.get(), second.get());
+
+                deck.start(task);
+                pump_until_done(deck, wand, task);
+
+                expect(task.done());
+            };
+
+            "with_timeout throws when the timer wins"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
+
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
+
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = poll_with_timeout(second.get());
+
+                deck.start(task);
+
+                auto timed_out = false;
+                try {
+                    pump_until_done(deck, wand, task);
+                } catch (const nxt::rt::timeout_error &) {
+                    timed_out = true;
+                }
+
+                expect(timed_out);
             };
         };
     }};
