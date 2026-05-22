@@ -221,37 +221,27 @@ void pump_until_done(
         throw std::runtime_error{"demo task did not complete"};
 }
 
-template<typename Sink>
-nxt::rt::task<void> print_entries(
-    nxt::rt::byte_writer<Sink> & writer,
-    std::vector<listing_entry> const & entries)
-{
-    auto widths = entries | std::views::transform(
-        [](listing_entry const & entry) {
-            return std::to_string(entry.stat.stx_size).size();
-        });
-    auto width = entries.empty() ? std::size_t{1} : std::ranges::max(widths);
-
-    co_await nxt::rt::for_each_task(
-        entries | std::views::transform(
-            [&](listing_entry const & entry) {
-                return writer.write(std::format(
-                    "{} {:>{}} {}\n",
-                    mode_string(entry.stat.stx_mode),
-                    entry.stat.stx_size,
-                    width,
-                    entry.name));
-            }));
-    co_await writer.flush();
-}
-
 nxt::rt::task<void> list_and_print(std::string path)
 {
-    auto entries = co_await list_path(std::move(path));
     auto out = nxt::rt::fd_sink{STDOUT_FILENO};
     auto storage = std::array<std::byte, 4096>{};
     auto writer = nxt::rt::byte_writer{out, std::span{storage}};
-    co_await print_entries(writer, entries);
+
+    auto entries = co_await list_path(std::move(path));
+    auto tasks = entries
+        | std::views::transform([](listing_entry const & entry) {
+            return std::format(
+                "{} {:>8} {}\n",
+                mode_string(entry.stat.stx_mode),
+                entry.stat.stx_size,
+                entry.name);
+        })
+        | std::views::transform([&](std::string line) {
+            return writer.write(std::move(line));
+        });
+
+    co_await nxt::rt::for_each_task(tasks);
+    co_await writer.flush();
 }
 
 } // namespace
