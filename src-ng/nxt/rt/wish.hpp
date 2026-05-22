@@ -375,6 +375,7 @@ public:
         poll_until_wish wish) = 0;
 
     virtual void suspend(wait_token token, parked_task task) = 0;
+    virtual void cancel(wait_token token) = 0;
     virtual void wave(deck & d) = 0;
 };
 

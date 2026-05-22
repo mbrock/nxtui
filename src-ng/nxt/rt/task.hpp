@@ -115,6 +115,26 @@ struct promise_base
                 });
     }
 
+    void cancel_wait_on_stop(wand & w, wait_token token)
+    {
+        wait_stop_callback.reset();
+        auto stop = stop_token();
+        if (!stop.stop_possible())
+            return;
+
+        wait_stop_callback =
+            std::make_unique<stop_callback_type>(
+                stop,
+                [&w, token] {
+                    w.cancel(token);
+                });
+    }
+
+    void clear_wait_stop_callback() noexcept
+    {
+        wait_stop_callback.reset();
+    }
+
     bool request_stop() noexcept
     {
         return stop_.request_stop();
@@ -157,6 +177,8 @@ struct promise_base
     runtime_env env;
     /// Propagates stop from the task awaiting this task.
     std::unique_ptr<stop_callback_type> parent_stop_callback;
+    /// Cancels the current parked wish when this task is stopped.
+    std::unique_ptr<stop_callback_type> wait_stop_callback;
 
 private:
     std::stop_source stop_;
@@ -960,7 +982,7 @@ inline bool stop_requested() noexcept
 inline void throw_if_stop_requested()
 {
     if (stop_requested())
-        throw runtime_error{"nxt::rt operation cancelled"};
+        throw operation_cancelled{};
 }
 
 template<typename T>
@@ -1121,6 +1143,8 @@ inline void deck::ready_item::resume_if_ready(deck & d) const
 inline void parked_task::resume(deck & d) const
 {
     trace("wand fulfill parked task");
+    if (promise != nullptr)
+        promise->clear_wait_stop_callback();
     d.enqueue(handle, promise);
 }
 
@@ -1159,6 +1183,7 @@ inline void waiter<T>::await_suspend(
             "nxt::rt waiter awaited without a prepared wand"};
 
     trace("waiter suspend token=" + std::to_string(token_));
+    running->cancel_wait_on_stop(*active_wand, token_);
     active_wand->suspend(
         token_,
         parked_task{

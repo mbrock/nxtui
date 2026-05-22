@@ -122,6 +122,20 @@ nxt::rt::task<void> poll_until_timeout(int rx)
         throw std::runtime_error{"poll-until did not time out"};
 }
 
+nxt::rt::task<void> poll_until_stopped(int rx)
+{
+    try {
+        (void)co_await nxt::rt::poll_wish{
+            .fd = rx,
+            .events = POLLIN,
+        };
+    } catch (const nxt::rt::operation_cancelled &) {
+        co_return;
+    }
+
+    throw std::runtime_error{"poll completed instead of being cancelled"};
+}
+
 nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
 {
     co_await nxt::rt::connect_wish::from(
@@ -303,6 +317,37 @@ static suite ng_uring_wand_tests{
                 pump_until_done(deck, wand, task);
 
                 expect(task.done());
+            };
+
+            "poll wishes are cancelled when their task stops"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
+
+                auto first = unique_fd{sockets[0]};
+                auto second = unique_fd{sockets[1]};
+
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = poll_until_stopped(second.get());
+
+                deck.start(task);
+                deck.run_ready();
+                expect(!task.done());
+
+                task.request_stop();
+                for (auto spins = 0; spins != 1000 && !task.done(); ++spins) {
+                    if (!deck.empty())
+                        deck.run_ready();
+                    wand.wave(deck);
+                    wand.poll(deck);
+                    if (deck.empty() && !task.done())
+                        std::this_thread::sleep_for(1ms);
+                }
+
+                if (!task.done())
+                    throw std::runtime_error{"poll cancellation did not complete"};
+                std::move(task).result();
             };
         };
     }};

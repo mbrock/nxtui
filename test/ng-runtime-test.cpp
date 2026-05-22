@@ -114,6 +114,11 @@ struct manual_wand final : nxt::rt::wand
             });
     }
 
+    void cancel(nxt::rt::wait_token token) override
+    {
+        cancelled.push_back(token);
+    }
+
     void wave(nxt::rt::deck &) override
     {
         ++waves;
@@ -140,6 +145,7 @@ struct manual_wand final : nxt::rt::wand
     };
 
     std::vector<nxt::rt::wait_token> prepared;
+    std::vector<nxt::rt::wait_token> cancelled;
     std::vector<parked_entry> parked;
     std::vector<std::shared_ptr<nxt::rt::wait_state<void>>> states;
     int waves = 0;
@@ -860,6 +866,21 @@ static suite ng_runtime_tests{
                 expect(wand.prepared.size() == std::size_t{1})
                     << "resuming after fulfillment should not prepare a second wish";
                 expect(wand.waves == 2_i);
+            };
+
+            "stopped tasks request cancellation of parked wishes"_test = [] {
+                auto wand = manual_wand{};
+                auto deck = nxt::rt::deck{&wand};
+
+                auto task = []() -> nxt::rt::task<void> {
+                    co_await nxt::rt::manual_wish{.token = 99};
+                }();
+
+                deck.start(task);
+                deck.run_ready();
+                task.request_stop();
+
+                expect(wand.cancelled == std::vector<nxt::rt::wait_token>{99});
             };
         };
 

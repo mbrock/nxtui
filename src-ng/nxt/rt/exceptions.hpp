@@ -53,6 +53,14 @@ private:
     std::vector<std::exception_ptr> exceptions_;
 };
 
+class operation_cancelled : public runtime_error
+{
+public:
+    operation_cancelled()
+        : runtime_error{"nxt::rt operation cancelled"}
+    {}
+};
+
 [[noreturn]] inline void rethrow(std::exception_ptr failure)
 {
 #ifdef NXT_HAVE_CPPTRACE
