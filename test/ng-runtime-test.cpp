@@ -1290,6 +1290,22 @@ static suite ng_runtime_tests{
                         expect(sink.text == "abcde");
                     };
 
+                    "writes and flushes text chunks"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::size_t{8}};
+                        auto chunks =
+                            std::vector<std::string>{"ab", "cd", "e"};
+
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write_all(chunks);
+                        });
+
+                        expect(sink.text == "abcde");
+                        expect(writer.buffered_size() == std::size_t{0});
+                    };
+
                     "writes lazy ranges of text chunks"_test = [] {
                         auto deck = nxt::rt::deck{};
                         auto sink = chunking_string_sink{64};
@@ -1326,6 +1342,25 @@ static suite ng_runtime_tests{
                         });
 
                         expect(sink.text == "abcdef");
+                    };
+
+                    "writes and flushes byte spans"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::size_t{8}};
+                        auto chunks = std::array{
+                            nxt::rt::as_bytes("ab"sv),
+                            nxt::rt::as_bytes("cd"sv),
+                            nxt::rt::as_bytes("ef"sv),
+                        };
+
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write_all(chunks);
+                        });
+
+                        expect(sink.text == "abcdef");
+                        expect(writer.buffered_size() == std::size_t{0});
                     };
                 };
 

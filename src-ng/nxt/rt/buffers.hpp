@@ -386,7 +386,7 @@ public:
 
     task<void> flush()
     {
-        co_await write_all(*sink_, buffered());
+        co_await nxt::rt::write_all(*sink_, buffered());
         end_ = 0;
     }
 
@@ -396,7 +396,7 @@ public:
         while (!remaining.empty()) {
             if (remaining.size() >= buffer_.size()) {
                 co_await flush();
-                co_await write_all(*sink_, remaining);
+                co_await nxt::rt::write_all(*sink_, remaining);
                 co_return;
             }
 
@@ -425,6 +425,15 @@ public:
     {
         for (auto && chunk : chunks)
             co_await write(std::forward<decltype(chunk)>(chunk));
+    }
+
+    template<typename Chunks>
+        requires detail::byte_writer_chunk<Chunks>
+            || detail::byte_writer_chunk_range<Chunks>
+    task<void> write_all(Chunks && chunks)
+    {
+        co_await write(std::forward<Chunks>(chunks));
+        co_await flush();
     }
 
 private:

@@ -175,8 +175,7 @@ nxt::rt::task<void> list_and_print(std::string path)
                 entry.name);
         });
 
-    co_await writer.write(lines);
-    co_await writer.flush();
+    co_await writer.write_all(lines);
 }
 
 } // namespace
