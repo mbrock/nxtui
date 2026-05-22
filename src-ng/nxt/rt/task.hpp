@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <stdexcept>
 #include <type_traits>
@@ -771,6 +772,27 @@ public:
     task_zone(task_zone &&) = delete;
     task_zone & operator=(task_zone &&) = delete;
 
+    void shutdown() noexcept
+    {
+        shutting_down_ = true;
+        stop_.request_stop();
+    }
+
+    [[nodiscard]] bool shutting_down() const noexcept
+    {
+        return shutting_down_;
+    }
+
+    [[nodiscard]] bool stop_requested() const noexcept
+    {
+        return stop_.stop_requested();
+    }
+
+    [[nodiscard]] std::stop_token stop_token() const noexcept
+    {
+        return stop_.get_token();
+    }
+
     template<typename T>
     deed<T> spawn(task<T> child)
     {
@@ -780,6 +802,8 @@ public:
         if (current == nullptr || active_deck == nullptr)
             throw runtime_error{
                 "nxt::rt zone spawn used without a running deck"};
+        if (shutting_down_)
+            throw runtime_error{"nxt::rt zone spawn used after shutdown"};
 
         auto handle = child.release();
         if (!handle || handle.done())
@@ -803,6 +827,8 @@ public:
 
 private:
     std::vector<std::shared_ptr<detail::child_record_base>> children_;
+    std::stop_source stop_;
+    bool shutting_down_ = false;
 };
 
 struct task_zone_key
@@ -827,6 +853,26 @@ inline task_zone & require_current_zone()
     return *zone;
 }
 
+inline std::stop_token current_stop_token() noexcept
+{
+    auto * zone = current_zone();
+    if (zone == nullptr)
+        return {};
+    return zone->stop_token();
+}
+
+inline bool stop_requested() noexcept
+{
+    auto * zone = current_zone();
+    return zone != nullptr && zone->stop_requested();
+}
+
+inline void throw_if_stop_requested()
+{
+    if (stop_requested())
+        throw runtime_error{"nxt::rt operation cancelled"};
+}
+
 template<typename T>
 deed<T> spawn(task<T> child)
 {
@@ -846,6 +892,7 @@ run_zone_body(task_zone & zone, Fn fn)
             co_await std::invoke(fn);
         } catch (...) {
             exceptions.push_back(std::current_exception());
+            zone.shutdown();
         }
 
         try {
@@ -863,6 +910,7 @@ run_zone_body(task_zone & zone, Fn fn)
             result.emplace(co_await std::invoke(fn));
         } catch (...) {
             exceptions.push_back(std::current_exception());
+            zone.shutdown();
         }
 
         try {

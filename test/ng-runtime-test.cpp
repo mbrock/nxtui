@@ -223,6 +223,14 @@ nxt::rt::task<int> throw_int_after_yield()
     throw nxt::rt::runtime_error{"zone child int boom"};
 }
 
+nxt::rt::task<void> record_stop_state_after_yield(
+    std::vector<int> & events,
+    int value)
+{
+    co_await nxt::rt::yield();
+    events.push_back(nxt::rt::stop_requested() ? value : -value);
+}
+
 static suite ng_runtime_tests{
     "Runtime", [] {
         "deck"_test = [] {
@@ -666,6 +674,64 @@ static suite ng_runtime_tests{
                 auto result = std::move(child).get();
                 expect(result.has_value());
                 expect(*result == 99_i);
+            };
+
+            "share a stop token with spawned children"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::spawn(
+                            record_stop_state_after_yield(events, 1));
+                        nxt::rt::require_current_zone().shutdown();
+                        co_return;
+                    });
+                });
+
+                expect(events == std::vector<int>{1});
+            };
+
+            "reject spawn after zone shutdown"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto rejected = false;
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::require_current_zone().shutdown();
+                        try {
+                            nxt::rt::spawn(value_after_yield(1));
+                        } catch (const std::exception &) {
+                            rejected = true;
+                        }
+                        co_return;
+                    });
+                });
+
+                expect(rejected);
+            };
+
+            "request child stop when the zone body fails"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+                auto threw = false;
+
+                try {
+                    deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::with_zone(
+                            [&]() -> nxt::rt::task<void> {
+                                nxt::rt::spawn(
+                                    record_stop_state_after_yield(events, 2));
+                                throw nxt::rt::runtime_error{
+                                    "zone body boom"};
+                            });
+                    });
+                } catch (const std::exception &) {
+                    threw = true;
+                }
+
+                expect(threw);
+                expect(events == std::vector<int>{2});
             };
         };
 
