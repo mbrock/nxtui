@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <format>
 #include <iostream>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -157,10 +158,9 @@ nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
         if (header.d_reclen < sizeof(linux_dirent64_header))
             throw std::runtime_error{"getdents64 returned a short entry"};
 
-        auto rest =
-            co_await reader.take(header.d_reclen - sizeof(linux_dirent64_header));
-        auto name = std::string_view{
-            reinterpret_cast<const char *>(rest.data())};
+        auto name = co_await reader.take_string_view(
+            header.d_reclen - sizeof(linux_dirent64_header));
+        name = name.substr(0, name.find('\0'));
         if (!hidden_or_dot(name)) {
             auto stat = co_await nxt::rt::statx_wish{
                 .dirfd = dir.get(),
@@ -227,8 +227,11 @@ nxt::rt::task<void> print_entries(
     std::vector<listing_entry> const & entries)
 {
     auto width = std::size_t{1};
-    for (auto const & entry : entries)
-        width = std::max(width, std::to_string(entry.stat.stx_size).size());
+    for (auto size : entries | std::views::transform(
+             [](listing_entry const & entry) {
+                 return std::to_string(entry.stat.stx_size).size();
+             }))
+        width = std::max(width, size);
 
     for (auto const & entry : entries) {
         co_await writer.write(

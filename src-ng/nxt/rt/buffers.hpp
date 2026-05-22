@@ -457,6 +457,11 @@ public:
         co_return out;
     }
 
+    task<std::string_view> take_string_view(std::size_t n)
+    {
+        co_return as_string_view(co_await take(n));
+    }
+
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     task<T> take_struct()

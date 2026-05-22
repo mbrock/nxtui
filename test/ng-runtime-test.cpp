@@ -1243,6 +1243,23 @@ static suite ng_runtime_tests{
                 });
             };
 
+            "byte_reader takes borrowed string views"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto chunks = std::array{"abcd"sv};
+                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                    auto view = co_await reader.take_string_view(3);
+                    co_return std::string{view};
+                });
+
+                expect(result == "abc");
+                expect(reader.buffered_size() == std::size_t{1});
+            };
+
             "byte_writer buffers bytes until flush"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto sink = chunking_string_sink{64};
