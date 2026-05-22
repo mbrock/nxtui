@@ -794,20 +794,20 @@ public:
     }
 
     template<typename T>
-    deed<T> spawn(task<T> child)
+    deed<T> fork(task<T> child)
     {
         auto * current = detail::current_env;
         auto * active_deck =
             current == nullptr ? nullptr : current->current_deck;
         if (current == nullptr || active_deck == nullptr)
             throw runtime_error{
-                "nxt::rt zone spawn used without a running deck"};
+                "nxt::rt zone fork used without a running deck"};
         if (stopping_)
-            throw runtime_error{"nxt::rt zone spawn used after stop"};
+            throw runtime_error{"nxt::rt zone fork used after stop"};
 
         auto handle = child.release();
         if (!handle || handle.done())
-            throw runtime_error{"nxt::rt zone spawn used with empty task"};
+            throw runtime_error{"nxt::rt zone fork used with empty task"};
 
         handle.promise().env.bindings = current->bindings;
         auto record = std::shared_ptr<detail::child_record<T>>{};
@@ -874,9 +874,9 @@ inline void throw_if_stop_requested()
 }
 
 template<typename T>
-deed<T> spawn(task<T> child)
+deed<T> fork(task<T> child)
 {
-    return require_current_zone().spawn(std::move(child));
+    return require_current_zone().fork(std::move(child));
 }
 
 namespace detail {

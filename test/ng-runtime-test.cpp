@@ -425,13 +425,13 @@ static suite ng_runtime_tests{
                 expect(seen);
             };
 
-            "join spawned tasks before the zone exits"_test = [] {
+            "join forked tasks before the zone exits"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxt::rt::task<void> {
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::spawn(record_after_yield(events, 1));
+                        nxt::rt::fork(record_after_yield(events, 1));
                         events.push_back(2);
                         co_return;
                     });
@@ -442,7 +442,7 @@ static suite ng_runtime_tests{
                 expect(events == std::vector<int>{2, 11, 12, 3});
             };
 
-            "let spawned tasks inherit the current zone"_test = [] {
+            "let forked tasks inherit the current zone"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto zones = std::vector<nxt::rt::task_zone *>{};
                 auto expected = static_cast<nxt::rt::task_zone *>(nullptr);
@@ -450,7 +450,7 @@ static suite ng_runtime_tests{
                 deck.sync_wait([&]() -> nxt::rt::task<void> {
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
                         expected = nxt::rt::current_zone();
-                        nxt::rt::spawn(record_current_zone(zones));
+                        nxt::rt::fork(record_current_zone(zones));
                         co_return;
                     });
                     co_return;
@@ -460,21 +460,21 @@ static suite ng_runtime_tests{
                 expect(zones == std::vector<nxt::rt::task_zone *>{expected});
             };
 
-            "allow children to spawn more work into the same zone"_test = [] {
+            "allow children to fork more work into the same zone"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto events = std::vector<int>{};
 
                 auto parent = [&events]() -> nxt::rt::task<void> {
                     events.push_back(1);
                     co_await nxt::rt::yield();
-                    nxt::rt::spawn(record_after_yield(events, 2));
+                    nxt::rt::fork(record_after_yield(events, 2));
                     events.push_back(3);
                     co_return;
                 };
 
                 deck.sync_wait([&]() -> nxt::rt::task<void> {
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::spawn(parent());
+                        nxt::rt::fork(parent());
                         co_return;
                     });
                     events.push_back(4);
@@ -484,12 +484,12 @@ static suite ng_runtime_tests{
                 expect(events == std::vector<int>{1, 3, 21, 22, 4});
             };
 
-            "reject spawn outside a zone"_test = [] {
+            "reject fork outside a zone"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto rejected = deck.sync_wait([]() -> nxt::rt::task<bool> {
                     try {
-                        nxt::rt::spawn([]() -> nxt::rt::task<void> {
+                        nxt::rt::fork([]() -> nxt::rt::task<void> {
                             co_return;
                         }());
                     } catch (const std::exception &) {
@@ -510,8 +510,8 @@ static suite ng_runtime_tests{
                     deck.sync_wait([&]() -> nxt::rt::task<void> {
                         co_await nxt::rt::with_zone(
                             [&]() -> nxt::rt::task<void> {
-                                nxt::rt::spawn(throw_after_yield(events, 0));
-                                nxt::rt::spawn(record_after_yield(events, 2));
+                                nxt::rt::fork(throw_after_yield(events, 0));
+                                nxt::rt::fork(record_after_yield(events, 2));
                                 co_return;
                             });
                         co_return;
@@ -533,9 +533,9 @@ static suite ng_runtime_tests{
                     deck.sync_wait([&]() -> nxt::rt::task<void> {
                         co_await nxt::rt::with_zone(
                             [&]() -> nxt::rt::task<void> {
-                                nxt::rt::spawn(throw_after_yield(events, 1));
-                                nxt::rt::spawn(throw_after_yield(events, 2));
-                                nxt::rt::spawn(record_after_yield(events, 3));
+                                nxt::rt::fork(throw_after_yield(events, 1));
+                                nxt::rt::fork(throw_after_yield(events, 2));
+                                nxt::rt::fork(record_after_yield(events, 3));
                                 co_return;
                             });
                         co_return;
@@ -549,7 +549,7 @@ static suite ng_runtime_tests{
                 expect(events == std::vector<int>{11, 21, 31, 32});
             };
 
-            "return spawned task results after joining"_test = [] {
+            "return forked task results after joining"_test = [] {
                 auto deck = nxt::rt::deck{};
 
                 auto child =
@@ -558,7 +558,7 @@ static suite ng_runtime_tests{
                         co_return co_await nxt::rt::with_zone(
                             []() -> nxt::rt::task<nxt::rt::deed<int>> {
                                 auto child =
-                                    nxt::rt::spawn(value_after_yield(42));
+                                    nxt::rt::fork(value_after_yield(42));
                                 co_return std::move(child);
                             });
                     });
@@ -566,7 +566,7 @@ static suite ng_runtime_tests{
                 expect(std::move(child).get() == 42_i);
             };
 
-            "return several spawned task results"_test = [] {
+            "return several forked task results"_test = [] {
                 auto deck = nxt::rt::deck{};
                 using children_type = std::tuple<
                     nxt::rt::deed<int>,
@@ -577,9 +577,9 @@ static suite ng_runtime_tests{
                         co_return co_await nxt::rt::with_zone(
                             []() -> nxt::rt::task<children_type> {
                                 auto first =
-                                    nxt::rt::spawn(value_after_yield(10));
+                                    nxt::rt::fork(value_after_yield(10));
                                 auto second =
-                                    nxt::rt::spawn(value_after_yield(20));
+                                    nxt::rt::fork(value_after_yield(20));
                                 co_return children_type{
                                     std::move(first),
                                     std::move(second)};
@@ -600,7 +600,7 @@ static suite ng_runtime_tests{
                         co_return co_await nxt::rt::with_zone(
                             []() -> nxt::rt::task<nxt::rt::deed<int>> {
                                 auto child =
-                                    nxt::rt::spawn(throw_int_after_yield());
+                                    nxt::rt::fork(throw_int_after_yield());
                                 co_return std::move(child);
                             });
                     });
@@ -622,7 +622,7 @@ static suite ng_runtime_tests{
                 deck.sync_wait([&]() -> nxt::rt::task<void> {
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
                         auto child =
-                            nxt::rt::spawn(throw_int_after_yield());
+                            nxt::rt::fork(throw_int_after_yield());
                         co_await nxt::rt::yield();
                         co_await nxt::rt::yield();
                         observed = child.exception() != nullptr;
@@ -644,7 +644,7 @@ static suite ng_runtime_tests{
                                 -> nxt::rt::task<
                                     nxt::rt::catching_deed<int>> {
                                 auto child =
-                                    nxt::rt::spawn(throw_int_after_yield())
+                                    nxt::rt::fork(throw_int_after_yield())
                                         .cope();
                                 co_return std::move(child);
                             });
@@ -665,7 +665,7 @@ static suite ng_runtime_tests{
                                 -> nxt::rt::task<
                                     nxt::rt::catching_deed<int>> {
                                 auto child =
-                                    nxt::rt::spawn(value_after_yield(99))
+                                    nxt::rt::fork(value_after_yield(99))
                                         .cope();
                                 co_return std::move(child);
                             });
@@ -676,13 +676,13 @@ static suite ng_runtime_tests{
                 expect(*result == 99_i);
             };
 
-            "share a stop token with spawned children"_test = [] {
+            "share a stop token with forked children"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxt::rt::task<void> {
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::spawn(
+                        nxt::rt::fork(
                             record_stop_state_after_yield(events, 1));
                         nxt::rt::require_current_zone().stop();
                         co_return;
@@ -692,7 +692,7 @@ static suite ng_runtime_tests{
                 expect(events == std::vector<int>{1});
             };
 
-            "reject spawn after zone stop"_test = [] {
+            "reject fork after zone stop"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto rejected = false;
 
@@ -700,7 +700,7 @@ static suite ng_runtime_tests{
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
                         nxt::rt::require_current_zone().stop();
                         try {
-                            nxt::rt::spawn(value_after_yield(1));
+                            nxt::rt::fork(value_after_yield(1));
                         } catch (const std::exception &) {
                             rejected = true;
                         }
@@ -720,7 +720,7 @@ static suite ng_runtime_tests{
                     deck.sync_wait([&]() -> nxt::rt::task<void> {
                         co_await nxt::rt::with_zone(
                             [&]() -> nxt::rt::task<void> {
-                                nxt::rt::spawn(
+                                nxt::rt::fork(
                                     record_stop_state_after_yield(events, 2));
                                 throw nxt::rt::runtime_error{
                                     "zone body boom"};
