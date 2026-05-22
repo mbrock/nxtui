@@ -684,7 +684,7 @@ static suite ng_runtime_tests{
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
                         nxt::rt::spawn(
                             record_stop_state_after_yield(events, 1));
-                        nxt::rt::require_current_zone().shutdown();
+                        nxt::rt::require_current_zone().stop();
                         co_return;
                     });
                 });
@@ -692,13 +692,13 @@ static suite ng_runtime_tests{
                 expect(events == std::vector<int>{1});
             };
 
-            "reject spawn after zone shutdown"_test = [] {
+            "reject spawn after zone stop"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto rejected = false;
 
                 deck.sync_wait([&]() -> nxt::rt::task<void> {
                     co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::require_current_zone().shutdown();
+                        nxt::rt::require_current_zone().stop();
                         try {
                             nxt::rt::spawn(value_after_yield(1));
                         } catch (const std::exception &) {

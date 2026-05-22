@@ -772,15 +772,15 @@ public:
     task_zone(task_zone &&) = delete;
     task_zone & operator=(task_zone &&) = delete;
 
-    void shutdown() noexcept
+    void stop() noexcept
     {
-        shutting_down_ = true;
+        stopping_ = true;
         stop_.request_stop();
     }
 
-    [[nodiscard]] bool shutting_down() const noexcept
+    [[nodiscard]] bool stopping() const noexcept
     {
-        return shutting_down_;
+        return stopping_;
     }
 
     [[nodiscard]] bool stop_requested() const noexcept
@@ -802,8 +802,8 @@ public:
         if (current == nullptr || active_deck == nullptr)
             throw runtime_error{
                 "nxt::rt zone spawn used without a running deck"};
-        if (shutting_down_)
-            throw runtime_error{"nxt::rt zone spawn used after shutdown"};
+        if (stopping_)
+            throw runtime_error{"nxt::rt zone spawn used after stop"};
 
         auto handle = child.release();
         if (!handle || handle.done())
@@ -828,7 +828,7 @@ public:
 private:
     std::vector<std::shared_ptr<detail::child_record_base>> children_;
     std::stop_source stop_;
-    bool shutting_down_ = false;
+    bool stopping_ = false;
 };
 
 struct task_zone_key
@@ -892,7 +892,7 @@ run_zone_body(task_zone & zone, Fn fn)
             co_await std::invoke(fn);
         } catch (...) {
             exceptions.push_back(std::current_exception());
-            zone.shutdown();
+            zone.stop();
         }
 
         try {
@@ -910,7 +910,7 @@ run_zone_body(task_zone & zone, Fn fn)
             result.emplace(co_await std::invoke(fn));
         } catch (...) {
             exceptions.push_back(std::current_exception());
-            zone.shutdown();
+            zone.stop();
         }
 
         try {
