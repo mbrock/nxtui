@@ -9,11 +9,10 @@
 #include <nxtai/responses.hpp>
 
 #if defined(__linux__)
-#include <nxt/rt/uring_wand.hpp>
+#  include <nxt/rt/uring_wand.hpp>
 #else
-#include <nxt/rt/kqueue_wand.hpp>
+#  include <nxt/rt/kqueue_wand.hpp>
 #endif
-
 
 #include <cerrno>
 #include <cstdint>
@@ -39,11 +38,11 @@ void set_close_on_exec(int fd)
 {
     auto flags = ::fcntl(fd, F_GETFD, 0);
     if (flags >= 0)
-        (void)::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+        (void) ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 }
 
-nxt::rt::task<nxt::unique_fd> connect_address(
-    nxt::rt::resolved_address address)
+nxt::rt::task<nxt::unique_fd>
+connect_address(nxt::rt::resolved_address address)
 {
     auto fd = nxt::unique_fd{::socket(
         address.family,
@@ -51,7 +50,8 @@ nxt::rt::task<nxt::unique_fd> connect_address(
         address.protocol)};
     if (fd.get() < 0)
         throw nxt::rt::runtime_error{
-            "socket: " + std::string{std::generic_category().message(errno)}};
+            "socket: "
+            + std::string{std::generic_category().message(errno)}};
 
     set_close_on_exec(fd.get());
     co_await nxt::rt::op::connect::from(
@@ -138,14 +138,16 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     auto server_hello = nxt::tls::parse_tls13_server_hello(record);
     nxt::tls::describe_server_hello(server_hello);
 
-    auto shared_secret =
-        nxt::crypto::x25519_dh(hello.key_pair.secret_key, server_hello.key_share);
-    nxt::tls::require_tls(shared_secret.has_value(), "X25519 shared secret failed");
+    auto shared_secret = nxt::crypto::x25519_dh(
+        hello.key_pair.secret_key, server_hello.key_share);
+    nxt::tls::require_tls(
+        shared_secret.has_value(), "X25519 shared secret failed");
     std::cerr << "computed X25519 shared secret: " << shared_secret->size()
               << " bytes\n";
 
     auto index = std::size_t{1};
-    auto transcript = nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
+    auto transcript =
+        nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
     auto handshake_keys =
         nxt::tls::derive_tls13_handshake_keys(*shared_secret, transcript);
     std::cerr << "derived handshake AES-128-GCM keys and IVs\n";
@@ -162,7 +164,8 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     auto leaf_public_key = std::optional<bytes>{};
     auto saw_server_finished = false;
     while (true) {
-        auto plaintext = nxt::tls::open_tls13_record(handshake_keys.server, record);
+        auto plaintext =
+            nxt::tls::open_tls13_record(handshake_keys.server, record);
         std::cerr << "decrypted inner record: "
                   << nxt::tls::tls_record_type_name(plaintext.inner_type)
                   << " type=" << unsigned{plaintext.inner_type}
@@ -173,12 +176,14 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
             nxt::tls::dump_hex(plaintext.content);
 
         if (plaintext.inner_type == 22) {
-            for (auto const & message : nxt::tls::split_handshake_messages(plaintext.content)) {
+            for (auto const & message :
+                 nxt::tls::split_handshake_messages(plaintext.content)) {
                 auto type = std::to_integer<std::uint8_t>(message[0]);
                 if (type == 11) {
                     auto cert = nxt::tls::parse_tls13_certificate(message);
                     leaf_public_key =
-                        nxt::tls::extract_p256_public_key_from_certificate(cert.leaf_der);
+                        nxt::tls::extract_p256_public_key_from_certificate(
+                            cert.leaf_der);
                     std::cerr << "parsed TLS certificate list: "
                               << cert.chain_der.size() << " certificates\n";
                     std::cerr << "extracted leaf P-256 public key: "
@@ -187,10 +192,12 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
                     nxt::tls::require_tls(
                         leaf_public_key.has_value(),
                         "certificate_verify arrived before certificate public key");
-                    auto cert_verify = nxt::tls::parse_tls13_certificate_verify(message);
+                    auto cert_verify =
+                        nxt::tls::parse_tls13_certificate_verify(message);
                     auto ok = nxt::tls::verify_certificate_verify(
                         *leaf_public_key, transcript, cert_verify);
-                    nxt::tls::require_tls(ok, "CertificateVerify signature failed");
+                    nxt::tls::require_tls(
+                        ok, "CertificateVerify signature failed");
                     std::cerr << "verified CertificateVerify signature\n";
                 } else if (type == 20) {
                     auto received = nxt::tls::parse_tls13_finished(message);
@@ -198,7 +205,8 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
                         handshake_keys.server.traffic_secret,
                         transcript,
                         received);
-                    nxt::tls::require_tls(ok, "server Finished verification failed");
+                    nxt::tls::require_tls(
+                        ok, "server Finished verification failed");
                     std::cerr << "verified server Finished\n";
                     saw_server_finished = true;
                 }
@@ -208,18 +216,20 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
 
         if (saw_server_finished)
             break;
-        nxt::tls::require_tls(reader.buffered_size() > 0, "server flight ended before Finished");
+        nxt::tls::require_tls(
+            reader.buffered_size() > 0,
+            "server flight ended before Finished");
         ++index;
         record = co_await nxt::tls::read_tls_record(reader);
         nxt::tls::describe_tls_record(index, record);
     }
 
-    auto application_keys =
-        nxt::tls::derive_tls13_application_keys(handshake_keys.secret, transcript);
+    auto application_keys = nxt::tls::derive_tls13_application_keys(
+        handshake_keys.secret, transcript);
     std::cerr << "derived application AES-128-GCM keys and IVs\n";
 
-    auto client_finished =
-        nxt::tls::make_finished_message(handshake_keys.client.traffic_secret, transcript);
+    auto client_finished = nxt::tls::make_finished_message(
+        handshake_keys.client.traffic_secret, transcript);
     auto encrypted_finished = nxt::tls::seal_tls13_record(
         handshake_keys.client, 22, client_finished);
     co_await socket_output.write_all(encrypted_finished);
@@ -236,7 +246,8 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     while (true) {
         record = co_await nxt::tls::read_tls_record(reader);
         nxt::tls::describe_tls_record(++index, record);
-        auto plaintext = nxt::tls::open_tls13_record(application_keys.server, record);
+        auto plaintext =
+            nxt::tls::open_tls13_record(application_keys.server, record);
         std::cerr << "decrypted application record: "
                   << nxt::tls::tls_record_type_name(plaintext.inner_type)
                   << " type=" << unsigned{plaintext.inner_type}
@@ -313,13 +324,11 @@ try {
                  : std::string_view{"https://less.rest/"});
 
 #if defined(__linux__)
-    nxt::rt::run([url = std::move(url)]() mutable {
-        return fetch(std::move(url));
-    });
+    nxt::rt::run(
+        [url = std::move(url)]() mutable { return fetch(std::move(url)); });
 #elif NXT_RT_HAS_KQUEUE
-    nxt::rt::run_with_kqueue([url = std::move(url)]() mutable {
-        return fetch(std::move(url));
-    });
+    nxt::rt::run_with_kqueue(
+        [url = std::move(url)]() mutable { return fetch(std::move(url)); });
 #else
     static_assert(NXT_RT_HAS_KQUEUE, "ng http demo needs a runtime wand");
 #endif

@@ -75,53 +75,59 @@ inline tls13_client_hello make_tls13_client_hello(std::string_view host)
     auto extensions = bytes{};
     {
         auto names = bytes{};
-    put_u8(names, 0); // host_name
-    put_u16(names, static_cast<std::uint16_t>(host.size()));
-    put_text(names, host);
+        put_u8(names, 0); // host_name
+        put_u16(names, static_cast<std::uint16_t>(host.size()));
+        put_text(names, host);
 
         auto body = bytes{};
-    put_u16(body, static_cast<std::uint16_t>(names.size()));
-    put_bytes(body, names);
-    put_extension(extensions, 0, std::move(body)); // server_name
+        put_u16(body, static_cast<std::uint16_t>(names.size()));
+        put_bytes(body, names);
+        put_extension(extensions, 0, std::move(body)); // server_name
     }
     {
         auto body = bytes{};
-    put_u8(body, 2);
-    put_u16(body, 0x0304); // TLS 1.3
-    put_extension(extensions, 43, std::move(body)); // supported_versions
+        put_u8(body, 2);
+        put_u16(body, 0x0304); // TLS 1.3
+        put_extension(
+            extensions, 43, std::move(body)); // supported_versions
     }
     {
         auto body = bytes{};
-    put_u16(body, 2);
-    put_u16(body, 0x001d); // x25519
-    put_extension(extensions, 10, std::move(body)); // supported_groups
+        put_u16(body, 2);
+        put_u16(body, 0x001d);                          // x25519
+        put_extension(extensions, 10, std::move(body)); // supported_groups
     }
     {
         auto body = bytes{};
-    put_u16(body, 8);
-    put_u16(body, 0x0403); // ecdsa_secp256r1_sha256
-    put_u16(body, 0x0804); // rsa_pss_rsae_sha256
-    put_u16(body, 0x0805); // rsa_pss_rsae_sha384
-    put_u16(body, 0x0401); // rsa_pkcs1_sha256
-    put_extension(extensions, 13, std::move(body)); // signature_algorithms
+        put_u16(body, 8);
+        put_u16(body, 0x0403); // ecdsa_secp256r1_sha256
+        put_u16(body, 0x0804); // rsa_pss_rsae_sha256
+        put_u16(body, 0x0805); // rsa_pss_rsae_sha384
+        put_u16(body, 0x0401); // rsa_pkcs1_sha256
+        put_extension(
+            extensions, 13, std::move(body)); // signature_algorithms
     }
     {
         auto share = bytes{};
-    put_u16(share, 0x001d); // x25519
-    put_u16(share, static_cast<std::uint16_t>(x25519.public_key.size()));
-    put_bytes(share, x25519.public_key);
+        put_u16(share, 0x001d); // x25519
+        put_u16(
+            share, static_cast<std::uint16_t>(x25519.public_key.size()));
+        put_bytes(share, x25519.public_key);
 
         auto body = bytes{};
-    put_u16(body, static_cast<std::uint16_t>(share.size()));
-    put_bytes(body, share);
-    put_extension(extensions, 51, std::move(body)); // key_share
+        put_u16(body, static_cast<std::uint16_t>(share.size()));
+        put_bytes(body, share);
+        put_extension(extensions, 51, std::move(body)); // key_share
     }
     {
         auto body = bytes{};
-    put_u16(body, 9);
-    put_u8(body, 8);
-    put_text(body, "http/1.1");
-    put_extension(extensions, 16, std::move(body)); // application_layer_protocol_negotiation
+        put_u16(body, 9);
+        put_u8(body, 8);
+        put_text(body, "http/1.1");
+        put_extension(
+            extensions,
+            16,
+            std::move(body)); // application_layer_protocol_negotiation
     }
 
     auto hello = bytes{};
@@ -145,7 +151,7 @@ inline tls13_client_hello make_tls13_client_hello(std::string_view host)
     put_bytes(handshake, hello);
 
     auto record = bytes{};
-    put_u8(record, 22); // handshake
+    put_u8(record, 22);      // handshake
     put_u16(record, 0x0301); // legacy record version for ClientHello
     put_u16(record, static_cast<std::uint16_t>(handshake.size()));
     put_bytes(record, handshake);
@@ -161,13 +167,15 @@ inline void dump_hex(std::span<const std::byte> bytes)
 {
     auto flags = std::cerr.flags();
     auto fill = std::cerr.fill();
-    for (auto offset = std::size_t{0}; offset < bytes.size(); offset += 16) {
+    for (auto offset = std::size_t{0}; offset < bytes.size();
+         offset += 16) {
         std::cerr << std::setw(4) << std::setfill('0') << std::hex << offset
                   << "  ";
-        auto line = bytes.subspan(offset, std::min<std::size_t>(
-                                              16, bytes.size() - offset));
+        auto line = bytes.subspan(
+            offset, std::min<std::size_t>(16, bytes.size() - offset));
         for (auto byte : line)
-            std::cerr << std::setw(2) << static_cast<unsigned>(
+            std::cerr << std::setw(2)
+                      << static_cast<unsigned>(
                              std::to_integer<unsigned char>(byte))
                       << ' ';
         std::cerr << '\n';
@@ -186,8 +194,8 @@ inline std::uint16_t parse_u16(std::span<const std::byte> input)
 inline std::uint32_t parse_u24(std::span<const std::byte> input)
 {
     return (std::to_integer<std::uint32_t>(input[0]) << 16)
-        | (std::to_integer<std::uint32_t>(input[1]) << 8)
-        | std::to_integer<std::uint32_t>(input[2]);
+           | (std::to_integer<std::uint32_t>(input[1]) << 8)
+           | std::to_integer<std::uint32_t>(input[2]);
 }
 
 class byte_cursor
@@ -195,7 +203,8 @@ class byte_cursor
 public:
     explicit byte_cursor(std::span<const std::byte> input)
         : input_(input)
-    {}
+    {
+    }
 
     [[nodiscard]] bool empty() const noexcept
     {
@@ -214,12 +223,12 @@ public:
 
     std::uint16_t take_u16()
     {
-    return parse_u16(take(2));
+        return parse_u16(take(2));
     }
 
     std::uint32_t take_u24()
     {
-    return parse_u24(take(3));
+        return parse_u24(take(3));
     }
 
     std::span<const std::byte> take(std::size_t n)
@@ -326,10 +335,12 @@ inline void require_tls(bool ok, const char * message)
         throw nxt::rt::runtime_error{message};
 }
 
-inline tls13_server_hello parse_tls13_server_hello(tls_record const & record)
+inline tls13_server_hello
+parse_tls13_server_hello(tls_record const & record)
 {
     require_tls(record.type == 22, "expected a TLS handshake record");
-    require_tls(record.version == 0x0303, "expected legacy TLS 1.2 record version");
+    require_tls(
+        record.version == 0x0303, "expected legacy TLS 1.2 record version");
 
     auto handshake = byte_cursor{record.payload};
     auto handshake_type = handshake.take_u8();
@@ -351,7 +362,8 @@ inline tls13_server_hello parse_tls13_server_hello(tls_record const & record)
 
     auto session_id_len = body.take_u8();
     auto session_id = body.take(session_id_len);
-    server_hello.legacy_session_id = bytes{session_id.begin(), session_id.end()};
+    server_hello.legacy_session_id =
+        bytes{session_id.begin(), session_id.end()};
 
     server_hello.cipher_suite = body.take_u16();
     require_tls(
@@ -364,7 +376,8 @@ inline tls13_server_hello parse_tls13_server_hello(tls_record const & record)
 
     auto extensions_len = body.take_u16();
     auto extensions = byte_cursor{body.take(extensions_len)};
-    require_tls(body.empty(), "unexpected bytes after ServerHello extensions");
+    require_tls(
+        body.empty(), "unexpected bytes after ServerHello extensions");
 
     auto saw_supported_versions = false;
     auto saw_key_share = false;
@@ -405,23 +418,28 @@ inline tls13_server_hello parse_tls13_server_hello(tls_record const & record)
         }
     }
 
-    require_tls(saw_supported_versions, "ServerHello omitted supported_versions");
+    require_tls(
+        saw_supported_versions, "ServerHello omitted supported_versions");
     require_tls(saw_key_share, "ServerHello omitted key_share");
     return server_hello;
 }
 
-inline void describe_tls_record(std::size_t index, tls_record const & record)
+inline void
+describe_tls_record(std::size_t index, tls_record const & record)
 {
-    std::cerr << "record " << index << ": " << tls_record_type_name(record.type)
-              << " type=" << unsigned{record.type} << " version=0x" << std::hex
-              << record.version << std::dec
+    std::cerr << "record " << index << ": "
+              << tls_record_type_name(record.type)
+              << " type=" << unsigned{record.type} << " version=0x"
+              << std::hex << record.version << std::dec
               << " length=" << record.payload.size() << '\n';
 
     if (record.type == 22 && record.payload.size() >= 4) {
         auto handshake_type =
             std::to_integer<std::uint8_t>(record.payload[0]);
-        auto handshake_length = parse_u24(std::span{record.payload}.subspan(1, 3));
-        std::cerr << "  handshake: " << tls_handshake_type_name(handshake_type)
+        auto handshake_length =
+            parse_u24(std::span{record.payload}.subspan(1, 3));
+        std::cerr << "  handshake: "
+                  << tls_handshake_type_name(handshake_type)
                   << " type=" << unsigned{handshake_type}
                   << " length=" << handshake_length << '\n';
     }
@@ -450,7 +468,8 @@ inline void describe_handshake_messages(std::span<const std::byte> bytes)
         if (length > cursor.remaining()) {
             std::cerr << "  handshake: " << tls_handshake_type_name(type)
                       << " type=" << unsigned{type} << " length=" << length
-                      << " partial, have " << cursor.remaining() << " bytes\n";
+                      << " partial, have " << cursor.remaining()
+                      << " bytes\n";
             return;
         }
 
@@ -461,7 +480,8 @@ inline void describe_handshake_messages(std::span<const std::byte> bytes)
     }
 }
 
-inline std::vector<bytes> split_handshake_messages(std::span<const std::byte> input)
+inline std::vector<bytes>
+split_handshake_messages(std::span<const std::byte> input)
 {
     auto cursor = byte_cursor{input};
     auto out = std::vector<bytes>{};
@@ -478,7 +498,8 @@ inline std::vector<bytes> split_handshake_messages(std::span<const std::byte> in
     return out;
 }
 
-inline bytes join_bytes(std::span<const std::byte> left, std::span<const std::byte> right)
+inline bytes join_bytes(
+    std::span<const std::byte> left, std::span<const std::byte> right)
 {
     auto out = bytes{};
     out.reserve(left.size() + right.size());
@@ -513,7 +534,8 @@ inline std::array<std::byte, nxt::crypto::sha256_len> derive_secret(
     std::span<const std::byte> messages)
 {
     auto transcript_hash = nxt::crypto::sha256(messages);
-    auto out = hkdf_expand_label(secret, label, transcript_hash, transcript_hash.size());
+    auto out = hkdf_expand_label(
+        secret, label, transcript_hash, transcript_hash.size());
     auto array = std::array<std::byte, nxt::crypto::sha256_len>{};
     std::ranges::copy(out, array.begin());
     return array;
@@ -563,9 +585,9 @@ inline tls13_handshake_keys derive_tls13_handshake_keys(
     auto handshake_secret =
         nxt::crypto::hkdf_extract_sha256(derived_secret, shared_secret);
     auto server_traffic_secret =
-    derive_secret(handshake_secret, "s hs traffic", transcript);
+        derive_secret(handshake_secret, "s hs traffic", transcript);
     auto client_traffic_secret =
-    derive_secret(handshake_secret, "c hs traffic", transcript);
+        derive_secret(handshake_secret, "c hs traffic", transcript);
 
     return tls13_handshake_keys{
         .secret = handshake_secret,
@@ -580,11 +602,12 @@ inline tls13_application_keys derive_tls13_application_keys(
 {
     auto zero = bytes(nxt::crypto::sha256_len);
     auto derived_secret = derive_secret(handshake_secret, "derived", {});
-    auto master_secret = nxt::crypto::hkdf_extract_sha256(derived_secret, zero);
+    auto master_secret =
+        nxt::crypto::hkdf_extract_sha256(derived_secret, zero);
     auto client_traffic_secret =
-    derive_secret(master_secret, "c ap traffic", transcript);
+        derive_secret(master_secret, "c ap traffic", transcript);
     auto server_traffic_secret =
-    derive_secret(master_secret, "s ap traffic", transcript);
+        derive_secret(master_secret, "s ap traffic", transcript);
     return tls13_application_keys{
         .client = derive_traffic_keys(client_traffic_secret),
         .server = derive_traffic_keys(server_traffic_secret),
@@ -600,12 +623,14 @@ inline bytes tls13_record_aad(tls_record const & record)
     return aad;
 }
 
-inline bytes tls13_record_nonce(std::span<const std::byte> iv, std::uint64_t sequence)
+inline bytes
+tls13_record_nonce(std::span<const std::byte> iv, std::uint64_t sequence)
 {
     auto nonce = bytes{iv.begin(), iv.end()};
     for (auto i = 0; i < 8; ++i) {
         auto shift = static_cast<unsigned>((7 - i) * 8);
-        nonce[nonce.size() - 8 + i] ^= static_cast<std::byte>(sequence >> shift);
+        nonce[nonce.size() - 8 + i] ^=
+            static_cast<std::byte>(sequence >> shift);
     }
     return nonce;
 }
@@ -616,12 +641,11 @@ struct tls13_plaintext
     std::uint8_t inner_type = 0;
 };
 
-
-inline tls13_plaintext open_tls13_record(
-    tls13_read_keys & keys,
-    tls_record const & record)
+inline tls13_plaintext
+open_tls13_record(tls13_read_keys & keys, tls_record const & record)
 {
-    require_tls(record.type == 23, "expected encrypted application_data record");
+    require_tls(
+        record.type == 23, "expected encrypted application_data record");
     auto aad = tls13_record_aad(record);
     auto nonce = tls13_record_nonce(keys.iv, keys.sequence++);
     auto plaintext =
@@ -630,7 +654,8 @@ inline tls13_plaintext open_tls13_record(
 
     while (!plaintext->empty() && plaintext->back() == std::byte{0})
         plaintext->pop_back();
-    require_tls(!plaintext->empty(), "decrypted TLS record has no inner type");
+    require_tls(
+        !plaintext->empty(), "decrypted TLS record has no inner type");
 
     auto inner_type = std::to_integer<std::uint8_t>(plaintext->back());
     plaintext->pop_back();
@@ -653,10 +678,12 @@ inline bytes seal_tls13_record(
     put_u16(aad, 0x0303);
     put_u16(
         aad,
-        static_cast<std::uint16_t>(inner.size() + nxt::crypto::aes_gcm_tag_len));
+        static_cast<std::uint16_t>(
+            inner.size() + nxt::crypto::aes_gcm_tag_len));
 
     auto nonce = tls13_record_nonce(keys.iv, keys.sequence++);
-    auto ciphertext = nxt::crypto::aes128gcm_seal(keys.key, nonce, aad, inner);
+    auto ciphertext =
+        nxt::crypto::aes128gcm_seal(keys.key, nonce, aad, inner);
 
     auto record = bytes{};
     put_bytes(record, aad);

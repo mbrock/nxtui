@@ -48,13 +48,15 @@ struct tls13_certificate_verify
     bytes signature;
 };
 
-inline tls13_certificate parse_tls13_certificate(std::span<const std::byte> message)
+inline tls13_certificate
+parse_tls13_certificate(std::span<const std::byte> message)
 {
     auto cursor = byte_cursor{message};
     require_tls(cursor.take_u8() == 11, "expected certificate message");
     auto length = cursor.take_u24();
     auto body = byte_cursor{cursor.take(length)};
-    require_tls(cursor.empty(), "unexpected bytes after certificate message");
+    require_tls(
+        cursor.empty(), "unexpected bytes after certificate message");
 
     auto request_context_len = body.take_u8();
     body.take(request_context_len);
@@ -74,25 +76,31 @@ inline tls13_certificate parse_tls13_certificate(std::span<const std::byte> mess
     return certificate;
 }
 
-inline tls13_certificate_verify parse_tls13_certificate_verify(
-    std::span<const std::byte> message)
+inline tls13_certificate_verify
+parse_tls13_certificate_verify(std::span<const std::byte> message)
 {
     auto cursor = byte_cursor{message};
-    require_tls(cursor.take_u8() == 15, "expected certificate_verify message");
+    require_tls(
+        cursor.take_u8() == 15, "expected certificate_verify message");
     auto length = cursor.take_u24();
     auto body = byte_cursor{cursor.take(length)};
-    require_tls(cursor.empty(), "unexpected bytes after certificate_verify message");
+    require_tls(
+        cursor.empty(),
+        "unexpected bytes after certificate_verify message");
 
     auto scheme = body.take_u16();
     auto signature = body.take(body.take_u16());
-    require_tls(body.empty(), "unexpected bytes after certificate_verify signature");
+    require_tls(
+        body.empty(),
+        "unexpected bytes after certificate_verify signature");
     return tls13_certificate_verify{
         .scheme = scheme,
         .signature = bytes{signature.begin(), signature.end()},
     };
 }
 
-inline bytes extract_p256_public_key_from_certificate(std::span<const std::byte> der)
+inline bytes
+extract_p256_public_key_from_certificate(std::span<const std::byte> der)
 {
     auto * ptr = reinterpret_cast<const unsigned char *>(der.data());
     auto cert = std::unique_ptr<X509, x509_deleter>{
@@ -112,7 +120,9 @@ inline bytes extract_p256_public_key_from_certificate(std::span<const std::byte>
 
     auto * group = EC_KEY_get0_group(ec_key.get());
     auto * point = EC_KEY_get0_public_key(ec_key.get());
-    require_tls(group != nullptr && point != nullptr, "EC public key is incomplete");
+    require_tls(
+        group != nullptr && point != nullptr,
+        "EC public key is incomplete");
     require_tls(
         EC_GROUP_get_curve_name(group) == NID_X9_62_prime256v1,
         "leaf certificate public key is not P-256");
@@ -133,7 +143,8 @@ inline bytes extract_p256_public_key_from_certificate(std::span<const std::byte>
     return out;
 }
 
-inline bytes certificate_verify_message(std::span<const std::byte> transcript)
+inline bytes
+certificate_verify_message(std::span<const std::byte> transcript)
 {
     auto out = bytes(64, std::byte{0x20});
     put_text(out, "TLS 1.3, server CertificateVerify");
@@ -151,7 +162,8 @@ inline bool verify_certificate_verify(
     require_tls(
         certificate_verify.scheme == 0x0403,
         "server used an unsupported CertificateVerify signature scheme");
-    auto message = certificate_verify_message(transcript_through_certificate);
+    auto message =
+        certificate_verify_message(transcript_through_certificate);
     return nxt::crypto::ecdsa_p256_sha256_verify(
         p256_public_key, message, certificate_verify.signature);
 }
