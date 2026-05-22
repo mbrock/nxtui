@@ -1286,6 +1286,57 @@ static suite ng_runtime_tests{
 
                 expect(*text == "abcde");
             };
+
+            "byte_writer writes ranges of text chunks"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto sink = chunking_string_sink{64};
+                auto writer = nxt::rt::byte_writer{sink, std::size_t{4}};
+                auto chunks = std::vector<std::string>{"ab", "cd", "e"};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await writer.write(chunks);
+                    expect(sink.text == "abcd");
+                    co_await writer.flush();
+                });
+
+                expect(sink.text == "abcde");
+            };
+
+            "byte_writer writes lazy ranges of text chunks"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto sink = chunking_string_sink{64};
+                auto writer = nxt::rt::byte_writer{sink, std::size_t{8}};
+                auto numbers = std::views::iota(1, 4);
+                auto chunks = numbers
+                    | std::views::transform([](int n) {
+                        return std::to_string(n);
+                    });
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await writer.write(chunks);
+                    co_await writer.flush();
+                });
+
+                expect(sink.text == "123");
+            };
+
+            "byte_writer writes ranges of byte spans"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto sink = chunking_string_sink{64};
+                auto writer = nxt::rt::byte_writer{sink, std::size_t{4}};
+                auto chunks = std::array{
+                    nxt::rt::as_bytes("ab"sv),
+                    nxt::rt::as_bytes("cd"sv),
+                    nxt::rt::as_bytes("ef"sv),
+                };
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await writer.write(chunks);
+                    co_await writer.flush();
+                });
+
+                expect(sink.text == "abcdef");
+            };
         };
 
         "pipes"_test = [] {

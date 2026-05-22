@@ -166,19 +166,16 @@ nxt::rt::task<void> list_and_print(std::string path)
     auto writer = nxt::rt::standard_output_writer();
 
     auto entries = co_await list_path(std::move(path));
-    auto tasks = entries
+    auto lines = entries
         | std::views::transform([](listing_entry const & entry) {
             return std::format(
                 "{} {:>8} {}\n",
                 mode_string(entry.stat.stx_mode),
                 entry.stat.stx_size,
                 entry.name);
-        })
-        | std::views::transform([&](std::string line) {
-            return writer.write(std::move(line));
         });
 
-    co_await nxt::rt::for_each_task(tasks);
+    co_await writer.write(lines);
     co_await writer.flush();
 }
 

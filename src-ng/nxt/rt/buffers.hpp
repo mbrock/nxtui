@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -285,6 +286,22 @@ inline task<void> write_all(byte_sink & sink, std::string text)
     co_await write_all(sink, as_bytes(std::string_view{text}));
 }
 
+namespace detail {
+
+template<typename T>
+concept byte_writer_chunk =
+    std::same_as<std::remove_cvref_t<T>, std::string>
+    || std::convertible_to<T, std::string_view>
+    || std::convertible_to<T, std::span<const std::byte>>;
+
+template<typename T>
+concept byte_writer_chunk_range =
+    std::ranges::input_range<T>
+    && (!byte_writer_chunk<T>)
+    && byte_writer_chunk<std::ranges::range_reference_t<T>>;
+
+} // namespace detail
+
 /// Buffered asynchronous writer over a byte sink.
 template<typename Sink = byte_sink>
 class byte_writer
@@ -396,6 +413,18 @@ public:
     task<void> write(std::string text)
     {
         co_await write(as_bytes(std::string_view{text}));
+    }
+
+    task<void> write(std::string_view text)
+    {
+        co_await write(as_bytes(text));
+    }
+
+    template<detail::byte_writer_chunk_range Chunks>
+    task<void> write(Chunks && chunks)
+    {
+        for (auto && chunk : chunks)
+            co_await write(std::forward<decltype(chunk)>(chunk));
     }
 
 private:
