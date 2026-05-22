@@ -491,6 +491,12 @@ template<typename T>
     }
 }
 
+template<task_factory Fn>
+[[nodiscard]] inline task_result_t<std::invoke_result_t<Fn>> run(Fn && fn)
+{
+    return run(std::invoke(std::forward<Fn>(fn)));
+}
+
 inline io_uring_sqe * uring_submission::get_sqe()
 {
     return wand_.get_sqe();

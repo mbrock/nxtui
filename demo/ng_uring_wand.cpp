@@ -172,27 +172,24 @@ nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
     };
 }
 
-nxt::rt::task<void> list_and_print(std::string path)
-{
-    co_await nxt::rt::write_all(
-        nxt::rt::standard_output(),
-        (co_await list_path(std::move(path)))
-            | std::views::transform([](listing_entry const & entry) {
-                  return std::format(
-                      "{} {:>8} {}\n",
-                      mode_string(entry.stat.stx_mode),
-                      entry.stat.stx_size,
-                      entry.name);
-              }));
-}
-
 } // namespace
 
 int main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
-    nxt::rt::run(list_and_print(path));
+    nxt::rt::run([path = std::move(path)]() mutable -> nxt::rt::task<void> {
+        co_await nxt::rt::write_all(
+            nxt::rt::standard_output(),
+            (co_await list_path(std::move(path)))
+                | std::views::transform([](listing_entry const & entry) {
+                      return std::format(
+                          "{} {:>8} {}\n",
+                          mode_string(entry.stat.stx_mode),
+                          entry.stat.stx_size,
+                          entry.name);
+                  }));
+    });
     return 0;
 } catch (std::exception const & error) {
     std::cerr << "ng-uring-wand-demo: " << error.what() << '\n';

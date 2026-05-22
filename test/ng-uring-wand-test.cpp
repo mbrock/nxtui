@@ -224,6 +224,17 @@ sockaddr_in loopback_listener_address(int fd)
 
 static suite ng_uring_wand_tests{
     "uring wand", [] {
+        "runner"_test = [] {
+            "runs task factories"_test = [] {
+                auto value = nxt::rt::run([]() -> nxt::rt::task<int> {
+                    co_await nxt::rt::op::manual{};
+                    co_return 42;
+                });
+
+                expect(value == 42_i);
+            };
+        };
+
         "socket I/O"_test = [] {
             "echoes over a socketpair"_test = [] {
                 auto sockets = std::array<int, 2>{-1, -1};
