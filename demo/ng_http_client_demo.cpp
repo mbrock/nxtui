@@ -11,6 +11,7 @@
 #include <nxt/rt/kqueue_wand.hpp>
 #endif
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <exception>
@@ -68,6 +69,12 @@ connect_tcp(std::string host, std::string port)
 
 using bytes = std::vector<std::byte>;
 
+struct tls13_client_hello
+{
+    bytes record;
+    nxt::crypto::x25519_key_pair key_pair;
+};
+
 void put_u8(bytes & out, std::uint8_t value)
 {
     out.push_back(static_cast<std::byte>(value));
@@ -104,7 +111,7 @@ void put_extension(bytes & out, std::uint16_t type, bytes body)
     put_bytes(out, body);
 }
 
-bytes make_tls13_client_hello(std::string_view host)
+tls13_client_hello make_tls13_client_hello(std::string_view host)
 {
     auto x25519 = nxt::crypto::x25519_keygen();
     auto random = nxt::crypto::random(32);
@@ -187,7 +194,10 @@ bytes make_tls13_client_hello(std::string_view host)
     put_u16(record, 0x0301); // legacy record version for ClientHello
     put_u16(record, static_cast<std::uint16_t>(handshake.size()));
     put_bytes(record, handshake);
-    return record;
+    return tls13_client_hello{
+        .record = std::move(record),
+        .key_pair = x25519,
+    };
 }
 
 void dump_hex(std::span<const std::byte> bytes)
@@ -222,6 +232,51 @@ std::uint32_t parse_u24(std::span<const std::byte> input)
         | (std::to_integer<std::uint32_t>(input[1]) << 8)
         | std::to_integer<std::uint32_t>(input[2]);
 }
+
+class byte_cursor
+{
+public:
+    explicit byte_cursor(std::span<const std::byte> input)
+        : input_(input)
+    {}
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return input_.empty();
+    }
+
+    [[nodiscard]] std::size_t remaining() const noexcept
+    {
+        return input_.size();
+    }
+
+    std::uint8_t take_u8()
+    {
+        return std::to_integer<std::uint8_t>(take(1)[0]);
+    }
+
+    std::uint16_t take_u16()
+    {
+        return parse_u16(take(2));
+    }
+
+    std::uint32_t take_u24()
+    {
+        return parse_u24(take(3));
+    }
+
+    std::span<const std::byte> take(std::size_t n)
+    {
+        if (n > input_.size())
+            throw nxt::rt::runtime_error{"truncated TLS message"};
+        auto out = input_.first(n);
+        input_ = input_.subspan(n);
+        return out;
+    }
+
+private:
+    std::span<const std::byte> input_;
+};
 
 template<typename Reader>
 nxt::rt::task<std::uint8_t> read_u8(Reader & reader)
@@ -285,6 +340,14 @@ struct tls_record
     bytes payload;
 };
 
+struct tls13_server_hello
+{
+    std::array<std::byte, 32> random{};
+    bytes legacy_session_id;
+    std::uint16_t cipher_suite = 0;
+    std::array<std::byte, nxt::crypto::x25519_key_len> key_share{};
+};
+
 template<typename Reader>
 nxt::rt::task<tls_record> read_tls_record(Reader & reader)
 {
@@ -297,6 +360,95 @@ nxt::rt::task<tls_record> read_tls_record(Reader & reader)
         .version = version,
         .payload = bytes{payload.begin(), payload.end()},
     };
+}
+
+void require_tls(bool ok, const char * message)
+{
+    if (!ok)
+        throw nxt::rt::runtime_error{message};
+}
+
+tls13_server_hello parse_tls13_server_hello(tls_record const & record)
+{
+    require_tls(record.type == 22, "expected a TLS handshake record");
+    require_tls(record.version == 0x0303, "expected legacy TLS 1.2 record version");
+
+    auto handshake = byte_cursor{record.payload};
+    auto handshake_type = handshake.take_u8();
+    auto handshake_length = handshake.take_u24();
+    require_tls(handshake_type == 2, "expected server_hello");
+    require_tls(
+        handshake_length == handshake.remaining(),
+        "server_hello length does not match record payload");
+
+    auto body = byte_cursor{handshake.take(handshake_length)};
+    auto server_hello = tls13_server_hello{};
+    require_tls(
+        body.take_u16() == 0x0303,
+        "expected ServerHello.legacy_version 0x0303");
+
+    auto random = body.take(server_hello.random.size());
+    std::ranges::copy(random, server_hello.random.begin());
+
+    auto session_id_len = body.take_u8();
+    auto session_id = body.take(session_id_len);
+    server_hello.legacy_session_id = bytes{session_id.begin(), session_id.end()};
+
+    server_hello.cipher_suite = body.take_u16();
+    require_tls(
+        server_hello.cipher_suite == 0x1301,
+        "server selected an unsupported cipher suite");
+
+    require_tls(
+        body.take_u8() == 0,
+        "server selected an unsupported compression method");
+
+    auto extensions_len = body.take_u16();
+    auto extensions = byte_cursor{body.take(extensions_len)};
+    require_tls(body.empty(), "unexpected bytes after ServerHello extensions");
+
+    auto saw_supported_versions = false;
+    auto saw_key_share = false;
+    while (!extensions.empty()) {
+        auto type = extensions.take_u16();
+        auto length = extensions.take_u16();
+        auto extension = byte_cursor{extensions.take(length)};
+
+        switch (type) {
+        case 43: { // supported_versions
+            require_tls(
+                extension.take_u16() == 0x0304,
+                "server selected an unsupported TLS version");
+            require_tls(
+                extension.empty(),
+                "unexpected bytes in supported_versions extension");
+            saw_supported_versions = true;
+            break;
+        }
+        case 51: { // key_share
+            require_tls(
+                extension.take_u16() == 0x001d,
+                "server selected a non-X25519 key share");
+            auto key_len = extension.take_u16();
+            require_tls(
+                key_len == server_hello.key_share.size(),
+                "server X25519 key share has the wrong length");
+            auto key = extension.take(key_len);
+            std::ranges::copy(key, server_hello.key_share.begin());
+            require_tls(
+                extension.empty(),
+                "unexpected bytes in key_share extension");
+            saw_key_share = true;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    require_tls(saw_supported_versions, "ServerHello omitted supported_versions");
+    require_tls(saw_key_share, "ServerHello omitted key_share");
+    return server_hello;
 }
 
 void describe_tls_record(std::size_t index, tls_record const & record)
@@ -316,17 +468,26 @@ void describe_tls_record(std::size_t index, tls_record const & record)
     }
 }
 
+void describe_server_hello(tls13_server_hello const & server_hello)
+{
+    std::cerr << "server hello: TLS 1.3, TLS_AES_128_GCM_SHA256, x25519"
+              << "\n";
+    std::cerr << "  legacy session id: "
+              << server_hello.legacy_session_id.size() << " bytes\n";
+}
+
 nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
 {
     auto socket = co_await connect_tcp(url.host, url.port);
     auto hello = make_tls13_client_hello(url.host);
 
-    std::cerr << "sending TLS 1.3 ClientHello (" << hello.size() << " bytes)\n";
+    std::cerr << "sending TLS 1.3 ClientHello (" << hello.record.size()
+              << " bytes)\n";
     auto socket_output = nxt::rt::byte_writer<nxt::rt::socket_sink>{
         nxt::rt::socket_sink{socket.get()},
         4096,
     };
-    co_await socket_output.write_all(hello);
+    co_await socket_output.write_all(hello.record);
 
     auto source = nxt::rt::socket_source{socket.get()};
     auto input_storage = std::vector<std::byte>(18 * 1024);
@@ -335,13 +496,24 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
         std::span{input_storage},
     };
 
-    auto index = std::size_t{0};
-    do {
-        auto record = co_await read_tls_record(reader);
+    auto record = co_await read_tls_record(reader);
+    describe_tls_record(0, record);
+    auto server_hello = parse_tls13_server_hello(record);
+    describe_server_hello(server_hello);
+
+    auto shared_secret =
+        nxt::crypto::x25519_dh(hello.key_pair.secret_key, server_hello.key_share);
+    require_tls(shared_secret.has_value(), "X25519 shared secret failed");
+    std::cerr << "computed X25519 shared secret: " << shared_secret->size()
+              << " bytes\n";
+
+    auto index = std::size_t{1};
+    while (reader.buffered_size() > 0) {
+        record = co_await read_tls_record(reader);
         describe_tls_record(index, record);
         dump_hex(record.payload);
         ++index;
-    } while (reader.buffered_size() > 0);
+    }
 }
 
 nxt::rt::task<void> fetch(nxt::rt::http::url url)
