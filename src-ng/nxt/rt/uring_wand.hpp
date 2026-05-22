@@ -476,6 +476,21 @@ private:
     std::unordered_set<wait_token> pending_cancellations_;
 };
 
+template<typename T>
+[[nodiscard]] inline T run(task<T> root)
+{
+    auto wand = uring_wand{};
+    auto d = deck{&wand};
+    d.start(root);
+    wand.run_until_done(d, root);
+
+    if constexpr (std::is_void_v<T>) {
+        std::move(root).result();
+    } else {
+        return std::move(root).result();
+    }
+}
+
 inline io_uring_sqe * uring_submission::get_sqe()
 {
     return wand_.get_sqe();

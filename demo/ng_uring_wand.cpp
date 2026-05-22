@@ -192,14 +192,7 @@ int main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
-    auto wand = nxt::rt::uring_wand{};
-    auto deck = nxt::rt::deck{&wand};
-    auto task = list_and_print(path);
-
-    deck.start(task);
-    wand.run_until_done(deck, task);
-
-    std::move(task).result();
+    nxt::rt::run(list_and_print(path));
     return 0;
 } catch (std::exception const & error) {
     std::cerr << "ng-uring-wand-demo: " << error.what() << '\n';
