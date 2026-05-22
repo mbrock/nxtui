@@ -3,9 +3,12 @@
 
 #include "test.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <span>
@@ -17,6 +20,7 @@
 #include <thread>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -171,6 +175,42 @@ nxt::rt::task<struct statx> stat_current_directory()
     };
 }
 
+struct linux_dirent64
+{
+    std::uint64_t d_ino;
+    std::int64_t d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[];
+};
+
+nxt::rt::task<std::vector<std::string>> read_current_directory_names()
+{
+    auto fd = co_await nxt::rt::openat_wish{
+        .path = ".",
+        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
+    };
+    auto dir = unique_fd{fd};
+
+    auto storage = std::array<std::byte, 4096>{};
+    auto bytes = co_await nxt::rt::getdents64_wish{
+        .fd = dir.get(),
+        .buffer = storage,
+    };
+
+    auto names = std::vector<std::string>{};
+    for (auto offset = std::size_t{}; offset < bytes;) {
+        auto const * entry = reinterpret_cast<linux_dirent64 const *>(
+            storage.data() + offset);
+        if (entry->d_reclen == 0)
+            throw std::runtime_error{"getdents64 returned a zero-length entry"};
+
+        names.emplace_back(entry->d_name);
+        offset += entry->d_reclen;
+    }
+    co_return names;
+}
+
 template<typename T>
 T pump_until_done(
     nxt::rt::deck & deck,
@@ -308,6 +348,18 @@ static suite ng_uring_wand_tests{
 
                 expect((stat.stx_mask & STATX_TYPE) != 0);
                 expect(S_ISDIR(stat.stx_mode));
+            };
+
+            "getdents64 wishes return directory entries"_test = [] {
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = read_current_directory_names();
+
+                deck.start(task);
+                auto names = pump_until_done(deck, wand, task);
+
+                expect(std::ranges::find(names, ".") != names.end());
+                expect(std::ranges::find(names, "..") != names.end());
             };
         };
 

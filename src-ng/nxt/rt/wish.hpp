@@ -211,6 +211,16 @@ struct statx_wish
     waiter<struct statx> operator co_await() const;
 };
 
+struct getdents64_wish
+{
+    using result_type = std::size_t;
+
+    int fd = -1;
+    std::span<std::byte> buffer;
+
+    waiter<std::size_t> operator co_await() const;
+};
+
 struct read_some_wish
 {
     using result_type = std::size_t;
@@ -357,6 +367,11 @@ public:
         deck & d,
         detail::promise_base & promise,
         statx_wish wish) = 0;
+
+    virtual waiter<std::size_t> prepare(
+        deck & d,
+        detail::promise_base & promise,
+        getdents64_wish wish) = 0;
 
     virtual waiter<std::size_t> prepare(
         deck & d,

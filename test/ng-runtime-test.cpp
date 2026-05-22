@@ -58,6 +58,14 @@ struct manual_wand final : nxt::rt::wand
     nxt::rt::waiter<std::size_t> prepare(
         nxt::rt::deck &,
         nxt::rt::detail::promise_base &,
+        nxt::rt::getdents64_wish) override
+    {
+        throw std::runtime_error{"manual_wand does not implement getdents64"};
+    }
+
+    nxt::rt::waiter<std::size_t> prepare(
+        nxt::rt::deck &,
+        nxt::rt::detail::promise_base &,
         nxt::rt::read_some_wish) override
     {
         throw std::runtime_error{"manual_wand does not implement read"};

@@ -1704,6 +1704,23 @@ inline waiter<struct statx> statx_wish::operator co_await() const
         *this);
 }
 
+inline waiter<std::size_t> getdents64_wish::operator co_await() const
+{
+    auto context = detail::current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr)
+        throw runtime_error{
+            "nxt::rt getdents64 wish awaited without a running wand"};
+
+    trace("wish getdents64 prepare fd=" + std::to_string(fd)
+        + " bytes=" + std::to_string(buffer.size()));
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        *this);
+}
+
 inline waiter<std::size_t> read_some_wish::operator co_await() const
 {
     auto context = detail::current_wish_context();

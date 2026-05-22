@@ -14,8 +14,10 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <sys/syscall.h>
 #include <unordered_set>
 #include <unordered_map>
+#include <unistd.h>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -105,6 +107,22 @@ public:
         pending_submissions_.push_back(token);
         trace("uring prepare statx token=" + std::to_string(token));
         return waiter<struct statx>{*this, token, state};
+    }
+
+    waiter<std::size_t> prepare(
+        deck &,
+        detail::promise_base &,
+        getdents64_wish wish) override
+    {
+        auto token = next_token_++;
+        auto state = std::make_shared<wait_state<std::size_t>>();
+        auto request = std::make_shared<uring_wish>(wish);
+        completions_.emplace(
+            token,
+            std::make_unique<completion<std::size_t>>(request, state));
+        pending_submissions_.push_back(token);
+        trace("uring prepare getdents64 token=" + std::to_string(token));
+        return waiter<std::size_t>{*this, token, state};
     }
 
     waiter<std::size_t> prepare(
@@ -309,6 +327,7 @@ private:
         manual_wish,
         openat_wish,
         statx_wish,
+        getdents64_wish,
         read_some_wish,
         recv_some_wish,
         send_some_wish,
@@ -462,28 +481,29 @@ private:
                 continue;
             }
 
-            stage_submission(token, completion.request());
-            completion.mark_submitted();
+            if (stage_submission(d, token, completion.request()))
+                completion.mark_submitted();
         }
     }
 
-    void stage_submission(wait_token token, uring_wish & request)
+    bool stage_submission(deck & d, wait_token token, uring_wish & request)
     {
-        std::visit(
-            [this, token](auto & op) {
-                stage_one(token, op);
+        return std::visit(
+            [this, &d, token](auto & op) {
+                return stage_one(d, token, op);
             },
             request);
     }
 
-    void stage_one(wait_token token, manual_wish const &)
+    bool stage_one(deck &, wait_token token, manual_wish const &)
     {
         auto * sqe = get_sqe();
         io_uring_prep_nop(sqe);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, openat_wish const & op)
+    bool stage_one(deck &, wait_token token, openat_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_openat(
@@ -493,9 +513,10 @@ private:
             op.flags,
             op.mode);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, statx_wish & op)
+    bool stage_one(deck &, wait_token token, statx_wish & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_statx(
@@ -506,9 +527,26 @@ private:
             op.mask,
             &op.result);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, read_some_wish const & op)
+    bool stage_one(deck & d, wait_token token, getdents64_wish const & op)
+    {
+        auto result = ::syscall(
+            SYS_getdents64,
+            op.fd,
+            op.buffer.data(),
+            op.buffer.size());
+        if (result < 0)
+            result = -errno;
+
+        trace("uring complete sync getdents64 token=" + std::to_string(token)
+            + " result=" + std::to_string(result));
+        complete(d, token, static_cast<int>(result));
+        return false;
+    }
+
+    bool stage_one(deck &, wait_token token, read_some_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_read(
@@ -518,9 +556,10 @@ private:
             op.buffer.size(),
             op.offset);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, recv_some_wish const & op)
+    bool stage_one(deck &, wait_token token, recv_some_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_recv(
@@ -530,9 +569,10 @@ private:
             op.buffer.size(),
             op.flags);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, send_some_wish const & op)
+    bool stage_one(deck &, wait_token token, send_some_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_send(
@@ -542,9 +582,10 @@ private:
             op.buffer.size(),
             op.flags);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, connect_wish const & op)
+    bool stage_one(deck &, wait_token token, connect_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_connect(
@@ -553,16 +594,18 @@ private:
             op.sockaddr_ptr(),
             op.address_size);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, poll_wish const & op)
+    bool stage_one(deck &, wait_token token, poll_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_poll_add(sqe, op.fd, op.events);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, timeout_wish const & op)
+    bool stage_one(deck &, wait_token token, timeout_wish const & op)
     {
         auto * sqe = get_sqe();
         io_uring_prep_timeout(
@@ -571,9 +614,10 @@ private:
             0,
             IORING_TIMEOUT_ETIME_SUCCESS);
         attach_token(sqe, token);
+        return true;
     }
 
-    void stage_one(wait_token token, poll_until_wish const & op)
+    bool stage_one(deck &, wait_token token, poll_until_wish const & op)
     {
         auto * poll_sqe = get_sqe();
         io_uring_prep_poll_add(poll_sqe, op.fd, op.events);
@@ -586,6 +630,7 @@ private:
             &op.timeout,
             IORING_TIMEOUT_ETIME_SUCCESS);
         attach_token(timeout_sqe, token);
+        return true;
     }
 
     void stage_cancellations()
