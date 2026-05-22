@@ -1165,27 +1165,50 @@ static suite ng_runtime_tests{
             };
 
             "task_byte_source reads through a task callable"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto read = [](std::span<std::byte> dst)
-                    -> nxt::rt::task<nxt::rt::read_result> {
-                    auto text = std::string_view{"xy"};
-                    std::memcpy(dst.data(), text.data(), text.size());
-                    co_return nxt::rt::read_result{
-                        .bytes = text.size(),
-                        .eof = true,
+                "from read results"_test = [] {
+                    auto deck = nxt::rt::deck{};
+                    auto read = [](std::span<std::byte> dst)
+                        -> nxt::rt::task<nxt::rt::read_result> {
+                        auto text = std::string_view{"xy"};
+                        std::memcpy(dst.data(), text.data(), text.size());
+                        co_return nxt::rt::read_result{
+                            .bytes = text.size(),
+                            .eof = true,
+                        };
                     };
+                    auto source = nxt::rt::task_byte_source{read};
+                    auto storage = std::array<std::byte, 4>{};
+
+                    auto result = deck.sync_wait(
+                        [&]() -> nxt::rt::task<std::string> {
+                        auto read = co_await source.read_some(storage);
+                        co_return std::string{
+                            nxt::rt::as_string_view(
+                                std::span{storage}.first(read.bytes))};
+                    });
+
+                    expect(result == "xy");
                 };
-                auto source = nxt::rt::task_byte_source{read};
-                auto storage = std::array<std::byte, 4>{};
 
-                auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
-                    auto read = co_await source.read_some(storage);
-                    co_return std::string{
-                        nxt::rt::as_string_view(
-                            std::span{storage}.first(read.bytes))};
-                });
+                "from byte counts"_test = [] {
+                    auto deck = nxt::rt::deck{};
+                    auto read = [](std::span<std::byte> dst)
+                        -> nxt::rt::task<std::size_t> {
+                        auto text = std::string_view{"xy"};
+                        std::memcpy(dst.data(), text.data(), text.size());
+                        co_return text.size();
+                    };
+                    auto source = nxt::rt::task_byte_source{read};
+                    auto storage = std::array<std::byte, 4>{};
 
-                expect(result == "xy");
+                    auto result = deck.sync_wait(
+                        [&]() -> nxt::rt::task<nxt::rt::read_result> {
+                        co_return co_await source.read_some(storage);
+                    });
+
+                    expect(result.bytes == std::size_t{2});
+                    expect(!result.eof);
+                };
             };
 
             "byte_reader peeks and takes copied structs"_test = [] {
@@ -1209,10 +1232,56 @@ static suite ng_runtime_tests{
                     expect(reader.buffered_size() == std::size_t{4});
 
                     auto second = co_await reader.take_struct<pair>();
-                    expect(second.a == static_cast<unsigned char>('a'));
-                    expect(second.b == static_cast<unsigned char>('b'));
+                    expect(second.has_value());
+                    expect(second->a == static_cast<unsigned char>('a'));
+                    expect(second->b == static_cast<unsigned char>('b'));
                     expect(reader.buffered_size() == std::size_t{2});
                 });
+            };
+
+            "byte_reader returns nullopt when taking structs at eof"_test = [] {
+                struct pair
+                {
+                    unsigned char a = 0;
+                    unsigned char b = 0;
+                };
+
+                auto deck = nxt::rt::deck{};
+                auto chunks = std::array{""sv};
+                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                auto result = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::optional<pair>> {
+                    co_return co_await reader.take_struct<pair>();
+                });
+
+                expect(!result);
+            };
+
+            "byte_reader does not treat empty reads as struct eof"_test = [] {
+                struct pair
+                {
+                    unsigned char a = 0;
+                    unsigned char b = 0;
+                };
+
+                auto deck = nxt::rt::deck{};
+                auto source = empty_then_string_source{};
+                auto storage = std::array<std::byte, 8>{};
+                auto reader =
+                    nxt::rt::byte_reader{source, std::span{storage}};
+
+                auto result = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::optional<pair>> {
+                    co_return co_await reader.take_struct<pair>();
+                });
+
+                expect(result.has_value());
+                expect(result->a == static_cast<unsigned char>('a'));
+                expect(result->b == static_cast<unsigned char>('b'));
             };
 
             "byte_reader takes borrowed string views"_test = [] {

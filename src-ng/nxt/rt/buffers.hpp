@@ -78,11 +78,17 @@ public:
 template<typename Read>
 concept byte_read_task =
     std::invocable<Read &, std::span<std::byte>>
-    && std::same_as<
-        std::invoke_result_t<Read &, std::span<std::byte>>,
-        task<read_result>>;
+    && is_task_v<std::invoke_result_t<Read &, std::span<std::byte>>>
+    && (
+        std::same_as<
+            task_result_t<std::invoke_result_t<Read &, std::span<std::byte>>>,
+            read_result>
+        || std::same_as<
+            task_result_t<std::invoke_result_t<Read &, std::span<std::byte>>>,
+            std::size_t>);
 
-/// Byte source backed by a callable returning `task<read_result>`.
+/// Byte source backed by a callable returning `task<read_result>` or
+/// `task<std::size_t>`. Count-only reads treat zero bytes as EOF.
 template<byte_read_task Read>
 class task_byte_source final : public byte_source
 {
@@ -93,7 +99,15 @@ public:
 
     task<read_result> read_some(std::span<std::byte> dst) override
     {
-        co_return co_await std::invoke(read_, dst);
+        auto result = co_await std::invoke(read_, dst);
+        if constexpr (std::same_as<decltype(result), read_result>) {
+            co_return result;
+        } else {
+            co_return read_result{
+                .bytes = result,
+                .eof = result == 0,
+            };
+        }
     }
 
 private:
@@ -588,9 +602,22 @@ public:
 
     template<typename T>
         requires std::is_trivially_copyable_v<T>
-    task<T> take_struct()
+    task<std::optional<T>> take_struct()
     {
-        auto value = co_await peek_struct<T>();
+        if (buffered_size() < sizeof(T)) {
+            rebase(sizeof(T));
+            while (buffered_size() < sizeof(T)) {
+                auto read = co_await fill_more_without_rebase();
+                if (read.eof && read.bytes == 0) {
+                    if (buffered_size() == 0)
+                        co_return std::nullopt;
+                    throw end_of_stream{"unexpected end of input"};
+                }
+            }
+        }
+
+        auto value = T{};
+        std::memcpy(&value, buffered().data(), sizeof(T));
         toss(sizeof(T));
         co_return value;
     }
