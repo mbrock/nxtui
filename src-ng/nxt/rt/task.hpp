@@ -1160,7 +1160,56 @@ task<T> stop_zone_on_completion(task<T> child)
     }
 }
 
+template<typename T>
+[[nodiscard]] T take_deed_result(catching_deed<T> deed)
+{
+    auto value = std::move(deed).get();
+    if (value)
+        return std::move(*value);
+    rethrow(value.error());
+}
+
+inline void take_deed_result(catching_deed<void> deed)
+{
+    auto value = std::move(deed).get();
+    if (value)
+        return;
+    rethrow(value.error());
+}
+
+template<typename Tuple, std::size_t... Is>
+[[nodiscard]] auto take_all_or_throw(
+    Tuple & deeds,
+    std::index_sequence<Is...>)
+{
+    return std::tuple{
+        take_deed_result(std::move(std::get<Is>(deeds)))...,
+    };
+}
+
 } // namespace detail
+
+template<typename... Tasks>
+    requires (sizeof...(Tasks) > 0)
+[[nodiscard]] task<std::tuple<task_result_t<Tasks>...>>
+when_all(Tasks... tasks)
+{
+    using deeds_type = std::tuple<catching_deed<task_result_t<Tasks>>...>;
+    constexpr auto count = sizeof...(Tasks);
+
+    auto deeds = co_await with_zone(
+        stop_on_failure{},
+        [... tasks = std::move(tasks)](
+            auto & policy) mutable -> task<deeds_type> {
+            co_return deeds_type{
+                policy.fork(std::move(tasks)).cope()...,
+            };
+        });
+
+    co_return detail::take_all_or_throw(
+        deeds,
+        std::make_index_sequence<count>{});
+}
 
 template<typename T, typename... Rest>
     requires (std::same_as<task<T>, std::remove_cvref_t<Rest>> && ...)

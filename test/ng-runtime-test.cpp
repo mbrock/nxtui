@@ -223,6 +223,12 @@ nxt::rt::task<int> value_after_yield(int value)
     co_return value;
 }
 
+nxt::rt::task<std::string> string_after_yield(std::string value)
+{
+    co_await nxt::rt::yield();
+    co_return value;
+}
+
 nxt::rt::task<int> value_after_two_yields_or_stop(
     std::vector<int> & events,
     int value)
@@ -904,6 +910,41 @@ static suite ng_runtime_tests{
                 }
 
                 expect(grouped);
+            };
+
+            "when_all returns a tuple of task results"_test = [] {
+                auto deck = nxt::rt::deck{};
+
+                auto values =
+                    deck.sync_wait([]()
+                        -> nxt::rt::task<std::tuple<int, std::string>> {
+                        co_return co_await nxt::rt::when_all(
+                            value_after_yield(7),
+                            string_after_yield("seven"));
+                    });
+
+                expect(std::get<0>(values) == 7_i);
+                expect(std::get<1>(values) == "seven");
+            };
+
+            "when_all stops siblings after a failure"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+                auto threw = false;
+
+                try {
+                    (void)deck.sync_wait([&]() -> nxt::rt::task<
+                        std::tuple<int, int>> {
+                        co_return co_await nxt::rt::when_all(
+                            throw_int_after_yield(),
+                            value_after_two_yields_or_stop(events, 8));
+                    });
+                } catch (const std::exception &) {
+                    threw = true;
+                }
+
+                expect(threw);
+                expect(events == std::vector<int>{8});
             };
         };
 
