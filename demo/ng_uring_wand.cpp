@@ -1,56 +1,43 @@
 #include "nxt/rt/task.hpp"
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/fs.hpp>
 #include <nxt/rt/uring_wand.hpp>
-#include <nxt/unique-fd.hpp>
 
-#include <algorithm>
 #include <array>
-#include <cstddef>
-#include <cstdint>
-#include <fcntl.h>
 #include <format>
 #include <iostream>
 #include <ranges>
-#include <span>
-#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <sys/stat.h>
 #include <utility>
-#include <vector>
 
 namespace {
 
-struct [[gnu::packed]] linux_dirent64_header
+char kind_char(nxt::rt::fs::file_kind kind)
 {
-    std::uint64_t d_ino;
-    std::int64_t d_off;
-    unsigned short d_reclen;
-    unsigned char d_type;
-};
+    using enum nxt::rt::fs::file_kind;
+    switch (kind) {
+    case directory:
+        return 'd';
+    case symlink:
+        return 'l';
+    case character:
+        return 'c';
+    case block:
+        return 'b';
+    case fifo:
+        return 'p';
+    case socket:
+        return 's';
+    default:
+        return '-';
+    }
+}
 
-struct listing_entry
-{
-    std::string name;
-    struct statx stat{};
-};
-
-std::string mode_string(mode_t mode)
+std::string mode_string(nxt::rt::fs::file_status const & status)
 {
     auto result = std::string{"----------"};
-
-    if (S_ISDIR(mode))
-        result[0] = 'd';
-    else if (S_ISLNK(mode))
-        result[0] = 'l';
-    else if (S_ISCHR(mode))
-        result[0] = 'c';
-    else if (S_ISBLK(mode))
-        result[0] = 'b';
-    else if (S_ISFIFO(mode))
-        result[0] = 'p';
-    else if (S_ISSOCK(mode))
-        result[0] = 's';
+    result[0] = kind_char(status.kind);
 
     constexpr auto bits = std::array{
         S_IRUSR,
@@ -76,84 +63,11 @@ std::string mode_string(mode_t mode)
     };
 
     for (auto i = std::size_t{}; i != bits.size(); ++i) {
-        if ((mode & bits[i]) != 0)
+        if ((status.mode & bits[i]) != 0)
             result[i + 1] = chars[i];
     }
 
     return result;
-}
-
-nxt::rt::task<std::vector<listing_entry>> list_directory(std::string path)
-{
-    auto fd = co_await nxt::rt::op::openat{
-        .dirfd = AT_FDCWD,
-        .path = std::move(path),
-        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
-        .mode = 0,
-    };
-    auto dir = nxt::unique_fd{fd};
-    auto source = nxt::rt::task_byte_source{
-        [fd = dir.get()](
-            std::span<std::byte> dst) -> nxt::rt::task<std::size_t> {
-            co_return co_await nxt::rt::op::getdents64{
-                .fd = fd,
-                .buffer = dst,
-            };
-        }};
-    auto storage = std::array<std::byte, 16 * 1024>{};
-    auto reader = nxt::rt::byte_reader{source, std::span{storage}};
-
-    auto names = std::vector<std::string>{};
-    while (auto header =
-               co_await reader.take_struct<linux_dirent64_header>()) {
-        if (header->d_reclen < sizeof(linux_dirent64_header))
-            throw std::runtime_error{"getdents64 returned a short entry"};
-
-        auto name = co_await reader.take_string_view(
-            header->d_reclen - sizeof(linux_dirent64_header));
-        name = name.substr(0, name.find('\0'));
-        names.emplace_back(name);
-    }
-
-    auto entries = co_await nxt::rt::when_all_range(
-        names
-        | std::views::transform(
-            [dirfd = dir.get()](
-                std::string const & name) -> nxt::rt::task<listing_entry> {
-                auto stat = co_await nxt::rt::op::statx{
-                    .dirfd = dirfd,
-                    .path = name,
-                    .flags = AT_SYMLINK_NOFOLLOW,
-                    .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
-                };
-                co_return listing_entry{
-                    .name = name,
-                    .stat = stat,
-                };
-            }));
-
-    std::ranges::sort(entries, {}, &listing_entry::name);
-    co_return entries;
-}
-
-nxt::rt::task<std::vector<listing_entry>> list_path(std::string path)
-{
-    auto stat = co_await nxt::rt::op::statx{
-        .dirfd = AT_FDCWD,
-        .path = path,
-        .flags = AT_SYMLINK_NOFOLLOW,
-        .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
-    };
-
-    if (S_ISDIR(stat.stx_mode))
-        co_return co_await list_directory(std::move(path));
-
-    co_return std::vector<listing_entry>{
-        listing_entry{
-            .name = std::move(path),
-            .stat = stat,
-        },
-    };
 }
 
 } // namespace
@@ -165,14 +79,15 @@ try {
     nxt::rt::run([path = std::move(path)]() mutable -> nxt::rt::task<void> {
         co_await nxt::rt::write_all(
             nxt::rt::standard_output(),
-            (co_await list_path(std::move(path)))
-                | std::views::transform([](listing_entry const & entry) {
-                      return std::format(
-                          "{} {:>8} {}\n",
-                          mode_string(entry.stat.stx_mode),
-                          entry.stat.stx_size,
-                          entry.name);
-                  }));
+            (co_await nxt::rt::fs::list_path(std::move(path)))
+                | std::views::transform(
+                    [](nxt::rt::fs::directory_entry const & entry) {
+                        return std::format(
+                            "{} {:>8} {}\n",
+                            mode_string(entry.status),
+                            entry.status.size,
+                            entry.name);
+                    }));
     });
     return 0;
 } catch (std::exception const & error) {

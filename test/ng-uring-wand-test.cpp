@@ -1,4 +1,5 @@
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/fs.hpp>
 #include <nxt/rt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
 
@@ -318,6 +319,22 @@ static suite ng_uring_wand_tests{
 
                 expect(std::ranges::find(names, ".") != names.end());
                 expect(std::ranges::find(names, "..") != names.end());
+            };
+
+            "fs lists portable directory entries"_test = [] {
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = nxt::rt::fs::list_path(".");
+
+                deck.start(task);
+                auto entries = pump_until_done(deck, wand, task);
+
+                auto dot = std::ranges::find(
+                    entries,
+                    ".",
+                    &nxt::rt::fs::directory_entry::name);
+                expect(dot != entries.end());
+                expect(dot->status.kind == nxt::rt::fs::file_kind::directory);
             };
         };
 
