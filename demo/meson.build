@@ -47,18 +47,10 @@ if ng_ls_demo_available
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : ng_ls_demo_dependencies,
   )
-
-  if nxt_liburing_dep.found()
-    executable('ng-uring-wand-demo',
-      'ng_ls_demo.cpp',
-      include_directories : [nxt_inc, nxt_ng_inc],
-      dependencies : [nxt_liburing_dep],
-    )
-  endif
 else
   message('no ng ls demo runtime found; skipping ng-ls-demo')
 endif
 
 if host_machine.system() == 'linux' and not nxt_liburing_dep.found()
-  message('liburing not found; skipping ng-uring-wand-demo')
+  message('liburing not found; skipping ng-ls-demo')
 endif
