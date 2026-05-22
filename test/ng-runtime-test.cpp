@@ -1232,110 +1232,123 @@ static suite ng_runtime_tests{
                 expect(reader.buffered_size() == std::size_t{1});
             };
 
-            "byte_writer buffers bytes until flush"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto sink = chunking_string_sink{64};
-                auto storage = std::array<std::byte, 4>{};
-                auto writer =
-                    nxt::rt::byte_writer{sink, std::span{storage}};
+            "BYTE WRITER"_test = [] {
+                "with borrowed storage"_test = [] {
+                    "buffers bytes until flush"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto storage = std::array<std::byte, 4>{};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::span{storage}};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await writer.write(std::string{"ab"});
-                    expect(sink.text.empty());
-                    co_await writer.write(std::string{"cd"});
-                    expect(sink.text.empty());
-                    co_await writer.write(std::string{"e"});
-                    expect(sink.text == "abcd");
-                    co_await writer.flush();
-                });
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write(std::string{"ab"});
+                            expect(sink.text.empty());
+                            co_await writer.write(std::string{"cd"});
+                            expect(sink.text.empty());
+                            co_await writer.write(std::string{"e"});
+                            expect(sink.text == "abcd");
+                            co_await writer.flush();
+                        });
 
-                expect(sink.text == "abcde");
-            };
-
-            "byte_writer can own its buffer"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto sink = chunking_string_sink{64};
-                auto writer = nxt::rt::byte_writer{sink, std::size_t{4}};
-
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await writer.write(std::string{"ab"});
-                    expect(sink.text.empty());
-                    co_await writer.write(std::string{"cd"});
-                    expect(sink.text.empty());
-                    co_await writer.flush();
-                });
-
-                expect(sink.text == "abcd");
-            };
-
-            "byte_writer can own its sink and buffer"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto text = std::make_shared<std::string>();
-                auto writer = nxt::rt::byte_writer{
-                    shared_string_sink{text},
-                    std::size_t{4},
+                        expect(sink.text == "abcde");
+                    };
                 };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await writer.write(std::string{"abc"});
-                    expect(text->empty());
-                    co_await writer.write(std::string{"de"});
-                    expect(*text == "abcd");
-                    co_await writer.flush();
-                });
+                "with owned storage"_test = [] {
+                    "buffers bytes until flush"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::size_t{4}};
 
-                expect(*text == "abcde");
-            };
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write(std::string{"ab"});
+                            expect(sink.text.empty());
+                            co_await writer.write(std::string{"cd"});
+                            expect(sink.text.empty());
+                            co_await writer.flush();
+                        });
 
-            "byte_writer writes ranges of text chunks"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto sink = chunking_string_sink{64};
-                auto writer = nxt::rt::byte_writer{sink, std::size_t{4}};
-                auto chunks = std::vector<std::string>{"ab", "cd", "e"};
+                        expect(sink.text == "abcd");
+                    };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await writer.write(chunks);
-                    expect(sink.text == "abcd");
-                    co_await writer.flush();
-                });
+                    "writes ranges of text chunks"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::size_t{4}};
+                        auto chunks =
+                            std::vector<std::string>{"ab", "cd", "e"};
 
-                expect(sink.text == "abcde");
-            };
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write(chunks);
+                            expect(sink.text == "abcd");
+                            co_await writer.flush();
+                        });
 
-            "byte_writer writes lazy ranges of text chunks"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto sink = chunking_string_sink{64};
-                auto writer = nxt::rt::byte_writer{sink, std::size_t{8}};
-                auto numbers = std::views::iota(1, 4);
-                auto chunks = numbers
-                    | std::views::transform([](int n) {
-                        return std::to_string(n);
-                    });
+                        expect(sink.text == "abcde");
+                    };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await writer.write(chunks);
-                    co_await writer.flush();
-                });
+                    "writes lazy ranges of text chunks"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::size_t{8}};
+                        auto numbers = std::views::iota(1, 4);
+                        auto chunks = numbers
+                            | std::views::transform([](int n) {
+                                return std::to_string(n);
+                            });
 
-                expect(sink.text == "123");
-            };
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write(chunks);
+                            co_await writer.flush();
+                        });
 
-            "byte_writer writes ranges of byte spans"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto sink = chunking_string_sink{64};
-                auto writer = nxt::rt::byte_writer{sink, std::size_t{4}};
-                auto chunks = std::array{
-                    nxt::rt::as_bytes("ab"sv),
-                    nxt::rt::as_bytes("cd"sv),
-                    nxt::rt::as_bytes("ef"sv),
+                        expect(sink.text == "123");
+                    };
+
+                    "writes ranges of byte spans"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto sink = chunking_string_sink{64};
+                        auto writer =
+                            nxt::rt::byte_writer{sink, std::size_t{4}};
+                        auto chunks = std::array{
+                            nxt::rt::as_bytes("ab"sv),
+                            nxt::rt::as_bytes("cd"sv),
+                            nxt::rt::as_bytes("ef"sv),
+                        };
+
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write(chunks);
+                            co_await writer.flush();
+                        });
+
+                        expect(sink.text == "abcdef");
+                    };
                 };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await writer.write(chunks);
-                    co_await writer.flush();
-                });
+                "with owned sink and storage"_test = [] {
+                    "buffers bytes until flush"_test = [] {
+                        auto deck = nxt::rt::deck{};
+                        auto text = std::make_shared<std::string>();
+                        auto writer = nxt::rt::byte_writer{
+                            shared_string_sink{text},
+                            std::size_t{4},
+                        };
 
-                expect(sink.text == "abcdef");
+                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                            co_await writer.write(std::string{"abc"});
+                            expect(text->empty());
+                            co_await writer.write(std::string{"de"});
+                            expect(*text == "abcd");
+                            co_await writer.flush();
+                        });
+
+                        expect(*text == "abcde");
+                    };
+                };
             };
         };
 
