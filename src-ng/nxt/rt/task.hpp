@@ -1177,6 +1177,27 @@ with_zone(Fn && fn)
     }
 }
 
+template<typename Policy, typename Fn>
+    requires stored_policy_task_factory<std::decay_t<Fn>, Policy>
+[[nodiscard]] task<stored_policy_task_result_t<std::decay_t<Fn>, Policy>>
+with_zone(Policy policy, Fn && fn)
+{
+    using factory_type = std::decay_t<Fn>;
+
+    auto run_with_policy =
+        [policy = std::move(policy),
+         fn = factory_type{std::forward<Fn>(fn)}]() mutable {
+        return std::invoke(fn, policy);
+    };
+
+    if constexpr (
+        std::is_void_v<stored_policy_task_result_t<factory_type, Policy>>) {
+        co_await with_zone(std::move(run_with_policy));
+    } else {
+        co_return co_await with_zone(std::move(run_with_policy));
+    }
+}
+
 namespace detail {
 
 template<typename T>

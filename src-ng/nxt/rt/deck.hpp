@@ -52,8 +52,17 @@ template<typename Fn>
 concept stored_task_factory =
     std::invocable<Fn &> && is_task_v<std::invoke_result_t<Fn &>>;
 
+template<typename Fn, typename Policy>
+concept stored_policy_task_factory =
+    std::invocable<Fn &, Policy &>
+    && is_task_v<std::invoke_result_t<Fn &, Policy &>>;
+
 template<typename Fn>
 using stored_task_result_t = task_result_t<std::invoke_result_t<Fn &>>;
+
+template<typename Fn, typename Policy>
+using stored_policy_task_result_t =
+    task_result_t<std::invoke_result_t<Fn &, Policy &>>;
 
 namespace detail {
 

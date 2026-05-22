@@ -817,8 +817,8 @@ static suite ng_runtime_tests{
                 try {
                     deck.sync_wait([&]() -> nxt::rt::task<void> {
                         co_await nxt::rt::with_zone(
-                            [&]() -> nxt::rt::task<void> {
-                                auto policy = nxt::rt::stop_on_failure{};
+                            nxt::rt::stop_on_failure{},
+                            [&](auto & policy) -> nxt::rt::task<void> {
                                 policy.fork(throw_after_yield(events, 1));
                                 policy.fork(
                                     record_stop_state_after_two_yields(
@@ -843,8 +843,9 @@ static suite ng_runtime_tests{
                     deck.sync_wait([&]()
                         -> nxt::rt::task<nxt::rt::deed<int>> {
                         co_return co_await nxt::rt::with_zone(
-                            [&]() -> nxt::rt::task<nxt::rt::deed<int>> {
-                                auto policy = nxt::rt::stop_on_success{};
+                            nxt::rt::stop_on_success{},
+                            [&](auto & policy)
+                                -> nxt::rt::task<nxt::rt::deed<int>> {
                                 auto child =
                                     policy.fork(value_after_yield(123));
                                 policy.fork(
