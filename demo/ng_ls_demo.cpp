@@ -1,7 +1,12 @@
 #include "nxt/rt/task.hpp"
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/fs.hpp>
+
+#if defined(__linux__)
 #include <nxt/rt/uring_wand.hpp>
+#else
+#include <nxt/rt/kqueue_wand.hpp>
+#endif
 
 #include <array>
 #include <format>
@@ -76,7 +81,7 @@ int main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
-    nxt::rt::run([path = std::move(path)]() mutable -> nxt::rt::task<void> {
+    auto body = [path = std::move(path)]() mutable -> nxt::rt::task<void> {
         co_await nxt::rt::write_all(
             nxt::rt::standard_output(),
             (co_await nxt::rt::fs::list_path(std::move(path)))
@@ -88,9 +93,18 @@ try {
                             entry.status.size,
                             entry.name);
                     }));
-    });
+    };
+
+#if defined(__linux__)
+    nxt::rt::run(std::move(body));
+#elif NXT_RT_HAS_KQUEUE
+    nxt::rt::run_with_kqueue(std::move(body));
+#else
+    static_assert(NXT_RT_HAS_KQUEUE, "ng ls demo needs a runtime wand");
+#endif
+
     return 0;
 } catch (std::exception const & error) {
-    std::cerr << "ng-uring-wand-demo: " << error.what() << '\n';
+    std::cerr << "ng-ls-demo: " << error.what() << '\n';
     return 1;
 }

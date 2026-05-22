@@ -280,15 +280,15 @@ if get_option('tests')
 
   test('nxt-tests', nxt_tests)
 
-  if host_machine.system() == 'linux'
-    nxt_ng_test_sources = files(
-      'test/ng-runtime-test.cpp',
-      'src/nxtio/stacktrace.cpp',
-      'test/test-main.cpp',
-    )
-    nxt_ng_test_deps = []
-    nxt_ng_test_deps += nxt_stacktrace_deps
+  nxt_ng_test_sources = files(
+    'test/ng-runtime-test.cpp',
+    'src/nxtio/stacktrace.cpp',
+    'test/test-main.cpp',
+  )
+  nxt_ng_test_deps = []
+  nxt_ng_test_deps += nxt_stacktrace_deps
 
+  if host_machine.system() == 'linux'
     nxt_test_liburing_dep = dependency(
       'liburing',
       fallback : ['liburing', 'uring'],
@@ -305,13 +305,13 @@ if get_option('tests')
         nxt_ng_test_deps += nxt_test_cares_dep
       endif
     endif
-
-    nxt_ng_tests = executable('ng-tests',
-      nxt_ng_test_sources,
-      include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
-      dependencies : nxt_ng_test_deps,
-      cpp_args : nxt_stacktrace_cpp_args,
-    )
-    test('ng-tests', nxt_ng_tests)
   endif
+
+  nxt_ng_tests = executable('ng-tests',
+    nxt_ng_test_sources,
+    include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
+    dependencies : nxt_ng_test_deps,
+    cpp_args : nxt_stacktrace_cpp_args,
+  )
+  test('ng-tests', nxt_ng_tests)
 endif

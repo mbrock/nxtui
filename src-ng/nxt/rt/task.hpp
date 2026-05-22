@@ -1730,6 +1730,7 @@ inline waiter<int> op::openat::operator co_await() const
         *this);
 }
 
+#if defined(__linux__)
 inline waiter<statx_result> op::statx::operator co_await() const
 {
     auto context = detail::current_wish_context();
@@ -1762,6 +1763,7 @@ inline waiter<std::size_t> op::getdents64::operator co_await() const
         *context.running,
         *this);
 }
+#endif
 
 inline waiter<std::size_t> op::read_some::operator co_await() const
 {

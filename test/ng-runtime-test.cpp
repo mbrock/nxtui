@@ -1,5 +1,6 @@
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/http.hpp>
+#include <nxt/rt/kqueue_wand.hpp>
 #include <nxt/rt/pipe.hpp>
 #include <nxt/rt/task.hpp>
 

@@ -9,7 +9,6 @@
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
-#include <linux/time_types.h>
 #include <memory>
 #include <poll.h>
 #include <optional>
@@ -24,6 +23,10 @@
 #include <utility>
 #include <variant>
 
+#if defined(__linux__)
+#include <linux/time_types.h>
+#endif
+
 namespace nxt::rt {
 
 class deck;
@@ -36,7 +39,17 @@ struct promise_base;
 
 using wait_token = std::uint64_t;
 
-inline __kernel_timespec as_kernel_timespec(std::chrono::nanoseconds duration)
+#if defined(__linux__)
+using kernel_timespec = __kernel_timespec;
+#else
+struct kernel_timespec
+{
+    std::int64_t tv_sec = 0;
+    std::int64_t tv_nsec = 0;
+};
+#endif
+
+inline kernel_timespec as_kernel_timespec(std::chrono::nanoseconds duration)
 {
     if (duration < std::chrono::nanoseconds::zero())
         duration = std::chrono::nanoseconds::zero();
@@ -44,7 +57,7 @@ inline __kernel_timespec as_kernel_timespec(std::chrono::nanoseconds duration)
     auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
     auto nanoseconds =
         std::chrono::duration_cast<std::chrono::nanoseconds>(duration - seconds);
-    return __kernel_timespec{
+    return kernel_timespec{
         .tv_sec = seconds.count(),
         .tv_nsec = nanoseconds.count(),
     };
@@ -182,7 +195,9 @@ struct poll_until_result
     bool timed_out = false;
 };
 
+#if defined(__linux__)
 using statx_result = struct statx;
+#endif
 
 namespace op {
 
@@ -215,6 +230,7 @@ struct openat
     waiter<int> operator co_await() const;
 };
 
+#if defined(__linux__)
 struct statx
 {
     using result_type = statx_result;
@@ -241,6 +257,7 @@ struct getdents64
     bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
 };
+#endif
 
 struct read_some
 {
@@ -346,7 +363,7 @@ struct timeout
     using result_type = void;
     static constexpr std::string_view name = "timeout";
 
-    __kernel_timespec duration{};
+    kernel_timespec duration{};
 
     static timeout after(std::chrono::nanoseconds duration)
     {
@@ -366,7 +383,7 @@ struct poll_until
 
     int fd = -1;
     short events = 0;
-    __kernel_timespec timeout{};
+    kernel_timespec timeout{};
 
     static poll_until after(
         int fd,
@@ -389,8 +406,10 @@ struct poll_until
 using wish_variant = std::variant<
     op::manual,
     op::openat,
+#if defined(__linux__)
     op::statx,
     op::getdents64,
+#endif
     op::read_some,
     op::write_some,
     op::recv_some,

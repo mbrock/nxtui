@@ -31,12 +31,34 @@ else
   nxt_liburing_dep = disabler()
 endif
 
-if nxt_liburing_dep.found()
-  executable('ng-uring-wand-demo',
-    'ng_uring_wand.cpp',
+ng_ls_demo_dependencies = []
+ng_ls_demo_available = false
+
+if host_machine.system() == 'darwin'
+  ng_ls_demo_available = true
+elif nxt_liburing_dep.found()
+  ng_ls_demo_available = true
+  ng_ls_demo_dependencies += nxt_liburing_dep
+endif
+
+if ng_ls_demo_available
+  executable('ng-ls-demo',
+    'ng_ls_demo.cpp',
     include_directories : [nxt_inc, nxt_ng_inc],
-    dependencies : [nxt_liburing_dep],
+    dependencies : ng_ls_demo_dependencies,
   )
+
+  if nxt_liburing_dep.found()
+    executable('ng-uring-wand-demo',
+      'ng_ls_demo.cpp',
+      include_directories : [nxt_inc, nxt_ng_inc],
+      dependencies : [nxt_liburing_dep],
+    )
+  endif
 else
+  message('no ng ls demo runtime found; skipping ng-ls-demo')
+endif
+
+if host_machine.system() == 'linux' and not nxt_liburing_dep.found()
   message('liburing not found; skipping ng-uring-wand-demo')
 endif
