@@ -237,6 +237,15 @@ nxt::rt::task<void> record_stop_state_after_yield(
     events.push_back(nxt::rt::stop_requested() ? value : -value);
 }
 
+nxt::rt::task<void> record_stop_state_after_two_yields(
+    std::vector<int> & events,
+    int value)
+{
+    co_await nxt::rt::yield();
+    co_await nxt::rt::yield();
+    events.push_back(nxt::rt::stop_requested() ? value : -value);
+}
+
 nxt::rt::task<void> record_task_stop_state_after_yield(
     std::vector<int> & events,
     int value)
@@ -798,6 +807,56 @@ static suite ng_runtime_tests{
                 deck.run_until_idle();
 
                 expect(events == std::vector<int>{100, 4});
+            };
+
+            "stop-on-failure fork policy stops siblings"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+                auto threw = false;
+
+                try {
+                    deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::with_zone(
+                            [&]() -> nxt::rt::task<void> {
+                                auto policy = nxt::rt::stop_on_failure{};
+                                policy.fork(throw_after_yield(events, 1));
+                                policy.fork(
+                                    record_stop_state_after_two_yields(
+                                        events,
+                                        2));
+                                co_return;
+                            });
+                    });
+                } catch (const std::exception &) {
+                    threw = true;
+                }
+
+                expect(threw);
+                expect(events == std::vector<int>{11, 2});
+            };
+
+            "stop-on-success fork policy stops siblings"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                auto child =
+                    deck.sync_wait([&]()
+                        -> nxt::rt::task<nxt::rt::deed<int>> {
+                        co_return co_await nxt::rt::with_zone(
+                            [&]() -> nxt::rt::task<nxt::rt::deed<int>> {
+                                auto policy = nxt::rt::stop_on_success{};
+                                auto child =
+                                    policy.fork(value_after_yield(123));
+                                policy.fork(
+                                    record_stop_state_after_two_yields(
+                                        events,
+                                        3));
+                                co_return std::move(child);
+                            });
+                    });
+
+                expect(std::move(child).get() == 123_i);
+                expect(events == std::vector<int>{3});
             };
         };
 

@@ -991,6 +991,95 @@ deed<T> fork(task<T> child)
     return require_current_zone().fork(std::move(child));
 }
 
+class stop_on_failure
+{
+public:
+    stop_on_failure()
+        : state_(std::make_shared<state>())
+    {}
+
+    template<typename T>
+    deed<T> fork(task<T> child)
+    {
+        return nxt::rt::fork(wrap(state_, std::move(child)));
+    }
+
+    [[nodiscard]] std::exception_ptr first_failure() const noexcept
+    {
+        return state_->first_failure;
+    }
+
+private:
+    struct state
+    {
+        std::exception_ptr first_failure;
+    };
+
+    template<typename T>
+    static task<T> wrap(std::shared_ptr<state> state, task<T> child)
+    {
+        try {
+            if constexpr (std::is_void_v<T>) {
+                co_await child;
+                co_return;
+            } else {
+                co_return co_await child;
+            }
+        } catch (...) {
+            if (!state->first_failure)
+                state->first_failure = std::current_exception();
+            if (auto * zone = current_zone())
+                zone->stop();
+            throw;
+        }
+    }
+
+    std::shared_ptr<state> state_;
+};
+
+class stop_on_success
+{
+public:
+    stop_on_success()
+        : state_(std::make_shared<state>())
+    {}
+
+    template<typename T>
+    deed<T> fork(task<T> child)
+    {
+        return nxt::rt::fork(wrap(state_, std::move(child)));
+    }
+
+    [[nodiscard]] bool succeeded() const noexcept
+    {
+        return state_->succeeded;
+    }
+
+private:
+    struct state
+    {
+        bool succeeded = false;
+    };
+
+    template<typename T>
+    static task<T> wrap(std::shared_ptr<state> state, task<T> child)
+    {
+        if constexpr (std::is_void_v<T>) {
+            co_await child;
+            state->succeeded = true;
+            require_current_zone().stop();
+            co_return;
+        } else {
+            auto value = co_await child;
+            state->succeeded = true;
+            require_current_zone().stop();
+            co_return value;
+        }
+    }
+
+    std::shared_ptr<state> state_;
+};
+
 namespace detail {
 
 template<stored_task_factory Fn>
