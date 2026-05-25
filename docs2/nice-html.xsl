@@ -153,53 +153,38 @@
             align-items: center;
             display: flex;
             flex-wrap: wrap;
-            gap: 0.22rem 0.42rem;
+            gap: 0.08rem 0.28rem;
           }
           .dexp.list {
             border: 0 solid color-mix(in srgb, var(--accent), transparent 45%);
-            border-radius: 8px;
-            border-width: 0 1.25px;
-            margin: 0.12rem 0;
-            padding: 0.12rem 0.45rem;
+            border-radius: 6px;
+            border-width: 0 1px;
+            margin: 0.03rem 0;
+            padding: 0.02rem 0.28rem;
           }
           .dexp.list .dexp.list {
             border-color: color-mix(in srgb, var(--muted), transparent 52%);
           }
           .dexp.symbol {
             color: var(--ink);
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 0.9rem;
+            font: inherit;
+            font-size: 0.95rem;
           }
           .dexp.number {
             color: var(--accent);
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 0.9rem;
+            font: inherit;
+            font-size: 0.95rem;
           }
           .dexp.list > .dexp.symbol:first-child {
             color: var(--accent);
-            font-weight: 700;
+            font-weight: 650;
           }
-          .dexp.list[data-callee='block'],
-          .dexp.list[data-callee='all'],
-          .dexp.list[data-callee='some'],
-          .dexp.list[data-callee='lone'],
-          .dexp.list[data-callee='always'],
-          .dexp.list[data-callee='next-state'] {
+          .dexp.list[data-callee='block'] {
             align-items: flex-start;
             flex-direction: column;
           }
-          .dexp.list[data-callee='block'] > .dexp.symbol:first-child,
-          .dexp.list[data-callee='all'] > .dexp.symbol:first-child,
-          .dexp.list[data-callee='some'] > .dexp.symbol:first-child,
-          .dexp.list[data-callee='lone'] > .dexp.symbol:first-child,
-          .dexp.list[data-callee='always'] > .dexp.symbol:first-child,
-          .dexp.list[data-callee='next-state'] > .dexp.symbol:first-child {
+          .dexp.list[data-callee='block'] > .dexp.symbol:first-child {
             width: 100%;
-          }
-          .dexp.list[data-callee='bindings'] {
-            align-items: flex-start;
-            border-color: color-mix(in srgb, var(--line), transparent 20%);
-            flex-direction: column;
           }
           .dexp.list[data-callee='binding'] {
             border-color: transparent;
@@ -208,7 +193,7 @@
           .dexp.list[data-callee='=>'],
           .dexp.list[data-callee='=='],
           .dexp.list[data-callee='in'] {
-            column-gap: 0.5rem;
+            column-gap: 0.32rem;
           }
           ul {
             margin: 0.75rem 0 1.25rem;
@@ -372,7 +357,7 @@
   </xsl:template>
 
   <xsl:template match="dexp-symbol">
-    <span class="dexp value symbol"><xsl:value-of select="translate(@name, '-', ' ')"/></span>
+    <span class="dexp value symbol"><xsl:value-of select="@name"/></span>
   </xsl:template>
 
   <xsl:template match="dexp-number">
