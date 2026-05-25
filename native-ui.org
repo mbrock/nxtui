@@ -1,0 +1,50 @@
+#+title: Native UI Thought
+
+* Cell-native, not cell-bound
+
+The current TUI model is already close to a small immediate-mode UI: layout
+values report size hints and render into a target. Today that target is a
+terminal-cell raster, but it could grow a higher-level drawing path.
+
+The key idea is to keep =ch= and =ln= as fundamental layout units even in a
+native UI backend. A native renderer can support fractional cell coordinates,
+sub-glyph positioning, smooth shapes, and real text rendering, while the whole
+interface still tends to harmonize with the terminal grid.
+
+* Rendering shape
+
+Keep =Raster= as one concrete render target, but introduce a conceptual drawing
+target for native backends:
+
+- text runs
+- fills and rules
+- clipping
+- raster islands
+- maybe images later
+
+Existing raster-only widgets still work by rendering into a child =Raster=, then
+the native backend draws that raster as a small terminal surface.
+
+* Mac backend sketch
+
+A nice small Mac backend could be:
+
+- AppKit for the window, event loop, clipboard, menus, and native integration
+- a thin Objective-C++ layer for =NSView= / =CAMetalLayer=
+- =metal-cpp= for the renderer, keeping most of the backend in C++
+- Core Text or a small wrapped text path for glyphs
+
+The AppKit side should stay boring and thin. The interesting part is a C++
+renderer that consumes a draw list expressed in fractional =ch= / =ln= space.
+
+* Why it feels promising
+
+This would let =nxt= keep its terminal soul while gaining a native presentation
+path:
+
+- layouts remain compact, typed, and grid-aware
+- terminal panes and old TUI widgets embed naturally
+- native widgets can be smoother without losing alignment
+- ANSI, Metal, and future renderers can share the same higher-level layout
+  language
+
