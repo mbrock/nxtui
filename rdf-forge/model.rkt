@@ -121,10 +121,21 @@
 (define (always body)
   (forge-expr 'always (list body)))
 
+(define-syntax (with-forge-vars stx)
+  (syntax-parse stx
+    [(_ (var:id ...) body:expr)
+     #'(let-syntax ([var (lambda (use-stx)
+                           (syntax-parse use-stx
+                             [id:id #''var]
+                             [(_ step (... ...))
+                              #'(follow 'var step (... ...))]))]
+                    ...)
+         body)]))
+
 (define-syntax (all stx)
   (syntax-parse stx
     [(_ ([var:id set:expr] ...) body:expr)
-     #'(let ([var 'var] ...)
+     #'(with-forge-vars (var ...)
          (forge-quant 'all
                       (list (cons 'var set) ...)
                       body))]))
@@ -132,7 +143,7 @@
 (define-syntax (some stx)
   (syntax-parse stx
     [(_ ([var:id set:expr] ...) body:expr)
-     #'(let ([var 'var] ...)
+     #'(with-forge-vars (var ...)
          (forge-quant 'some
                       (list (cons 'var set) ...)
                       body))]
@@ -142,7 +153,7 @@
 (define-syntax (lone stx)
   (syntax-parse stx
     [(_ ([var:id set:expr] ...) body:expr)
-     #'(let ([var 'var] ...)
+     #'(with-forge-vars (var ...)
          (forge-quant 'lone
                       (list (cons 'var set) ...)
                       body))]

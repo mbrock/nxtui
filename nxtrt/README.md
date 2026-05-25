@@ -32,8 +32,12 @@ raw Forge text. For example:
 ```racket
 (all ([a waiter])
   (=> (some (follow a parked-on))
-      (== (follow a (belongs-to (task waiter)) (belongs-to waiter)) a)))
+      (== (a (belongs-to (task waiter)) (belongs-to waiter)) a)))
 ```
+
+Quantified variables are callable inside predicate bodies. Calling a variable
+with relation steps follows that path from the variable, so `(a parked-on)` is
+the same relation expression as `(follow a parked-on)`.
 
 Field declarations resolve overloaded properties from the enclosing signature
 domain, so a signature can stay close to the ontology wording:

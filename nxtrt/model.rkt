@@ -37,58 +37,58 @@
    (predicate 'structural-invariants
               (block
                (all ([a waiter])
-                 (in (union (follow a staged-on)
-                            (follow a parked-on))
-                     (follow a holds)))
+                 (in (union (a staged-on)
+                            (a parked-on))
+                     (a holds)))
                (all ([a waiter])
-                 (lone (union (follow a staged-on)
-                              (follow a parked-on))))
+                 (lone (union (a staged-on)
+                              (a parked-on))))
                (all ([t task] [a waiter])
-                 (=> (== (follow t (belongs-to waiter)) a)
-                     (== (follow a (belongs-to (task waiter))) t)))
+                 (=> (== (t (belongs-to waiter)) a)
+                     (== (a (belongs-to (task waiter))) t)))
                (all ([d deed])
-                 (== (follow d (belongs-to (task deed)) (belongs-to (zone task)))
-                     (follow d (belongs-to (zone deed)))))
+                 (== (d (belongs-to (task deed)) (belongs-to (zone task)))
+                     (d (belongs-to (zone deed)))))
                (all ([z zone] [t (matching (belongs-to (zone task)) z)])
                  (lone ([d (matching (belongs-to (zone deed)) z)])
-                   (== (follow d (belongs-to (task deed))) t)))
+                   (== (d (belongs-to (task deed))) t)))
                (all ([t task] [d deck])
-                 (=> (== (follow t (belongs-to deck)) d)
-                     (no (follow t (belongs-to waiter)))))
+                 (=> (== (t (belongs-to deck)) d)
+                     (no (t (belongs-to waiter)))))
                (all ([a waiter])
-                 (=> (some (follow a parked-on))
-                     (== (follow a (belongs-to (task waiter)) (belongs-to waiter)) a)))))
+                 (=> (some (a parked-on))
+                     (== (a (belongs-to (task waiter)) (belongs-to waiter)) a)))))
 
    (predicate 'ready-task-has-a-deck
               (all ([t task])
-                (=> (some (follow t (belongs-to deck)))
-                    (one (follow t (belongs-to deck))))))
+                (=> (some (t (belongs-to deck)))
+                    (one (t (belongs-to deck))))))
 
    (predicate 'waiting-task-has-a-wand
               (all ([t task])
-                (=> (some (follow t (belongs-to waiter)))
-                    (one (follow t (belongs-to waiter) holds)))))
+                (=> (some (t (belongs-to waiter)))
+                    (one (t (belongs-to waiter) holds)))))
 
    (predicate 'child-task-has-at-most-one-deed-in-its-zone
               (all ([z zone] [t (matching (belongs-to (zone task)) z)])
                 (lone ([d (matching (belongs-to (zone deed)) z)])
-                  (== (follow d (belongs-to (task deed))) t))))
+                  (== (d (belongs-to (task deed))) t))))
 
    (predicate 'parked-waiter-identifies-suspended-task
               (all ([a waiter])
-                (=> (some (follow a parked-on))
-                    (== (follow a (belongs-to (task waiter)) (belongs-to waiter)) a))))
+                (=> (some (a parked-on))
+                    (== (a (belongs-to (task waiter)) (belongs-to waiter)) a))))
 
    (predicate 'ready-task-on-deck
               (some ([t task])
-                (some (follow t (belongs-to deck)))))
+                (some (t (belongs-to deck)))))
 
    (predicate 'task-awaiting-wish
               (some ([t task] [a waiter] [w wand])
                 (block
-                 (== (follow t (belongs-to waiter)) a)
-                 (== (follow a holds) w)
-                 (== (follow a parked-on) w))))
+                 (== (t (belongs-to waiter)) a)
+                 (== (a holds) w)
+                 (== (a parked-on) w))))
 
    (predicate 'zone-with-children
               (some ([z zone])
@@ -99,24 +99,24 @@
    (predicate 'staged-but-not-parked-yet
               (some ([a waiter] [w wand])
                 (block
-                 (== (follow a staged-on) w)
-                 (no (follow a parked-on)))))
+                 (== (a staged-on) w)
+                 (no (a parked-on)))))
 
    (predicate 'parent-child-continuation
               (some ([parent task] [child task])
-                (== (follow child continues-as) parent)))
+                (== (child continues-as) parent)))
 
    (predicate 'rich-runtime-shape
               (some ([d deck] [w wand] [z zone])
                 (block
-                 (== (follow d waves) w)
+                 (== (d waves) w)
                  (ge (count (matching (belongs-to deck) d)) 1)
                  (ge (count (matching (belongs-to (zone task)) z)) 2)
                  (some ([a waiter])
-                   (|| (== (follow a staged-on) w)
-                       (== (follow a parked-on) w)))
+                   (|| (== (a staged-on) w)
+                       (== (a parked-on) w)))
                  (some ([t (matching (belongs-to (zone task)) z)])
-                   (some (follow t (belongs-to waiter)))))))
+                   (some (t (belongs-to waiter)))))))
 
    (check 'ready-task-has-a-deck-checked
           (=> 'structural-invariants 'ready-task-has-a-deck))
