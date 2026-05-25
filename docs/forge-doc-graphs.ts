@@ -40,7 +40,10 @@ function upgradeGraphPlaceholder(placeholder: Element) {
 
 	const graph = document.createElement("forge-graph");
 	graph.setAttribute("title", placeholder.getAttribute("title") || `${graphRef.frg}: ${graphRef.run}`);
-	graph.setAttribute("height", placeholder.getAttribute("height") || "560");
+	const height = placeholder.getAttribute("height");
+	if (height) {
+		graph.setAttribute("height", height);
+	}
 	appendInlineXml(graph, xml);
 
 	const cnd = placeholder.getAttribute("cnd");

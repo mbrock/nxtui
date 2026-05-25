@@ -70,18 +70,21 @@
             font-size: 1.08rem;
           }
           forge-doc-graph {
+            aspect-ratio: 16 / 10;
             display: block;
-            width: 100%;
-            min-height: 560px;
-            height: 560px;
+            min-height: 360px;
+            max-height: 680px;
             margin: 2rem 0 3rem;
             position: relative;
+            width: 100%;
           }
           forge-doc-graph forge-graph {
+            aspect-ratio: inherit;
             display: block;
+            height: 100%;
+            min-height: inherit;
+            max-height: inherit;
             width: 100%;
-            min-height: 560px;
-            height: 560px;
           }
           section {
             max-width: 760px;
@@ -179,6 +182,6 @@
   </xsl:template>
 
   <xsl:template match="forge-graph">
-    <forge-doc-graph frg="{@frg}" run="{@run}" title="{@title}" height="560"></forge-doc-graph>
+    <forge-doc-graph frg="{@frg}" run="{@run}" title="{@title}"></forge-doc-graph>
   </xsl:template>
 </xsl:stylesheet>
