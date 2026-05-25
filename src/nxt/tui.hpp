@@ -107,6 +107,12 @@ auto leaf(WidthHint w, HeightHint h, F && f)
     return Leaf<std::decay_t<F>>{w, h, std::forward<F>(f)};
 }
 
+/// Empty layout used when a typed composition needs an absent child.
+inline auto empty()
+{
+    return leaf(WidthHint{}, HeightHint{}, [](RasterView &, Size) {});
+}
+
 /// Conditional layout that delegates to one of two child layouts.
 template<Layout FalseLayout, Layout TrueLayout>
 struct Either
@@ -356,6 +362,39 @@ auto fixed_width(width_t width, Child && child)
 {
     return FixedWidth<std::decay_t<Child>>{
         width, std::forward<Child>(child)};
+}
+
+/// Layout decorator that lets a child claim remaining row width.
+template<Layout Child>
+struct GrowWidth
+{
+    Child child;
+    ratio_t factor{1.0 * one};
+
+    constexpr WidthHint width_hint() const
+    {
+        auto hint = child.width_hint();
+        hint.flex = std::max(hint.flex, factor);
+        return hint;
+    }
+
+    constexpr HeightHint height_hint() const
+    {
+        return child.height_hint();
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        child.render(raster, size);
+    }
+};
+
+/// Keep the child's minimum width but make it participate in row flex.
+template<Layout Child>
+auto grow_width(Child && child, ratio_t factor = 1.0 * one)
+{
+    return GrowWidth<std::decay_t<Child>>{
+        std::forward<Child>(child), factor};
 }
 
 /// Render one styled span and return the column after the written text.
@@ -913,6 +952,111 @@ template<Layout... Children>
 Column<std::decay_t<Children>...> column(Children &&... children)
 {
     return {std::tuple{std::forward<Children>(children)...}};
+}
+
+/// Dynamic horizontal flex container for a runtime-sized vector of
+/// children that all have the same concrete layout type.
+template<Layout Child>
+struct DynRow
+{
+    std::vector<Child> children;
+
+    WidthHint width_hint() const
+    {
+        width_t total_min = 0 * ch;
+        ratio_t total_flex = 0.0 * one;
+        for (const auto & c : children) {
+            total_min += c.width_hint().min;
+            total_flex += c.width_hint().flex;
+        }
+        return {total_min, total_flex};
+    }
+
+    HeightHint height_hint() const
+    {
+        height_t max_min = 0 * ln;
+        for (const auto & c : children)
+            max_min = std::max(max_min, c.height_hint().min);
+        return HeightHint::fixed(
+            max_min.count() > 0 ? max_min : height_t{1 * ln});
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        width_t used = 0 * ch;
+        ratio_t total_flex = 0.0 * one;
+        for (const auto & c : children) {
+            used += c.width_hint().min;
+            total_flex += c.width_hint().flex;
+        }
+
+        Pos cursor = Pos::origin();
+        for (const auto & c : children) {
+            auto h = c.width_hint();
+            auto w = h.min;
+            if (h.flex > 0.0 * one && size.w > used)
+                w += (size.w - used)
+                     * (h.flex.value() / total_flex.value());
+            if (w.count() > 0) {
+                auto child_size = Size{w, size.h};
+                auto sub = subraster(raster, cursor, child_size);
+                c.render(sub, child_size);
+                cursor += w;
+            }
+        }
+    }
+};
+
+template<Layout Child>
+auto dyn_row(std::vector<Child> children)
+{
+    return DynRow<Child>{std::move(children)};
+}
+
+/// Dynamic vertical flex container for a runtime-sized vector of
+/// children that all have the same concrete layout type.
+template<Layout Child>
+struct DynColumn
+{
+    std::vector<Child> children;
+
+    WidthHint width_hint() const
+    {
+        width_t max_min = 0 * ch;
+        for (const auto & c : children)
+            max_min = std::max(max_min, c.width_hint().min);
+        return {max_min, 1.0 * one};
+    }
+
+    HeightHint height_hint() const
+    {
+        height_t total_min = 0 * ln;
+        for (const auto & c : children)
+            total_min += c.height_hint().min;
+        return HeightHint::fixed(total_min);
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        Pos cursor = Pos::origin();
+        for (const auto & c : children) {
+            auto h = c.height_hint().min;
+            if (h.count() == 0)
+                continue;
+            if ((cursor.y - Pos::origin().y) + h > size.h)
+                break;
+            auto child_size = Size{size.w, h};
+            auto sub = subraster(raster, cursor, child_size);
+            c.render(sub, child_size);
+            cursor = cursor + h;
+        }
+    }
+};
+
+template<Layout Child>
+auto dyn_column(std::vector<Child> children)
+{
+    return DynColumn<Child>{std::move(children)};
 }
 
 /// Render a span of items by mapping each item to a one-line layout.

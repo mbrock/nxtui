@@ -115,24 +115,25 @@ inline auto status_chip(
         std::format(" {} ", s), fg_color, bg_color, em_flags);
 }
 
-inline AnyLayout cassette_row(AnyLayout row, width_t pad = 1 * ch)
+template<Layout Body>
+inline auto inset_block(Body && body, width_t pad = 1 * ch)
 {
-    return AnyLayout{
-        nxt::tui::row(
-            std::vector<AnyLayout>{
-                hfill(pad, page_bg),
-                std::move(row),
-                flex_fill(page_bg),
-            })};
+    return nxt::tui::row(
+        hfill(pad, page_bg),
+        grow_width(std::forward<Body>(body)));
 }
 
-inline auto cassette_rows(std::vector<AnyLayout> rows, width_t pad = 1 * ch)
+inline auto block(std::vector<AnyLayout> rows, width_t pad = 1 * ch)
 {
-    auto padded = std::vector<AnyLayout>{};
-    padded.reserve(rows.size());
-    for (auto & r : rows)
-        padded.push_back(cassette_row(std::move(r), pad));
-    return column(std::move(padded));
+    return inset_block(dyn_column(std::move(rows)), pad);
+}
+
+template<Layout Header, Layout Body>
+inline auto block(Header && header, Body && body, width_t pad = 1 * ch)
+{
+    return inset_block(
+        column(std::forward<Header>(header), std::forward<Body>(body)),
+        pad);
 }
 
 inline auto spine(const call_view & c)
@@ -212,15 +213,26 @@ inline auto body_line(std::string s, Rgba8 fg_color)
     return text(std::move(s), fg(fg_color));
 }
 
-inline AnyLayout result_window(const call_view & c)
+inline auto body_lines(std::vector<std::string> lines, Rgba8 fg_color)
 {
-    auto rows = std::vector<AnyLayout>{};
+    if (lines.empty())
+        lines.push_back({});
+
+    auto styled = std::vector<std::vector<Span>>{};
+    styled.reserve(lines.size());
+    for (auto & line : lines)
+        styled.push_back({span(std::move(line), fg(fg_color))});
+    return styled_lines(
+        std::move(styled), Style{.fg = fg_color, .bg = page_bg});
+}
+
+inline auto result_window(const call_view & c)
+{
     auto line_color = c.state == status::error ? rose_300 : slate_300;
-    for (auto & line : first_lines(c.output, 4))
-        rows.push_back(body_line(std::move(line), line_color));
-    if (rows.empty())
-        rows.push_back(body_line("running", slate_700));
-    return cassette_rows(std::move(rows));
+    auto lines = first_lines(c.output, 4);
+    if (lines.empty())
+        lines.push_back("running");
+    return inset_block(body_lines(std::move(lines), line_color));
 }
 
 inline AnyLayout shell_header(
@@ -241,42 +253,42 @@ inline AnyLayout shell_header(
     return row(std::move(parts));
 }
 
-inline AnyLayout shell_script_window(std::string_view command)
+inline auto shell_script_window(std::string_view command)
 {
-    auto rows = std::vector<AnyLayout>{};
+    auto rows = std::vector<std::vector<Span>>{};
     auto prefix = std::string{"$ "};
     for (auto & line : first_lines(command, 12)) {
         rows.push_back(
-            row(std::vector<AnyLayout>{
-                text(prefix, fg(orange_300)),
-                flex_text(std::move(line), fg(amber_200)),
-            }));
+            {
+                span(prefix, fg(orange_300)),
+                span(std::move(line), fg(amber_200)),
+            });
         prefix = "> ";
     }
-    return cassette_rows(std::move(rows));
+    return inset_block(
+        styled_lines(
+            std::move(rows), Style{.fg = amber_200, .bg = page_bg}));
 }
 
-inline AnyLayout shell_output_window(const call_view & c)
+inline auto shell_output_window(const call_view & c)
 {
-    auto rows = std::vector<AnyLayout>{};
     auto line_color = c.state == status::error ? rose_300 : slate_300;
-    rows.push_back(chip(
-        c.state == status::running ? " running " : " output ",
-        c.state == status::error ? rose_300 : slate_500,
-        page_bg,
-        c.state == status::running ? DEFAULT_EMPHASIS : Emphasis::bold));
+    auto header =
+        chip(
+            c.state == status::running ? " running " : " output ",
+            c.state == status::error ? rose_300 : slate_500,
+            page_bg,
+            c.state == status::running ? DEFAULT_EMPHASIS : Emphasis::bold);
+    auto lines = std::vector<std::string>{};
     if (!c.output.empty()) {
         auto sanitized = nxt::tui::text_flow::sanitize_terminal_text(c.output);
-        auto output_lines =
-            nxt::tui::text_flow::wrap_text(sanitized, 88 * ch);
-        if (output_lines.size() > 8)
-            output_lines.resize(8);
-        for (auto & line : output_lines)
-            rows.push_back(body_line(std::move(line), line_color));
+        lines = nxt::tui::text_flow::wrap_text(sanitized, 88 * ch);
+        if (lines.size() > 8)
+            lines.resize(8);
     }
     if (c.output.empty() && c.state == status::running)
-        rows.push_back(body_line("waiting for process output", slate_700));
-    return cassette_rows(std::move(rows));
+        lines.push_back("waiting for process output");
+    return block(std::move(header), body_lines(std::move(lines), line_color));
 }
 
 inline AnyLayout render_bash_call(const call_view & c)
@@ -284,10 +296,10 @@ inline AnyLayout render_bash_call(const call_view & c)
     auto command = bash_command(c.arguments);
     auto pieces = std::vector<AnyLayout>{};
     if (command && short_shell_oneliner(*command)) {
-        pieces.push_back(cassette_row(
+        pieces.push_back(inset_block(
             shell_header(c, std::format("$ {}", *command), amber_200)));
     } else {
-        pieces.push_back(cassette_row(
+        pieces.push_back(inset_block(
             shell_header(c, "shell script", orange_300)));
         if (command)
             pieces.push_back(shell_script_window(*command));
@@ -304,36 +316,32 @@ inline AnyLayout render_call(const call_view & c)
         return render_bash_call(c);
 
     auto pieces = std::vector<AnyLayout>{};
-    pieces.push_back(cassette_row(call_header(c)));
+    pieces.push_back(inset_block(call_header(c)));
     if (!c.output.empty() || c.state == status::running)
         pieces.push_back(result_window(c));
     return column(std::move(pieces));
 }
 
-inline AnyLayout thought_block(std::string s)
+inline auto thought_block(std::string s)
 {
-    auto rows = std::vector<AnyLayout>{};
-    rows.push_back(chip(" thinking ", slate_950, sky_300, Emphasis::bold));
-    rows.push_back(
+    return block(
+        chip(" thinking ", slate_950, sky_300, Emphasis::bold),
         nxt::tui::text_flow::markdown_block(
             s,
             fg(slate_300),
             88 * ch,
             Style{.fg = slate_300, .bg = page_bg}));
-    return cassette_rows(std::move(rows));
 }
 
-inline AnyLayout assistant_block(std::string s)
+inline auto assistant_block(std::string s)
 {
-    auto rows = std::vector<AnyLayout>{};
-    rows.push_back(chip(" assistant ", slate_950, emerald_300, Emphasis::bold));
-    rows.push_back(
+    return block(
+        chip(" assistant ", slate_950, emerald_300, Emphasis::bold),
         nxt::tui::text_flow::markdown_block(
             s,
             fg(slate_300),
             88 * ch,
             Style{.fg = slate_300, .bg = page_bg}));
-    return cassette_rows(std::move(rows));
 }
 
 inline AnyLayout render_turn(const turn_view & t)

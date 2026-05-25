@@ -262,67 +262,274 @@ auto header_layout(const live_state & state)
     namespace tt = nxt::ai::tool_tui;
     auto summary = std::format("{}  {}", state.model, state.status);
     return nxt::tui::row(
-        std::vector<nxt::tui::AnyLayout>{
-            tt::chip(" nxtllm ", tt::slate_950, tt::amber_300,
-                     nxt::Emphasis::bold),
-            nxt::tui::flex_text(
-                std::move(summary),
-                nxt::tui::fg(tt::slate_400) | nxt::tui::bg(tt::band_bg)),
-        });
+        tt::chip(" nxtllm ", tt::slate_950, tt::amber_300,
+                 nxt::Emphasis::bold),
+        nxt::tui::flex_text(
+            std::move(summary),
+            nxt::tui::fg(tt::slate_400) | nxt::tui::bg(tt::band_bg)));
+}
+
+auto assistant_preview_layout(const live_state & state)
+{
+    namespace tt = nxt::ai::tool_tui;
+    auto preview = join_lines(last_lines(state.assistant_text, 8));
+    return nxt::tui::either(
+        !state.assistant_text.empty(),
+        nxt::tui::empty(),
+        nxt::tui::text_lines(
+            std::move(preview), nxt::tui::fg(tt::slate_300)));
+}
+
+auto activity_layout(const live_state & state)
+{
+    return nxt::tui::either(
+        !state.turn.thought.empty() || !state.turn.calls.empty(),
+        nxt::tui::empty(),
+        nxt::ai::tool_tui::render_turn(state.turn));
 }
 
 auto live_layout(const live_state & state)
 {
     namespace tt = nxt::ai::tool_tui;
-    auto rows = std::vector<nxt::tui::AnyLayout>{};
-    rows.push_back(header_layout(state));
-
-    if (!state.assistant_text.empty()) {
-        rows.push_back(nxt::tui::text_lines(
-            join_lines(last_lines(state.assistant_text, 8)),
-            nxt::tui::fg(tt::slate_300)));
-    } else {
-        rows.push_back(nxt::tui::text(
-            "waiting for first tokens", nxt::tui::fg(tt::slate_700)));
-    }
-
-    if (!state.turn.thought.empty() || !state.turn.calls.empty())
-        rows.push_back(tt::render_turn(state.turn));
-
     return nxt::tui::surface(
         nxt::tui::Style{
             .fg = tt::slate_300,
             .bg = tt::page_bg,
             .em = nxt::DEFAULT_EMPHASIS,
         },
-        nxt::tui::column(std::move(rows)));
+        nxt::tui::column(
+            header_layout(state),
+            assistant_preview_layout(state),
+            activity_layout(state)));
 }
 
-void publish_live(
-    nxt::rt::ui_scope * ui,
-    live_state & state,
-    bool force = false)
+class plain_agent_presenter
 {
-    if (ui != nullptr) {
+public:
+    void status(std::string, bool = true)
+    {
+    }
+
+    void publish(bool = false)
+    {
+    }
+
+    void reasoning_started()
+    {
+    }
+
+    void reasoning_delta(std::string_view)
+    {
+    }
+
+    nxt::rt::task<void> reasoning_done(std::string)
+    {
+        co_return;
+    }
+
+    void output_delta(std::string_view delta)
+    {
+        std::cout << delta << std::flush;
+    }
+
+    void finish_plain_output()
+    {
+        std::cout << '\n';
+    }
+
+    nxt::rt::task<void> finish_assistant()
+    {
+        co_return;
+    }
+
+    void begin_tool_batch(
+        const std::vector<nxt::ai::tools::function_call> & calls)
+    {
+        std::cout << "[tools] running " << calls.size() << " tool call(s)\n";
+    }
+
+    nxt::rt::task<void> finish_tool_batch(
+        const std::vector<nxt::ai::tools::function_call_result> & results,
+        int)
+    {
+        for (const auto & result : results) {
+            std::cout << "[tool] " << result.call.name << " -> "
+                      << (result.result.failed ? "failed" : "ok") << " ("
+                      << result.result.output.size() << " bytes)\n";
+        }
+        co_return;
+    }
+
+    nxt::rt::task<void> tls_ready(
+        const std::shared_ptr<nxt::rt::trace_context> &,
+        const nxt::rt::trace_span &)
+    {
+        co_return;
+    }
+};
+
+class hud_agent_presenter
+{
+public:
+    hud_agent_presenter(nxt::rt::ui_scope & ui, live_state & state)
+        : hud_ui_{ui}
+        , hud_{state}
+    {
+    }
+
+    void status(std::string text, bool force = true)
+    {
+        hud_.status = std::move(text);
+        publish(force);
+    }
+
+    void publish(bool force = false)
+    {
         auto now = std::chrono::steady_clock::now();
         if (!force
-            && state.last_publish != std::chrono::steady_clock::time_point{}
-            && now - state.last_publish < frame_interval)
+            && hud_.last_publish != std::chrono::steady_clock::time_point{}
+            && now - hud_.last_publish < frame_interval)
             return;
-        state.last_publish = now;
-        ui->draw(live_layout(state));
+        hud_.last_publish = now;
+        hud_ui_.draw(live_layout(hud_));
     }
-}
 
+    void reasoning_started()
+    {
+        hud_.status = "thinking";
+        publish(true);
+    }
+
+    void reasoning_delta(std::string_view delta)
+    {
+        hud_.status = "thinking";
+        append_thought_delta(hud_, delta);
+        publish();
+    }
+
+    nxt::rt::task<void> reasoning_done(std::string text)
+    {
+        if (!text.empty())
+            hud_.turn.thought = std::move(text);
+        auto summary = std::move(hud_.turn.thought);
+        hud_.turn.thought.clear();
+        hud_.status = "thinking done";
+        if (!summary.empty())
+            co_await hud_ui_.print(
+                nxt::ai::tool_tui::thought_block(std::move(summary)));
+        publish(true);
+    }
+
+    void output_delta(std::string_view delta)
+    {
+        auto first_stream_delta = hud_.status != "streaming";
+        hud_.status = "streaming";
+        hud_.assistant_text += delta;
+        publish(first_stream_delta);
+    }
+
+    void finish_plain_output()
+    {
+    }
+
+    nxt::rt::task<void> finish_assistant()
+    {
+        if (hud_.assistant_text.empty())
+            co_return;
+        co_await hud_ui_.print(
+            nxt::ai::tool_tui::assistant_block(
+                std::move(hud_.assistant_text)));
+        hud_.assistant_text.clear();
+        publish(true);
+    }
+
+    void begin_tool_batch(
+        const std::vector<nxt::ai::tools::function_call> & calls)
+    {
+        hud_.status = std::format("running {} tool call(s)", calls.size());
+        hud_.turn.calls.clear();
+        hud_.turn.calls.reserve(calls.size());
+        for (const auto & call : calls) {
+            hud_.turn.calls.push_back(
+                nxt::ai::tool_tui::call_view{
+                    .name = call.name,
+                    .arguments = call.arguments,
+                    .output = {},
+                    .state = nxt::ai::tool_tui::status::running,
+                    .elapsed_ms = -1,
+                });
+        }
+        publish(true);
+    }
+
+    nxt::rt::task<void> finish_tool_batch(
+        const std::vector<nxt::ai::tools::function_call_result> & results,
+        int elapsed_ms)
+    {
+        for (std::size_t i = 0; i < results.size(); ++i) {
+            const auto & result = results[i];
+            if (i < hud_.turn.calls.size()) {
+                auto & call = hud_.turn.calls[i];
+                call.state = result.result.failed
+                    ? nxt::ai::tool_tui::status::error
+                    : nxt::ai::tool_tui::status::ok;
+                call.output = result.result.output;
+                call.elapsed_ms = elapsed_ms;
+            }
+            publish(true);
+        }
+
+        if (!hud_.turn.calls.empty()) {
+            co_await hud_ui_.print(nxt::ai::tool_tui::render_turn(hud_.turn));
+            hud_.turn.calls.clear();
+            publish(true);
+        }
+    }
+
+    nxt::rt::task<void> tls_ready(
+        const std::shared_ptr<nxt::rt::trace_context> & trace,
+        const nxt::rt::trace_span & tls_span)
+    {
+        if (trace != nullptr && tls_span)
+            co_await hud_ui_.print(
+                nxt::ai::trace_tui::render_span_waterfall(
+                    *trace,
+                    tls_span,
+                    {
+                        .label = "",
+                        .detail = "TLS 1.3",
+                        .subject = "api.openai.com",
+                        .accent = nxt::ai::tool_tui::teal_300,
+                    }));
+        else
+            co_await hud_ui_.print_block(
+                "tls  api.openai.com  TLS 1.3 handshake\n");
+        publish(true);
+    }
+
+    void done()
+    {
+        status("done");
+        hud_.done = true;
+    }
+
+    void failed()
+    {
+        status("failed");
+        hud_.done = true;
+    }
+
+private:
+    nxt::rt::ui_scope & hud_ui_;
+    live_state & hud_;
+};
+
+template<typename Presenter>
 nxt::rt::task<response_stream_result> stream_openai_response(
     const llm_request & request,
-    live_state * live = nullptr,
-    nxt::rt::ui_scope * ui = nullptr)
+    Presenter & presenter)
 {
-    if (live != nullptr) {
-        live->status = "connecting";
-        publish_live(ui, *live, true);
-    }
+    presenter.status("connecting");
 
     auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
     auto socket_output = nxt::rt::byte_writer<nxt::rt::socket_sink>{
@@ -337,10 +544,7 @@ nxt::rt::task<response_stream_result> stream_openai_response(
     };
 
     auto tls = nxt::rt::tls::tls13_client_session{reader, socket_output};
-    if (live != nullptr) {
-        live->status = "tls handshake";
-        publish_live(ui, *live, true);
-    }
+    presenter.status("tls handshake");
     auto trace = nxt::rt::current_trace_context();
     auto tls_span = nxt::rt::trace_span{};
     if (trace != nullptr) {
@@ -360,14 +564,11 @@ nxt::rt::task<response_stream_result> stream_openai_response(
                 -> nxt::rt::task<> {
                 if (progress.kind
                     == nxt::rt::tls::handshake_progress_kind::begin) {
-                    if (live != nullptr) {
-                        live->status =
-                            std::format(
-                                "tls: {}",
-                                nxt::ai::trace_tui::display_name(
-                                    progress.name));
-                        publish_live(ui, *live, true);
-                    }
+                    presenter.status(
+                        std::format(
+                            "tls: {}",
+                            nxt::ai::trace_tui::display_name(
+                                progress.name)));
                     if (trace != nullptr && tls_span)
                         active_tls_spans.push_back(
                             trace->start_span(
@@ -392,13 +593,10 @@ nxt::rt::task<response_stream_result> stream_openai_response(
 
                 if (trace != nullptr && tls_span)
                     tls_span.event(std::string{progress.name});
-                if (live != nullptr) {
-                    live->status =
-                        std::format(
-                            "tls: {}",
-                            nxt::ai::trace_tui::display_name(progress.name));
-                    publish_live(ui, *live, true);
-                }
+                presenter.status(
+                    std::format(
+                        "tls: {}",
+                        nxt::ai::trace_tui::display_name(progress.name)));
             });
         if (tls_span)
             tls_span.finish("ok");
@@ -409,25 +607,7 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             tls_span.finish("error");
         throw;
     }
-    if (live != nullptr) {
-        if (ui != nullptr) {
-            if (trace != nullptr && tls_span)
-                co_await ui->print(
-                    nxt::ai::trace_tui::render_span_waterfall(
-                        *trace,
-                        tls_span,
-                        {
-                            .label = "",
-                            .detail = "TLS 1.3",
-                            .subject = "api.openai.com",
-                            .accent = nxt::ai::tool_tui::teal_300,
-                        }));
-            else
-                co_await ui->print_block(
-                    "tls  api.openai.com  TLS 1.3 handshake\n");
-        }
-        publish_live(ui, *live, true);
-    }
+    co_await presenter.tls_ready(trace, tls_span);
 
     auto http_request =
         nxt::ai::responses::openai_responses_http_request(request);
@@ -474,48 +654,20 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             auto payload = event.read<nxt::ai::openai::output_item_event>();
             result.output_items.push_back(std::move(payload.item));
         } else if (event.type == "response.reasoning_summary_part.added") {
-            if (live != nullptr) {
-                live->status = "thinking";
-                if (live->turn.thought.empty())
-                    live->turn.thought = "waiting for reasoning summary...";
-                publish_live(ui, *live, true);
-            }
+            presenter.reasoning_started();
         } else if (event.type == "response.reasoning_summary_text.delta") {
             auto delta =
                 event.read<
                     nxt::ai::openai::reasoning_summary_text_delta_event>();
-            if (live != nullptr) {
-                if (live->turn.thought == "waiting for reasoning summary...")
-                    live->turn.thought.clear();
-                live->status = "thinking";
-                append_thought_delta(*live, delta.delta);
-                publish_live(ui, *live);
-            }
+            presenter.reasoning_delta(delta.delta);
         } else if (event.type == "response.reasoning_summary_text.done") {
             auto done =
                 event.read<
                     nxt::ai::openai::reasoning_summary_text_done_event>();
-            if (live != nullptr) {
-                if (!done.text.empty())
-                    live->turn.thought = std::move(done.text);
-                auto summary = std::move(live->turn.thought);
-                live->turn.thought.clear();
-                live->status = "thinking done";
-                if (ui != nullptr && !summary.empty())
-                    co_await ui->print(
-                        nxt::ai::tool_tui::thought_block(std::move(summary)));
-                publish_live(ui, *live, true);
-            }
+            co_await presenter.reasoning_done(std::move(done.text));
         } else if (event.type == "response.output_text.delta") {
             auto delta = event.read<nxt::ai::openai::text_delta_event>();
-            if (live != nullptr) {
-                auto first_stream_delta = live->status != "streaming";
-                live->status = "streaming";
-                live->assistant_text += delta.delta;
-                publish_live(ui, *live, first_stream_delta);
-            } else {
-                std::cout << delta.delta << std::flush;
-            }
+            presenter.output_delta(delta.delta);
         } else if (
             event.type == "response.failed"
             || event.type == "response.incomplete") {
@@ -529,17 +681,15 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             break;
     }
 
-    if (live == nullptr)
-        std::cout << '\n';
+    presenter.finish_plain_output();
     co_return result;
 }
 
-template<typename ToolSet>
+template<typename ToolSet, typename Presenter>
 nxt::rt::task<void> run_agent_loop(
     llm_request request,
     ToolSet tools,
-    live_state * live = nullptr,
-    nxt::rt::ui_scope * ui = nullptr,
+    Presenter & presenter,
     std::size_t max_steps = 32)
 {
     auto original = request;
@@ -547,22 +697,12 @@ nxt::rt::task<void> run_agent_loop(
     prepare_tool_request(request, tools);
 
     for (std::size_t step = 0; step < max_steps; ++step) {
-        if (live != nullptr) {
-            live->status = std::format("turn {}", step + 1);
-            publish_live(ui, *live, true);
-        }
-        auto response = co_await stream_openai_response(request, live, ui);
+        presenter.status(std::format("turn {}", step + 1));
+        auto response = co_await stream_openai_response(request, presenter);
         auto calls =
             nxt::ai::tools::function_calls_from_items(response.output_items);
         if (calls.empty()) {
-            if (live != nullptr && ui != nullptr
-                && !live->assistant_text.empty()) {
-                co_await ui->print(
-                    nxt::ai::tool_tui::assistant_block(
-                        std::move(live->assistant_text)));
-                live->assistant_text.clear();
-                publish_live(ui, *live, true);
-            }
+            co_await presenter.finish_assistant();
             co_return;
         }
 
@@ -571,26 +711,7 @@ nxt::rt::task<void> run_agent_loop(
                 "tool call response had no response id"};
 
         auto started = std::chrono::steady_clock::now();
-        if (live != nullptr) {
-            live->status =
-                std::format("running {} tool call(s)", calls.size());
-            live->turn.calls.clear();
-            live->turn.calls.reserve(calls.size());
-            for (const auto & call : calls) {
-                live->turn.calls.push_back(
-                    nxt::ai::tool_tui::call_view{
-                        .name = call.name,
-                        .arguments = call.arguments,
-                        .output = {},
-                        .state = nxt::ai::tool_tui::status::running,
-                        .elapsed_ms = -1,
-                    });
-            }
-            publish_live(ui, *live, true);
-        } else {
-            std::cout << "[tools] running " << calls.size()
-                      << " tool call(s)\n";
-        }
+        presenter.begin_tool_batch(calls);
 
         auto results =
             co_await nxt::ai::tools::run_function_tool_batch(tools, calls);
@@ -598,29 +719,8 @@ nxt::rt::task<void> run_agent_loop(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started)
                 .count();
-        for (std::size_t i = 0; i < results.size(); ++i) {
-            const auto & result = results[i];
-            if (live != nullptr) {
-                if (i < live->turn.calls.size()) {
-                    auto & call = live->turn.calls[i];
-                    call.state = result.result.failed
-                        ? nxt::ai::tool_tui::status::error
-                        : nxt::ai::tool_tui::status::ok;
-                    call.output = result.result.output;
-                    call.elapsed_ms = static_cast<int>(elapsed);
-                }
-                publish_live(ui, *live, true);
-            } else {
-                std::cout << "[tool] " << result.call.name << " -> "
-                          << (result.result.failed ? "failed" : "ok") << " ("
-                          << result.result.output.size() << " bytes)\n";
-            }
-        }
-        if (live != nullptr && ui != nullptr && !live->turn.calls.empty()) {
-            co_await ui->print(nxt::ai::tool_tui::render_turn(live->turn));
-            live->turn.calls.clear();
-            publish_live(ui, *live, true);
-        }
+        co_await presenter.finish_tool_batch(
+            results, static_cast<int>(elapsed));
 
         auto outputs = nxt::ai::tools::output_items_from_results(results);
         request = original;
@@ -675,7 +775,9 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
     }
 
     if (::isatty(STDOUT_FILENO) == 0) {
-        co_await run_agent_loop(std::move(request), std::move(tools));
+        auto presenter = plain_agent_presenter{};
+        co_await run_agent_loop(
+            std::move(request), std::move(tools), presenter);
         co_return EXIT_SUCCESS;
     }
 
@@ -703,21 +805,17 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
                 [&]() -> nxt::rt::task<void> {
                 co_await nxt::rt::with_ui_zone([&](nxt::rt::ui_scope ui)
                     -> nxt::rt::task<void> {
-                    publish_live(&ui, live, true);
+                    auto presenter = hud_agent_presenter{ui, live};
+                    presenter.publish(true);
                     try {
                         co_await run_agent_loop(
                             std::move(request),
                             std::move(tools),
-                            &live,
-                            &ui);
-                        live.status = "done";
-                        live.done = true;
-                        publish_live(&ui, live, true);
+                            presenter);
+                        presenter.done();
                         ui.request_shutdown();
                     } catch (...) {
-                        live.status = "failed";
-                        live.done = true;
-                        publish_live(&ui, live, true);
+                        presenter.failed();
                         ui.request_shutdown();
                         throw;
                     }

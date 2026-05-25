@@ -144,13 +144,12 @@ inline auto waterfall_bar(
         begin, end, accent, tool_tui::slate_800);
 }
 
-inline nxt::tui::AnyLayout render_waterfall(
-    waterfall_view view,
-    waterfall_options options = {})
+inline auto waterfall_header(
+    const waterfall_view & view,
+    const waterfall_options & options)
 {
     namespace tt = tool_tui;
 
-    auto rows = std::vector<nxt::tui::AnyLayout>{};
     auto header = std::vector<nxt::tui::AnyLayout>{};
     if (!options.label.empty())
         header.push_back(
@@ -174,63 +173,64 @@ inline nxt::tui::AnyLayout render_waterfall(
             tt::slate_950,
             tt::amber_300,
             nxt::Emphasis::bold));
-    rows.push_back(nxt::tui::row(std::move(header)));
+    return nxt::tui::row(std::move(header));
+}
+
+inline auto waterfall_row_layout(
+    const waterfall_row & row,
+    nxt::rt::trace_clock::duration total,
+    Rgba8 accent)
+{
+    namespace tt = tool_tui;
+    return nxt::tui::row(
+        nxt::tui::fixed_width(
+            28 * nxt::ch,
+            nxt::tui::flex_text(
+                row.name,
+                nxt::tui::fg(tt::slate_300)
+                    | nxt::tui::bg(tt::page_bg))),
+        nxt::tui::fixed_width(
+            9 * nxt::ch,
+            nxt::tui::text(
+                std::format("+{:>7}", format_duration(row.offset)),
+                nxt::tui::fg(tt::slate_500)
+                    | nxt::tui::bg(tt::page_bg))),
+        nxt::tui::fixed_width(
+            9 * nxt::ch,
+            nxt::tui::text(
+                std::format("{:>7}  ", format_duration(row.duration)),
+                nxt::tui::fg(tt::slate_400)
+                    | nxt::tui::bg(tt::page_bg))),
+        waterfall_bar(row.offset, row.duration, total, accent));
+}
+
+inline auto render_waterfall(
+    waterfall_view view,
+    waterfall_options options = {})
+{
+    namespace tt = tool_tui;
+
+    auto rows = std::vector<nxt::tui::AnyLayout>{};
+    rows.push_back(waterfall_header(view, options));
 
     if (view.rows.empty()) {
         rows.push_back(tt::body_line("no completed child spans", tt::slate_500));
     } else {
-        for (const auto & row : view.rows) {
+        for (const auto & row : view.rows)
             rows.push_back(
-                nxt::tui::row(
-                    std::vector<nxt::tui::AnyLayout>{
-                        nxt::tui::fixed_width(
-                            28 * nxt::ch,
-                            nxt::tui::flex_text(
-                                row.name,
-                                nxt::tui::fg(tt::slate_300)
-                                    | nxt::tui::bg(tt::page_bg))),
-                        nxt::tui::fixed_width(
-                            9 * nxt::ch,
-                            nxt::tui::text(
-                                std::format("+{:>7}",
-                                            format_duration(row.offset)),
-                                nxt::tui::fg(tt::slate_500)
-                                    | nxt::tui::bg(tt::page_bg))),
-                        nxt::tui::fixed_width(
-                            9 * nxt::ch,
-                            nxt::tui::text(
-                                std::format("{:>7}  ",
-                                            format_duration(row.duration)),
-                                nxt::tui::fg(tt::slate_400)
-                                    | nxt::tui::bg(tt::page_bg))),
-                        waterfall_bar(
-                            row.offset, row.duration, view.total, options.accent),
-                    }));
-        }
+                waterfall_row_layout(row, view.total, options.accent));
     }
 
-    auto full_width_rows = std::vector<nxt::tui::AnyLayout>{};
-    full_width_rows.reserve(rows.size());
-    for (auto & row : rows) {
-        full_width_rows.push_back(
-            nxt::tui::row(
-                std::vector<nxt::tui::AnyLayout>{
-                    nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-                    std::move(row),
-                }));
-    }
-
-    return nxt::tui::AnyLayout{
-        nxt::tui::surface(
-            nxt::tui::Style{
-                .fg = tt::slate_300,
-                .bg = tt::page_bg,
-                .em = nxt::DEFAULT_EMPHASIS,
-            },
-            nxt::tui::column(std::move(full_width_rows)))};
+    return nxt::tui::surface(
+        nxt::tui::Style{
+            .fg = tt::slate_300,
+            .bg = tt::page_bg,
+            .em = nxt::DEFAULT_EMPHASIS,
+        },
+        tt::block(std::move(rows)));
 }
 
-inline nxt::tui::AnyLayout render_span_waterfall(
+inline auto render_span_waterfall(
     const nxt::rt::trace_context & trace,
     const nxt::rt::trace_span & span,
     waterfall_options options = {})
