@@ -326,6 +326,20 @@ Parser::CsiResult Parser::parse_csi(std::size_t end, KeyEvent & event)
         return CsiResult::invalid; // Mouse input is intentionally out of scope here.
 
     auto params = split(body, ';');
+    if (command == 'R' && params.size() == 2) {
+        auto row = parse_number(params[0]);
+        auto col = parse_number(params[1]);
+        if (!row || !col || *row <= 0 || *col <= 0)
+            return CsiResult::invalid;
+
+        event.raw = std::move(raw);
+        event.key = Key::unknown;
+        event.cursor_position = Pos{
+            terminal_origin + static_cast<std::size_t>(*col - 1) * ch,
+            terminal_origin_v + static_cast<std::size_t>(*row - 1) * ln};
+        return CsiResult::parsed;
+    }
+
     auto key_parts = params.empty() ? std::vector<std::string_view>{}
                                     : split(params[0], ':');
     auto first = key_parts.empty() || key_parts[0].empty()

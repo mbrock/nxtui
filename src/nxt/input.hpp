@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <nxt/units.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -91,6 +92,8 @@ struct KeyEvent
     std::string text;
     /// Raw bytes consumed to produce this event.
     std::string raw;
+    /// Cursor position report from DSR 6: CSI row ; col R.
+    std::optional<Pos> cursor_position;
 
     /// True when the event should be treated as ordinary text insertion.
     [[nodiscard]] bool is_text() const noexcept
@@ -107,6 +110,12 @@ struct KeyEvent
         return key == Key::character && type != EventType::release
             && codepoint == static_cast<std::uint32_t>('c') && mods.ctrl
             && !mods.alt && !mods.super && !mods.hyper && !mods.meta;
+    }
+
+    /// True when this event is a terminal cursor-position report.
+    [[nodiscard]] bool is_cursor_position_report() const noexcept
+    {
+        return cursor_position.has_value();
     }
 
     /// True when the event is plain Ctrl-L.

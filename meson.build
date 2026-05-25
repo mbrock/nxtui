@@ -191,6 +191,7 @@ if get_option('tests')
   nxt_test_inc = include_directories('test')
 
   nxt_ng_test_sources = files(
+    'test/input-test.cpp',
     'test/ng-include-test.cpp',
     'test/ng-runtime-test.cpp',
     'test/terminal-test.cpp',

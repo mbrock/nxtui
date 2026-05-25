@@ -211,6 +211,11 @@ public:
                     reinterpret_cast<const char *>(storage.data()),
                     static_cast<std::size_t>(n)};
                 for (auto & event : parser.feed(bytes)) {
+                    if (event.is_cursor_position_report()) {
+                        (void)cursor_reports_.try_publish(
+                            *event.cursor_position);
+                        continue;
+                    }
                     if (event.is_ctrl_l()) {
                         print_block(d.runtime_dump_text());
                         continue;
@@ -234,6 +239,8 @@ public:
 
         auto out = std::ostringstream{};
         drain_commands();
+        if (has_terminal_surface())
+            clear_bottom_region(out, max_rendered_hud_height_);
         if (has_terminal_surface())
             compositor_.set_hud_height(0 * ln, size_.h, out);
         flush_output_queue(out);
@@ -327,17 +334,93 @@ private:
         out.flush();
     }
 
-    [[nodiscard]] std::optional<row_t> query_insertion_cursor() const
+    void clear_bottom_region(std::ostream & out, height_t rows)
     {
-        if (!has_terminal_surface())
-            return std::nullopt;
-        if (terminal_geometry_initialized_)
-            return std::nullopt;
-        // Cursor position reporting is an in-band terminal protocol response.
-        // Do not synchronously poll stdin from the render path; a future
-        // terminal owner can observe CPR asynchronously and feed it into the
-        // geometry model.
-        return std::nullopt;
+        rows = std::min(rows, size_.h);
+        if (rows == 0 * ln)
+            return;
+
+        auto buf = std::string{};
+        auto w = nxt::ansi::Writer{buf};
+        auto first = nxt::terminal_origin_v + size_.h - rows;
+        auto last = nxt::terminal_origin_v + size_.h;
+        w.save_cursor();
+        for (auto row = first; row < last; row += 1 * ln) {
+            w.move_to(nxt::Pos{nxt::terminal_origin + 0 * nxt::ch, row});
+            w.clear_line();
+        }
+        w.restore_cursor();
+        out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    }
+
+    [[nodiscard]] height_t target_height_for(const widget_slot & layout) const
+    {
+        auto hint = layout.height_hint();
+        auto target_h = hint.flex > 0 * one ? size_.h : hint.min;
+        target_h = std::min(target_h, size_.h);
+
+        if (hint.flex == 0 * one && target_h > 0 * ln) {
+            auto reserved_log_rows = 7 * ln;
+            if (size_.h > reserved_log_rows)
+                target_h = std::min(target_h, size_.h - reserved_log_rows);
+        }
+
+        return target_h;
+    }
+
+    void discard_cursor_reports()
+    {
+        while (cursor_reports_.try_pop()) {
+        }
+    }
+
+    [[nodiscard]] task<std::optional<row_t>>
+    request_initial_insertion_cursor()
+    {
+        if (!has_terminal_surface() || ::isatty(STDIN_FILENO) == 0)
+            co_return std::nullopt;
+
+        discard_cursor_reports();
+
+        auto query = std::string{};
+        auto w = nxt::ansi::Writer{query};
+        w.request_cursor_position();
+        co_await write_stdout_all(std::move(query));
+
+        auto deadline =
+            std::chrono::steady_clock::now()
+            + std::chrono::milliseconds{100};
+        while (!stop_requested()) {
+            if (auto report = cursor_reports_.try_pop())
+                co_return report->y;
+
+            auto now = std::chrono::steady_clock::now();
+            if (now >= deadline)
+                break;
+
+            auto remaining =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    deadline - now);
+            auto poll_interval =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::milliseconds{8});
+            co_await op::timeout::after(std::min(remaining, poll_interval));
+        }
+
+        co_return std::nullopt;
+    }
+
+    [[nodiscard]] task<void>
+    prepare_initial_geometry(const widget_slot & layout)
+    {
+        if (terminal_geometry_initialized_ || initial_cursor_probe_finished_)
+            co_return;
+
+        if (target_height_for(layout) == 0 * ln)
+            co_return;
+
+        initial_cursor_probe_finished_ = true;
+        initial_insertion_cursor_ = co_await request_initial_insertion_cursor();
     }
 
     template<nxt::tui::Layout Layout>
@@ -410,21 +493,16 @@ private:
     std::string render_frame_bytes(const widget_slot & layout)
     {
         auto out = std::ostringstream{};
-        auto hint = layout.height_hint();
-        auto target_h = hint.flex > 0 * one ? size_.h : hint.min;
-        target_h = std::min(target_h, size_.h);
+        auto target_h = target_height_for(layout);
+        last_rendered_hud_height_ = target_h;
+        max_rendered_hud_height_ =
+            std::max(max_rendered_hud_height_, target_h);
 
-        if (hint.flex == 0 * one && target_h > 0 * ln) {
-            auto reserved_log_rows = 7 * ln;
-            if (size_.h > reserved_log_rows)
-                target_h = std::min(target_h, size_.h - reserved_log_rows);
-        }
-
-        auto insertion_cursor = target_h > 0 * ln
-                                    ? query_insertion_cursor()
-                                    : std::optional<row_t>{};
-        compositor_.set_hud_height(
-            target_h, size_.h, out, insertion_cursor);
+        auto insertion_cursor =
+            target_h > 0 * ln && !terminal_geometry_initialized_
+                ? initial_insertion_cursor_
+                : std::optional<row_t>{};
+        compositor_.set_hud_height(target_h, size_.h, out, insertion_cursor);
         if (target_h > 0 * ln)
             terminal_geometry_initialized_ = true;
 
@@ -462,6 +540,7 @@ private:
                     (void)refresh_terminal_size();
                     next_size_refresh = now + std::chrono::milliseconds{250};
                 }
+                co_await prepare_initial_geometry(surface_);
                 co_await write_stdout_all(render_frame_bytes(surface_));
             } else {
                 co_await write_stdout_all(render_output_only_bytes());
@@ -482,6 +561,7 @@ private:
         drain_commands();
         if (has_terminal_surface()) {
             (void)refresh_terminal_size();
+            co_await prepare_initial_geometry(surface_);
             co_await write_stdout_all(render_frame_bytes(surface_));
         } else {
             co_await write_stdout_all(render_output_only_bytes());
@@ -498,11 +578,16 @@ private:
     event damage_event_;
     std::uint64_t damage_generation_ = 0;
     channel<terminal_command> commands_;
+    channel<Pos> cursor_reports_;
     std::vector<queued_output> output_queue_;
     regional_tty::scrollback_append_state scrollback_;
     bool stopping_ = false;
     bool cleaned_up_ = false;
     bool terminal_geometry_initialized_ = false;
+    bool initial_cursor_probe_finished_ = false;
+    height_t last_rendered_hud_height_ = 0 * ln;
+    height_t max_rendered_hud_height_ = 0 * ln;
+    std::optional<row_t> initial_insertion_cursor_;
 };
 
 struct current_ui_runtime_key

@@ -183,7 +183,23 @@ static suite input_parser_tests{
                 expect(events[0].key == Key::up);
                 expect(events[0].mods.ctrl);
             };
-        };
-    }};
+
+            "parses cursor position reports"_test = [] {
+                nxt::input::Parser parser;
+                auto events = parser.feed("\x1b[12;34R");
+
+                expect(events.size() == 1_ul);
+                expect(events[0].is_cursor_position_report());
+                expect(events[0].key == Key::unknown);
+                expect(events[0].cursor_position.has_value());
+                expect(
+                    events[0].cursor_position->x
+                    == nxt::terminal_origin + 33 * nxt::ch);
+                expect(
+                    events[0].cursor_position->y
+                    == nxt::terminal_origin_v + 11 * nxt::ln);
+            };
+	        };
+	    }};
 
 } // namespace nxt::test
