@@ -21,9 +21,17 @@
                   forge-field-ref?
                   forge-field-ref-name
                   forge-predicate-name
+                  forge-predicate-body
                   forge-check-name
                   forge-run-name
-                  forge-run-scope)
+                  forge-run-scope
+                  forge-expr?
+                  forge-expr-op
+                  forge-expr-args
+                  forge-quant?
+                  forge-quant-kind
+                  forge-quant-bindings
+                  forge-quant-body)
          "../rdf-forge/ontology.rkt"
          "../nxtrt/model.rkt"
          "../nxtrt/ontology.rkt")
@@ -248,8 +256,39 @@
               ,@(for/list ([fld (in-list (forge-signature-fields sig))])
                   (field-doc (forge-signature-term sig) fld))))
 
+(define (dexp-symbol name)
+  `(dexp-symbol (@ (name ,(format "~a" name)))))
+
+(define (dexp-number value)
+  `(dexp-number (@ (value ,(format "~a" value)))))
+
+(define (dexp-list . children)
+  `(dexp-list ,@children))
+
+(define (expr-doc expr)
+  (cond
+    [(symbol? expr) (dexp-symbol expr)]
+    [(number? expr) (dexp-number expr)]
+    [(term? expr) (dexp-symbol (term-display-name expr))]
+    [(forge-expr? expr)
+     (apply dexp-list
+            (cons (dexp-symbol (forge-expr-op expr))
+                  (map expr-doc (forge-expr-args expr))))]
+    [(forge-quant? expr)
+     (dexp-list
+      (dexp-symbol (forge-quant-kind expr))
+      (apply dexp-list
+             (for/list ([binding (in-list (forge-quant-bindings expr))])
+               (dexp-list (dexp-symbol (car binding))
+                          (expr-doc (cdr binding)))))
+      (expr-doc (forge-quant-body expr)))]
+    [(list? expr)
+     (apply dexp-list (map expr-doc expr))]
+    [else (dexp-symbol (format "~a" expr))]))
+
 (define (predicate-doc pred)
-  `(predicate (@ (name ,(symbol->string (forge-predicate-name pred))))))
+  `(predicate (@ (name ,(symbol->string (forge-predicate-name pred))))
+              ,(expr-doc (forge-predicate-body pred))))
 
 (define (check-doc chk)
   `(check (@ (name ,(symbol->string (forge-check-name chk))))))

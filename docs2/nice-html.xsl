@@ -2,6 +2,7 @@
 <xsl:stylesheet version="1.0"
                 xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
   <xsl:output method="html" encoding="UTF-8" indent="yes"/>
+  <xsl:strip-space elements="dexp-list dexp-symbol dexp-number predicate predicates"/>
 
   <xsl:template match="/doc-page">
     <html>
@@ -136,6 +137,47 @@
           }
           .inline-list code {
             white-space: nowrap;
+          }
+          .predicate-list {
+            display: grid;
+            gap: 1rem;
+          }
+          .predicate {
+            border-top: 1px solid var(--line);
+            padding-top: 0.75rem;
+          }
+          .predicate h3 {
+            margin-top: 0;
+          }
+          .dexp {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.22rem 0.42rem;
+          }
+          .dexp.list {
+            border: 0 solid color-mix(in srgb, var(--accent), transparent 45%);
+            border-radius: 8px;
+            border-width: 0 1.25px;
+            margin: 0.12rem 0;
+            padding: 0.12rem 0.45rem;
+          }
+          .dexp.list .dexp.list {
+            border-color: color-mix(in srgb, var(--muted), transparent 52%);
+          }
+          .dexp.symbol {
+            color: var(--ink);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.9rem;
+          }
+          .dexp.number {
+            color: var(--accent);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.9rem;
+          }
+          .dexp.list > .dexp.symbol:first-child {
+            color: var(--accent);
+            font-weight: 700;
           }
           ul {
             margin: 0.75rem 0 1.25rem;
@@ -272,6 +314,15 @@
           </section>
         </xsl:for-each>
       </div>
+      <h3>Predicates</h3>
+      <div class="predicate-list">
+        <xsl:for-each select="predicates/predicate">
+          <section class="predicate">
+            <h3><xsl:value-of select="translate(@name, '-', ' ')"/></h3>
+            <xsl:apply-templates select="dexp-list"/>
+          </section>
+        </xsl:for-each>
+      </div>
       <h3>Witnesses</h3>
       <div class="run-list">
         <xsl:for-each select="runs/run">
@@ -283,5 +334,17 @@
         </xsl:for-each>
       </div>
     </section>
+  </xsl:template>
+
+  <xsl:template match="dexp-list">
+    <div class="dexp value list"><xsl:apply-templates/></div>
+  </xsl:template>
+
+  <xsl:template match="dexp-symbol">
+    <span class="dexp value symbol"><xsl:value-of select="translate(@name, '-', ' ')"/></span>
+  </xsl:template>
+
+  <xsl:template match="dexp-number">
+    <span class="dexp value number"><xsl:value-of select="@value"/></span>
   </xsl:template>
 </xsl:stylesheet>
