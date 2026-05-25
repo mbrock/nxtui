@@ -287,10 +287,10 @@
   (define term (forge-field-term fld))
   (cond
     [(forge-field-ref? term)
-     (ontology-property (term-ontology domain-term)
-                        (forge-field-ref-name term)
-                        #:domain domain-term
-                        #:range (forge-field-range fld))]
+     (ontology-ensure-property (term-ontology domain-term)
+                               (forge-field-ref-name term)
+                               #:domain domain-term
+                               #:range (forge-field-range fld))]
     [else term]))
 
 (define (forge-option-hash model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])
@@ -379,6 +379,23 @@
     [(hash-has-key? predicate-map sym) (hash-ref predicate-map sym)]
     [else (raise-argument-error 'compile-symbol "bound Forge variable or predicate name" sym)]))
 
+(define (resolve-relation-term expr relation-map)
+  (cond
+    [(hash-has-key? relation-map expr)
+     (hash-ref relation-map expr)]
+    [else
+     (define local (term-rdf-name expr))
+     (define matches
+       (for/list ([(relation-term relation) (in-hash relation-map)]
+                  #:when (eq? (term-rdf-name relation-term) local))
+         relation))
+     (case (length matches)
+       [(1) (car matches)]
+       [(0) #f]
+       [else (raise-argument-error 'compile-forge-expr
+                                   "unambiguous model relation"
+                                   expr)])]))
+
 (define (compile-quantifier quant sig-map relation-map predicate-map env)
   (define-values (decls body-env)
     (for/fold ([decls '()]
@@ -404,8 +421,11 @@
     [(term? expr)
      (cond
        [(hash-has-key? sig-map expr) (hash-ref sig-map expr)]
-       [(hash-has-key? relation-map expr) (hash-ref relation-map expr)]
-       [else (raise-argument-error 'compile-forge-expr "model term" expr)])]
+       [else
+        (define relation (resolve-relation-term expr relation-map))
+        (if relation
+            relation
+            (raise-argument-error 'compile-forge-expr "model term" expr))])]
     [(symbol? expr) (compile-symbol expr env predicate-map)]
     [(forge-quant? expr) (compile-quantifier expr sig-map relation-map predicate-map env)]
     [(forge-expr? expr)

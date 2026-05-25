@@ -204,7 +204,9 @@
   (and (term? value) (eq? (term-kind value) 'class)))
 
 (define (property-term? value)
-  (and (term? value) (eq? (term-kind value) 'property)))
+  (and (term? value)
+       (eq? (term-kind value) 'property)
+       (eq? (term-local value) (term-rdf-name value))))
 
 (define (field-relation-term signature-term fld)
   (with-handlers ([exn:fail? (lambda (_error) #f)])
@@ -298,9 +300,7 @@
 
 (define (property-dexp value)
   (call-doc 'property
-            (dexp-symbol (term-display-name value))
-            (dexp-symbol (term-display-name (term-option-ref value 'domain)))
-            (dexp-symbol (term-display-name (term-option-ref value 'range)))))
+            (dexp-symbol (term-display-name value))))
 
 (define (ontology-dexp ont)
   (define terms (ontology-declared-terms ont))

@@ -11,6 +11,7 @@
  define-property
  ontology-declared-terms
  ontology-property
+ ontology-ensure-property
  ontology->turtle
  term-forge-name
  term-rdf-name
@@ -62,6 +63,30 @@
                         #:range range
                         #:rdf-name local)))
 
+(define (ontology-property-matches ont local #:domain [domain #f] #:range [range #f])
+  (filter (lambda (value)
+            (and (term? value)
+                 (eq? (term-kind value) 'property)
+                 (eq? (term-rdf-name value) local)
+                 (or (not domain)
+                     (eq? (option-ref (term-options value) 'domain) domain))
+                 (or (not range)
+                     (eq? (option-ref (term-options value) 'range) range))))
+          (ontology-declared-terms ont)))
+
+(define (ontology-ensure-property ont local #:domain domain #:range range)
+  (define matches (ontology-property-matches ont local #:domain domain #:range range))
+  (case (length matches)
+    [(1) (car matches)]
+    [(0)
+     (make-property-term ont (overload-forge-name local domain range)
+                         #:domain domain
+                         #:range range
+                         #:rdf-name local)]
+    [else (error 'ontology-ensure-property
+                 "ambiguous property named ~a with requested domain/range"
+                 local)]))
+
 (define (ontology-declared-terms ont)
   (reverse (unbox (ontology-terms ont))))
 
@@ -70,16 +95,7 @@
   (if found (cdr found) fallback))
 
 (define (ontology-property ont local #:domain [domain #f] #:range [range #f])
-  (define matches
-    (filter (lambda (value)
-              (and (term? value)
-                   (eq? (term-kind value) 'property)
-                   (eq? (term-rdf-name value) local)
-                   (or (not domain)
-                       (eq? (option-ref (term-options value) 'domain) domain))
-                   (or (not range)
-                       (eq? (option-ref (term-options value) 'range) range))))
-            (ontology-declared-terms ont)))
+  (define matches (ontology-property-matches ont local #:domain domain #:range range))
   (case (length matches)
     [(1) (car matches)]
     [(0) (error 'ontology-property "no property named ~a with requested domain/range" local)]
@@ -118,23 +134,25 @@
                   (turtle-literal (option-ref options 'subclass-of)))
           ""))]
     [(property)
-     (string-append
-      (format "~a a owl:ObjectProperty .\n" (turtle-name value))
-      (if (option-ref options 'domain)
-          (format "~a rdfs:domain ~a .\n"
-                  (turtle-name value)
-                  (turtle-literal (option-ref options 'domain)))
-          "")
-      (if (option-ref options 'range)
-          (format "~a rdfs:range ~a .\n"
-                  (turtle-name value)
-                  (turtle-literal (option-ref options 'range)))
-          "")
-      (if (option-ref options 'inverse-of)
-          (format "~a owl:inverseOf ~a .\n"
-                  (turtle-name value)
-                  (turtle-literal (option-ref options 'inverse-of)))
-          ""))]
+     (if (eq? (term-local value) (term-rdf-name value))
+         (string-append
+          (format "~a a owl:ObjectProperty .\n" (turtle-name value))
+          (if (option-ref options 'domain)
+              (format "~a rdfs:domain ~a .\n"
+                      (turtle-name value)
+                      (turtle-literal (option-ref options 'domain)))
+              "")
+          (if (option-ref options 'range)
+              (format "~a rdfs:range ~a .\n"
+                      (turtle-name value)
+                      (turtle-literal (option-ref options 'range)))
+              "")
+          (if (option-ref options 'inverse-of)
+              (format "~a owl:inverseOf ~a .\n"
+                      (turtle-name value)
+                      (turtle-literal (option-ref options 'inverse-of)))
+              ""))
+         "")]
     [else ""]))
 
 (define (ontology->turtle ont)
@@ -163,7 +181,16 @@
 (define-syntax (define-property stx)
   (syntax-parse stx
     [(_ ont:id name:id)
-     #'(define name (make-property-term ont 'name))]
+     #'(begin
+         (void (make-property-term ont 'name))
+         (define-syntax (name use-stx)
+           (syntax-parse use-stx
+             [id:id
+              #'(ontology-property ont 'name)]
+             [(_ (range*:id domain*:id))
+              #'(ontology-ensure-property ont 'name #:domain domain* #:range range*)]
+             [(_ range*:id)
+              #'(ontology-property ont 'name #:range range*)])))]
     [(_ ont:id name:id ((domain:id range:id) ...))
      #'(begin
          (void (make-property-family ont 'name (list (list domain range) ...)))
@@ -172,7 +199,7 @@
              [id:id
               #'(ontology-property ont 'name)]
              [(_ (range*:id domain*:id))
-              #'(ontology-property ont 'name #:domain domain* #:range range*)]
+              #'(ontology-ensure-property ont 'name #:domain domain* #:range range*)]
              [(_ range*:id)
               #'(ontology-property ont 'name #:range range*)])))]
     [(_ ont:id binding:id #:name local:id #:domain domain:id #:range range:id)

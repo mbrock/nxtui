@@ -93,6 +93,10 @@
      #'(o:define-class ont name option ...)]
     [(_ ont:id ((~datum property) name:id ((~datum block) (domain:id range:id) ...)))
      #'(o:define-property ont name ((domain range) ...))]
+    [(_ ont:id ((~datum property) name:id ((~datum block))))
+     #'(o:define-property ont name)]
+    [(_ ont:id ((~datum property) name:id))
+     #'(o:define-property ont name)]
     [(_ ont:id ((~datum property) name:id (domain:id range:id) ...))
      #'(o:define-property ont name ((domain range) ...))]))
 

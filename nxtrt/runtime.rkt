@@ -11,24 +11,13 @@ ontology nxt "https://swa.sh/nxt#"
   class deed :subclass-of resource
 
   property waves
-    deck wand
   property belongs-to
-    task zone
-    waiter task
-    deed task
-    deed zone
   property is-ready-on
-    task deck
   property continues-as
-    task task
   property wants
-    waiter wish
   property holds
-    waiter wand
   property staged-on
-    waiter wand
   property parked-on
-    waiter wand
 
 model runtime-model
   option verbose 0
