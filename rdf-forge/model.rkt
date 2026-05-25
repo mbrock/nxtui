@@ -171,8 +171,28 @@
     [(_ term:expr range:expr)
      #'(make-field term 'one range)]))
 
-(define (signature term . fields)
+(define (make-signature term . fields)
   (forge-signature term fields))
+
+(define-syntax (signature stx)
+  (syntax-parse stx
+    [(_ term:expr)
+     #'(make-signature term)]
+    [(_ term:expr field-clause ...)
+     #'(make-signature term (signature-field field-clause) ...)]))
+
+(define-syntax (signature-field stx)
+  (syntax-parse stx
+    [(_ ((~datum field) arg ...))
+     #'(field arg ...)]
+    [(_ (name:id (~datum one) range:expr))
+     #'(make-field (forge-field-ref 'name) 'one range)]
+    [(_ (name:id (~datum lone) range:expr))
+     #'(make-field (forge-field-ref 'name) 'lone range)]
+    [(_ (name:id (~datum set) range:expr))
+     #'(make-field (forge-field-ref 'name) 'set range)]
+    [(_ other:expr)
+     #'other]))
 
 (define (predicate name body)
   (forge-predicate name body))

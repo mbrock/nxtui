@@ -40,10 +40,10 @@ domain, so a signature can stay close to the ontology wording:
 
 ```racket
 (signature task
-  (field belongs-to #:lone zone)
-  (field belongs-to #:lone deck)
-  (field belongs-to #:lone waiter)
-  (field continues-as #:lone task))
+  (belongs-to lone zone)
+  (belongs-to lone deck)
+  (belongs-to lone waiter)
+  (continues-as lone task))
 ```
 
 Use `follow` for outgoing relation paths and `matching` for inverse lookups:

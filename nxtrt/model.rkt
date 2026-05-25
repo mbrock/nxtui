@@ -15,24 +15,24 @@
    (option 'max_tracelength 3)
 
    (signature deck
-     (field waves #:one wand))
+     (waves one wand))
    (signature wand)
    (signature zone)
    (signature task
-     (field belongs-to #:lone zone)
-     (field belongs-to #:lone deck)
-     (field belongs-to #:lone waiter)
-     (field continues-as #:lone task))
+     (belongs-to lone zone)
+     (belongs-to lone deck)
+     (belongs-to lone waiter)
+     (continues-as lone task))
    (signature wish)
    (signature waiter
-     (field wants #:one wish)
-     (field holds #:one wand)
-     (field belongs-to #:one task)
-     (field staged-on #:lone wand)
-     (field parked-on #:lone wand))
+     (wants one wish)
+     (holds one wand)
+     (belongs-to one task)
+     (staged-on lone wand)
+     (parked-on lone wand))
    (signature deed
-     (field belongs-to #:one task)
-     (field belongs-to #:one zone))
+     (belongs-to one task)
+     (belongs-to one zone))
 
    (predicate 'structural-invariants
               (block
