@@ -28,12 +28,11 @@
             background: var(--paper);
           }
           main {
-            width: min(1120px, calc(100% - 2rem));
+            width: min(760px, calc(100% - 2rem));
             margin: 0 auto;
             padding: 4.5rem 0 5rem;
           }
           header {
-            max-width: 760px;
             margin-bottom: 2rem;
           }
           h1 {
@@ -66,7 +65,6 @@
             margin: 0;
           }
           .intro {
-            max-width: 760px;
             font-size: 1.08rem;
           }
           forge-doc-graph {
@@ -79,9 +77,6 @@
             background: transparent;
             display: block;
             width: 100%;
-          }
-          section {
-            max-width: 760px;
           }
           ul {
             margin: 0.75rem 0 1.25rem;
