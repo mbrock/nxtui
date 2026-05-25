@@ -66,6 +66,7 @@
 (struct forge-option (name value) #:transparent)
 (struct forge-expr (op args) #:transparent)
 (struct forge-quant (kind bindings body) #:transparent)
+(struct forge-field-ref (name) #:transparent)
 
 (define (option name value)
   (forge-option name value))
@@ -153,6 +154,14 @@
 
 (define-syntax (field stx)
   (syntax-parse stx
+    [(_ name:id #:one range:expr)
+     #'(make-field (forge-field-ref 'name) 'one range)]
+    [(_ name:id #:lone range:expr)
+     #'(make-field (forge-field-ref 'name) 'lone range)]
+    [(_ name:id #:set range:expr)
+     #'(make-field (forge-field-ref 'name) 'set range)]
+    [(_ name:id range:expr)
+     #'(make-field (forge-field-ref 'name) 'one range)]
     [(_ term:expr #:one range:expr)
      #'(make-field term 'one range)]
     [(_ term:expr #:lone range:expr)
@@ -212,6 +221,16 @@
   (define found (and (term? value) (assoc key (term-options value))))
   (if found (cdr found) fallback))
 
+(define (field-term-for-domain domain-term fld)
+  (define term (forge-field-term fld))
+  (cond
+    [(forge-field-ref? term)
+     (ontology-property (term-ontology domain-term)
+                        (forge-field-ref-name term)
+                        #:domain domain-term
+                        #:range (forge-field-range fld))]
+    [else term]))
+
 (define (forge-option-hash model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])
   (define base
     (for/fold ([options (hash)])
@@ -262,11 +281,13 @@
   (define relation-map (make-hasheq))
   (for* ([sig (in-list signatures)]
          [fld (in-list (forge-signature-fields sig))])
-    (define domain (hash-ref sig-map (forge-signature-term sig)))
+    (define domain-term (forge-signature-term sig))
+    (define domain (hash-ref sig-map domain-term))
     (define range (hash-ref sig-map (forge-field-range fld)))
+    (define relation-term (field-term-for-domain domain-term fld))
     (hash-set! relation-map
-               (forge-field-term fld)
-               (f:make-relation (string->symbol (forge-name (forge-field-term fld)))
+               relation-term
+               (f:make-relation (string->symbol (forge-name relation-term))
                                 (list domain range))))
   relation-map)
 
@@ -275,7 +296,8 @@
               [fld (in-list (forge-signature-fields sig))]
               #:unless (eq? (forge-field-multiplicity fld) 'set))
     (define domain (hash-ref sig-map (forge-signature-term sig)))
-    (define relation (hash-ref relation-map (forge-field-term fld)))
+    (define relation-term (field-term-for-domain (forge-signature-term sig) fld))
+    (define relation (hash-ref relation-map relation-term))
     (define var (f:var (string->symbol (string-append (forge-name (forge-signature-term sig)) "_self"))))
     (define relation-value (f:join/func var relation))
     (define body
@@ -378,7 +400,7 @@
   (define relations
     (for*/list ([sig (in-list (forge-model-signatures model))]
                 [fld (in-list (forge-signature-fields sig))])
-      (hash-ref relation-map (forge-field-term fld))))
+      (hash-ref relation-map (field-term-for-domain (forge-signature-term sig) fld))))
   (define options (forge-option-hash model #:run-sterling run-sterling #:export-run export-run #:export-xml export-xml))
   (define (run-with-field-constraints body)
     (apply f:&&/func (append field-constraints (list body))))

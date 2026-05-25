@@ -19,20 +19,20 @@
    (signature wand)
    (signature zone)
    (signature task
-     (field (belongs-to (zone task)) #:lone zone)
-     (field (belongs-to deck) #:lone deck)
-     (field (belongs-to waiter) #:lone waiter)
+     (field belongs-to #:lone zone)
+     (field belongs-to #:lone deck)
+     (field belongs-to #:lone waiter)
      (field continues-as #:lone task))
    (signature wish)
    (signature waiter
      (field wants #:one wish)
      (field holds #:one wand)
-     (field (belongs-to (task waiter)) #:one task)
+     (field belongs-to #:one task)
      (field staged-on #:lone wand)
      (field parked-on #:lone wand))
    (signature deed
-     (field (belongs-to (task deed)) #:one task)
-     (field (belongs-to (zone deed)) #:one zone))
+     (field belongs-to #:one task)
+     (field belongs-to #:one zone))
 
    (predicate 'structural-invariants
               (block
