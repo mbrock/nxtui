@@ -70,23 +70,14 @@
             font-size: 1.08rem;
           }
           forge-doc-graph {
-            aspect-ratio: 21 / 10;
             background: transparent;
             display: block;
-            margin: 2.25rem 0 3rem;
-            max-height: 620px;
-            min-height: 320px;
-            position: relative;
-            width: min(1280px, calc(100vw - 2rem));
-            margin-left: calc((100% - min(1280px, calc(100vw - 2rem))) / 2);
+            margin: 2rem 0 2.75rem;
+            width: 100%;
           }
           forge-doc-graph forge-graph {
-            aspect-ratio: inherit;
             background: transparent;
             display: block;
-            height: 100%;
-            min-height: inherit;
-            max-height: inherit;
             width: 100%;
           }
           section {
