@@ -285,8 +285,11 @@ public:
     class awaiter
     {
     public:
-        explicit awaiter(coroutine_handle coroutine) noexcept
+        explicit awaiter(
+            coroutine_handle coroutine,
+            bool follow_parent_stop = true) noexcept
             : coroutine_(coroutine)
+            , follow_parent_stop_(follow_parent_stop)
         {}
 
         /// If the child already completed, the awaiting coroutine need not
@@ -314,7 +317,8 @@ public:
             auto & promise = coroutine_.promise();
             promise.env.bindings = current->bindings;
             promise.set_continuation(awaiting, awaiting_promise);
-            promise.follow_stop(*awaiting_promise);
+            if (follow_parent_stop_)
+                promise.follow_stop(*awaiting_promise);
             active_deck->enqueue(coroutine_, &promise);
         }
 
@@ -330,6 +334,7 @@ public:
 
     private:
         coroutine_handle coroutine_;
+        bool follow_parent_stop_ = true;
     };
 
     task() noexcept = default;
@@ -991,6 +996,17 @@ template<typename T>
 deed<T> fork(task<T> child)
 {
     return require_current_zone().fork(std::move(child));
+}
+
+template<typename T>
+[[nodiscard]] task<T> shield(task<T> child)
+{
+    auto awaiter = typename task<T>::awaiter{child.handle(), false};
+    if constexpr (std::is_void_v<T>) {
+        co_await awaiter;
+    } else {
+        co_return co_await awaiter;
+    }
 }
 
 namespace detail {
@@ -1792,6 +1808,55 @@ inline waiter<std::size_t> op::getdents64::operator co_await() const
 
     trace("wish getdents64 prepare fd=" + std::to_string(fd)
         + " bytes=" + std::to_string(buffer.size()));
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        *this);
+}
+
+inline waiter<piped_child> op::spawn_piped::operator co_await() const
+{
+    auto context = detail::current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr)
+        throw runtime_error{
+            "nxt::rt spawn-piped wish awaited without a running wand"};
+
+    trace("wish spawn-piped prepare argv=" + std::to_string(argv.size()));
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        *this);
+}
+
+inline waiter<child_result> op::wait_child::operator co_await() const
+{
+    auto context = detail::current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr)
+        throw runtime_error{
+            "nxt::rt wait-child wish awaited without a running wand"};
+
+    trace("wish wait-child prepare pidfd=" + std::to_string(pidfd));
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        *this);
+}
+
+inline waiter<void> op::signal_child::operator co_await() const
+{
+    auto context = detail::current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr)
+        throw runtime_error{
+            "nxt::rt signal-child wish awaited without a running wand"};
+
+    trace("wish signal-child prepare pidfd=" + std::to_string(pidfd)
+        + " signal=" + std::to_string(signal));
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,

@@ -9,15 +9,21 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cerrno>
+#include <cstring>
 #include <exception>
+#include <fcntl.h>
 #include <ranges>
 #include <memory>
+#include <spawn.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/pidfd.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unordered_set>
 #include <unordered_map>
 #include <unistd.h>
@@ -28,6 +34,8 @@
 #if NXT_RT_HAS_LIBURING
 #include <liburing.h>
 #endif
+
+extern "C" char ** environ;
 
 namespace nxt::rt {
 
@@ -342,6 +350,12 @@ private:
                     state_->set_value(static_cast<std::size_t>(result));
                 } else if constexpr (std::is_same_v<T, statx_result>) {
                     state_->set_value(std::get<op::statx>(*this->request_).result);
+                } else if constexpr (std::is_same_v<T, piped_child>) {
+                    state_->set_value(std::move(
+                        *std::get<op::spawn_piped>(*this->request_).child));
+                } else if constexpr (std::is_same_v<T, child_result>) {
+                    state_->set_value(child_result_from(
+                        std::get<op::wait_child>(*this->request_).info));
                 } else {
                     static_assert(std::is_void_v<T>, "unsupported uring result");
                 }
@@ -349,6 +363,22 @@ private:
         }
 
     private:
+        static child_result child_result_from(siginfo_t const & info)
+        {
+            return child_result{
+                .pid = info.si_pid,
+                .code = info.si_code,
+                .exited = info.si_code == CLD_EXITED,
+                .exit_code = info.si_code == CLD_EXITED ? info.si_status : 0,
+                .signaled =
+                    info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED,
+                .signal =
+                    info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED
+                        ? info.si_status
+                        : 0,
+            };
+        }
+
         std::shared_ptr<wait_state<T>> state_;
     };
 
@@ -512,6 +542,103 @@ inline void uring_submission::complete_sync(int result)
     wand_.complete(deck_, token_, result);
 }
 
+inline bool set_fd_cloexec(int fd)
+{
+    auto flags = ::fcntl(fd, F_GETFD);
+    return flags >= 0 && ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
+}
+
+inline bool move_fd_above_stdio(int & fd)
+{
+    if (fd > STDERR_FILENO)
+        return true;
+
+    auto replacement = ::fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (replacement < 0)
+        return false;
+
+    ::close(fd);
+    fd = replacement;
+    return true;
+}
+
+inline bool make_cloexec_pipe(int pipefd[2])
+{
+    if (::pipe2(pipefd, O_CLOEXEC) != 0)
+        return false;
+    if (!move_fd_above_stdio(pipefd[0])
+        || !move_fd_above_stdio(pipefd[1])) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        pipefd[0] = -1;
+        pipefd[1] = -1;
+        return false;
+    }
+    return true;
+}
+
+inline std::vector<char *> argv_ptrs(std::vector<std::string> & argv)
+{
+    auto ptrs = std::vector<char *>{};
+    ptrs.reserve(argv.size() + 1);
+    for (auto & arg : argv)
+        ptrs.push_back(arg.data());
+    ptrs.push_back(nullptr);
+    return ptrs;
+}
+
+class spawn_file_actions
+{
+public:
+    spawn_file_actions()
+    {
+        if (::posix_spawn_file_actions_init(&actions_) != 0)
+            throw runtime_error{"posix_spawn_file_actions_init failed"};
+    }
+
+    spawn_file_actions(const spawn_file_actions &) = delete;
+    spawn_file_actions & operator=(const spawn_file_actions &) = delete;
+
+    ~spawn_file_actions()
+    {
+        ::posix_spawn_file_actions_destroy(&actions_);
+    }
+
+    [[nodiscard]] posix_spawn_file_actions_t * get() noexcept
+    {
+        return &actions_;
+    }
+
+private:
+    posix_spawn_file_actions_t actions_{};
+};
+
+inline int check_spawn_file_action(int rc)
+{
+    return rc == 0 ? 0 : -rc;
+}
+
+inline int open_pidfd(pid_t pid)
+{
+#ifdef SYS_pidfd_open
+    return static_cast<int>(::syscall(SYS_pidfd_open, pid, 0));
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+inline int send_pidfd_signal(int pidfd, int signal)
+{
+#ifdef SYS_pidfd_send_signal
+    return static_cast<int>(
+        ::syscall(SYS_pidfd_send_signal, pidfd, signal, nullptr, 0));
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
 inline bool op::manual::stage_uring(uring_submission & submission)
 {
     auto * sqe = submission.get_sqe();
@@ -561,6 +688,99 @@ inline bool op::getdents64::stage_uring(uring_submission & submission)
         + std::to_string(submission.token())
         + " result=" + std::to_string(result));
     submission.complete_sync(static_cast<int>(result));
+    return false;
+}
+
+inline bool op::spawn_piped::stage_uring(uring_submission & submission)
+{
+    if (argv.empty()) {
+        submission.complete_sync(-EINVAL);
+        return false;
+    }
+
+    auto pipefd = std::array<int, 2>{-1, -1};
+    if (!make_cloexec_pipe(pipefd.data())) {
+        submission.complete_sync(-errno);
+        return false;
+    }
+
+    auto read_fd = nxt::unique_fd{pipefd[0]};
+    auto write_fd = nxt::unique_fd{pipefd[1]};
+
+    auto actions = spawn_file_actions{};
+    auto rc = check_spawn_file_action(
+        ::posix_spawn_file_actions_adddup2(
+            actions.get(), write_fd.get(), STDOUT_FILENO));
+    if (rc == 0)
+        rc = check_spawn_file_action(
+            ::posix_spawn_file_actions_adddup2(
+                actions.get(), write_fd.get(), STDERR_FILENO));
+    if (rc == 0)
+        rc = check_spawn_file_action(
+            ::posix_spawn_file_actions_addclose(actions.get(), read_fd.get()));
+    if (rc == 0)
+        rc = check_spawn_file_action(
+            ::posix_spawn_file_actions_addclose(actions.get(), write_fd.get()));
+    if (rc < 0) {
+        submission.complete_sync(rc);
+        return false;
+    }
+
+    auto ptrs = argv_ptrs(argv);
+    auto pid = pid_t{-1};
+    rc = ::posix_spawnp(
+        &pid,
+        argv.front().c_str(),
+        actions.get(),
+        nullptr,
+        ptrs.data(),
+        environ);
+    if (rc != 0) {
+        submission.complete_sync(-rc);
+        return false;
+    }
+
+    auto pidfd = open_pidfd(pid);
+    if (pidfd < 0) {
+        auto saved_errno = errno;
+        ::kill(pid, SIGKILL);
+        (void)::waitpid(pid, nullptr, 0);
+        submission.complete_sync(-saved_errno);
+        return false;
+    }
+
+    write_fd.reset();
+    *child = piped_child{
+        .pid = pid,
+        .pidfd = nxt::unique_fd{pidfd},
+        .output = std::move(read_fd),
+    };
+    submission.complete_sync(0);
+    return false;
+}
+
+inline bool op::wait_child::stage_uring(uring_submission & submission)
+{
+    if (pidfd < 0) {
+        submission.complete_sync(-EBADF);
+        return false;
+    }
+
+    auto * sqe = submission.get_sqe();
+    io_uring_prep_waitid(sqe, P_PIDFD, pidfd, &info, WEXITED, 0);
+    submission.attach(sqe);
+    return true;
+}
+
+inline bool op::signal_child::stage_uring(uring_submission & submission)
+{
+    if (pidfd < 0) {
+        submission.complete_sync(-EBADF);
+        return false;
+    }
+
+    auto rc = send_pidfd_signal(pidfd, signal);
+    submission.complete_sync(rc < 0 ? -errno : 0);
     return false;
 }
 

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "nxt/rt/exceptions.hpp"
+#include "nxt/unique-fd.hpp"
 
+#include <csignal>
 #include <coroutine>
 #include <chrono>
 #include <cstddef>
@@ -19,9 +21,11 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #if defined(__linux__)
 #include <linux/time_types.h>
@@ -197,6 +201,33 @@ struct poll_until_result
 
 #if defined(__linux__)
 using statx_result = struct statx;
+
+struct child_result
+{
+    pid_t pid = -1;
+    int code = 0;
+    bool exited = false;
+    int exit_code = 0;
+    bool signaled = false;
+    int signal = 0;
+};
+
+struct piped_child
+{
+    pid_t pid = -1;
+    nxt::unique_fd pidfd;
+    nxt::unique_fd output;
+
+    [[nodiscard]] int pid_fd() const noexcept
+    {
+        return pidfd.get();
+    }
+
+    [[nodiscard]] int output_fd() const noexcept
+    {
+        return output.get();
+    }
+};
 #endif
 
 namespace op {
@@ -256,6 +287,42 @@ struct getdents64
 
     bool stage_uring(uring_submission & submission);
     waiter<std::size_t> operator co_await() const;
+};
+
+struct spawn_piped
+{
+    using result_type = piped_child;
+    static constexpr std::string_view name = "spawn-piped";
+
+    std::vector<std::string> argv;
+    std::shared_ptr<piped_child> child = std::make_shared<piped_child>();
+
+    bool stage_uring(uring_submission & submission);
+    waiter<piped_child> operator co_await() const;
+};
+
+struct wait_child
+{
+    using result_type = child_result;
+    static constexpr std::string_view name = "wait-child";
+
+    int pidfd = -1;
+    siginfo_t info{};
+
+    bool stage_uring(uring_submission & submission);
+    waiter<child_result> operator co_await() const;
+};
+
+struct signal_child
+{
+    using result_type = void;
+    static constexpr std::string_view name = "signal-child";
+
+    int pidfd = -1;
+    int signal = SIGTERM;
+
+    bool stage_uring(uring_submission & submission);
+    waiter<void> operator co_await() const;
 };
 #endif
 
@@ -409,6 +476,9 @@ using wish_variant = std::variant<
 #if defined(__linux__)
     op::statx,
     op::getdents64,
+    op::spawn_piped,
+    op::wait_child,
+    op::signal_child,
 #endif
     op::read_some,
     op::write_some,

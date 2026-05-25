@@ -223,6 +223,27 @@ nxt::rt::task<void> record_current_zone(
     zones.push_back(nxt::rt::current_zone());
 }
 
+nxt::rt::task<bool> read_task_stop_after_yield()
+{
+    co_await nxt::rt::yield();
+    co_return nxt::rt::task_stop_requested();
+}
+
+nxt::rt::task<bool> shielded_child_stop_state()
+{
+    co_return co_await nxt::rt::shield(read_task_stop_after_yield());
+}
+
+nxt::rt::task<void> await_manual_token(nxt::rt::wait_token token)
+{
+    co_await nxt::rt::op::manual{.token = token};
+}
+
+nxt::rt::task<void> shielded_manual_token(nxt::rt::wait_token token)
+{
+    co_await nxt::rt::shield(await_manual_token(token));
+}
+
 nxt::rt::task<void> throw_after_yield(std::vector<int> & events, int value)
 {
     events.push_back(value * 10 + 1);
@@ -903,6 +924,38 @@ static suite ng_runtime_tests{
                 });
 
                 expect(events == std::vector<int>{3});
+            };
+
+            "shielded child tasks do not inherit parent stop"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto task = shielded_child_stop_state();
+
+                deck.start(task);
+                task.request_stop();
+                deck.run_until_idle();
+
+                expect(task.done());
+                expect(!std::move(task).result());
+            };
+
+            "shielded child wishes are not cancelled by parent stop"_test = [] {
+                auto wand = manual_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = shielded_manual_token(99);
+
+                deck.start(task);
+                task.request_stop();
+                deck.run_until_idle();
+
+                expect(wand.prepared == std::vector<nxt::rt::wait_token>{99});
+                expect(wand.cancelled.empty());
+                expect(wand.parked.size() == std::size_t{1});
+
+                wand.fulfill(deck, 99);
+                deck.run_until_idle();
+
+                expect(task.done());
+                std::move(task).result();
             };
 
             "stop a hosted zone when its parent task is stopped"_test = [] {
