@@ -181,6 +181,7 @@
           }
           .dexp.list[data-callee='block'] {
             align-items: flex-start;
+            border-right-width: 0;
             flex-direction: column;
           }
           .dexp.list[data-callee='block'] > .dexp.symbol:first-child {
