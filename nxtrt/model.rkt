@@ -19,7 +19,7 @@
    (signature wand)
    (signature zone)
    (signature task
-     (field (belongs-to zone #:domain task) #:lone zone)
+     (field (belongs-to (zone task)) #:lone zone)
      (field (belongs-to deck) #:lone deck)
      (field (belongs-to waiter) #:lone waiter)
      (field continues-as #:lone task))
@@ -27,12 +27,12 @@
    (signature waiter
      (field wants #:one wish)
      (field holds #:one wand)
-     (field (belongs-to task #:domain waiter) #:one task)
+     (field (belongs-to (task waiter)) #:one task)
      (field staged-on #:lone wand)
      (field parked-on #:lone wand))
    (signature deed
-     (field (belongs-to task #:domain deed) #:one task)
-     (field (belongs-to zone #:domain deed) #:one zone))
+     (field (belongs-to (task deed)) #:one task)
+     (field (belongs-to (zone deed)) #:one zone))
 
    (predicate 'structural-invariants
               (block
@@ -45,19 +45,19 @@
                               (follow a parked-on))))
                (all ([t task] [a waiter])
                  (=> (== (follow t (belongs-to waiter)) a)
-                     (== (follow a (belongs-to task #:domain waiter)) t)))
+                     (== (follow a (belongs-to (task waiter))) t)))
                (all ([d deed])
-                 (== (follow d (belongs-to task #:domain deed) (belongs-to zone #:domain task))
-                     (follow d (belongs-to zone #:domain deed))))
-               (all ([z zone] [t (matching (belongs-to zone #:domain task) z)])
-                 (lone ([d (matching (belongs-to zone #:domain deed) z)])
-                   (== (follow d (belongs-to task #:domain deed)) t)))
+                 (== (follow d (belongs-to (task deed)) (belongs-to (zone task)))
+                     (follow d (belongs-to (zone deed)))))
+               (all ([z zone] [t (matching (belongs-to (zone task)) z)])
+                 (lone ([d (matching (belongs-to (zone deed)) z)])
+                   (== (follow d (belongs-to (task deed))) t)))
                (all ([t task] [d deck])
                  (=> (== (follow t (belongs-to deck)) d)
                      (no (follow t (belongs-to waiter)))))
                (all ([a waiter])
                  (=> (some (follow a parked-on))
-                     (== (follow a (belongs-to task #:domain waiter) (belongs-to waiter)) a)))))
+                     (== (follow a (belongs-to (task waiter)) (belongs-to waiter)) a)))))
 
    (predicate 'ready-task-has-a-deck
               (all ([t task])
@@ -70,14 +70,14 @@
                     (one (follow t (belongs-to waiter) holds)))))
 
    (predicate 'child-task-has-at-most-one-deed-in-its-zone
-              (all ([z zone] [t (matching (belongs-to zone #:domain task) z)])
-                (lone ([d (matching (belongs-to zone #:domain deed) z)])
-                  (== (follow d (belongs-to task #:domain deed)) t))))
+              (all ([z zone] [t (matching (belongs-to (zone task)) z)])
+                (lone ([d (matching (belongs-to (zone deed)) z)])
+                  (== (follow d (belongs-to (task deed))) t))))
 
    (predicate 'parked-waiter-identifies-suspended-task
               (all ([a waiter])
                 (=> (some (follow a parked-on))
-                    (== (follow a (belongs-to task #:domain waiter) (belongs-to waiter)) a))))
+                    (== (follow a (belongs-to (task waiter)) (belongs-to waiter)) a))))
 
    (predicate 'ready-task-on-deck
               (some ([t task])
@@ -93,8 +93,8 @@
    (predicate 'zone-with-children
               (some ([z zone])
                 (block
-                 (ge (count (matching (belongs-to zone #:domain task) z)) 2)
-                 (ge (count (matching (belongs-to zone #:domain deed) z)) 2))))
+                 (ge (count (matching (belongs-to (zone task)) z)) 2)
+                 (ge (count (matching (belongs-to (zone deed)) z)) 2))))
 
    (predicate 'staged-but-not-parked-yet
               (some ([a waiter] [w wand])
@@ -111,11 +111,11 @@
                 (block
                  (== (follow d waves) w)
                  (ge (count (matching (belongs-to deck) d)) 1)
-                 (ge (count (matching (belongs-to zone #:domain task) z)) 2)
+                 (ge (count (matching (belongs-to (zone task)) z)) 2)
                  (some ([a waiter])
                    (|| (== (follow a staged-on) w)
                        (== (follow a parked-on) w)))
-                 (some ([t (matching (belongs-to zone #:domain task) z)])
+                 (some ([t (matching (belongs-to (zone task)) z)])
                    (some (follow t (belongs-to waiter)))))))
 
    (check 'ready-task-has-a-deck-checked

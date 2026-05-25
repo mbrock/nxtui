@@ -53,20 +53,14 @@
            (term-local range))))
 
 (define (make-property-family ont local overloads)
-  (define terms
-    (for/list ([overload (in-list overloads)])
-      (define domain (car overload))
-      (define range (cadr overload))
-      (define forge-name (overload-forge-name local domain range))
-      (make-property-term ont forge-name
-                          #:domain domain
-                          #:range range
-                          #:rdf-name local)))
-  (case (length terms)
-    [(1) (car terms)]
-    [else
-     (lambda (range #:domain [domain #f])
-       (ontology-property ont local #:domain domain #:range range))]))
+  (for/list ([overload (in-list overloads)])
+    (define domain (car overload))
+    (define range (cadr overload))
+    (define forge-name (overload-forge-name local domain range))
+    (make-property-term ont forge-name
+                        #:domain domain
+                        #:range range
+                        #:rdf-name local)))
 
 (define (ontology-declared-terms ont)
   (reverse (unbox (ontology-terms ont))))
@@ -171,7 +165,16 @@
     [(_ ont:id name:id)
      #'(define name (make-property-term ont 'name))]
     [(_ ont:id name:id ((domain:id range:id) ...))
-     #'(define name (make-property-family ont 'name (list (list domain range) ...)))]
+     #'(begin
+         (void (make-property-family ont 'name (list (list domain range) ...)))
+         (define-syntax (name use-stx)
+           (syntax-parse use-stx
+             [id:id
+              #'(ontology-property ont 'name)]
+             [(_ (range*:id domain*:id))
+              #'(ontology-property ont 'name #:domain domain* #:range range*)]
+             [(_ range*:id)
+              #'(ontology-property ont 'name #:range range*)])))]
     [(_ ont:id binding:id #:name local:id #:domain domain:id #:range range:id)
      #'(define binding (make-property-term ont 'local
                                            #:domain domain

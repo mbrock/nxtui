@@ -32,13 +32,13 @@ raw Forge text. For example:
 ```racket
 (all ([a waiter])
   (=> (some (follow a parked-on))
-      (== (follow a (belongs-to task #:domain waiter) (belongs-to waiter)) a)))
+      (== (follow a (belongs-to (task waiter)) (belongs-to waiter)) a)))
 ```
 
 Use `follow` for outgoing relation paths and `matching` for inverse lookups:
 
 ```racket
-(all ([z zone] [t (matching (belongs-to zone #:domain task) z)])
-  (lone ([d (matching (belongs-to zone #:domain deed) z)])
-    (== (follow d (belongs-to task #:domain deed)) t)))
+(all ([z zone] [t (matching (belongs-to (zone task)) z)])
+  (lone ([d (matching (belongs-to (zone deed)) z)])
+    (== (follow d (belongs-to (task deed))) t)))
 ```
