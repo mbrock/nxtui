@@ -6,10 +6,11 @@
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/cgroup.hpp>
 #include <nxt/rt/pty.hpp>
+#include <nxt/rt/terminal_app.hpp>
 #include <nxt/tui.hpp>
+#include <nxt/tui_sparkline.hpp>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -21,11 +22,9 @@
 #include <iostream>
 #include <poll.h>
 #include <random>
-#include <span>
+#include <optional>
 #include <string>
-#include <sys/ioctl.h>
 #include <sys/types.h>
-#include <termios.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -33,6 +32,14 @@
 namespace {
 
 using namespace std::chrono_literals;
+
+constexpr auto frame_interval = 16ms;
+constexpr auto cgroup_sample_interval = 33ms;
+constexpr auto cgroup_sparkline_interval = 120ms;
+constexpr auto cgroup_live_samples = std::size_t{8};
+constexpr auto cgroup_sparkline_samples = std::size_t{160};
+constexpr auto memory_chart_floor_bytes = std::uint64_t{
+    128ull * 1024ull * 1024ull};
 
 using sample = nxt::rt::cgroup::sample;
 using bytes_t = nxt::rt::cgroup::bytes_t;
@@ -43,64 +50,30 @@ struct session_state
     std::string unit_name;
     std::filesystem::path cgroup_path;
     std::deque<sample> samples;
+    std::vector<double> memory_points;
+    std::vector<double> cpu_points;
+    std::optional<sample> last_sparkline_sample;
     nxt::rt::child_result status;
     bool process_done = false;
 
-    void push_sample(sample value)
+    session_state()
     {
+        memory_points.reserve(cgroup_sparkline_samples);
+        cpu_points.reserve(cgroup_sparkline_samples);
+    }
+
+    void push_sample(sample value, bool include_sparkline = false)
+    {
+        if (include_sparkline)
+            push_sparkline_sample(value);
+
         samples.push_back(std::move(value));
-        while (samples.size() > 64)
+        while (samples.size() > cgroup_live_samples)
             samples.pop_front();
     }
+
+    void push_sparkline_sample(const sample & value);
 };
-
-class raw_terminal
-{
-public:
-    explicit raw_terminal(int fd)
-        : fd_(fd)
-        , active_(::isatty(fd) && ::tcgetattr(fd, &saved_) == 0)
-    {
-        if (!active_)
-            return;
-
-        auto raw = saved_;
-        raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-        raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-        raw.c_cc[VMIN] = 0;
-        raw.c_cc[VTIME] = 0;
-        if (::tcsetattr(fd_, TCSANOW, &raw) != 0)
-            active_ = false;
-    }
-
-    raw_terminal(const raw_terminal &) = delete;
-    raw_terminal & operator=(const raw_terminal &) = delete;
-
-    ~raw_terminal()
-    {
-        if (active_)
-            (void)::tcsetattr(fd_, TCSANOW, &saved_);
-    }
-
-private:
-    int fd_ = -1;
-    termios saved_{};
-    bool active_ = false;
-};
-
-nxt::Size terminal_size()
-{
-    auto ws = winsize{};
-    if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0
-        && ws.ws_col > 0
-        && ws.ws_row > 0) {
-        return nxt::Size{
-            static_cast<std::size_t>(ws.ws_col) * nxt::ch,
-            static_cast<std::size_t>(ws.ws_row) * nxt::ln,
-        };
-    }
-    return nxt::Size{96 * nxt::ch, 26 * nxt::ln};
-}
 
 std::string format_bytes(bytes_t b)
 {
@@ -117,16 +90,6 @@ std::string format_bytes(bytes_t b)
     return std::format("{} B", b.v);
 }
 
-std::string format_time(usec_t u)
-{
-    auto d = static_cast<double>(u.v);
-    if (d >= 1e6)
-        return std::format("{:.2f}s", d / 1e6);
-    if (d >= 1e3)
-        return std::format("{:.0f}ms", d / 1e3);
-    return std::format("{}us", u.v);
-}
-
 std::string make_unit_name()
 {
     auto now = std::chrono::system_clock::now();
@@ -137,41 +100,8 @@ std::string make_unit_name()
     return std::format("nxt-ng-shell-{}-{:06x}", ::getpid(), rng() & 0xffffff);
 }
 
-std::string sparkline(std::span<const double> values, std::size_t cells)
+double cpu_percent_between(const sample & a, const sample & b)
 {
-    static constexpr auto blocks = std::array<std::string_view, 9>{
-        " ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
-    };
-    if (cells == 0)
-        return {};
-    if (values.empty())
-        return std::string(cells, ' ');
-
-    auto [lo_it, hi_it] = std::minmax_element(values.begin(), values.end());
-    auto lo = *lo_it;
-    auto hi = *hi_it;
-    if (std::abs(hi - lo) < 1e-9)
-        hi = lo + 1.0;
-
-    auto out = std::string{};
-    auto take = std::min(values.size(), cells);
-    out.append(cells - take, ' ');
-    auto offset = values.size() - take;
-    for (std::size_t i = 0; i != take; ++i) {
-        auto frac = (values[offset + i] - lo) / (hi - lo);
-        auto idx = static_cast<std::size_t>(
-            std::round(std::clamp(frac, 0.0, 1.0) * 8.0));
-        out += blocks[idx];
-    }
-    return out;
-}
-
-double cpu_percent(const session_state & state)
-{
-    if (state.samples.size() < 2)
-        return 0.0;
-    auto const & a = state.samples[state.samples.size() - 2];
-    auto const & b = state.samples.back();
     auto dt = std::chrono::duration_cast<std::chrono::microseconds>(
                   b.at - a.at)
                   .count();
@@ -183,97 +113,156 @@ double cpu_percent(const session_state & state)
            / static_cast<double>(dt);
 }
 
-std::string cpu_spark(const session_state & state)
+void session_state::push_sparkline_sample(const sample & value)
 {
-    auto hist = std::vector<double>{};
-    for (std::size_t i = 1; i < state.samples.size(); ++i) {
-        auto const & a = state.samples[i - 1];
-        auto const & b = state.samples[i];
-        auto dt = std::chrono::duration_cast<std::chrono::microseconds>(
-                      b.at - a.at)
-                      .count();
-        auto dcpu = static_cast<std::int64_t>(b.cpu_usage.v)
-                    - static_cast<std::int64_t>(a.cpu_usage.v);
-        hist.push_back(
-            dt > 0
-                ? 100.0
-                      * static_cast<double>(
-                          std::max<std::int64_t>(0, dcpu))
-                      / static_cast<double>(dt)
-                : 0.0);
-    }
-    return sparkline(hist, 24);
+    memory_points.push_back(static_cast<double>(value.memory_current.v));
+    if (last_sparkline_sample)
+        cpu_points.push_back(cpu_percent_between(*last_sparkline_sample, value));
+    last_sparkline_sample = value;
+
+    if (memory_points.size() > cgroup_sparkline_samples)
+        memory_points.erase(memory_points.begin());
+    if (cpu_points.size() > cgroup_sparkline_samples)
+        cpu_points.erase(cpu_points.begin());
 }
 
-std::string child_status_text(const session_state & state)
+double cpu_percent(const session_state & state)
 {
-    if (!state.process_done)
-        return "running";
-    if (state.status.exited)
-        return std::format("exited {}", state.status.exit_code);
-    if (state.status.signaled)
-        return std::format("signal {}", state.status.signal);
-    return "done";
+    if (state.samples.size() < 2)
+        return 0.0;
+    auto const & a = state.samples[state.samples.size() - 2];
+    auto const & b = state.samples.back();
+    return cpu_percent_between(a, b);
+}
+
+auto metrics_layout(const session_state & state)
+{
+    constexpr auto value_width = 20 * nxt::ch;
+    auto latest = state.samples.empty() ? sample{} : state.samples.back();
+    auto cpu = cpu_percent(state);
+    auto mem_peak = latest.memory_peak.v == 0
+        ? static_cast<double>(memory_chart_floor_bytes)
+        : static_cast<double>(
+              std::max(latest.memory_peak.v, memory_chart_floor_bytes));
+    auto mem_line = std::format(
+        "{} / {}",
+        format_bytes(latest.memory_current),
+        format_bytes(latest.memory_peak));
+    auto cpu_line = std::format("{:.0f}% CPU", cpu);
+
+    return nxt::tui::column(
+        nxt::tui::row(
+            nxt::tui::fixed_width(
+                value_width,
+                nxt::tui::text(
+                    std::move(mem_line),
+                    nxt::tui::fg(nxt::Rgba8{230, 205, 130}))),
+            nxt::tui::text("  "),
+            nxt::tui::sparkline(
+                std::span<const double>{state.memory_points},
+                2 * nxt::ln,
+                nxt::tui::fg(nxt::Rgba8{225, 175, 105}),
+                nxt::chart::value_range{0.0, mem_peak})),
+        nxt::tui::row(
+            nxt::tui::fixed_width(
+                value_width,
+                nxt::tui::text(
+                    std::move(cpu_line),
+                    nxt::tui::fg(nxt::Rgba8{160, 210, 150}))),
+            nxt::tui::text("  "),
+            nxt::tui::sparkline(
+                std::span<const double>{state.cpu_points},
+                2 * nxt::ln,
+                nxt::tui::fg(nxt::Rgba8{105, 190, 170}),
+                nxt::chart::value_range{0.0, 100.0})));
 }
 
 auto frame_layout(
     const session_state & state,
-    nxt::rt::pty::session & pty,
-    nxt::Size size)
+    nxt::rt::pty::session & pty)
 {
-    auto width = std::max<std::size_t>(32, size.w.count());
-    auto sample_count = state.samples.size();
-    auto latest = sample_count == 0 ? sample{} : state.samples.back();
-    auto scope = state.cgroup_path.empty() ? std::string{"discovering scope..."}
-                                           : state.cgroup_path.string();
-    if (scope.size() > width - 8)
-        scope = "..." + scope.substr(scope.size() - (width - 11));
-
     return nxt::tui::column(
-        nxt::tui::row(
-            nxt::tui::text(" ng shell scope ", nxt::tui::bold),
-            nxt::tui::flex_fill(nxt::Rgba8{36, 42, 52})),
-        nxt::tui::text(
-            "unit " + state.unit_name + "  status " + child_status_text(state),
-            nxt::tui::fg(nxt::Rgba8::bright_cyan())),
-        nxt::tui::text(scope, nxt::tui::fg(nxt::Rgba8{150, 160, 178})),
-        nxt::tui::hrule(),
-        nxt::tui::text(
-            "memory " + format_bytes(latest.memory_current) + "  peak "
-                + format_bytes(latest.memory_peak) + "  pids "
-                + std::to_string(latest.pids.v),
-            nxt::tui::fg(nxt::Rgba8{230, 205, 130})),
-        nxt::tui::text(
-            "cpu " + std::format("{:.1f}%", cpu_percent(state)) + "  "
-                + cpu_spark(state) + "  total " + format_time(latest.cpu_usage)
-                + " user " + format_time(latest.cpu_user) + " sys "
-                + format_time(latest.cpu_system),
-            nxt::tui::fg(nxt::Rgba8{160, 210, 150})),
-        nxt::tui::text(
-            std::format(
-                "pressure avg10  mem {:.2f}%  cpu {:.2f}%  io {:.2f}%",
-                latest.psi_mem,
-                latest.psi_cpu,
-                latest.psi_io),
-            nxt::tui::fg(nxt::Rgba8{170, 180, 210})),
-        nxt::tui::hrule(),
+        metrics_layout(state),
         nxt::rt::pty::pty_screen(
             pty,
             nxt::tui::bg(nxt::Rgba8{12, 14, 18})));
 }
 
 void render_frame(
-    nxt::ui::TerminalCompositor & compositor,
+    nxt::rt::terminal_app & terminal,
     const session_state & state,
-    nxt::rt::pty::session & pty,
-    nxt::Size size)
+    nxt::rt::pty::session & pty)
 {
+    auto & compositor = terminal.compositor();
     auto & buffer = compositor.back_buffer();
     buffer.clear();
-    auto layout = frame_layout(state, pty, size);
+    auto layout = frame_layout(state, pty);
     auto view = buffer.view();
-    layout.render(view, size);
+    layout.render(view, terminal.size());
     compositor.present_frame(std::cout);
+}
+
+nxt::rt::task<void> sample_cgroup_until_done(session_state & state)
+{
+    auto next_sample =
+        std::chrono::steady_clock::now() + cgroup_sample_interval;
+    auto next_sparkline_sample = std::chrono::steady_clock::now();
+
+    while (!state.process_done) {
+        if (state.cgroup_path.empty()) {
+            if (auto found =
+                    co_await nxt::rt::cgroup::find_unit_scope(
+                        state.unit_name))
+                state.cgroup_path = std::move(*found);
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (!state.cgroup_path.empty()) {
+            auto include_sparkline = now >= next_sparkline_sample;
+            if (include_sparkline)
+                while (next_sparkline_sample <= now)
+                    next_sparkline_sample += cgroup_sparkline_interval;
+            state.push_sample(
+                co_await nxt::rt::cgroup::read_sample(state.cgroup_path),
+                include_sparkline);
+        }
+
+        now = std::chrono::steady_clock::now();
+        if (now < next_sample)
+            co_await nxt::rt::op::timeout::after(next_sample - now);
+        next_sample += cgroup_sample_interval;
+        if (next_sample < now)
+            next_sample = now + cgroup_sample_interval;
+    }
+
+    if (!state.cgroup_path.empty()
+        && std::filesystem::exists(state.cgroup_path))
+        state.push_sample(
+            co_await nxt::rt::cgroup::read_sample(state.cgroup_path),
+            true);
+}
+
+nxt::rt::task<void> render_until_done(
+    nxt::rt::terminal_app & terminal,
+    const session_state & state,
+    nxt::rt::pty::session & pty)
+{
+    auto next_frame = std::chrono::steady_clock::now() + frame_interval;
+
+    while (!state.process_done) {
+        (void)terminal.refresh_size();
+        render_frame(terminal, state, pty);
+
+        auto now = std::chrono::steady_clock::now();
+        if (now < next_frame)
+            co_await nxt::rt::op::timeout::after(next_frame - now);
+        next_frame += frame_interval;
+        if (next_frame < now)
+            next_frame = now + frame_interval;
+    }
+
+    (void)terminal.refresh_size();
+    render_frame(terminal, state, pty);
 }
 
 nxt::rt::task<void> read_pty_until_done(
@@ -345,59 +334,30 @@ nxt::rt::task<void> run_scoped_command(std::string command = {})
     state.unit_name = make_unit_name();
     auto argv = scoped_shell_argv(state.unit_name, command);
 
-    auto size = terminal_size();
+    auto size = nxt::rt::current_terminal_size();
     auto pty = co_await nxt::rt::pty::spawn(nxt::rt::pty::spawn_options{
         .argv = std::move(argv),
         .size = size,
     });
-    auto glyphs = nxt::GlyphTable{};
-    auto compositor = nxt::ui::TerminalCompositor{size, glyphs};
-    auto raw = raw_terminal{STDIN_FILENO};
+    auto terminal = nxt::rt::terminal_app{};
 
-    std::cout << "\x1b[?25l\x1b[2J\x1b[H" << std::flush;
     auto failure = std::exception_ptr{};
+    auto reader = nxt::rt::catching_deed<void>{};
+    auto input = nxt::rt::catching_deed<void>{};
+    auto sampler = nxt::rt::catching_deed<void>{};
+    auto renderer = nxt::rt::catching_deed<void>{};
     try {
         co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-            auto reader =
-                nxt::rt::fork(read_pty_until_done(pty, state)).cope();
-            auto input =
-                nxt::rt::fork(pump_stdin_to_pty(pty, state)).cope();
+            reader = nxt::rt::fork(read_pty_until_done(pty, state)).cope();
+            input = nxt::rt::fork(pump_stdin_to_pty(pty, state)).cope();
+            sampler = nxt::rt::fork(sample_cgroup_until_done(state)).cope();
+            renderer =
+                nxt::rt::fork(render_until_done(terminal, state, pty)).cope();
 
-            while (!state.process_done) {
-                if (state.cgroup_path.empty()) {
-                    if (auto found =
-                            co_await nxt::rt::cgroup::find_unit_scope(
-                                state.unit_name))
-                        state.cgroup_path = std::move(*found);
-                }
-                if (!state.cgroup_path.empty())
-                    state.push_sample(
-                        co_await nxt::rt::cgroup::read_sample(
-                            state.cgroup_path));
-
-                auto next_size = terminal_size();
-                if (next_size.w != size.w || next_size.h != size.h) {
-                    size = next_size;
-                    compositor.resize(size);
-                }
-                render_frame(compositor, state, pty, size);
-                co_await nxt::rt::op::timeout::after(80ms);
-            }
-
-            if (!state.cgroup_path.empty() && std::filesystem::exists(state.cgroup_path))
-                state.push_sample(
-                    co_await nxt::rt::cgroup::read_sample(state.cgroup_path));
-            render_frame(compositor, state, pty, size);
-
-            auto reader_done = std::move(reader).get();
-            if (!reader_done)
-                nxt::rt::rethrow(reader_done.error());
-            auto input_done = std::move(input).get();
-            if (!input_done)
-                nxt::rt::rethrow(input_done.error());
+            while (!state.process_done)
+                co_await nxt::rt::op::timeout::after(frame_interval);
         });
     } catch (...) {
-        std::cout << "\x1b[?25h\x1b[0m" << std::flush;
         failure = std::current_exception();
     }
 
@@ -407,7 +367,18 @@ nxt::rt::task<void> run_scoped_command(std::string command = {})
         nxt::rt::rethrow(failure);
     }
 
-    std::cout << "\x1b[?25h\x1b[0m\n" << std::flush;
+    auto reader_done = std::move(reader).get();
+    if (!reader_done)
+        nxt::rt::rethrow(reader_done.error());
+    auto input_done = std::move(input).get();
+    if (!input_done)
+        nxt::rt::rethrow(input_done.error());
+    auto sampler_done = std::move(sampler).get();
+    if (!sampler_done)
+        nxt::rt::rethrow(sampler_done.error());
+    auto renderer_done = std::move(renderer).get();
+    if (!renderer_done)
+        nxt::rt::rethrow(renderer_done.error());
 }
 
 } // namespace
@@ -427,7 +398,7 @@ try {
     rt.run(run_scoped_command(std::move(command)));
     return 0;
 } catch (std::exception const & error) {
-    std::cout << "\x1b[?25h\x1b[0m" << std::flush;
+    std::cout << "\x1b[?25h\x1b[0m\x1b[?1049l" << std::flush;
     std::cerr << "ng-shell-scope-demo: " << error.what() << '\n';
     return 1;
 }

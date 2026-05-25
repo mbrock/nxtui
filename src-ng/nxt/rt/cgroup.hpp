@@ -186,7 +186,6 @@ inline double parse_psi_some_avg10(std::string_view text)
 inline task<sample> read_sample(const std::filesystem::path & dir)
 {
     auto out = sample{};
-    out.at = std::chrono::steady_clock::now();
 
     auto [
         memory_current,
@@ -204,6 +203,7 @@ inline task<sample> read_sample(const std::filesystem::path & dir)
         read_text_file(dir / "cpu.pressure"),
         read_text_file(dir / "io.pressure"));
 
+    out.at = std::chrono::steady_clock::now();
     out.memory_current = bytes_t{memory_current};
     out.memory_peak = bytes_t{memory_peak};
     out.pids = count_t{pids};

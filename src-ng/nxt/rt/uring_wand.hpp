@@ -82,7 +82,7 @@ private:
 class uring_wand final : public wand
 {
 public:
-    explicit uring_wand(unsigned queue_depth = 64)
+    explicit uring_wand(unsigned queue_depth = 1024)
     {
         auto rc = io_uring_queue_init(queue_depth, &ring_, 0);
         if (rc < 0)

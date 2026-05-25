@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxt/raster.hpp"
+#include "nxt/chart.hpp"
 #include "nxt/units.hpp"
 #include "nxt/utf8.hpp"
 
@@ -321,6 +322,42 @@ auto fixed_height(height_t height, Child && child)
         height, std::forward<Child>(child)};
 }
 
+/// Layout decorator that forces a fixed width hint.
+template<Layout Child>
+struct FixedWidth
+{
+    /// Width reported to parent rows and HUD sizing.
+    width_t width{0 * ch};
+    /// Child rendered with whatever size the parent assigns.
+    Child child;
+
+    /// Return the fixed width hint.
+    constexpr WidthHint width_hint() const
+    {
+        return WidthHint::fixed(width);
+    }
+
+    /// Forward the child's height hint.
+    constexpr HeightHint height_hint() const
+    {
+        return child.height_hint();
+    }
+
+    /// Render the child without additional clipping behavior.
+    void render(RasterView & raster, Size size) const
+    {
+        child.render(raster, size);
+    }
+};
+
+/// Create a layout wrapper that reports a fixed width.
+template<Layout Child>
+auto fixed_width(width_t width, Child && child)
+{
+    return FixedWidth<std::decay_t<Child>>{
+        width, std::forward<Child>(child)};
+}
+
 /// Render one styled span and return the column after the written text.
 inline col_t render_span(RasterView & r, Pos pos, const Span & s)
 {
@@ -338,6 +375,42 @@ inline col_t render_span(RasterView & r, Pos pos, const Span & s)
     }
 
     return end_x;
+}
+
+/// Clear a one-line raster and apply explicitly-set style channels.
+inline void clear_line(RasterView & r, Style style = {})
+{
+    std::ranges::fill(r.glyphs(), 32);
+    if (style.fg != DEFAULT_COLOR)
+        std::ranges::fill(r.fgs(), style.fg);
+    if (style.bg != DEFAULT_COLOR)
+        std::ranges::fill(r.bgs(), style.bg);
+    if (style.em != DEFAULT_EMPHASIS)
+        std::ranges::fill(r.ems(), style.em);
+}
+
+/// Clear and render one styled line of text.
+inline col_t render_line(RasterView & r, std::string text, Style style = {})
+{
+    clear_line(r, style);
+    return render_span(r, Pos::origin(), Span{std::move(text), style});
+}
+
+/// Create a one-line layout from a pure assigned-width-to-text function.
+template<typename MakeText>
+    requires requires(const std::decay_t<MakeText> & make_text, width_t w) {
+        { make_text(w) } -> std::convertible_to<std::string>;
+    }
+inline auto line_text(WidthHint width, MakeText && make_text, Style style = {})
+{
+    return leaf(
+        width,
+        HeightHint::fixed(1 * ln),
+        [make_text = std::decay_t<MakeText>{std::forward<MakeText>(
+             make_text)},
+         style](RasterView & r, Size size) {
+            render_line(r, make_text(size.w), style);
+        });
 }
 
 /// Repeat a UTF-8 glyph string `w` terminal cells worth of times.
@@ -366,13 +439,9 @@ inline width_t utf8_width(std::string_view s)
 inline auto text(std::string s)
 {
     auto w = utf8_width(s);
-    return leaf(
+    return line_text(
         WidthHint::fixed(w),
-        HeightHint::fixed(1 * ln),
-        [=](RasterView & r, Size) {
-            std::ranges::fill(r.glyphs(), 32);
-            render_span(r, Pos::origin(), Span{s, {}});
-        });
+        [s = std::move(s)](width_t) { return s; });
 }
 
 /// Create a one-line text leaf using `style`.
@@ -382,19 +451,10 @@ inline auto text(std::string s)
 inline auto text(std::string s, Style style)
 {
     auto w = utf8_width(s);
-    return leaf(
+    return line_text(
         WidthHint::fixed(w),
-        HeightHint::fixed(1 * ln),
-        [=](RasterView & r, Size) {
-            std::ranges::fill(r.glyphs(), 32);
-            if (style.fg != DEFAULT_COLOR)
-                std::ranges::fill(r.fgs(), style.fg);
-            if (style.bg != DEFAULT_COLOR)
-                std::ranges::fill(r.bgs(), style.bg);
-            if (style.em != DEFAULT_EMPHASIS)
-                std::ranges::fill(r.ems(), style.em);
-            render_span(r, Pos::origin(), Span{s, style});
-        });
+        [s = std::move(s)](width_t) { return s; },
+        style);
 }
 
 /// Create a one-line text leaf that grows to fill its assigned width
@@ -403,21 +463,12 @@ inline auto text(std::string s, Style style)
 /// same as `text(s, style)`.
 inline auto flex_text(std::string s, Style style = {})
 {
-    return leaf(
+    return line_text(
         WidthHint::grow(),
-        HeightHint::fixed(1 * ln),
-        [s = std::move(s), style](RasterView & r, Size size) {
-            std::ranges::fill(r.glyphs(), 32);
-            if (style.fg != DEFAULT_COLOR)
-                std::ranges::fill(r.fgs(), style.fg);
-            if (style.bg != DEFAULT_COLOR)
-                std::ranges::fill(r.bgs(), style.bg);
-            if (style.em != DEFAULT_EMPHASIS)
-                std::ranges::fill(r.ems(), style.em);
-
-            auto w = size.w.count();
+        [s = std::move(s)](width_t width) {
+            auto w = width.count();
             if (w == 0)
-                return;
+                return std::string{};
             // Byte-truncation: callers asking for stretch behavior are
             // displaying single-line ASCII-ish content (args, headers,
             // status lines). Cluster-aware truncation can come later.
@@ -430,8 +481,9 @@ inline auto flex_text(std::string s, Style style = {})
                     out.resize(w);
                 }
             }
-            render_span(r, Pos::origin(), Span{out, style});
-        });
+            return out;
+        },
+        style);
 }
 
 inline auto
@@ -595,33 +647,16 @@ inline std::string hrule_string(width_t w)
 /// Create a one-line horizontal rule layout.
 inline auto hrule()
 {
-    return leaf(
+    return line_text(
         WidthHint::grow(),
-        HeightHint::fixed(1 * ln),
-        [=](RasterView & r, Size size) {
-            write_text(r, Pos::origin(), hrule_string(size.w));
-        });
+        [](width_t width) { return hrule_string(width); });
 }
 
 /// Build the glyph string for a fractional progress bar.
 inline std::string bar_string(percent_t pct, width_t width)
 {
-    static constexpr std::array<std::string_view, 9> partials = {
-        "", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"};
-
-    auto w = width.count();
     auto fraction = std::clamp(pct.value(), 0.0, 100.0) / 100.0;
-    double fill = fraction * w;
-    std::size_t full = static_cast<std::size_t>(fill);
-    std::size_t partial = static_cast<std::size_t>((fill - full) * 8 + 0.5);
-
-    if (partial >= 8) {
-        full++;
-        partial = 0;
-    }
-
-    return repeat("█", std::min(full, w) * ch)
-           + std::string(partials[partial]);
+    return chart::progress_bar(fraction, width.count());
 }
 
 /// Create a one-line progress bar layout.
@@ -630,14 +665,10 @@ inline auto progress_bar(
     Rgba8 fg = Rgba8(100, 180, 255),
     Rgba8 bg = Rgba8(50, 50, 50))
 {
-    return leaf(
+    return line_text(
         WidthHint::grow(),
-        HeightHint::fixed(1 * ln),
-        [=](RasterView & r, Size) {
-            std::ranges::fill(r.bgs(), bg);
-            std::ranges::fill(r.fgs(), fg);
-            r.write_text(Pos::origin(), bar_string(pct, r.width()));
-        });
+        [=](width_t width) { return bar_string(pct, width); },
+        Style{fg, bg, DEFAULT_EMPHASIS});
 }
 
 /// Horizontal flex container.

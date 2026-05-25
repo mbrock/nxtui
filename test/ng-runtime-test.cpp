@@ -1,3 +1,4 @@
+#include <nxt/sparkline.hpp>
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/channel.hpp>
 #include <nxt/rt/event.hpp>
@@ -333,6 +334,59 @@ nxt::rt::task<void> record_task_stop_state_after_yield(
 
 static suite ng_runtime_tests{
     "Runtime", [] {
+        "charting"_test = [] {
+            "sparkline is a pure width-to-text transform"_test = [] {
+                auto values = std::to_array<double>({0.0, 1.0, 2.0});
+
+                auto line = nxt::chart::sparkline(values, 6);
+
+                expect(line == "    ▄█");
+            };
+
+            "sparkline keeps the newest samples when narrow"_test = [] {
+                auto values = std::to_array<double>(
+                    {0.0, 1.0, 2.0, 3.0, 4.0});
+
+                auto line = nxt::chart::sparkline(values, 3);
+
+                expect(line == "▄▆█");
+            };
+
+            "empty sparkline reserves the requested cells"_test = [] {
+                expect(
+                    nxt::chart::sparkline(std::span<const double>{}, 4)
+                    == "    ");
+            };
+
+            "sparkline can use a fixed value range"_test = [] {
+                auto values = std::to_array<double>({0.0, 10.0, 100.0});
+
+                auto line = nxt::chart::sparkline(
+                    values,
+                    3,
+                    nxt::chart::value_range{0.0, 100.0});
+
+                expect(line == " ▁█");
+            };
+
+            "two-line sparkline gives sixteen vertical steps"_test = [] {
+                auto values =
+                    std::to_array<double>({0.0, 25.0, 50.0, 75.0, 100.0});
+
+                auto rows = nxt::chart::sparkline2(
+                    values,
+                    5,
+                    nxt::chart::value_range{0.0, 100.0});
+
+                expect(rows[0] == "   ▄█");
+                expect(rows[1] == " ▄███");
+            };
+
+            "progress bar projects fill coverage per cell"_test = [] {
+                expect(nxt::chart::progress_bar(0.625, 4) == "██▌ ");
+            };
+        };
+
         "deck"_test = [] {
             "sync_wait returns completed root task values"_test = [] {
                 auto deck = nxt::rt::deck{};
