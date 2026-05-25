@@ -78,6 +78,63 @@
             display: block;
             width: 100%;
           }
+          .model-doc {
+            border-top: 1px solid var(--line);
+            margin: 3rem 0 3.5rem;
+            padding-top: 2rem;
+          }
+          .model-doc h2 {
+            margin-top: 0;
+          }
+          .model-doc h3 {
+            font-size: 1rem;
+            margin: 1.6rem 0 0.55rem;
+          }
+          .model-table {
+            border-collapse: collapse;
+            font-size: 0.9rem;
+            line-height: 1.35;
+            margin: 0.75rem 0 1.2rem;
+            width: 100%;
+          }
+          .model-table th {
+            color: var(--muted);
+            font-weight: 650;
+            text-align: left;
+          }
+          .model-table th,
+          .model-table td {
+            border-bottom: 1px solid var(--line);
+            padding: 0.45rem 0.55rem 0.45rem 0;
+            vertical-align: top;
+          }
+          .model-table code {
+            background: transparent;
+            padding: 0;
+          }
+          .signature-list,
+          .run-list {
+            display: grid;
+            gap: 1.2rem;
+          }
+          .signature,
+          .run {
+            border-top: 1px solid var(--line);
+            padding-top: 0.8rem;
+          }
+          .signature h3,
+          .run h3 {
+            margin-top: 0;
+          }
+          .inline-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem 0.7rem;
+            margin: 0.5rem 0 1rem;
+          }
+          .inline-list code {
+            white-space: nowrap;
+          }
           ul {
             margin: 0.75rem 0 1.25rem;
             padding-left: 1.3rem;
@@ -95,6 +152,8 @@
             <xsl:apply-templates select="paragraph"/>
           </div>
           <xsl:apply-templates select="forge-graph"/>
+          <xsl:apply-templates select="ontology-section"/>
+          <xsl:apply-templates select="model-section"/>
           <xsl:apply-templates select="section"/>
         </main>
       </body>
@@ -138,5 +197,99 @@
 
   <xsl:template match="forge-graph">
     <forge-doc-graph frg="{@frg}" run="{@run}" title="{@title}"></forge-doc-graph>
+  </xsl:template>
+
+  <xsl:template match="ontology-section">
+    <section class="model-doc ontology">
+      <h2><xsl:value-of select="title"/></h2>
+      <p>
+        <code><xsl:value-of select="ontology-prefix"/></code>
+        <xsl:text> </xsl:text>
+        <span class="source"><xsl:value-of select="ontology-base"/></span>
+      </p>
+      <h3>Classes</h3>
+      <table class="model-table">
+        <thead>
+          <tr><th>Name</th><th>Parent</th><th>IRI</th></tr>
+        </thead>
+        <tbody>
+          <xsl:for-each select="classes/class">
+            <tr>
+              <td><code><xsl:value-of select="@name"/></code></td>
+              <td><code><xsl:value-of select="@parent"/></code></td>
+              <td><xsl:value-of select="@iri"/></td>
+            </tr>
+          </xsl:for-each>
+        </tbody>
+      </table>
+      <h3>Properties</h3>
+      <table class="model-table">
+        <thead>
+          <tr><th>Name</th><th>Domain</th><th>Range</th><th>Forge</th></tr>
+        </thead>
+        <tbody>
+          <xsl:for-each select="properties/property">
+            <tr>
+              <td><code><xsl:value-of select="@name"/></code></td>
+              <td><code><xsl:value-of select="@domain"/></code></td>
+              <td><code><xsl:value-of select="@range"/></code></td>
+              <td><code><xsl:value-of select="@forge-name"/></code></td>
+            </tr>
+          </xsl:for-each>
+        </tbody>
+      </table>
+    </section>
+  </xsl:template>
+
+  <xsl:template match="model-section">
+    <section class="model-doc model">
+      <h2><xsl:value-of select="title"/></h2>
+      <h3>Signatures</h3>
+      <div class="signature-list">
+        <xsl:for-each select="signatures/signature">
+          <section class="signature">
+            <h3><code><xsl:value-of select="@name"/></code></h3>
+            <table class="model-table">
+              <thead>
+                <tr><th>Field</th><th>Multiplicity</th><th>Range</th><th>Temporal</th><th>Forge</th></tr>
+              </thead>
+              <tbody>
+                <xsl:for-each select="field">
+                  <tr>
+                    <td><code><xsl:value-of select="@name"/></code></td>
+                    <td><code><xsl:value-of select="@multiplicity"/></code></td>
+                    <td><code><xsl:value-of select="@range"/></code></td>
+                    <td><xsl:if test="@variable='true'">var</xsl:if></td>
+                    <td><code><xsl:value-of select="@forge-name"/></code></td>
+                  </tr>
+                </xsl:for-each>
+              </tbody>
+            </table>
+          </section>
+        </xsl:for-each>
+      </div>
+      <h3>Predicates</h3>
+      <div class="inline-list">
+        <xsl:for-each select="predicates/predicate">
+          <code><xsl:value-of select="@name"/></code>
+        </xsl:for-each>
+      </div>
+      <h3>Checks</h3>
+      <div class="inline-list">
+        <xsl:for-each select="checks/check">
+          <code><xsl:value-of select="@name"/></code>
+        </xsl:for-each>
+      </div>
+      <h3>Runs</h3>
+      <div class="run-list">
+        <xsl:for-each select="runs/run">
+          <section class="run">
+            <h3><code><xsl:value-of select="@name"/></code></h3>
+            <p class="source">scope <code><xsl:value-of select="@scope"/></code></p>
+            <xsl:apply-templates select="forge-graph"/>
+          </section>
+        </xsl:for-each>
+      </div>
+    </section>
   </xsl:template>
 </xsl:stylesheet>

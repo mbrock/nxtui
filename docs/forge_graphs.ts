@@ -29,6 +29,10 @@ const scanRoots = [
 	path.join(root, "test"),
 ];
 
+const scanFiles = [
+	path.join(root, "docs2", "out", "rt-overview.xml"),
+];
+
 function rel(file: string) {
 	return path.relative(root, file);
 }
@@ -70,28 +74,44 @@ async function* walk(dir: string): AsyncGenerator<string> {
 
 async function scanGraphs() {
 	const graphs: Graph[] = [];
+	for (const file of scanFiles) {
+		if (existsSync(file)) {
+			graphs.push(...await scanGraphFile(file));
+		}
+	}
 	for (const scanRoot of scanRoots) {
 		for await (const file of walk(scanRoot)) {
-			if (![".h", ".hpp", ".hh", ".hxx", ".md"].includes(path.extname(file))) {
+			if (![".h", ".hpp", ".hh", ".hxx", ".md", ".xml"].includes(path.extname(file))) {
 				continue;
 			}
 
-			const text = await readFile(file, "utf8");
-			const source = rel(file);
-			for (const match of text.matchAll(/<forge-doc-graph\b([^>]*)>/gi)) {
-				const graph = parseAttributes(match[1]) as Partial<Graph>;
-				graph._source = source;
-				graphs.push(graph as Graph);
-			}
-			for (const match of text.matchAll(/[@\\]forgegraph\{([^,{}]+),([^,{}]+),([^{}]+)\}/g)) {
-				graphs.push({
-					frg: match[1].trim(),
-					run: match[2].trim(),
-					title: match[3].trim(),
-					_source: source,
-				});
-			}
+			graphs.push(...await scanGraphFile(file));
 		}
+	}
+	return graphs;
+}
+
+async function scanGraphFile(file: string) {
+	const graphs: Graph[] = [];
+	const text = await readFile(file, "utf8");
+	const source = rel(file);
+	for (const match of text.matchAll(/<forge-doc-graph\b([^>]*)>/gi)) {
+		const graph = parseAttributes(match[1]) as Partial<Graph>;
+		graph._source = source;
+		graphs.push(graph as Graph);
+	}
+	for (const match of text.matchAll(/<forge-graph\b([^>]*)>/gi)) {
+		const graph = parseAttributes(match[1]) as Partial<Graph>;
+		graph._source = source;
+		graphs.push(graph as Graph);
+	}
+	for (const match of text.matchAll(/[@\\]forgegraph\{([^,{}]+),([^,{}]+),([^{}]+)\}/g)) {
+		graphs.push({
+			frg: match[1].trim(),
+			run: match[2].trim(),
+			title: match[3].trim(),
+			_source: source,
+		});
 	}
 	return graphs;
 }

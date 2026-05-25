@@ -23,6 +23,7 @@
  (struct-out forge-option)
  (struct-out forge-expr)
  (struct-out forge-quant)
+ (struct-out forge-field-ref)
  model
  signature
  field

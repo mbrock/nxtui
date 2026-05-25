@@ -13,8 +13,6 @@ concurrency handles, buffered byte streams, and low-level backend operations.
 This page is the conceptual map for those pieces. The class and function pages
 remain the exact reference for the corresponding C++ declarations.
 
-@forgegraph{nxtrt/model.rkt,rich-runtime-trace-witness,nxt::rt runtime trace}
-
 @section rt_execution_model Execution model
 
 The core value is @ref nxt::rt::task "task<T>": a lazy coroutine frame that

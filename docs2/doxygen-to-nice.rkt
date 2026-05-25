@@ -6,7 +6,27 @@
          racket/match
          racket/string
          sxml
-         sxml/sxpath)
+         sxml/sxpath
+         (only-in "../rdf-forge/model.rkt"
+                  forge-model-signatures
+                  forge-model-predicates
+                  forge-model-checks
+                  forge-model-runs
+                  forge-signature-term
+                  forge-signature-fields
+                  forge-field-term
+                  forge-field-multiplicity
+                  forge-field-range
+                  forge-field-variable?
+                  forge-field-ref?
+                  forge-field-ref-name
+                  forge-predicate-name
+                  forge-check-name
+                  forge-run-name
+                  forge-run-scope)
+         "../rdf-forge/ontology.rkt"
+         "../nxtrt/model.rkt"
+         "../nxtrt/ontology.rkt")
 
 (define (read-xml path)
   (call-with-input-file path
@@ -158,7 +178,110 @@
                 (kind ,(attr-ref node 'kind "")))
              (title ,(text-content (first-element node 'title)))
              (source ,(attr-ref (first-element node 'location) 'file ""))
-             ,@(filter values (map convert-block (children detail)))))
+             ,@(filter values (map convert-block (children detail)))
+             ,@(runtime-model-doc)))
+
+(define (symbol-title value)
+  (string-titlecase
+   (string-replace (symbol->string value) "-" " ")))
+
+(define (term-display-name value)
+  (symbol->string (term-rdf-name value)))
+
+(define (term-option-ref value key [fallback #f])
+  (define found (assoc key (term-options value)))
+  (if found (cdr found) fallback))
+
+(define (class-term? value)
+  (and (term? value) (eq? (term-kind value) 'class)))
+
+(define (property-term? value)
+  (and (term? value) (eq? (term-kind value) 'property)))
+
+(define (class-doc value)
+  `(class (@ (name ,(term-display-name value))
+             (iri ,(term-iri value))
+             (abstract ,(if (term-option-ref value 'abstract) "true" "false"))
+             (parent ,(if (term-option-ref value 'subclass-of)
+                          (term-display-name (term-option-ref value 'subclass-of))
+                          "")))))
+
+(define (property-doc value)
+  `(property (@ (name ,(term-display-name value))
+                (forge-name ,(term-forge-name value))
+                (iri ,(term-iri value))
+                (domain ,(if (term-option-ref value 'domain)
+                             (term-display-name (term-option-ref value 'domain))
+                             ""))
+                (range ,(if (term-option-ref value 'range)
+                            (term-display-name (term-option-ref value 'range))
+                            "")))))
+
+(define (ontology-doc ont)
+  (define terms (ontology-declared-terms ont))
+  `(ontology-section
+    (title "Runtime ontology")
+    (ontology-prefix ,(symbol->string (ontology-prefix ont)))
+    (ontology-base ,(ontology-base ont))
+    (classes
+     ,@(map class-doc (filter class-term? terms)))
+    (properties
+     ,@(map property-doc (filter property-term? terms)))))
+
+(define (field-doc signature-term fld)
+  (define relation-term
+    (with-handlers ([exn:fail? (lambda (_error) #f)])
+      (ontology-property (term-ontology signature-term)
+                         (if (forge-field-ref? (forge-field-term fld))
+                             (forge-field-ref-name (forge-field-term fld))
+                             (term-rdf-name (forge-field-term fld)))
+                         #:domain signature-term
+                         #:range (forge-field-range fld))))
+  `(field (@ (name ,(if relation-term
+                        (term-display-name relation-term)
+                        (format "~a" (forge-field-term fld))))
+             (forge-name ,(if relation-term
+                              (term-forge-name relation-term)
+                              (format "~a" (forge-field-term fld))))
+             (multiplicity ,(symbol->string (forge-field-multiplicity fld)))
+             (range ,(term-display-name (forge-field-range fld)))
+             (variable ,(if (forge-field-variable? fld) "true" "false")))))
+
+(define (signature-doc sig)
+  `(signature (@ (name ,(term-display-name (forge-signature-term sig))))
+              ,@(for/list ([fld (in-list (forge-signature-fields sig))])
+                  (field-doc (forge-signature-term sig) fld))))
+
+(define (predicate-doc pred)
+  `(predicate (@ (name ,(symbol->string (forge-predicate-name pred))))))
+
+(define (check-doc chk)
+  `(check (@ (name ,(symbol->string (forge-check-name chk))))))
+
+(define (run-doc frg-path run-command)
+  (define run-name (symbol->string (forge-run-name run-command)))
+  `(run (@ (name ,run-name)
+           (scope ,(format "~a" (forge-run-scope run-command))))
+        (forge-graph (@ (frg ,frg-path)
+                        (run ,run-name)
+                        (title ,(symbol-title (forge-run-name run-command)))))))
+
+(define (model-doc frg-path mdl)
+  `(model-section
+    (title "Runtime Forge model")
+    (signatures
+     ,@(map signature-doc (forge-model-signatures mdl)))
+    (predicates
+     ,@(map predicate-doc (forge-model-predicates mdl)))
+    (checks
+     ,@(map check-doc (forge-model-checks mdl)))
+    (runs
+     ,@(for/list ([run-command (in-list (forge-model-runs mdl))])
+         (run-doc frg-path run-command)))))
+
+(define (runtime-model-doc)
+  (list (ontology-doc nxt)
+        (model-doc "nxtrt/model.rkt" runtime-model)))
 
 (module+ main
   (define input "docs2/out/doxygen/xml/rt_overview.xml")
