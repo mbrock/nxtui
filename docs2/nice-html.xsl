@@ -71,7 +71,17 @@
           }
           forge-doc-graph {
             display: block;
-            margin: 2rem 0;
+            width: 100%;
+            min-height: 560px;
+            height: 560px;
+            margin: 2rem 0 3rem;
+            position: relative;
+          }
+          forge-doc-graph forge-graph {
+            display: block;
+            width: 100%;
+            min-height: 560px;
+            height: 560px;
           }
           section {
             max-width: 760px;
