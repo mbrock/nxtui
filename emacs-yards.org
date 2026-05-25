@@ -14,9 +14,10 @@ streaming response, overlay, trace span, and temporary display belongs to
 that command.  If the command returns, fails, or is cancelled with =C-g=,
 the whole tree has a well-defined fate.
 
-This suggests a native Emacs embedding where =nxt::yardtask= coroutines
-run cooperatively with Emacs Lisp execution, preserving yard/editor
-context across =co_await= suspension points.
+This suggests a native Emacs embedding where =nxt::rt::task= coroutines
+run cooperatively with Emacs Lisp execution, preserving runtime/editor
+context through =nxt::rt::env= and task zones across =co_await=
+suspension points.
 
 ** Brief introduction to nxt UI
 
@@ -48,10 +49,10 @@ one global screen.
 
 The current =yard= and =scope= system already provides bounded child
 lifetimes, cancellation tokens, live surfaces, output routing, and trace
-span attribution.  The newer =yardtask= experiment pushes this toward a
-real structured-concurrency substrate by making the coroutine promise own
-an ambient frame: context, parent/child relations, stop propagation, and
-context restoration across arbitrary awaits.
+span attribution.  The new =nxt::rt= runtime is the intended
+structured-concurrency substrate: coroutine promises carry an ambient
+environment, task zones own child relations, stop propagates through the
+tree, and context is restored across awaits.
 
 One concrete demonstration is the =nxtllm= OpenAI agent harness.  It
 streams model responses, shows live HUD/status updates, asks for tool
@@ -85,9 +86,9 @@ Emacs already has rich notions of place and dynamic extent:
 - child surfaces
 - cancellation scopes
 - trace spans
-- =yardtask= frames
-- ambient =yard_context=
-- =yard_var<T>=
+- =nxt::rt= task zones
+- ambient =nxt::rt::env= bindings
+- typed runtime/editor capabilities
 - stop propagation through a frame tree
 
 The integration should map place to place, not command to command.
@@ -275,7 +276,7 @@ Possible native API:
 #+begin_src cpp
 class emacs_scheduler {
 public:
-    void spawn(yardtask<> task);
+    void spawn(nxt::rt::task<> task);
     void run_ready(emacs_env *env);
     void request_quit();
     void resume_timer(timer_id id);
@@ -301,7 +302,7 @@ Emacs can pump ready work from:
 - a module callback
 - a wakeup pipe/event fd bridge
 
-The pump resumes ready =yardtask= coroutines.  Suspension returns control
+The pump resumes ready =nxt::rt::task= coroutines.  Suspension returns control
 to Emacs.
 
 ** Awaiting Emacs
@@ -322,26 +323,26 @@ co_await emacs_sleep{std::chrono::milliseconds{50}};
 auto event = co_await emacs_next_input{};
 #+end_src
 
-The coroutine promise is responsible for restoring the current yard frame
-around every await seam, much like =save-excursion= restores point after
-temporary buffer motion.
+The coroutine promise and runtime environment are responsible for
+restoring the current task/editor context around every await seam, much
+like =save-excursion= restores point after temporary buffer motion.
 
 ** Context preservation
 
-The existing =yardtask= experiment already points in the right direction:
-the promise owns a =yard_frame=, and =await_transform= wraps awaited
-objects so that ambient context is restored around =await_ready=,
-=await_suspend=, and =await_resume=.
+The useful part of the removed custom task experiment now belongs in
+=nxt::rt=: the promise owns an environment snapshot, task zones describe
+parent/child lifetime, and await boundaries restore the ambient context
+needed by editor and UI capabilities.
 
 For Emacs-hosted tasks, the frame can grow editor capabilities:
 
 #+begin_src text
-yard_frame
+runtime task context
   id
   name
   parent
   children
-  yard_context
+  env bindings
   stop_source
   current Emacs thread/scheduler affinity
   current buffer reference
@@ -414,7 +415,7 @@ Emacs-side rendering should be polite:
 The symmetry is important:
 
 #+begin_src text
-C++ yardtask preserves current yard across co_await.
+C++ runtime tasks preserve current yard/editor context across co_await.
 Elisp save-excursion preserves editor position across buffer mutation.
 #+end_src
 
@@ -433,9 +434,18 @@ Examples:
 This can be represented as ambient context:
 
 #+begin_src cpp
-yard_var<emacs_region> current_region{"emacs-region"};
-yard_var<trace_filter> current_trace_filter{"trace-filter"};
-yard_var<emacs_buffer> current_buffer{"emacs-buffer"};
+struct current_region {
+    using value_type = emacs_region;
+    static constexpr auto name = "emacs-region";
+};
+struct current_trace_filter {
+    using value_type = trace_filter;
+    static constexpr auto name = "trace-filter";
+};
+struct current_buffer {
+    using value_type = emacs_buffer;
+    static constexpr auto name = "emacs-buffer";
+};
 #+end_src
 
 ** C-g and cancellation
@@ -497,13 +507,13 @@ Emacs's existing synchronous execution model.
    (nxt-pump runtime)
    #+end_src
 
-3. Implement an Emacs-hosted =yardtask= scheduler with:
+3. Implement an Emacs-hosted =nxt::rt= pump with:
 
    - ready queue
    - timer awaiter
    - explicit yield awaiter
    - cancellation token
-   - current frame restoration
+   - current environment restoration
 
 4. Add a marker-bounded region primitive:
 
@@ -514,9 +524,9 @@ Emacs's existing synchronous execution model.
 5. Let a C++ coroutine draw a counter into that region:
 
    #+begin_src cpp
-   nxt::yardtask<> counter(yard self)
+   nxt::rt::task<> counter(yard self)
    {
-       for (int i = 0; !yard_stop_requested(); ++i) {
+       for (int i = 0; !nxt::rt::stop_requested(); ++i) {
            self.draw(text("tick " + std::to_string(i)));
            co_await emacs_sleep{100ms};
        }
@@ -566,7 +576,7 @@ Emacs supplies interactive dynamic extent: commands, buffers, markers,
 overlays, narrowing, and =C-g=.
 
 =nxt= supplies structured coroutine concurrency: yards, child surfaces,
-ambient context, cancellation, and trace spans.
+ambient runtime context, cancellation, and trace spans.
 
 An Emacs-hosted yard runtime would combine them:
 

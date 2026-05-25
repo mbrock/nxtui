@@ -1,4 +1,6 @@
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/channel.hpp>
+#include <nxt/rt/event.hpp>
 #include <nxt/rt/http.hpp>
 #include <nxt/rt/kqueue_wand.hpp>
 #include <nxt/rt/pipe.hpp>
@@ -185,6 +187,34 @@ nxt::rt::task<void> record_after_yield(std::vector<int> & events, int value)
     events.push_back(value * 10 + 1);
     co_await nxt::rt::yield();
     events.push_back(value * 10 + 2);
+}
+
+nxt::rt::task<void>
+record_next_channel_value(
+    nxt::rt::channel<int> & events,
+    std::vector<int> & out)
+{
+    auto value = co_await events.next();
+    if (value)
+        out.push_back(*value);
+}
+
+nxt::rt::task<void>
+record_closed_channel(nxt::rt::channel<int> & events, bool & finished)
+{
+    auto value = co_await events.next();
+    expect(!value);
+    finished = true;
+}
+
+nxt::rt::task<void>
+record_after_event(
+    nxt::rt::event & ready,
+    std::vector<int> & out,
+    int value)
+{
+    co_await ready;
+    out.push_back(value);
 }
 
 nxt::rt::task<void> record_current_zone(
@@ -1631,6 +1661,147 @@ static suite ng_runtime_tests{
                 }
 
                 expect(threw);
+            };
+        };
+
+        "channels"_test = [] {
+            "buffer values until consumed"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = nxt::rt::channel<int>{};
+
+                expect(deck.sync_wait(events.publish(1)));
+                expect(deck.sync_wait(events.publish(2)));
+
+                auto values = deck.sync_wait([&]() -> nxt::rt::task<
+                    std::vector<int>> {
+                    auto out = std::vector<int>{};
+                    out.push_back(*(co_await events.next()));
+                    out.push_back(*(co_await events.next()));
+                    co_return out;
+                });
+
+                expect(values == std::vector<int>{1, 2});
+            };
+
+            "resumes a waiting consumer when a value is published"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = nxt::rt::channel<int>{};
+                auto seen = std::vector<int>{};
+
+                auto consumer = record_next_channel_value(events, seen);
+
+                deck.start(consumer);
+                deck.run_until_idle();
+
+                expect(seen.empty());
+                expect(!consumer.done());
+
+                expect(deck.sync_wait(events.publish(7)));
+                deck.run_until_idle();
+
+                expect(seen == std::vector<int>{7});
+                expect(consumer.done());
+            };
+
+            "close rejects publishers and drains consumers"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = nxt::rt::channel<int>{};
+
+                expect(deck.sync_wait(events.publish(1)));
+                events.close();
+
+                auto first = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::optional<int>> {
+                    co_return co_await events.next();
+                });
+                auto second = deck.sync_wait(
+                    [&]() -> nxt::rt::task<std::optional<int>> {
+                    co_return co_await events.next();
+                });
+
+                expect(first && *first == 1_i);
+                expect(!second);
+                expect(!deck.sync_wait(events.publish(2)));
+            };
+
+            "cancel requests stop and wakes pending consumers"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = nxt::rt::channel<int>{};
+                auto finished = false;
+
+                auto consumer = record_closed_channel(events, finished);
+
+                deck.start(consumer);
+                deck.run_until_idle();
+
+                events.cancel();
+                deck.run_until_idle();
+
+                expect(events.stop_requested());
+                expect(finished);
+                expect(consumer.done());
+                expect(!deck.sync_wait(events.publish(1)));
+            };
+
+            "try_pop drains buffered values without awaiting"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = nxt::rt::channel<int>{};
+
+                expect(deck.sync_wait(events.push(3)));
+                auto value = events.try_pop();
+                expect(value && *value == 3_i);
+                expect(!events.try_pop());
+            };
+        };
+
+        "events"_test = [] {
+            "set wakes all waiting tasks"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto ready = nxt::rt::event{};
+                auto values = std::vector<int>{};
+
+                auto first = record_after_event(ready, values, 1);
+                auto second = record_after_event(ready, values, 2);
+                deck.start(first);
+                deck.start(second);
+                deck.run_until_idle();
+
+                expect(values.empty());
+
+                ready.set();
+                deck.run_until_idle();
+
+                expect(values == std::vector<int>{1, 2});
+                expect(first.done());
+                expect(second.done());
+            };
+
+            "reset makes future awaits suspend again"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto ready = nxt::rt::event{};
+                auto values = std::vector<int>{};
+
+                ready.set();
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await ready;
+                    values.push_back(1);
+                });
+
+                ready.reset();
+
+                auto task = record_after_event(ready, values, 2);
+
+                deck.start(task);
+                deck.run_until_idle();
+
+                expect(values == std::vector<int>{1});
+                expect(!task.done());
+
+                ready.set();
+                deck.run_until_idle();
+
+                expect(values == std::vector<int>{1, 2});
+                expect(task.done());
             };
         };
 

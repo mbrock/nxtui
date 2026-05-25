@@ -1,25 +1,29 @@
-nxtdemo_sources = [
-  'main.cpp',
-  'build_sim.cpp',
-  'cassette.cpp',
-  'cgroup_browser.cpp',
-  'shell_scope.cpp',
-]
-nxtdemo_dependencies = [nxt_dep]
-nxtdemo_cpp_args = []
+if nxt_legacy_runtime_enabled
+  nxtdemo_sources = [
+    'main.cpp',
+    'build_sim.cpp',
+    'cassette.cpp',
+    'cgroup_browser.cpp',
+    'shell_scope.cpp',
+  ]
+  nxtdemo_dependencies = [nxt_dep]
+  nxtdemo_cpp_args = []
 
-if arrow_dataset_available
-  nxtdemo_sources += 'span_browser.cpp'
-  nxtdemo_dependencies += arrow_dataset_deps
-  nxtdemo_cpp_args += '-DNXTDEMO_HAVE_SPAN_BROWSER'
+  if arrow_dataset_available
+    nxtdemo_sources += 'span_browser.cpp'
+    nxtdemo_dependencies += arrow_dataset_deps
+    nxtdemo_cpp_args += '-DNXTDEMO_HAVE_SPAN_BROWSER'
+  endif
+
+  executable('nxtdemo',
+    nxtdemo_sources,
+    include_directories : nxt_inc,
+    dependencies : nxtdemo_dependencies,
+    cpp_args : nxtdemo_cpp_args,
+  )
+else
+  message('legacy runtime disabled; skipping nxtdemo')
 endif
-
-executable('nxtdemo',
-  nxtdemo_sources,
-  include_directories : nxt_inc,
-  dependencies : nxtdemo_dependencies,
-  cpp_args : nxtdemo_cpp_args,
-)
 
 if host_machine.system() == 'linux'
   nxt_liburing_dep = dependency(
@@ -33,6 +37,8 @@ endif
 
 ng_ls_demo_dependencies = []
 ng_ls_demo_available = false
+ng_http_client_demo_dependencies = []
+ng_http_client_demo_available = false
 
 if host_machine.system() == 'darwin'
   ng_ls_demo_available = true
@@ -47,16 +53,33 @@ if ng_ls_demo_available
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : ng_ls_demo_dependencies,
   )
+endif
 
+nxt_cares_dep = dependency('libcares', required : false)
+
+if ng_ls_demo_available and nxt_cares_dep.found()
+  ng_http_client_demo_available = true
+  ng_http_client_demo_dependencies = ng_ls_demo_dependencies + [
+    nxt_core_dep,
+    glaze_dep,
+    nxt_cares_dep,
+  ]
+endif
+
+if ng_http_client_demo_available
   executable('ng-http-client-demo',
     'ng_http_client_demo.cpp',
     include_directories : [nxt_inc, nxt_ng_inc],
-    dependencies : ng_ls_demo_dependencies + [nxt_dep, nxt_libcoro_dep],
+    dependencies : ng_http_client_demo_dependencies,
   )
 else
-  message('no ng demo runtime found; skipping ng-ls-demo and ng-http-client-demo')
+  message('no ng HTTP demo dependencies found; skipping ng-http-client-demo')
 endif
 
 if host_machine.system() == 'linux' and not nxt_liburing_dep.found()
   message('liburing not found; skipping ng-ls-demo')
+endif
+
+if not nxt_cares_dep.found()
+  message('libcares not found; skipping ng-http-client-demo')
 endif

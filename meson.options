@@ -6,3 +6,6 @@ option('tests', type : 'boolean', value : true,
 
 option('llm_tool', type : 'boolean', value : true,
   description : 'Build nxtllm trace/debug tool, requires nanoarrow IPC')
+
+option('legacy_runtime', type : 'boolean', value : true,
+  description : 'Build the libcoro-backed nxtio runtime while it is being migrated')

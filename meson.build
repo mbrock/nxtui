@@ -10,25 +10,29 @@ project('nxtui', 'cpp', 'c',
 
 cmake = import('cmake')
 
-nxt_libcoro_options = cmake.subproject_options()
-nxt_libcoro_options.add_cmake_defines({
-  'LIBCORO_BUILD_TESTS': false,
-  'LIBCORO_BUILD_EXAMPLES': false,
-  'LIBCORO_EXTERNAL_DEPENDENCIES': false,
-  'LIBCORO_FEATURE_NETWORKING': true,
-  'LIBCORO_FEATURE_TLS': true,
-})
+nxt_legacy_runtime_enabled = get_option('legacy_runtime')
 
-nxt_libcoro_project = cmake.subproject(
-  'libcoro',
-  options : nxt_libcoro_options,
-)
-nxt_libcoro_dep = declare_dependency(
-  dependencies : [
-    nxt_libcoro_project.dependency('libcoro'),
-    nxt_libcoro_project.dependency('c_ares'),
-  ],
-)
+if nxt_legacy_runtime_enabled
+  nxt_libcoro_options = cmake.subproject_options()
+  nxt_libcoro_options.add_cmake_defines({
+    'LIBCORO_BUILD_TESTS': false,
+    'LIBCORO_BUILD_EXAMPLES': false,
+    'LIBCORO_EXTERNAL_DEPENDENCIES': false,
+    'LIBCORO_FEATURE_NETWORKING': true,
+    'LIBCORO_FEATURE_TLS': true,
+  })
+
+  nxt_libcoro_project = cmake.subproject(
+    'libcoro',
+    options : nxt_libcoro_options,
+  )
+  nxt_libcoro_dep = declare_dependency(
+    dependencies : [
+      nxt_libcoro_project.dependency('libcoro'),
+      nxt_libcoro_project.dependency('c_ares'),
+    ],
+  )
+endif
 
 nxt_awslc_options = cmake.subproject_options()
 nxt_awslc_options.add_cmake_defines({
@@ -53,34 +57,41 @@ utf8proc_dep = dependency(
   fallback : ['utf8proc', 'utf8proc_dep'],
   default_options : ['tests=disabled'],
 )
-nanoarrow_ipc_dep = dependency(
-  'nanoarrow-ipc',
-  fallback : ['nanoarrow', 'nanoarrow_ipc_dep'],
-  default_options : [
-    'ipc=enabled',
-    'apps=disabled',
-    'benchmarks=disabled',
-    'device=disabled',
-    'testing=disabled',
-    'tests=disabled',
-  ],
-)
-arrow_dataset_deps = [
-  dependency('arrow', required : false),
-  dependency('arrow-dataset', required : false),
-  dependency('parquet', required : false),
-]
-arrow_dataset_available = true
-foreach dep : arrow_dataset_deps
-  arrow_dataset_available = arrow_dataset_available and dep.found()
-endforeach
 
-nxt_cairo_dep = dependency('cairo', required : false)
-nxt_pangocairo_dep = dependency('pangocairo', required : false)
-nxt_fontconfig_dep = dependency('fontconfig', required : false)
-nxt_png_available = nxt_cairo_dep.found() \
-  and nxt_pangocairo_dep.found() \
-  and nxt_fontconfig_dep.found()
+if nxt_legacy_runtime_enabled
+  nanoarrow_ipc_dep = dependency(
+    'nanoarrow-ipc',
+    fallback : ['nanoarrow', 'nanoarrow_ipc_dep'],
+    default_options : [
+      'ipc=enabled',
+      'apps=disabled',
+      'benchmarks=disabled',
+      'device=disabled',
+      'testing=disabled',
+      'tests=disabled',
+    ],
+  )
+  arrow_dataset_deps = [
+    dependency('arrow', required : false),
+    dependency('arrow-dataset', required : false),
+    dependency('parquet', required : false),
+  ]
+  arrow_dataset_available = true
+  foreach dep : arrow_dataset_deps
+    arrow_dataset_available = arrow_dataset_available and dep.found()
+  endforeach
+endif
+
+if nxt_legacy_runtime_enabled
+  nxt_cairo_dep = dependency('cairo', required : false)
+  nxt_pangocairo_dep = dependency('pangocairo', required : false)
+  nxt_fontconfig_dep = dependency('fontconfig', required : false)
+  nxt_png_available = nxt_cairo_dep.found() \
+    and nxt_pangocairo_dep.found() \
+    and nxt_fontconfig_dep.found()
+else
+  nxt_png_available = false
+endif
 
 nxt_mdspan_args = [
   '-DMDSPAN_USE_BRACKET_OPERATOR=1',
@@ -151,13 +162,6 @@ nxt_core_dep = declare_dependency(
   compile_args : nxt_mdspan_args,
 )
 
-nxt_runtime_deps = [
-  nxt_core_dep,
-  nxt_libcoro_dep,
-  glaze_dep,
-]
-
-nxt_runtime_cpp_args = []
 nxt_stacktrace_deps = []
 nxt_stacktrace_cpp_args = []
 
@@ -178,8 +182,6 @@ if cpptrace_dep.found() and cpp.links(
   cpptrace_probe,
   dependencies : [cpptrace_dep],
   name : 'cpptrace')
-  nxt_runtime_deps += cpptrace_dep
-  nxt_runtime_cpp_args += '-DNXT_HAVE_CPPTRACE=1'
   nxt_stacktrace_deps += cpptrace_dep
   nxt_stacktrace_cpp_args += '-DNXT_HAVE_CPPTRACE=1'
   message('cpptrace available')
@@ -202,7 +204,6 @@ else
     std_stacktrace_probe,
     dependencies : [stdcxxexp_dep],
     name : 'std::stacktrace with stdc++exp')
-    nxt_runtime_deps += stdcxxexp_dep
     nxt_stacktrace_deps += stdcxxexp_dep
     message('std::stacktrace available with stdc++exp')
   else
@@ -226,77 +227,96 @@ if nxt_png_available
     compile_args : nxt_mdspan_args,
   )
 
-  nxt_runtime_deps += nxt_png_dep
-  nxt_runtime_cpp_args += '-DNXT_HAVE_PNG=1'
 endif
 
-nxt_runtime_sources = files(
-  'src/nxtio/app.cpp',
-  'src/nxtio/arrow.cpp',
-  'src/nxtio/http.cpp',
-  'src/nxtio/input.cpp',
-  'src/nxtio/net.cpp',
-  'src/nxtio/short_id.cpp',
-  'src/nxtio/signal-pipe.cpp',
-  'src/nxtio/stacktrace.cpp',
-  'src/nxtio/subprocess.cpp',
-)
+if nxt_legacy_runtime_enabled
+  nxt_runtime_deps = [
+    nxt_core_dep,
+    nxt_libcoro_dep,
+    glaze_dep,
+  ]
 
-nxt_runtime_deps += nanoarrow_ipc_dep
+  nxt_runtime_cpp_args = []
 
-nxt_lib = static_library('nxtui',
-  nxt_runtime_sources,
-  include_directories : nxt_inc,
-  dependencies : nxt_runtime_deps,
-  cpp_args : nxt_runtime_cpp_args,
-  install : true,
-)
+  nxt_runtime_deps += nxt_stacktrace_deps
+  nxt_runtime_cpp_args += nxt_stacktrace_cpp_args
 
-nxt_dep = declare_dependency(
-  link_with : nxt_lib,
-  include_directories : nxt_inc,
-  dependencies : nxt_runtime_deps,
-  compile_args : nxt_runtime_cpp_args,
-)
+  if nxt_png_available
+    nxt_runtime_deps += nxt_png_dep
+    nxt_runtime_cpp_args += '-DNXT_HAVE_PNG=1'
+  endif
+
+  nxt_runtime_sources = files(
+    'src/nxtio/app.cpp',
+    'src/nxtio/arrow.cpp',
+    'src/nxtio/http.cpp',
+    'src/nxtio/input.cpp',
+    'src/nxtio/net.cpp',
+    'src/nxtio/short_id.cpp',
+    'src/nxtio/signal-pipe.cpp',
+    'src/nxtio/stacktrace.cpp',
+    'src/nxtio/subprocess.cpp',
+  )
+
+  nxt_runtime_deps += nanoarrow_ipc_dep
+
+  nxt_lib = static_library('nxtui',
+    nxt_runtime_sources,
+    include_directories : nxt_inc,
+    dependencies : nxt_runtime_deps,
+    cpp_args : nxt_runtime_cpp_args,
+    install : true,
+  )
+
+  nxt_dep = declare_dependency(
+    link_with : nxt_lib,
+    include_directories : nxt_inc,
+    dependencies : nxt_runtime_deps,
+    compile_args : nxt_runtime_cpp_args,
+  )
+endif
 
 if get_option('demo')
   subdir('demo')
 endif
 
-if get_option('llm_tool')
+if get_option('llm_tool') and nxt_legacy_runtime_enabled
   executable('nxtllm',
     'src/nxtai/nxtllm.cpp',
     include_directories : nxt_inc,
     dependencies : [nxt_dep],
     cpp_args : ['-Wno-unused-parameter'],
   )
+elif get_option('llm_tool')
+  message('legacy runtime disabled; skipping nxtllm')
 endif
 
 if get_option('tests')
   nxt_test_inc = include_directories('test')
 
-  nxt_tests = executable('nxt-tests',
-    files(
-      'test/arrow-test.cpp',
-      'test/buffers-test.cpp',
-      'test/crypto-test.cpp',
-      'test/http-io-test.cpp',
-      'test/http-test.cpp',
-      'test/input-test.cpp',
-      'test/llm-test.cpp',
-      'test/net-include-test.cpp',
-      'test/raster-test.cpp',
-      'test/subprocess-test.cpp',
-      'test/terminal-test.cpp',
-      'test/test-main.cpp',
-      'test/text-field-test.cpp',
-      'test/yardtask-test.cpp',
-    ),
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : [nxt_dep],
-  )
+  if nxt_legacy_runtime_enabled
+    nxt_tests = executable('nxt-tests',
+      files(
+        'test/arrow-test.cpp',
+        'test/buffers-test.cpp',
+        'test/crypto-test.cpp',
+        'test/http-io-test.cpp',
+        'test/http-test.cpp',
+        'test/input-test.cpp',
+        'test/llm-test.cpp',
+        'test/net-include-test.cpp',
+        'test/raster-test.cpp',
+        'test/subprocess-test.cpp',
+        'test/terminal-test.cpp',
+        'test/test-main.cpp',
+        'test/text-field-test.cpp',
+      ),
+      include_directories : [nxt_inc, nxt_test_inc],
+      dependencies : [nxt_dep],
+    )
 
-  test('nxt-tests', nxt_tests)
+    test('nxt-tests', nxt_tests)
+  endif
 
   nxt_ng_test_sources = files(
     'test/ng-runtime-test.cpp',

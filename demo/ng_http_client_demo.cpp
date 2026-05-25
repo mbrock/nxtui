@@ -6,7 +6,7 @@
 #include <nxt/tls.hpp>
 #include <nxt/tls/cert.hpp>
 #include <nxt/unique-fd.hpp>
-#include <nxtai/responses.hpp>
+#include <nxtai/responses_request.hpp>
 
 #if defined(__linux__)
 #  include <nxt/rt/uring_wand.hpp>

@@ -19,6 +19,9 @@ template<typename T = void>
 class task;
 class task_zone;
 class deck;
+class event;
+template<typename T>
+class channel;
 struct yield_awaiter;
 
 template<typename>
@@ -237,6 +240,9 @@ private:
     template<typename T>
     friend class task;
     friend class task_zone;
+    friend class event;
+    template<typename T>
+    friend class channel;
     friend struct parked_task;
     friend struct yield_awaiter;
     /// @endcond
