@@ -125,10 +125,8 @@ int main()
 }
 ```
 
-The legacy `nxtio` runner is still available with `-Dlegacy_runtime=true` while
-the remaining app code migrates. That path builds around a `yard`: draw the
-current layout, spawn child work, print scrollback output, and request shutdown
-from the same runtime-backed handle.
+The old `nxtio` runner sources are still in the tree as migration reference
+material, but the Meson build no longer vendors or builds `libcoro`.
 
 The ng runtime owns:
 
@@ -172,10 +170,9 @@ integers throughout layout and rendering code.
 
 - `src/nxt` contains core terminal, raster, units, and layout code.
 - `src-ng/nxt/rt` contains the new structured coroutine runtime.
-- `src/nxtio` contains the legacy libcoro-backed app runtime.
+- `src-ng/nxtai` contains the new-runtime `nxtllm` entry point.
+- `src/nxtio` contains legacy app runtime sources kept for porting reference.
 - `test` contains raster, terminal compositor, and runtime tests.
-- `subprojects/libcoro` vendors the old runtime dependency for
-  `-Dlegacy_runtime=true` builds.
 - `vendor/mdspan` vendors the header-only mdspan implementation.
 - `vendor/libvterm` is used by the terminal tests.
 
@@ -190,29 +187,24 @@ meson test -C build
 ```
 
 The default build is the new-runtime lane: it builds core layout/raster code,
-`ng-tests`, and the ng demos without pulling in `libcoro`. Try the small TUI
-demo with:
+`ng-tests`, `nxtllm`, and the ng demos without pulling in `libcoro`. Try the
+small TUI demo with:
 
 ```sh
 build/demo/ng-tui-demo
 ```
 
-The legacy app stack remains opt-in while migration is in progress:
+`nxtllm` is also an ng target now. It can parse the familiar CLI and construct
+OpenAI Responses requests on `nxt::rt`; network streaming and the richer HUD are
+the next migration slices:
 
 ```sh
-meson setup build-legacy -Dlegacy_runtime=true -Dllm_tool=true
-meson compile -C build-legacy nxtdemo nxtllm nxt-tests
+build/nxtllm --dump-request "hello from the new runtime"
 ```
 
-`nxtdemo` bundles all UI demos behind subcommands (`nxtdemo build_sim`,
-`nxtdemo cgroup_browser`, `nxtdemo shell_scope`). When the Arrow C++ Dataset and
-Parquet development packages are installed, `nxtdemo span_browser` is also
-available for browsing a Hive-partitioned span archive.
-
-Install `cpptrace` if you want richer crash stack traces in the legacy TUI
-runtime. Meson enables it only after a real compile/link probe, so compilers
-that find an incompatible system package will fall back to the built-in
-stacktrace shim.
+Install `cpptrace` if you want richer crash stack traces in tests. Meson enables
+it only after a real compile/link probe, so compilers that find an incompatible
+system package will fall back to the built-in stacktrace shim.
 
 The API is still in motion, but the intended direction is stable: small
 composable layout values, a typed raster underneath, and a runtime that works

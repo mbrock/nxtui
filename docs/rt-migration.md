@@ -1,10 +1,11 @@
 # Runtime migration notes
 
-The goal is to move the application/runtime surface from the old
-`nxtio`/libcoro stack onto `nxt::rt`, then make `nxtllm` build in the
-`-Dlegacy_runtime=false` configuration.  The old custom task prototype
-has been removed; its useful ideas now belong in `nxt::rt::env`, task
-zones, and explicit UI/runtime capabilities.
+The goal is to move the application/runtime surface from the old `nxtio` stack
+onto `nxt::rt`.  `libcoro` has been removed from the Meson build and from
+`subprojects`; remaining `nxtio` sources are porting reference material rather
+than a build lane. The old custom task prototype has been removed; its useful
+ideas now belong in `nxt::rt::env`, task zones, and explicit UI/runtime
+capabilities.
 
 ## Current split
 
@@ -14,16 +15,17 @@ zones, and explicit UI/runtime capabilities.
 - `nxt::rt::deck` for pumpable execution.
 - `nxt::rt::wand` implementations for platform waiting.
 - `nxt::rt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
-- DNS, HTTP, TLS, and socket experiments that do not require libcoro.
+- DNS, HTTP, TLS, and socket experiments.
 - Core terminal input types and parsing in `src/nxt/input.hpp`, shared by
   both the ng runtime and the legacy `nxtio` shim.
+- The default `nxtllm` executable, currently able to parse CLI options and
+  construct OpenAI Responses request envelopes on `nxt::rt`.
 
-The default build now leaves the old application stack out.  That stack
-still depends on libcoro through
-`src/nxtio/async-core.hpp`.  That header aliases `nxt::task`,
-`nxt::scheduler`, `nxt::queue`, `nxt::event`, `nxt::latch`,
-`sync_wait`, and `when_all` to libcoro primitives.  Most of the UI,
-process, signal, and `nxtai` code enters async through those aliases.
+The old application stack is no longer built.  It still contains useful UI and
+tooling code, but `src/nxtio/async-core.hpp` aliases `nxt::task`,
+`nxt::scheduler`, `nxt::queue`, `nxt::event`, `nxt::latch`, `sync_wait`, and
+`when_all` to removed libcoro primitives. Most of the legacy UI, process,
+signal, and old `nxtai` code enters async through those aliases.
 
 ## Migration table
 
@@ -40,6 +42,7 @@ process, signal, and `nxtai` code enters async through those aliases.
 | `spawn_detached` | `nxt::rt::fork` in a zone | Detached work should still be owned by a root zone. |
 | `nxt::scope` | `nxt::rt::task_zone` + UI capabilities | Scope currently mixes lifetime, scheduler, and yard state. Split those. |
 | `nxtio/net` | `src-ng` HTTP/TLS/DNS | The OpenAI streaming path should use the new HTTP client directly. |
+| old `src/nxtai/nxtllm.cpp` | `src-ng/nxtai/nxtllm.cpp` | Started. The executable now builds on `nxt::rt`; streaming/HUD/tools still need ports. |
 
 ## First code slices
 
@@ -71,21 +74,21 @@ process, signal, and `nxtai` code enters async through those aliases.
    scheduler pointer today.  Move those to a runtime capability that offers
    `poll`, `sleep`, and subprocess handling on `nxt::rt`.
 
-6. Re-enable `nxtllm` under `-Dlegacy_runtime=false`.
-   The success condition is that `meson setup -Dlegacy_runtime=false
-   -Dllm_tool=true` builds `nxtllm` without pulling in libcoro.
+6. Re-enable `nxtllm` on the ng runtime. Started as
+   `src-ng/nxtai/nxtllm.cpp`: the executable builds by default, parses CLI
+   options, enters `nxt::rt::runtime`, and constructs Responses request JSON.
+   Next success condition: stream a response over the `src-ng` HTTP/TLS stack.
 
 ## Compatibility strategy
 
-Do not try to make `src/nxtio/async-core.hpp` alias both runtimes.  The
-old libcoro task and `nxt::rt::task` have different ownership and pump
-semantics, and a dual alias layer would hide the hard parts.  Prefer
-explicit ports:
+Do not try to make `src/nxtio/async-core.hpp` alias both runtimes.  The old
+libcoro task and `nxt::rt::task` have different ownership and pump semantics,
+and a dual alias layer would hide the hard parts. Prefer explicit ports:
 
 - Move dependency-light data types first.
 - Port leaf async functions next.
-- Keep old UI demos on the legacy runtime until the app facade is ready.
-- Use `-Dlegacy_runtime=false` as the guardrail for new-runtime-only work.
+- Keep old UI demos as source references until the app facade is ready.
+- Treat a clean default Meson build as the guardrail for new-runtime-only work.
 
 ## `nxtllm` path
 
