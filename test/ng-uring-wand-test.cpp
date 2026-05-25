@@ -1,4 +1,5 @@
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/app.hpp>
 #include <nxt/rt/fs.hpp>
 #include <nxt/rt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
@@ -64,6 +65,12 @@ nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
 nxt::rt::task<void> timeout_once()
 {
     co_await nxt::rt::op::timeout::after(1ms);
+}
+
+nxt::rt::task<int> app_child_value(int value)
+{
+    co_await nxt::rt::yield();
+    co_return value;
 }
 
 nxt::rt::task<void> poll_until_after_socket_send(int tx, int rx)
@@ -233,6 +240,48 @@ static suite ng_uring_wand_tests{
                 });
 
                 expect(value == 42_i);
+            };
+
+            "runtime owns a root zone and app channels"_test = [] {
+                auto rt = nxt::rt::runtime{};
+
+                auto child = rt.run([]() -> nxt::rt::task<nxt::rt::deed<int>> {
+                    expect(nxt::rt::current_zone() != nullptr);
+                    co_return nxt::rt::fork(app_child_value(41));
+                });
+
+                expect(std::move(child).get() == 41_i);
+
+                auto key = nxt::input::KeyEvent{};
+                key.key = nxt::input::Key::character;
+                key.text = "x";
+
+                auto input_text = rt.run(
+                    [&rt, key = std::move(key)]() mutable
+                        -> nxt::rt::task<std::string> {
+                        expect(co_await rt.publish_input_event(
+                            std::move(key)));
+                        auto event = co_await rt.next_input();
+                        co_return event ? event->text : std::string{};
+                    });
+
+                expect(input_text == "x");
+
+                auto resized = rt.publish_resize(
+                    nxt::Size{80 * nxt::ch, 24 * nxt::ln});
+                expect(resized);
+                auto size = rt.next_resize_now();
+                expect(size.has_value());
+                expect(size->w == 80 * nxt::ch);
+                expect(size->h == 24 * nxt::ln);
+            };
+
+            "runtime sleeps on its platform wand"_test = [] {
+                auto rt = nxt::rt::runtime{};
+
+                rt.run([&rt]() -> nxt::rt::task<void> {
+                    co_await rt.sleep(1ms);
+                });
             };
         };
 

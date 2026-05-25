@@ -44,10 +44,11 @@ process, signal, and `nxtai` code enters async through those aliases.
    `UIRuntime` needs input queues, resize queues, and damage notifications
    before it can stop depending on libcoro.
 
-2. Introduce an ng runtime facade beside `nxt::ui::UIRuntime`.
-   It should own a `deck`, a platform `wand`, a root zone, and the existing
-   terminal/compositor state.  Keep the UI-facing methods familiar:
-   `sleep`, `next_input`, `damage`, `spawn`, and `run`.
+2. Introduce an ng runtime facade beside `nxt::ui::UIRuntime`. Started as
+   `nxt::rt::runtime`: it owns a `deck`, platform `wand`, root-zone run
+   entrypoint, damage event, input channel, resize channel, and `sleep`.
+   The next part is to layer terminal/compositor ownership and yard-like
+   surfaces on top of it.
 
 3. Port `nxtio/buffers.hpp` and `nxtio/http.hpp`-style helpers to
    `nxt::rt::task`.
