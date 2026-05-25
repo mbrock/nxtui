@@ -8,15 +8,19 @@
 #include <nxt/any_layout.hpp>
 #include <nxt/compositor.hpp>
 #include <nxt/glyph-table.hpp>
+#include <nxt/input.hpp>
 #include <nxt/regional-tty.hpp>
 #include <nxt/slot.hpp>
 #include <nxt/tui.hpp>
 #include <nxt/units.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <poll.h>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -51,6 +55,7 @@ public:
     explicit ui_runtime(ui_runtime_options options = {})
         : options_(options)
         , terminal_surface_(options.render && ::isatty(STDOUT_FILENO) != 0)
+        , raw_(STDIN_FILENO, terminal_surface_ && ::isatty(STDIN_FILENO) != 0)
         , size_(current_terminal_size(options.fallback_size))
         , compositor_(size_, glyphs_)
         , surface_(nxt::tui::AnyLayout{}, [this] { signal_damage(); })
@@ -154,6 +159,56 @@ public:
             });
     }
 
+    task<void> run_input_owner(deck & d)
+    {
+        if (!terminal_surface_ || ::isatty(STDIN_FILENO) == 0)
+            co_return;
+
+        auto parser = nxt::input::Parser{};
+        auto storage = std::array<std::byte, 256>{};
+
+        while (!stop_requested()) {
+            auto ready = co_await op::poll_until::after(
+                STDIN_FILENO,
+                POLLIN,
+                std::chrono::milliseconds{100});
+            if (ready.timed_out)
+                continue;
+
+            while (true) {
+                auto n = ::read(
+                    STDIN_FILENO,
+                    storage.data(),
+                    storage.size());
+                if (n == 0)
+                    break;
+                if (n < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
+                    if (errno == EINTR)
+                        continue;
+                    co_return;
+                }
+
+                auto bytes = std::string_view{
+                    reinterpret_cast<const char *>(storage.data()),
+                    static_cast<std::size_t>(n)};
+                for (auto & event : parser.feed(bytes)) {
+                    if (event.is_ctrl_l()) {
+                        co_await print_block(d.runtime_dump_text());
+                        continue;
+                    }
+                    if (event.is_ctrl_c() || event.is_ctrl_z()) {
+                        request_shutdown();
+                        if (auto * zone = current_zone())
+                            zone->stop();
+                        co_return;
+                    }
+                }
+            }
+        }
+    }
+
     task<void> cleanup()
     {
         if (cleaned_up_)
@@ -250,6 +305,17 @@ private:
         out.flush();
     }
 
+    [[nodiscard]] std::optional<row_t> query_insertion_cursor() const
+    {
+        if (!has_terminal_surface())
+            return std::nullopt;
+        if (compositor_.hud_height() > 0 * ln)
+            return std::nullopt;
+        if (auto pos = nxt::ansi::query_cursor_position())
+            return pos->y;
+        return std::nullopt;
+    }
+
     template<nxt::tui::Layout Layout>
     [[nodiscard]] std::string render_scrollback_layout(Layout && layout)
     {
@@ -322,11 +388,13 @@ private:
             auto reserved_log_rows = 7 * ln;
             if (size_.h > reserved_log_rows)
                 target_h = std::min(target_h, size_.h - reserved_log_rows);
+
         }
 
         flush_output_queue(out);
 
-        compositor_.set_hud_height(target_h, size_.h, out);
+        compositor_.set_hud_height(
+            target_h, size_.h, out, query_insertion_cursor());
 
         auto & buffer = compositor_.back_buffer();
         buffer.clear();
@@ -388,6 +456,7 @@ private:
 
     ui_runtime_options options_;
     bool terminal_surface_ = false;
+    raw_terminal_mode raw_;
     nxt::GlyphTable glyphs_;
     nxt::Size size_;
     nxt::ui::TerminalCompositor compositor_;
@@ -523,6 +592,25 @@ namespace detail {
 template<typename Body>
     requires std::invocable<Body &, ui_scope>
         && is_task_v<std::invoke_result_t<Body &, ui_scope>>
+        && std::is_void_v<
+            task_result_t<std::invoke_result_t<Body &, ui_scope>>>
+task<void> run_ui_zone_body_child(
+    Body & body,
+    ui_scope & scope,
+    ui_runtime & ui)
+{
+    try {
+        co_await std::invoke(body, scope);
+    } catch (...) {
+        ui.request_shutdown();
+        throw;
+    }
+    ui.request_shutdown();
+}
+
+template<typename Body>
+    requires std::invocable<Body &, ui_scope>
+        && is_task_v<std::invoke_result_t<Body &, ui_scope>>
 [[nodiscard]] auto run_ui_child(ui_scope child, Body body)
     -> task<task_result_t<std::invoke_result_t<Body &, ui_scope>>>
 {
@@ -608,21 +696,33 @@ task<void> with_ui_zone(
     auto ui = ui_runtime{options};
     auto scope = ui_scope{ui};
     auto owner = catching_deed<void>{};
+    auto input = catching_deed<void>{};
+    auto worker = catching_deed<void>{};
 
     co_await with_zone([&]() -> task<void> {
         owner = fork(ui.run_terminal_owner(frame_time)).cope();
-        try {
-            co_await std::invoke(body, scope);
-        } catch (...) {
-            ui.request_shutdown();
-            throw;
-        }
-        ui.request_shutdown();
+        auto * deck = current_deck();
+        if (deck == nullptr)
+            throw runtime_error{"nxt::rt ui input used without a deck"};
+        input = fork(ui.run_input_owner(*deck)).cope();
+        worker = fork(
+            detail::stop_zone_on_completion(
+                detail::run_ui_zone_body_child(body, scope, ui)))
+            .cope();
+        co_return;
     });
 
+    auto worked = std::move(worker).get();
+    if (!worked
+        && !(ui.stop_requested() && is_operation_cancelled(worked.error())))
+        rethrow(worked.error());
     auto owned = std::move(owner).get();
-    if (!owned)
+    if (!owned && !(ui.stop_requested() && is_operation_cancelled(owned.error())))
         rethrow(owned.error());
+    auto input_done = std::move(input).get();
+    if (!input_done
+        && !(ui.stop_requested() && is_operation_cancelled(input_done.error())))
+        rethrow(input_done.error());
 }
 
 } // namespace nxt::rt

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxt/rt/debug.hpp"
 #include "nxt/rt/ids.hpp"
 #include "nxt/rt/env.hpp"
 #include "nxt/rt/trace.hpp"
@@ -12,6 +13,7 @@
 #include <string>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 namespace nxt::rt {
 
@@ -124,11 +126,13 @@ public:
     /// unexpectedly resume sibling work in the middle of its own turn.
     void run_ready()
     {
+        dump_if_requested();
         run_ready_with();
         if (wand_ != nullptr) {
             trace("deck wave wand");
             wand_->wave(*this);
         }
+        dump_if_requested();
     }
 
     /// Pump one ready round with `w` as the active backend, then wave it.
@@ -197,7 +201,11 @@ private:
         trace("deck round end ready=" + std::to_string(ready_.size()));
     }
 
+    void dump_if_requested();
+
 public:
+    [[nodiscard]] std::string runtime_dump_text() const;
+
     template<typename T>
     void start(task<T> & t);
 

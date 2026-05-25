@@ -1,0 +1,75 @@
+stty -echo
+direnv: loading ~/nxtui/.envrc
+direnv: export +ALIBABA_API_KEY +ANTHROPIC_API_KEY +DEFAULT_CHAT_ID +GOOGLE_API_KEY +OPENAI_API_KEY
++REPLICATE_API_TOKEN +TELEGRAM_BOT_ID +TELEGRAM_BOT_TOKEN +TELEGRAM_CHAT_ID +XAI_API_KEY
+mbrock@swa:~/nxtui$ stty -echo
+mbrock@swa:~/nxtui$
+
+
+
+
+
+
+  TLS 1.3 api.openai.com                                                                       45ms
+ client hello make           +    0us    23ms  ██████████████████████████▋
+ client hello write          +   23ms     1ms                            ▐█
+ server hello read           +   24ms     9ms                              ██████████▋
+ server hello parse          +   33ms     1ms                                        ▕█
+ x25519 shared secret        +   34ms    41us
+ keys derive handshake       +   35ms    75us                                           ▏
+ handshake record read       +   36ms     1ms                                            ▐▌
+ handshake record read       +   38ms     2ms                                              ▐██▏
+ handshake record decrypt    +   40ms     1ms                                                 █▌
+ certificate parse           +   42ms    99us                                                  ▏
+ certificate verify          +   43ms    93us                                                   ▏
+ server finished verify      +   44ms    20us
+ keys derive application     +   44ms   866us                                                    ▕▉
+ client finished write       +   45ms   926us                                                     ▕█
+  thinking
+
+ Executing shell command
+
+ The user is requesting to use the shell tool, but there’s not much additional context. I
+ should proceed by running a simple command that incorporates a short sleep interval and
+ outputs to standard output. This will involve using the functions.bash tool. I’m
+ planning to execute a basic loop that counts and prints “tick” followed by the count,
+ with a slight pause in between. It needs to be concise!
+ $ bash -lc 'for i in 1 2 3; do echo "tick $i"; sleep 0.2; done'                   664ms  2.9M  21B
+  output
+
+
+
+
+
+
+
+
+
+
+
+
+ tick 1
+ tick 2
+ tick 3
+  TLS 1.3 api.openai.com                                                                       18ms
+ client hello make           +    0us    44us  ▏
+ client hello write          +   84us   966us  ███
+ server hello read           +    1ms     6ms     ██████████████████▋
+ server hello parse          +    8ms   901us                       ▐██▎
+ x25519 shared secret        +    9ms    36us                          ▏
+ keys derive handshake       +    9ms    48us                             ▏
+ handshake record read       +   10ms   994us                               ▕██▊
+ handshake record read       +   12ms     1ms                                     ▐██▎
+ handshake record decrypt    +   13ms   945us                                        ▐██▏
+ certificate parse           +   14ms    76us                                           ▎
+ certificate verify          +   15ms    90us                                              ▎
+ server finished verify      +   16ms    21us
+ keys derive application     +   17ms   931us                                                 ▐██▏
+ client finished write       +   18ms   991us                                                    ███
+  assistant
+ tick 1
+ tick 2
+ tick 3
+
+@@NXT_DONE:0
+bash-5.3$

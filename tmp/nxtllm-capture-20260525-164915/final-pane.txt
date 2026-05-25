@@ -1,0 +1,90 @@
+stty -echo
+direnv: loading ~/nxtui/.envrc
+direnv: export +ALIBABA_API_KEY +ANTHROPIC_API_KEY +DEFAULT_CHAT_ID +GOOGLE_API_KEY +OPENAI_API_KEY
++REPLICATE_API_TOKEN +TELEGRAM_BOT_ID +TELEGRAM_BOT_TOKEN +TELEGRAM_CHAT_ID +XAI_API_KEY
+mbrock@swa:~/nxtui$ stty -echo
+mbrock@swa:~/nxtui$
+  TLS 1.3 api.openai.com                                                                       37ms
+ client hello make           +    0us    25ms  ███████████████████████████████████▋
+ client hello write          +   25ms   484us                                     ▐▍
+ server hello read           +   25ms     7ms                                      ▐██████████
+ server hello parse          +   33ms   396us                                                 ▋
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ x25519 shared secret        +   33ms    36us
+
+
+
+
+
+
+
+ keys derive handshake       +   33ms    75us                                                  ▏
+ handshake record read       +   34ms   369us                                                  ▐▎
+ handshake record read       +   34ms   392us                                                   ▐▎
+ handshake record decrypt    +   35ms   289us                                                    ▍
+ certificate parse           +   35ms   103us                                                    ▏
+ certificate verify          +   36ms   104us                                                     ▏
+ server finished verify      +   36ms    22us
+ keys derive application     +   36ms   290us                                                      ▍
+ client finished write       +   36ms   365us                                                      ▐
+  thinking
+
+ Preparing bash command
+
+ The user wants me to use the shell tool with short sleeps and standard output, but
+ there's no repo context to consider. I need to comply with their request. I think I'll
+ call the functions.bash command with a simple script like echo followed by a sleep
+ command, perhaps sleep 0.1. I should keep it brief to focus on their specific needs and
+
+
+
+
+
+
+ ensure the script runs smoothly for them. I'll get that set up!
+ shell script                                                                      658ms  2.6M  23B
+ $ set -e; echo "start"; sleep 0.2; echo "step1"; sleep 0.2; echo "step2"; sleep 0.2; echo "done";
+  output
+ start
+ step1
+ step2
+ done
+  TLS 1.3 api.openai.com                                                                       12ms
+ client hello make           +    0us    70us  ▍
+ client hello write          +  122us   341us  ▐█▏
+ server hello read           +  492us     6ms    █████████████████████████████▊
+ server hello parse          +    7ms   279us                                 ▕█▎
+ x25519 shared secret        +    7ms    38us                                   ▏
+ keys derive handshake       +    8ms    51us                                    ▕▏
+ handshake record read       +    8ms   385us                                      ▐█▏
+ handshake record read       +    9ms   500us                                          ██▎
+ handshake record decrypt    +    9ms   370us                                            ▐█▏
+ certificate parse           +   10ms   100us                                              ▌
+ certificate verify          +   10ms    91us                                                ▍
+ server finished verify      +   11ms    22us                                                  ▏
+ keys derive application     +   11ms   372us                                                   █▊
+ client finished write       +   11ms   463us                                                    ▕██
+  assistant
+ start
+ step1
+ step2
+ done
+
+@@NXT_DONE:0
+bash-5.3$

@@ -5,6 +5,7 @@
 #include <nxt/glyph-table.hpp>
 #include <nxt/units.hpp>
 
+#include <fcntl.h>
 #include <iostream>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -53,6 +54,11 @@ public:
         raw.c_cc[VTIME] = 0;
         if (::tcsetattr(fd_, TCSANOW, &raw) != 0)
             active_ = false;
+
+        saved_flags_ = ::fcntl(fd_, F_GETFL, 0);
+        if (saved_flags_ >= 0)
+            flags_active_ =
+                ::fcntl(fd_, F_SETFL, saved_flags_ | O_NONBLOCK) == 0;
     }
 
     raw_terminal_mode(const raw_terminal_mode &) = delete;
@@ -60,14 +66,18 @@ public:
 
     ~raw_terminal_mode()
     {
+        if (flags_active_)
+            (void)::fcntl(fd_, F_SETFL, saved_flags_);
         if (active_)
             (void)::tcsetattr(fd_, TCSANOW, &saved_);
     }
 
 private:
     int fd_ = -1;
+    int saved_flags_ = -1;
     termios saved_{};
     bool active_ = false;
+    bool flags_active_ = false;
 };
 
 class terminal_app

@@ -1,6 +1,7 @@
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/app.hpp>
 #include <nxt/rt/fs.hpp>
+#include <nxt/rt/scoped_process.hpp>
 #include <nxt/rt/subprocess.hpp>
 #include <nxt/rt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
@@ -554,6 +555,22 @@ static suite ng_uring_wand_tests{
                 expect(!child.failed);
             };
 
+            "subprocess capture does not inherit runtime stdin"_test = [] {
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = capture_shell(
+                    "if read line; then printf 'stdin:%s' \"$line\"; "
+                    "else printf 'stdin-eof'; fi");
+
+                deck.start(task);
+                auto child = pump_until_done(deck, wand, task);
+
+                expect(child.status.exited);
+                expect(child.status.exit_code == 0_i);
+                expect(child.output == "stdin-eof");
+                expect(!child.failed);
+            };
+
             "subprocess capture fails oversized output after draining"_test = [] {
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -569,6 +586,25 @@ static suite ng_uring_wand_tests{
                 expect(child.failure_reason
                     == "tool output exceeded capture limit (5 bytes)");
                 expect(child.output.find("abcde") != std::string::npos);
+            };
+
+            "systemd scope wrapping preserves child argv"_test = [] {
+                auto argv = std::vector<std::string>{
+                    "/bin/bash",
+                    "-c",
+                    "printf hi",
+                };
+                auto wrapped = nxt::rt::scoped_process::systemd_scope_argv(
+                    "nxt-test.scope",
+                    std::move(argv));
+
+                expect(wrapped[0] == "systemd-run");
+                expect(wrapped[1] == "--user");
+                expect(wrapped[2] == "--scope");
+                expect(wrapped[5] == "--unit=nxt-test.scope");
+                expect(wrapped[6] == "/bin/bash");
+                expect(wrapped[7] == "-c");
+                expect(wrapped[8] == "printf hi");
             };
 
             "subprocess children are signalled through pidfds"_test = [] {

@@ -195,7 +195,10 @@ struct ng_echo_tool
     nxt::rt::task<nxt::ai::tools::tool_result> run(parameters args) const
     {
         co_await nxt::rt::yield();
-        co_return nxt::ai::tools::tool_result{.output = std::move(args.text)};
+        co_return nxt::ai::tools::tool_result{
+            .output = std::move(args.text),
+            .observed = std::nullopt,
+        };
     }
 };
 

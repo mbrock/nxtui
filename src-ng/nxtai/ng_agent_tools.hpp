@@ -31,10 +31,15 @@ inline std::string read_file_to_string(
 inline tools::tool_result process_result_to_tool_result(
     tool_process::result captured)
 {
+    auto observed = std::optional<nxt::rt::scoped_process::observation>{};
+    if (captured.observed.active())
+        observed = std::move(captured.observed);
+
     if (captured.failed)
         return tools::tool_result{
             .failed = true,
             .output = std::move(captured.output),
+            .observed = std::move(observed),
         };
 
     if (!captured.status.exited || captured.status.exit_code != 0)
@@ -43,9 +48,13 @@ inline tools::tool_result process_result_to_tool_result(
             .output = captured.output.empty()
                 ? std::string{"process failed"}
                 : std::move(captured.output),
+            .observed = std::move(observed),
         };
 
-    return tools::tool_result{.output = std::move(captured.output)};
+    return tools::tool_result{
+        .output = std::move(captured.output),
+        .observed = std::move(observed),
+    };
 }
 
 struct bash_tool
@@ -75,13 +84,22 @@ struct bash_tool
             co_return tools::tool_result{
                 .failed = true,
                 .output = "missing command",
+                .observed = std::nullopt,
             };
 
         auto argv = std::vector<std::string>{};
         argv.emplace_back("/bin/bash");
         argv.emplace_back("-c");
         argv.push_back(std::move(args.command));
-        auto captured = co_await tool_process::capture(std::move(argv));
+        auto captured = co_await tool_process::capture(
+            std::move(argv),
+            tool_process::capture_options{
+                .scope = nxt::rt::scoped_process::options{
+                    .systemd_user_scope = true,
+                    .unit_name = nxt::rt::scoped_process::make_unit_name(
+                        "bash"),
+                },
+            });
         co_return process_result_to_tool_result(std::move(captured));
     }
 };
@@ -115,6 +133,7 @@ struct rg_search_tool
             co_return tools::tool_result{
                 .failed = true,
                 .output = "missing pattern",
+                .observed = std::nullopt,
             };
 
         if (args.path.empty())
@@ -161,6 +180,7 @@ struct read_file_tool
             co_return tools::tool_result{
                 .failed = true,
                 .output = "missing required parameter `path`",
+                .observed = std::nullopt,
             };
 
         std::error_code ec;
@@ -168,10 +188,12 @@ struct read_file_tool
             co_return tools::tool_result{
                 .failed = true,
                 .output = "file does not exist",
+                .observed = std::nullopt,
             };
 
         co_return tools::tool_result{
             .output = read_file_to_string(path, 8 * 1024 * 1024),
+            .observed = std::nullopt,
         };
     }
 };

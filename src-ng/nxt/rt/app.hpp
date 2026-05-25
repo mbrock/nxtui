@@ -60,7 +60,9 @@ public:
 
     runtime()
         : deck_(&wand_)
-    {}
+    {
+        debug::install_signal_dump();
+    }
 
     runtime(const runtime &) = delete;
     runtime & operator=(const runtime &) = delete;

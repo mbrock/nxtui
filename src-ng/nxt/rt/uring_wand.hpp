@@ -800,8 +800,16 @@ inline bool op::spawn_piped::stage_uring(uring_submission & submission)
 
     auto actions = spawn_file_actions{};
     auto rc = check_spawn_file_action(
-        ::posix_spawn_file_actions_adddup2(
-            actions.get(), write_fd.get(), STDOUT_FILENO));
+        ::posix_spawn_file_actions_addopen(
+            actions.get(),
+            STDIN_FILENO,
+            "/dev/null",
+            O_RDONLY,
+            0));
+    if (rc == 0)
+        rc = check_spawn_file_action(
+            ::posix_spawn_file_actions_adddup2(
+                actions.get(), write_fd.get(), STDOUT_FILENO));
     if (rc == 0)
         rc = check_spawn_file_action(
             ::posix_spawn_file_actions_adddup2(

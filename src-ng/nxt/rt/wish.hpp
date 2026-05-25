@@ -150,10 +150,12 @@ public:
     waiter(
         wand & source,
         wait_token token,
-        std::shared_ptr<wait_state<T>> state) noexcept
+        std::shared_ptr<wait_state<T>> state,
+        std::string description = {}) noexcept
         : source_(&source)
         , token_(token)
         , state_(std::move(state))
+        , description_(std::move(description))
     {}
 
     [[nodiscard]] bool await_ready() const noexcept
@@ -183,6 +185,7 @@ private:
     wand * source_ = nullptr;
     wait_token token_ = 0;
     std::shared_ptr<wait_state<T>> state_;
+    std::string description_;
 };
 
 template<>
@@ -529,6 +532,101 @@ struct prepared_wish
     std::shared_ptr<void> state;
 };
 
+inline std::string describe_wish(const op::manual & wish)
+{
+    return "manual token " + std::to_string(wish.token);
+}
+
+inline std::string describe_wish(const op::openat & wish)
+{
+    return "openat " + wish.path;
+}
+
+#if defined(__linux__)
+inline std::string describe_wish(const op::statx & wish)
+{
+    return "statx " + wish.path;
+}
+
+inline std::string describe_wish(const op::getdents64 & wish)
+{
+    return "getdents64 fd " + std::to_string(wish.fd)
+        + " bytes " + std::to_string(wish.buffer.size());
+}
+
+inline std::string describe_wish(const op::spawn_piped & wish)
+{
+    auto command = wish.argv.empty() ? std::string{} : wish.argv.front();
+    return "spawn-piped argc " + std::to_string(wish.argv.size())
+        + (command.empty() ? std::string{} : " command " + command);
+}
+
+inline std::string describe_wish(const op::spawn_pty & wish)
+{
+    auto command = wish.argv.empty() ? std::string{} : wish.argv.front();
+    return "spawn-pty argc " + std::to_string(wish.argv.size())
+        + (command.empty() ? std::string{} : " command " + command);
+}
+
+inline std::string describe_wish(const op::wait_child & wish)
+{
+    return "wait-child pidfd " + std::to_string(wish.pidfd);
+}
+
+inline std::string describe_wish(const op::signal_child & wish)
+{
+    return "signal-child pidfd " + std::to_string(wish.pidfd)
+        + " signal " + std::to_string(wish.signal);
+}
+#endif
+
+inline std::string describe_wish(const op::read_some & wish)
+{
+    return "read fd " + std::to_string(wish.fd)
+        + " bytes " + std::to_string(wish.buffer.size());
+}
+
+inline std::string describe_wish(const op::write_some & wish)
+{
+    return "write fd " + std::to_string(wish.fd)
+        + " bytes " + std::to_string(wish.buffer.size());
+}
+
+inline std::string describe_wish(const op::recv_some & wish)
+{
+    return "recv fd " + std::to_string(wish.fd)
+        + " bytes " + std::to_string(wish.buffer.size());
+}
+
+inline std::string describe_wish(const op::send_some & wish)
+{
+    return "send fd " + std::to_string(wish.fd)
+        + " bytes " + std::to_string(wish.buffer.size());
+}
+
+inline std::string describe_wish(const op::connect & wish)
+{
+    return "connect fd " + std::to_string(wish.fd);
+}
+
+inline std::string describe_wish(const op::poll & wish)
+{
+    return "poll fd " + std::to_string(wish.fd)
+        + " events " + std::to_string(wish.events);
+}
+
+inline std::string describe_wish(const op::timeout & wish)
+{
+    auto millis = wish.duration.tv_sec * 1000 + wish.duration.tv_nsec / 1000000;
+    return "timeout " + std::to_string(millis) + "ms";
+}
+
+inline std::string describe_wish(const op::poll_until & wish)
+{
+    return "poll-until fd " + std::to_string(wish.fd)
+        + " events " + std::to_string(wish.events);
+}
+
 } // namespace detail
 
 /// Backend interface for staged platform/event-loop machinery.
@@ -550,6 +648,7 @@ public:
     {
         using result_type = typename Wish::result_type;
         auto state = std::make_shared<wait_state<result_type>>();
+        auto description = detail::describe_wish(wish);
         auto token = prepare_wish(
             d,
             promise,
@@ -557,7 +656,11 @@ public:
                 .wish = wish_variant{std::move(wish)},
                 .state = state,
             });
-        return waiter<result_type>{*this, token, state};
+        return waiter<result_type>{
+            *this,
+            token,
+            state,
+            std::move(description)};
     }
 
     virtual void suspend(wait_token token, parked_task task) = 0;

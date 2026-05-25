@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nxt/rt/buffers.hpp>
+#include <nxt/rt/scoped_process.hpp>
 #include <nxt/rt/subprocess.hpp>
 #include <nxt/rt/task.hpp>
 
@@ -21,6 +22,7 @@ using namespace std::chrono_literals;
 struct result
 {
     nxt::rt::child_result status;
+    nxt::rt::scoped_process::observation observed;
     bool failed = false;
     bool output_too_large = false;
     std::string failure_reason;
@@ -30,8 +32,16 @@ struct result
 struct capture_state
 {
     nxt::rt::subprocess::piped_child child;
+    nxt::rt::scoped_process::observation observed;
     result captured;
     bool waited = false;
+    bool done = false;
+};
+
+struct capture_options
+{
+    std::size_t max_capture_bytes = 8 * 1024 * 1024;
+    nxt::rt::scoped_process::options scope = {};
 };
 
 inline nxt::rt::task<void>
@@ -44,6 +54,7 @@ finish_child(std::shared_ptr<capture_state> state)
     state->captured.status =
         co_await nxt::rt::subprocess::terminate_and_wait(state->child, 500ms);
     state->waited = true;
+    state->done = true;
 }
 
 inline nxt::rt::task<void>
@@ -78,6 +89,7 @@ capture_output(
     state->captured.status =
         co_await nxt::rt::subprocess::wait_child(state->child);
     state->waited = true;
+    state->done = true;
 }
 
 inline result mark_output_too_large_failed(result captured, std::size_t max_bytes)
@@ -101,20 +113,60 @@ inline result mark_output_too_large_failed(result captured, std::size_t max_byte
 inline nxt::rt::task<result>
 capture(
     std::vector<std::string> argv,
-    std::size_t max_capture_bytes = 8 * 1024 * 1024)
+    capture_options options = {})
 {
     auto state = std::make_shared<capture_state>();
-    state->child = co_await nxt::rt::subprocess::spawn_piped(std::move(argv));
+    auto child =
+        co_await nxt::rt::scoped_process::spawn_piped(
+            std::move(argv),
+            std::move(options.scope));
+    state->child = std::move(child.child);
+    state->observed = std::move(child.observed);
 
-    co_await nxt::rt::finally(
-        capture_output(state, max_capture_bytes),
-        [state]() {
-            return finish_child(state);
-        });
+    auto capture = nxt::rt::catching_deed<void>{};
+    auto monitor = nxt::rt::catching_deed<void>{};
+    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+        capture =
+            nxt::rt::fork(
+                nxt::rt::detail::stop_zone_on_completion(
+                    nxt::rt::finally(
+                        capture_output(state, options.max_capture_bytes),
+                        [state]() {
+                            return finish_child(state);
+                        })))
+                .cope();
+        monitor =
+            nxt::rt::fork(
+                nxt::rt::scoped_process::monitor_until_done(
+                    state->observed,
+                    state->done,
+                    options.scope.sample_interval,
+                    options.scope.max_samples))
+                .cope();
+        co_return;
+    });
 
+    auto capture_done = std::move(capture).get();
+    if (!capture_done)
+        nxt::rt::rethrow(capture_done.error());
+    auto monitor_done = std::move(monitor).get();
+    if (!monitor_done)
+        nxt::rt::rethrow(monitor_done.error());
+
+    state->captured.observed = std::move(state->observed);
     co_return mark_output_too_large_failed(
         std::move(state->captured),
-        max_capture_bytes);
+        options.max_capture_bytes);
+}
+
+inline nxt::rt::task<result>
+capture(
+    std::vector<std::string> argv,
+    std::size_t max_capture_bytes)
+{
+    co_return co_await capture(
+        std::move(argv),
+        capture_options{.max_capture_bytes = max_capture_bytes});
 }
 
 } // namespace nxt::ai::tool_process

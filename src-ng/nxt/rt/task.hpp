@@ -912,7 +912,22 @@ inline catching_deed<void> deed<void>::cope() &&
 class task_zone
 {
 public:
-    task_zone() = default;
+    task_zone()
+        : debug_id_(debug::allocate_zone_id())
+    {
+        debug::register_zone(
+            debug::zone_snapshot{
+                .id = debug_id_,
+                .parent = debug_parent_,
+                .children = children_.size(),
+                .stopping = stopping_,
+            });
+    }
+
+    ~task_zone()
+    {
+        debug::unregister_zone(debug_id_);
+    }
 
     task_zone(const task_zone &) = delete;
     task_zone & operator=(const task_zone &) = delete;
@@ -925,6 +940,7 @@ public:
         stop_.request_stop();
         for (auto & child : children_)
             child->request_stop();
+        debug_update();
     }
 
     [[nodiscard]] bool stopping() const noexcept
@@ -968,15 +984,40 @@ public:
         }
 
         children_.push_back(record);
+        debug_update();
         active_deck->enqueue(handle, &handle.promise());
         return deed<T>{std::move(record)};
     }
 
     [[nodiscard]] task<void> join();
 
+    [[nodiscard]] debug::zone_id debug_id() const noexcept
+    {
+        return debug_id_;
+    }
+
+    void debug_parent(debug::zone_id parent) noexcept
+    {
+        debug_parent_ = parent;
+        debug_update();
+    }
+
 private:
+    void debug_update() const
+    {
+        debug::update_zone(
+            debug::zone_snapshot{
+                .id = debug_id_,
+                .parent = debug_parent_,
+                .children = children_.size(),
+                .stopping = stopping_,
+            });
+    }
+
     std::vector<std::shared_ptr<detail::child_record_base>> children_;
     std::stop_source stop_;
+    debug::zone_id debug_id_ = 0;
+    debug::zone_id debug_parent_ = 0;
     bool stopping_ = false;
 };
 
@@ -1000,6 +1041,12 @@ inline task_zone & require_current_zone()
     if (zone == nullptr)
         throw runtime_error{"nxt::rt operation used without task zone"};
     return *zone;
+}
+
+inline deck * current_deck() noexcept
+{
+    auto * env = current_env();
+    return env == nullptr ? nullptr : env->current_deck;
 }
 
 inline std::stop_token current_task_stop_token() noexcept
@@ -1734,6 +1781,8 @@ with_zone(Fn && fn)
 {
     using factory_type = std::decay_t<Fn>;
     auto zone = task_zone{};
+    if (auto * parent = current_zone())
+        zone.debug_parent(parent->debug_id());
     auto body = detail::run_zone_body(
         zone,
         factory_type{std::forward<Fn>(fn)});
@@ -1804,6 +1853,29 @@ inline task_id deck::current_task_id() const noexcept
     return env->current_promise->id;
 }
 
+inline void deck::dump_if_requested()
+{
+    if (!debug::consume_signal_dump_request())
+        return;
+
+    std::cerr << "\n" << runtime_dump_text() << std::flush;
+}
+
+inline std::string deck::runtime_dump_text() const
+{
+    auto ready = std::vector<task_id>{};
+    ready.reserve(ready_.size());
+    for (auto const & item : ready_) {
+        if (item.promise != nullptr)
+            ready.push_back(item.promise->id);
+    }
+
+    return debug::format_runtime_dump(
+        debug::snapshot_zones(),
+        debug::snapshot_waits(),
+        std::move(ready));
+}
+
 inline void deck::enqueue(
     std::coroutine_handle<> handle,
     detail::promise_base * promise)
@@ -1834,6 +1906,8 @@ inline void parked_task::resume(deck & d) const
     trace("wand fulfill parked task");
     if (promise != nullptr)
         promise->clear_wait_stop_callback();
+    if (promise != nullptr)
+        debug::unpark_task(promise->id);
     d.enqueue(handle, promise);
 }
 
@@ -1872,6 +1946,7 @@ inline void waiter<T>::await_suspend(
             "nxt::rt waiter awaited without a prepared wand"};
 
     trace("waiter suspend token=" + std::to_string(token_));
+    debug::park_task(running->id, token_, description_);
     running->cancel_wait_on_stop(*active_wand, token_);
     active_wand->suspend(
         token_,

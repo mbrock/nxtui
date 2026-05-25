@@ -108,6 +108,22 @@ struct KeyEvent
             && codepoint == static_cast<std::uint32_t>('c') && mods.ctrl
             && !mods.alt && !mods.super && !mods.hyper && !mods.meta;
     }
+
+    /// True when the event is plain Ctrl-L.
+    [[nodiscard]] bool is_ctrl_l() const noexcept
+    {
+        return key == Key::character && type != EventType::release
+            && codepoint == static_cast<std::uint32_t>('l') && mods.ctrl
+            && !mods.alt && !mods.super && !mods.hyper && !mods.meta;
+    }
+
+    /// True when the event is plain Ctrl-Z.
+    [[nodiscard]] bool is_ctrl_z() const noexcept
+    {
+        return key == Key::character && type != EventType::release
+            && codepoint == static_cast<std::uint32_t>('z') && mods.ctrl
+            && !mods.alt && !mods.super && !mods.hyper && !mods.meta;
+    }
 };
 
 /// Incremental parser for terminal keyboard input bytes.

@@ -1,11 +1,13 @@
 #pragma once
 
+#include <nxt/rt/scoped_process.hpp>
 #include <nxt/any_layout.hpp>
 #include <nxt/tui.hpp>
 #include <nxt/tui_text.hpp>
 #include <nxtai/openai_types.hpp>
 
 #include <format>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,6 +51,7 @@ struct call_view
     std::string name;
     std::string arguments;
     std::string output;
+    std::optional<nxt::rt::scoped_process::observation> observed;
     status state = status::running;
     int elapsed_ms = -1;
 };
@@ -84,6 +87,19 @@ inline std::string truncate_bytes(std::string s, std::size_t max)
     s.resize(max - 3);
     s += "...";
     return s;
+}
+
+inline std::string compact_bytes(std::uint64_t bytes)
+{
+    if (bytes < 1000)
+        return std::format("{}B", bytes);
+    auto kib = static_cast<double>(bytes) / 1024.0;
+    if (kib < 1000.0)
+        return std::format("{:.0f}K", kib);
+    auto mib = kib / 1024.0;
+    if (mib < 1000.0)
+        return std::format("{:.1f}M", mib);
+    return std::format("{:.1f}G", mib / 1024.0);
 }
 
 inline std::string primary_arg(const call_view & c)
@@ -247,6 +263,15 @@ inline AnyLayout shell_header(
     if (c.elapsed_ms >= 0)
         parts.push_back(
             chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg));
+    if (c.observed && c.observed->latest()) {
+        const auto latest = *c.observed->latest();
+        parts.push_back(chip(
+            std::format(
+                " {} ",
+                compact_bytes(latest.memory_current.v)),
+            slate_400,
+            band_bg));
+    }
     if (!c.output.empty())
         parts.push_back(chip(
             std::format(" {}B ", c.output.size()), slate_400, band_bg));

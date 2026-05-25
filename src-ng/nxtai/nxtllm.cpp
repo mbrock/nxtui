@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <format>
@@ -256,31 +257,48 @@ std::string join_lines(const std::vector<std::string> & lines)
     return out;
 }
 
-std::string format_bytes(std::size_t bytes)
+std::string format_compact_bytes(std::size_t bytes)
 {
-    if (bytes < 1024)
-        return std::format("{} B", bytes);
-    auto kib = static_cast<double>(bytes) / 1024.0;
-    if (kib < 1024.0)
-        return std::format("{:.1f} KiB", kib);
-    return std::format("{:.1f} MiB", kib / 1024.0);
+    if (bytes < 1000)
+        return std::format("{}", bytes);
+    auto kb = static_cast<double>(bytes) / 1024.0;
+    if (kb < 10.0)
+        return std::format("{:.1f}K", kb);
+    if (kb < 1000.0)
+        return std::format("{:.0f}K", kb);
+    auto mb = kb / 1024.0;
+    if (mb < 10.0)
+        return std::format("{:.1f}M", mb);
+    return std::format("{:.0f}M", mb);
 }
 
-std::string format_rate(double bytes_per_second)
+std::string format_compact_rate(double bytes_per_second)
 {
-    if (bytes_per_second < 1024.0)
-        return std::format("{:.0f} B/s", bytes_per_second);
-    auto kib = bytes_per_second / 1024.0;
-    if (kib < 1024.0)
-        return std::format("{:.1f} KiB/s", kib);
-    return std::format("{:.1f} MiB/s", kib / 1024.0);
+    return format_compact_bytes(
+        static_cast<std::size_t>(std::max(bytes_per_second, 0.0))) + "/s";
 }
 
-nxt::percent_t rate_percent(double bytes_per_second)
+nxt::Rgba8 blend(nxt::Rgba8 a, nxt::Rgba8 b, double t)
+{
+    t = std::clamp(t, 0.0, 1.0);
+    auto channel = [=](std::uint8_t x, std::uint8_t y) {
+        return static_cast<std::uint8_t>(
+            static_cast<double>(x)
+            + (static_cast<double>(y) - static_cast<double>(x)) * t);
+    };
+    return nxt::Rgba8{
+        channel(a.r(), b.r()),
+        channel(a.g(), b.g()),
+        channel(a.b(), b.b()),
+    };
+}
+
+nxt::Rgba8 rate_bg(nxt::Rgba8 color, double bytes_per_second)
 {
     static constexpr auto max_display_rate = 32.0 * 1024.0;
-    return std::clamp(bytes_per_second / max_display_rate, 0.0, 1.0)
-         * 100.0 * nxt::percent;
+    auto fraction =
+        std::clamp(bytes_per_second / max_display_rate, 0.0, 1.0);
+    return blend(nxt::ai::tool_tui::slate_900, color, 0.12 + 0.58 * fraction);
 }
 
 enum class cell_align { left, right };
@@ -289,7 +307,8 @@ std::string fit_cell(std::string s, std::size_t width, cell_align align)
 {
     if (width == 0)
         return {};
-    if (s.size() > width) {
+    auto display_width = static_cast<std::size_t>(nxt::tui::utf8_width(s).count());
+    if (display_width > width) {
         if (width == 1)
             return s.substr(0, 1);
         s.resize(width - 1);
@@ -297,7 +316,7 @@ std::string fit_cell(std::string s, std::size_t width, cell_align align)
         return s;
     }
 
-    auto pad = std::string(width - s.size(), ' ');
+    auto pad = std::string(width - display_width, ' ');
     if (align == cell_align::right)
         return pad + std::move(s);
     s += pad;
@@ -315,6 +334,18 @@ auto fixed_cell(
         nxt::tui::WidthHint::fixed(width),
         [s = std::move(s), cells, align](nxt::width_t) {
             return fit_cell(s, cells, align);
+        },
+        style);
+}
+
+auto rate_cell(std::string label, double bytes_per_second, nxt::Rgba8 color)
+{
+    namespace tt = nxt::ai::tool_tui;
+    auto style = nxt::tui::fg(tt::slate_300) | nxt::tui::bg(rate_bg(color, bytes_per_second));
+    return nxt::tui::line_text(
+        nxt::tui::WidthHint{7 * nxt::ch, 1.0 * nxt::one},
+        [label = std::move(label)](nxt::width_t width) {
+            return fit_cell(label, width.count(), cell_align::right);
         },
         style);
 }
@@ -368,62 +399,45 @@ auto network_footer_layout(const live_state & state)
     namespace tt = nxt::ai::tool_tui;
     const auto & net = state.network;
     auto phase = net.phase.empty() ? std::string{"network"} : net.phase;
-    auto metric_style = nxt::tui::fg(tt::slate_500) | nxt::tui::bg(tt::page_bg);
     auto value_style = nxt::tui::fg(tt::slate_300) | nxt::tui::bg(tt::page_bg);
     auto phase_style = nxt::tui::fg(tt::teal_300) | nxt::tui::bg(tt::page_bg)
                      | nxt::tui::em(nxt::Emphasis::bold);
+    auto event_style = nxt::tui::fg(tt::slate_500) | nxt::tui::bg(tt::page_bg);
     return nxt::tui::either(
         !net.phase.empty() || net.socket_rx != 0 || net.socket_tx != 0,
         nxt::tui::empty(),
         nxt::tui::row(
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            fixed_cell(18 * nxt::ch, std::move(phase), phase_style),
-            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            fixed_cell(2 * nxt::ch, "I", metric_style),
-            fixed_cell(
-                9 * nxt::ch,
-                format_bytes(net.socket_rx),
-                value_style,
-                cell_align::right),
+            fixed_cell(14 * nxt::ch, std::move(phase), phase_style),
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(
-                9 * nxt::ch,
-                format_rate(net.socket_rx_bps),
-                value_style,
-                cell_align::right),
-            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            nxt::tui::fixed_width(
                 7 * nxt::ch,
-                nxt::tui::progress_bar(
-                    rate_percent(net.socket_rx_bps),
-                    tt::teal_300,
-                    tt::slate_900)),
-            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            fixed_cell(2 * nxt::ch, "O", metric_style),
-            fixed_cell(
-                9 * nxt::ch,
-                format_bytes(net.socket_tx),
+                format_compact_bytes(net.socket_rx) + "↓",
                 value_style,
                 cell_align::right),
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            fixed_cell(
-                9 * nxt::ch,
-                format_rate(net.socket_tx_bps),
-                value_style,
-                cell_align::right),
+            rate_cell(
+                format_compact_rate(net.socket_rx_bps) + "↓",
+                net.socket_rx_bps,
+                tt::teal_300),
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            nxt::tui::fixed_width(
+            fixed_cell(
                 7 * nxt::ch,
-                nxt::tui::progress_bar(
-                    rate_percent(net.socket_tx_bps),
-                    tt::amber_300,
-                    tt::slate_900)),
+                format_compact_bytes(net.socket_tx) + "↑",
+                value_style,
+                cell_align::right),
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            fixed_cell(2 * nxt::ch, "E", metric_style),
+            rate_cell(
+                format_compact_rate(net.socket_tx_bps) + "↑",
+                net.socket_tx_bps,
+                tt::amber_300),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(
                 5 * nxt::ch,
-                std::to_string(net.sse_events),
-                value_style,
+                net.sse_events == 0
+                    ? std::string{}
+                    : std::format("#{}", net.sse_events),
+                event_style,
                 cell_align::right),
             nxt::tui::flex_text("", nxt::tui::bg(tt::page_bg))));
 }
@@ -477,6 +491,13 @@ sample_network_instruments(nxt::rt::ui_scope ui, live_state & state)
     }
 }
 
+template<typename ToolSet>
+nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
+run_function_tool_batch_ui(
+    const ToolSet & tools,
+    std::vector<nxt::ai::tools::function_call> calls,
+    nxt::rt::ui_scope ui);
+
 class plain_agent_presenter
 {
 public:
@@ -520,6 +541,17 @@ public:
         const std::vector<nxt::ai::tools::function_call> & calls)
     {
         std::cout << "[tools] running " << calls.size() << " tool call(s)\n";
+    }
+
+    template<typename ToolSet>
+    nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
+    run_tool_batch(
+        const ToolSet & tools,
+        std::vector<nxt::ai::tools::function_call> calls)
+    {
+        co_return co_await nxt::ai::tools::run_function_tool_batch(
+            tools,
+            std::move(calls));
     }
 
     nxt::rt::task<void> finish_tool_batch(
@@ -640,16 +672,29 @@ public:
         hud_.turn.calls.clear();
         hud_.turn.calls.reserve(calls.size());
         for (const auto & call : calls) {
-            hud_.turn.calls.push_back(
+                hud_.turn.calls.push_back(
                 nxt::ai::tool_tui::call_view{
                     .name = call.name,
                     .arguments = call.arguments,
                     .output = {},
+                    .observed = std::nullopt,
                     .state = nxt::ai::tool_tui::status::running,
                     .elapsed_ms = -1,
                 });
         }
         publish(true);
+    }
+
+    template<typename ToolSet>
+    nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
+    run_tool_batch(
+        const ToolSet & tools,
+        std::vector<nxt::ai::tools::function_call> calls)
+    {
+        co_return co_await run_function_tool_batch_ui(
+            tools,
+            std::move(calls),
+            hud_ui_);
     }
 
     nxt::rt::task<void> finish_tool_batch(
@@ -664,6 +709,7 @@ public:
                     ? nxt::ai::tool_tui::status::error
                     : nxt::ai::tool_tui::status::ok;
                 call.output = result.result.output;
+                call.observed = result.result.observed;
                 call.elapsed_ms = elapsed_ms;
             }
             publish(true);
@@ -943,8 +989,9 @@ nxt::rt::task<void> run_agent_loop(
         auto started = std::chrono::steady_clock::now();
         presenter.begin_tool_batch(calls);
 
-        auto results =
-            co_await nxt::ai::tools::run_function_tool_batch(tools, calls);
+        auto results = co_await presenter.run_tool_batch(
+            tools,
+            std::move(calls));
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started)
@@ -972,6 +1019,148 @@ nxt::rt::task<void> run_agent_loop(
     }
 
     throw nxt::rt::runtime_error{"too many tool call turns"};
+}
+
+template<typename ToolSet>
+nxt::rt::task<nxt::ai::tools::tool_result> run_one_tool_call_worker(
+    const ToolSet & tools,
+    const nxt::ai::tools::function_call & call,
+    bool & done)
+{
+    try {
+        auto result = co_await nxt::ai::tools::run_function_tool(tools, call);
+        done = true;
+        co_return result;
+    } catch (...) {
+        done = true;
+        throw;
+    }
+}
+
+template<typename ToolSet>
+nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
+    const ToolSet & tools,
+    nxt::ai::tools::function_call call,
+    nxt::rt::ui_scope ui)
+{
+    auto started = std::chrono::steady_clock::now();
+    auto view = nxt::ai::tool_tui::call_view{
+        .name = call.name,
+        .arguments = call.arguments,
+        .output = {},
+        .observed = std::nullopt,
+        .state = nxt::ai::tool_tui::status::running,
+        .elapsed_ms = -1,
+    };
+    ui.draw(nxt::ai::tool_tui::render_call(view));
+
+    auto done = false;
+    auto worker = co_await nxt::rt::with_zone(
+        [&]() -> nxt::rt::task<
+            nxt::rt::catching_deed<nxt::ai::tools::tool_result>> {
+            auto deed = nxt::rt::fork(
+                run_one_tool_call_worker(tools, call, done)).cope();
+
+            while (!done) {
+                auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started)
+                        .count();
+                view.elapsed_ms = static_cast<int>(elapsed);
+                ui.draw(nxt::ai::tool_tui::render_call(view));
+                co_await nxt::rt::op::timeout::after(frame_interval);
+            }
+            co_return std::move(deed);
+        });
+
+    auto finished = std::move(worker).get();
+    if (!finished)
+        nxt::rt::rethrow(finished.error());
+    auto result = std::move(*finished);
+    auto elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started)
+            .count();
+
+    view.state = result.failed
+        ? nxt::ai::tool_tui::status::error
+        : nxt::ai::tool_tui::status::ok;
+    view.output = result.output;
+    view.observed = result.observed;
+    view.elapsed_ms = static_cast<int>(elapsed);
+    ui.draw(nxt::ai::tool_tui::render_call(view));
+
+    auto output_item =
+        nxt::ai::tools::function_call_output(
+            call.call_id,
+            nxt::ai::tools::tool_result_json(result));
+    co_return nxt::ai::tools::function_call_result{
+        .call = std::move(call),
+        .result = std::move(result),
+        .output_item = std::move(output_item),
+    };
+}
+
+template<typename ToolSet>
+nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
+run_function_tool_batch_ui(
+    const ToolSet & tools,
+    std::vector<nxt::ai::tools::function_call> calls,
+    nxt::rt::ui_scope ui)
+{
+    auto done_count = std::size_t{};
+    auto deeds = co_await nxt::rt::with_zone(
+        [&]() -> nxt::rt::task<
+            std::vector<
+                nxt::rt::catching_deed<
+                    nxt::ai::tools::function_call_result>>> {
+            auto out = std::vector<
+                nxt::rt::catching_deed<
+                    nxt::ai::tools::function_call_result>>{};
+            out.reserve(calls.size());
+
+            auto surfaces = std::vector<nxt::tui::AnyLayout>{};
+            surfaces.reserve(calls.size());
+            for (auto & call : calls) {
+                auto child = ui.spawn(
+                    [&tools,
+                     call = std::move(call),
+                     &done_count](nxt::rt::ui_scope child_ui)
+                        mutable -> nxt::rt::task<
+                            nxt::ai::tools::function_call_result> {
+                        try {
+                            auto result = co_await run_one_tool_call_ui(
+                                tools,
+                                std::move(call),
+                                std::move(child_ui));
+                            ++done_count;
+                            co_return result;
+                        } catch (...) {
+                            ++done_count;
+                            throw;
+                        }
+                    });
+                surfaces.emplace_back(child.surface());
+                out.push_back(std::move(child).cope());
+            }
+            ui.draw(nxt::tui::dyn_column(std::move(surfaces)));
+
+            while (done_count < out.size())
+                co_await nxt::rt::op::timeout::after(frame_interval);
+            co_return out;
+        });
+
+    auto out = std::vector<nxt::ai::tools::function_call_result>{};
+    out.reserve(deeds.size());
+    for (auto & deed : deeds) {
+        auto result = std::move(deed).get();
+        if (result) {
+            out.push_back(std::move(*result));
+        } else {
+            nxt::rt::rethrow(result.error());
+        }
+    }
+    co_return out;
 }
 
 nxt::rt::task<int> run_nxtllm(cli_options options)

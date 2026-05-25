@@ -1,5 +1,6 @@
 #pragma once
 
+#include <nxt/rt/scoped_process.hpp>
 #include <nxt/rt/task.hpp>
 #include <nxtai/openai_types.hpp>
 
@@ -25,6 +26,7 @@ struct tool_result
 {
     bool failed = false;
     std::string output;
+    std::optional<nxt::rt::scoped_process::observation> observed;
 };
 
 template<typename Tool>
@@ -163,7 +165,17 @@ function_call_output(std::string call_id, std::string output)
 
 [[nodiscard]] inline std::string tool_result_json(const tool_result & result)
 {
-    return glz::ex::write_json(result);
+    struct serialized_tool_result
+    {
+        bool failed = false;
+        std::string output;
+    };
+
+    return glz::ex::write_json(
+        serialized_tool_result{
+            .failed = result.failed,
+            .output = result.output,
+        });
 }
 
 template<function_tool Tool>
@@ -180,6 +192,7 @@ nxt::rt::task<tool_result> run_one_function_tool(
                 .failed = true,
                 .output = std::string{"invalid tool arguments json: "}
                     + glz::format_error(ec, call.arguments),
+                .observed = std::nullopt,
             };
     }
 
@@ -189,11 +202,13 @@ nxt::rt::task<tool_result> run_one_function_tool(
         co_return tool_result{
             .failed = true,
             .output = std::string{"tool execution failed: "} + e.what(),
+            .observed = std::nullopt,
         };
     } catch (...) {
         co_return tool_result{
             .failed = true,
             .output = "tool execution failed: non-std exception",
+            .observed = std::nullopt,
         };
     }
 }
@@ -207,6 +222,7 @@ nxt::rt::task<tool_result> run_function_tool(
         co_return tool_result{
             .failed = true,
             .output = "unknown tool",
+            .observed = std::nullopt,
         };
     } else {
         const auto & tool = std::get<I>(tools.items);

@@ -1,5 +1,29 @@
 # Repository Notes
 
+## Coroutine Wisdom
+
+COROUTINE LAMBDAS THAT CAPTURE WILL CAUSE SEGFAULTS AND VERY ANNOYING
+ISSUES!!!
+
+Do not make a capturing lambda whose `operator()` is itself a coroutine and
+then let the returned task outlive the lambda object. The coroutine frame does
+not save the lambda closure for you; captured references/state can dangle and
+produce crashes, stuck timer loops, corrupted UI state, and deeply misleading
+debugging sessions. Prefer a named coroutine helper function or pass state as
+explicit coroutine parameters.
+
+If a UI/tool animation is "just waiting on timers forever", first suspect a
+lifetime or completion-signal bug, not the timer. Verify that the worker task
+can actually set the `done` flag it is supposed to set.
+
+When a sibling task needs to stop the main work in a scope, make the main work
+a forked child owned by that scope. A zone body is not automatically the same
+thing as one of the zone's child deeds.
+
+Do not paper over freezes by repeatedly running the whole test suite. Reproduce
+the failing app path, inspect the parked tasks/wishes, and fix the concrete
+runtime or lifetime bug.
+
 ## Tests
 
 Run the main test binary directly to see the nested test report:
