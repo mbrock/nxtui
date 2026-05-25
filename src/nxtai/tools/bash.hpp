@@ -17,9 +17,7 @@ struct bash_tool
     static constexpr std::string_view name = "bash";
     static constexpr std::string_view description =
         "Run a bash command. The combined stdout+stderr is "
-        "returned. This tool REQUIRES user approval — the user "
-        "will be prompted to confirm or deny before the command "
-        "runs. Use it for read-only inspections and idempotent "
+        "returned. Use it for read-only inspections and idempotent "
         "operations; avoid destructive commands.";
     static constexpr bool strict = true;
     static constexpr std::string_view icon = "bash";

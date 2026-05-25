@@ -49,7 +49,6 @@ struct tool_display
 {
     std::string_view icon = "tool";
     nxt::Rgba8 color = nxt::Rgba8{nxt::theme::baltic_church.green};
-    bool needs_approval = false;
 };
 
 [[nodiscard]] inline const nxt::theme::Palette & tool_palette()
@@ -63,7 +62,6 @@ default_tool_display(const nxt::theme::Palette & palette = tool_palette())
     return tool_display{
         .icon = "tool",
         .color = nxt::Rgba8{palette.green},
-        .needs_approval = false,
     };
 }
 
@@ -75,11 +73,6 @@ concept has_tool_icon = requires {
 template<typename Tool>
 concept has_theme_color = requires(const nxt::theme::Palette & palette) {
     { Tool::theme_color(palette) } -> std::convertible_to<nxt::Rgba8>;
-};
-
-template<typename Tool>
-concept has_approval_requirement = requires {
-    { Tool::needs_approval } -> std::convertible_to<bool>;
 };
 
 template<typename T>
@@ -221,8 +214,6 @@ template<typename Tool>
         display.icon = tool_t::icon;
     if constexpr (has_theme_color<tool_t>)
         display.color = tool_t::theme_color(palette);
-    if constexpr (has_approval_requirement<tool_t>)
-        display.needs_approval = tool_t::needs_approval;
     return display;
 }
 
@@ -338,61 +329,6 @@ inline auto folded_result_card(
     return done_card(display, args, elapsed, summary, error);
 }
 
-// Two-line card for approval prompts. Line 1 names the tool and its
-// args; line 2 shows the key hints.
-inline auto approval_card(tool_display display, std::string_view args)
-{
-    using namespace nxt::tui;
-    auto warn = nxt::Rgba8{tool_palette().amber};
-    auto label = std::string{display.icon};
-    auto args_str = std::string{args};
-    args_str = args_str.substr(0, 40) + "…";
-    return column(
-        styled_text(
-            span(" !  ", fg(warn) | bold),
-            span("approve  ", fg(warn) | bold),
-            span(label + "  ", fg(display.color) | bold),
-            span(args_str, fg(nxt::Rgba8{tool_palette().fg}))),
-        styled_text(
-            span("    ", fg(warn)),
-            span("y", fg(warn) | bold),
-            span(" run  ", faint),
-            span("n", fg(warn) | bold),
-            span(" deny  ", faint),
-            span("A", fg(warn) | bold),
-            span(" all  ", faint),
-            span("D", fg(warn) | bold),
-            span(" deny all  ", faint),
-            span("ESC", fg(warn) | bold),
-            span(" cancel batch", faint)));
-}
-
-inline auto denied_card(tool_display display, std::string_view args)
-{
-    using namespace nxt::tui;
-    auto color = nxt::Rgba8{tool_palette().coral};
-    auto label = std::string{display.icon};
-    auto args_str = std::string{args};
-    if (args_str.size() > 70)
-        args_str = args_str.substr(0, 68) + "…";
-    return hud_blocks::header_row(
-        "N", label, args_str, "denied", color, faint);
-}
-
-// Compact "queued" indicator drawn into each child's surface while
-// approvals are still being collected for the batch.
-inline auto queued_card(tool_display display, std::string_view args)
-{
-    using namespace nxt::tui;
-    auto color = nxt::Rgba8{tool_palette().fg_muted};
-    auto label = std::string{display.icon};
-    auto args_str = std::string{args};
-    if (args_str.size() > 70)
-        args_str = args_str.substr(0, 68) + "…";
-    return hud_blocks::header_row(
-        "·", label, args_str, "queued", color, faint);
-}
-
 // One-line summary of the result (bytes/error).
 inline std::string result_summary(const tools::tool_result & result)
 {
@@ -479,48 +415,6 @@ preview_spans(const tools::tool_result & result, std::size_t max_lines = 4)
     return out;
 }
 
-// ============================================================================
-// Approval flow
-// ============================================================================
-
-enum class ApprovalDecision {
-    yes,
-    no,
-    all,
-    deny_all,
-    cancel,
-};
-
-template<typename ToolSet>
-inline nxt::task<ApprovalDecision> request_approval(
-    nxt::ui::yard & self,
-    const ToolSet & tool_list,
-    const tools::function_call & call)
-{
-    auto args_short = args_summary(tool_list, call);
-    auto display = display_for_call(tool_list, call);
-    self.draw(approval_card(display, args_short));
-    while (!self.cancelled()) {
-        auto event = co_await self.next_input();
-        if (!event)
-            co_return ApprovalDecision::cancel;
-        if (event->type == nxt::input::EventType::release)
-            continue;
-        if (nxt::ui::is_escape(*event))
-            co_return ApprovalDecision::cancel;
-        if (nxt::ui::is_character(*event, 'y'))
-            co_return ApprovalDecision::yes;
-        if (nxt::ui::is_character(*event, 'n'))
-            co_return ApprovalDecision::no;
-        if (nxt::ui::is_character(*event, 'A'))
-            co_return ApprovalDecision::all;
-        if (nxt::ui::is_character(*event, 'D'))
-            co_return ApprovalDecision::deny_all;
-    }
-    co_return ApprovalDecision::cancel;
-}
-
-// ============================================================================
 // Dynamic column for concurrent tool surfaces. Same shape as the
 // helper in cgroup_browser / span_browser. Owned-vector form so the
 // published layout is self-contained.
@@ -688,42 +582,9 @@ inline nxt::task<tools::tool_result> run_one_animated(
     co_return result;
 }
 
-template<typename ToolSet>
-inline nxt::task<tools::tool_result> run_one_or_deny(
-    nxt::ui::yard & self,
-    const ToolSet & tool_list,
-    tools::function_call call,
-    bool approved,
-    hud_blocks::State * hud = nullptr)
-{
-    using namespace nxt::tui;
-    if (!approved) {
-        auto args_short = args_summary(tool_list, call);
-        auto display = display_for_call(tool_list, call);
-        auto denied = denied_card(display, args_short);
-        auto block = render_for_scrollback(self, scrollback_box(denied));
-        self.print_block(block);
-        (void) hud;
-        self.draw(nxt::tui::AnyLayout{});
-        agent_trace::record_tool_call(self, call);
-        auto denial = tools::tool_result{
-            .failed = true,
-            .output = "denied by user",
-        };
-        agent_trace::record_tool_result(
-            self,
-            call,
-            tools::tool_result_json(denial),
-            true);
-        co_return denial;
-    }
-    co_return co_await run_one_animated(
-        self, tool_list, std::move(call), hud);
-}
-
 // ============================================================================
-// Entry point: collect any required approvals, then spawn all tools
-// concurrently, compose their surfaces in a column, await all.
+// Entry point: spawn all tools concurrently, compose their surfaces in a
+// column, await all.
 // ============================================================================
 
 template<typename ToolSet>
@@ -737,55 +598,14 @@ inline nxt::task<std::vector<openai::raw_json>> run_all(
     if (calls.empty())
         co_return std::vector<openai::raw_json>{};
 
-    // Phase 1: collect approvals sequentially. While we're prompting,
-    // the HUD shows the approval card for the current call.
-    std::vector<bool> approved(calls.size(), true);
-    bool blanket_yes = false;
-    bool blanket_no = false;
-    bool cancelled = false;
-    for (std::size_t i = 0; i < calls.size(); ++i) {
-        if (!display_for_call(tool_list, calls[i]).needs_approval)
-            continue;
-        if (blanket_yes) {
-            approved[i] = true;
-            continue;
-        }
-        if (blanket_no || cancelled) {
-            approved[i] = false;
-            continue;
-        }
-        auto d = co_await request_approval(self, tool_list, calls[i]);
-        switch (d) {
-        case ApprovalDecision::yes:
-            approved[i] = true;
-            break;
-        case ApprovalDecision::no:
-            approved[i] = false;
-            break;
-        case ApprovalDecision::all:
-            approved[i] = true;
-            blanket_yes = true;
-            break;
-        case ApprovalDecision::deny_all:
-            approved[i] = false;
-            blanket_no = true;
-            break;
-        case ApprovalDecision::cancel:
-            approved[i] = false;
-            cancelled = true;
-            break;
-        }
-    }
-
     if (hud)
         self.draw(hud->view());
     else
         self.draw(nxt::tui::AnyLayout{});
 
-    // Phase 2: spawn each call as its own child process. Each child
-    // animates its card via `accompany`, runs (or denies), commits
-    // to scrollback. Results land in a shared vector indexed by
-    // slot — single scheduler thread so no data race.
+    // Spawn each call as its own child process. Each child animates its card
+    // via `accompany`, runs, and commits to scrollback. Results land in a
+    // shared vector indexed by slot — single scheduler thread so no data race.
     auto results =
         std::make_shared<std::vector<tools::tool_result>>(calls.size());
 
@@ -793,16 +613,14 @@ inline nxt::task<std::vector<openai::raw_json>> run_all(
     handles.reserve(calls.size());
     for (std::size_t i = 0; i < calls.size(); ++i) {
         auto call_copy = calls[i];
-        auto approved_i = approved[i];
         handles.push_back(self.spawn(
             [results,
              i,
              call_copy = std::move(call_copy),
-             approved_i,
              hud,
              tool_list_ptr = &tool_list](nxt::ui::yard & s) -> nxt::task<> {
-                auto r = co_await run_one_or_deny(
-                    s, *tool_list_ptr, call_copy, approved_i, hud);
+                auto r = co_await run_one_animated(
+                    s, *tool_list_ptr, call_copy, hud);
                 (*results)[i] = std::move(r);
             }));
     }
