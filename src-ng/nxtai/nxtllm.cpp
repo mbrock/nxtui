@@ -2,8 +2,10 @@
 #include <nxt/rt/net.hpp>
 #include <nxt/rt/tls.hpp>
 #include <nxt/http.hpp>
+#include <nxtai/ng_agent_tools.hpp>
 #include <nxtai/openai_types.hpp>
 #include <nxtai/responses_request.hpp>
+#include <nxtai/tool_batch.hpp>
 
 #include <cstdlib>
 #include <exception>
@@ -147,6 +149,13 @@ struct stream_event
     }
 };
 
+struct response_stream_result
+{
+    std::vector<nxt::ai::openai::raw_json> output_items;
+    std::optional<std::string> response_id;
+    bool completed = false;
+};
+
 [[nodiscard]] bool response_status_is_success(
     const nxt::rt::http::response_head & head)
 {
@@ -165,7 +174,29 @@ struct stream_event
     return nxt::rt::http::iequals(media_type, expected);
 }
 
-nxt::rt::task<void> stream_openai_response(const llm_request & request)
+template<typename ToolSet>
+void prepare_tool_request(llm_request & request, const ToolSet & tools)
+{
+    if (nxt::ai::tools::empty(tools))
+        return;
+    request.tools = nxt::ai::tools::function_tool_definitions(tools);
+    if (!request.store)
+        request.include = {"reasoning.encrypted_content"};
+}
+
+void append_stateless_turn(
+    std::vector<nxt::ai::openai::raw_json> & input,
+    std::vector<nxt::ai::openai::raw_json> output_items,
+    std::vector<nxt::ai::openai::raw_json> tool_outputs)
+{
+    for (auto & item : output_items)
+        input.push_back(std::move(item));
+    for (auto & output : tool_outputs)
+        input.push_back(std::move(output));
+}
+
+nxt::rt::task<response_stream_result> stream_openai_response(
+    const llm_request & request)
 {
     auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
     auto socket_output = nxt::rt::byte_writer<nxt::rt::socket_sink>{
@@ -206,6 +237,7 @@ nxt::rt::task<void> stream_openai_response(const llm_request & request)
     auto body = nxt::rt::http::read_response_body(http_reader, head);
     auto sse_storage = std::vector<std::byte>(18 * 1024);
     auto sse_reader = nxt::rt::byte_reader{body, std::span{sse_storage}};
+    auto result = response_stream_result{};
     while (auto sse = co_await nxt::rt::http::parse_sse_event(sse_reader)) {
         if (sse->data == "[DONE]")
             break;
@@ -218,7 +250,14 @@ nxt::rt::task<void> stream_openai_response(const llm_request & request)
             .data = std::move(sse->data),
         };
 
-        if (event.type == "response.output_text.delta") {
+        if (event.type == "response.created") {
+            auto payload = event.read<nxt::ai::openai::response_event>();
+            if (!payload.response.id.empty())
+                result.response_id = std::move(payload.response.id);
+        } else if (event.type == "response.output_item.done") {
+            auto payload = event.read<nxt::ai::openai::output_item_event>();
+            result.output_items.push_back(std::move(payload.item));
+        } else if (event.type == "response.output_text.delta") {
             auto delta = event.read<nxt::ai::openai::text_delta_event>();
             std::cout << delta.delta << std::flush;
         } else if (
@@ -228,16 +267,73 @@ nxt::rt::task<void> stream_openai_response(const llm_request & request)
                 "OpenAI Responses terminal event: " + event.type};
         }
 
+        if (event.type == "response.completed")
+            result.completed = true;
         if (terminal)
             break;
     }
 
     std::cout << '\n';
+    co_return result;
+}
+
+template<typename ToolSet>
+nxt::rt::task<void> run_agent_loop(
+    llm_request request,
+    ToolSet tools,
+    std::size_t max_steps = 32)
+{
+    auto original = request;
+    auto stateless_input = nxt::ai::responses::input_items_from_request(request);
+    prepare_tool_request(request, tools);
+
+    for (std::size_t step = 0; step < max_steps; ++step) {
+        auto response = co_await stream_openai_response(request);
+        auto calls =
+            nxt::ai::tools::function_calls_from_items(response.output_items);
+        if (calls.empty())
+            co_return;
+
+        if (request.store && !response.response_id)
+            throw nxt::rt::runtime_error{
+                "tool call response had no response id"};
+
+        std::cout << "[tools] running " << calls.size()
+                  << " tool call(s)\n";
+        auto results =
+            co_await nxt::ai::tools::run_function_tool_batch(tools, calls);
+        for (const auto & result : results) {
+            std::cout << "[tool] " << result.call.name << " -> "
+                      << (result.result.failed ? "failed" : "ok") << " ("
+                      << result.result.output.size() << " bytes)\n";
+        }
+
+        auto outputs = nxt::ai::tools::output_items_from_results(results);
+        request = original;
+        request.input.clear();
+        request.input_items.clear();
+        request.previous_response_id.clear();
+
+        if (request.store) {
+            request.input_items = std::move(outputs);
+            request.previous_response_id = *response.response_id;
+        } else {
+            append_stateless_turn(
+                stateless_input,
+                std::move(response.output_items),
+                std::move(outputs));
+            request.input_items = stateless_input;
+        }
+        prepare_tool_request(request, tools);
+    }
+
+    throw nxt::rt::runtime_error{"too many tool call turns"};
 }
 
 nxt::rt::task<int> run_nxtllm(cli_options options)
 {
     auto request = make_request(options);
+    auto tools = nxt::ai::agent_tools::for_agent();
 
     if (!options.oneshot_prompt) {
         std::cout
@@ -247,6 +343,8 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
                "--dump-request to inspect the JSON envelope.\n";
         co_return EXIT_SUCCESS;
     }
+
+    prepare_tool_request(request, tools);
 
     if (options.dump_request) {
         std::cout << nxt::ai::responses::openai_responses_body(request)
@@ -262,7 +360,7 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
         co_return EXIT_FAILURE;
     }
 
-    co_await stream_openai_response(request);
+    co_await run_agent_loop(std::move(request), std::move(tools));
     co_return EXIT_SUCCESS;
 }
 

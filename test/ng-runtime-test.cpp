@@ -4,6 +4,7 @@
 #include <nxt/rt/http.hpp>
 #include <nxt/rt/kqueue_wand.hpp>
 #include <nxt/rt/task.hpp>
+#include <nxtai/tool_batch.hpp>
 
 #include "test.hpp"
 
@@ -168,6 +169,29 @@ struct shared_string_sink final : nxt::rt::byte_sink
 
     std::shared_ptr<std::string> text;
     std::size_t limit = 1;
+};
+
+struct ng_echo_tool
+{
+    static constexpr std::string_view name = "ng_echo";
+    static constexpr std::string_view description = "Echo text.";
+    static constexpr bool strict = true;
+
+    struct parameters
+    {
+        std::string text;
+
+        struct glaze_json_schema
+        {
+            glz::schema text{.description = "Text to echo."};
+        };
+    };
+
+    nxt::rt::task<nxt::ai::tools::tool_result> run(parameters args) const
+    {
+        co_await nxt::rt::yield();
+        co_return nxt::ai::tools::tool_result{.output = std::move(args.text)};
+    }
 };
 
 nxt::rt::task<int> read_ambient_int_after_yield()
@@ -1157,6 +1181,60 @@ static suite ng_runtime_tests{
 
                 expect(threw);
                 expect(events == std::vector<int>{8});
+            };
+        };
+
+        "tool batches"_test = [] {
+            "parse calls and return function_call_output items in order"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto calls = std::vector<nxt::ai::tools::function_call>{
+                    *nxt::ai::tools::function_call_from_item(
+                        nxt::ai::openai::raw_json{
+                            R"({"id":"fc_1","type":"function_call","call_id":"call_1","name":"ng_echo","arguments":"{\"text\":\"one\"}"})"}),
+                    *nxt::ai::tools::function_call_from_item(
+                        nxt::ai::openai::raw_json{
+                            R"({"id":"fc_2","type":"function_call","call_id":"call_2","name":"ng_echo","arguments":"{\"text\":\"two\"}"})"}),
+                };
+                auto tools = nxt::ai::tools::tool_set{ng_echo_tool{}};
+
+                auto results = deck.sync_wait(
+                    nxt::ai::tools::run_function_tool_batch(
+                        tools,
+                        std::move(calls)));
+
+                expect(results.size() == 2_ul);
+                expect(results[0].call.call_id == "call_1");
+                expect(results[0].result.output == "one");
+                expect(results[1].call.call_id == "call_2");
+                expect(results[1].result.output == "two");
+                expect(
+                    results[0].output_item.str.find("function_call_output")
+                    != std::string::npos);
+                expect(
+                    results[0].output_item.str.find(
+                        R"("output":"{\"failed\":false,\"output\":\"one\"}")")
+                    != std::string::npos);
+            };
+
+            "unknown tools become failed batch results"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto tools = nxt::ai::tools::tool_set{ng_echo_tool{}};
+                auto calls = std::vector<nxt::ai::tools::function_call>{
+                    nxt::ai::tools::function_call{
+                        .call_id = "call_missing",
+                        .name = "missing",
+                        .arguments = "{}",
+                    },
+                };
+
+                auto results = deck.sync_wait(
+                    nxt::ai::tools::run_function_tool_batch(
+                        tools,
+                        std::move(calls)));
+
+                expect(results.size() == 1_ul);
+                expect(results[0].result.failed);
+                expect(results[0].result.output == "unknown tool");
             };
         };
 
