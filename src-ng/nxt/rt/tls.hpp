@@ -9,9 +9,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -29,11 +31,30 @@ public:
 
     task<> handshake(std::string_view host)
     {
+        co_await handshake(host, [](std::string_view) {});
+    }
+
+    template<typename Progress>
+    task<> handshake(std::string_view host, Progress progress)
+    {
+        auto notify = [&progress](std::string_view step) -> task<> {
+            using result_type =
+                std::invoke_result_t<Progress &, std::string_view>;
+            if constexpr (nxt::rt::is_task_v<result_type>) {
+                co_await std::invoke(progress, step);
+            } else {
+                std::invoke(progress, step);
+            }
+        };
+
         auto hello = nxt::tls::make_tls13_client_hello(host);
+        co_await notify("client hello");
         co_await writer_.write_all(hello.record);
 
+        co_await notify("server hello");
         auto record = co_await nxt::tls::read_tls_record(reader_);
         auto server_hello = nxt::tls::parse_tls13_server_hello(record);
+        co_await notify("x25519 shared secret");
         auto shared_secret = nxt::crypto::x25519_dh(
             hello.key_pair.secret_key, server_hello.key_share);
         nxt::tls::require_tls(
@@ -41,16 +62,19 @@ public:
 
         auto transcript =
             nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
+        co_await notify("handshake keys");
         auto handshake_keys =
             nxt::tls::derive_tls13_handshake_keys(*shared_secret, transcript);
 
         auto leaf_public_key = std::optional<nxt::tls::bytes>{};
         auto saw_server_finished = false;
         while (!saw_server_finished) {
+            co_await notify("encrypted handshake");
             record = co_await nxt::tls::read_tls_record(reader_);
             if (record.type == 20)
                 continue;
 
+            co_await notify("decrypt handshake record");
             auto plaintext =
                 nxt::tls::open_tls13_record(handshake_keys.server, record);
             if (plaintext.inner_type != 22)
@@ -60,11 +84,13 @@ public:
                  nxt::tls::split_handshake_messages(plaintext.content)) {
                 auto type = std::to_integer<std::uint8_t>(message[0]);
                 if (type == 11) {
+                    co_await notify("certificate");
                     auto cert = nxt::tls::parse_tls13_certificate(message);
                     leaf_public_key =
                         nxt::tls::extract_p256_public_key_from_certificate(
                             cert.leaf_der);
                 } else if (type == 15) {
+                    co_await notify("certificate verify");
                     nxt::tls::require_tls(
                         leaf_public_key.has_value(),
                         "certificate_verify arrived before certificate");
@@ -75,6 +101,7 @@ public:
                     nxt::tls::require_tls(
                         ok, "CertificateVerify signature failed");
                 } else if (type == 20) {
+                    co_await notify("server finished");
                     auto received =
                         nxt::tls::parse_tls13_finished(message);
                     auto ok = nxt::tls::verify_finished(
@@ -88,8 +115,10 @@ public:
             }
         }
 
+        co_await notify("application keys");
         application_keys_ = nxt::tls::derive_tls13_application_keys(
             handshake_keys.secret, transcript);
+        co_await notify("client finished");
         auto client_finished = nxt::tls::make_finished_message(
             handshake_keys.client.traffic_secret, transcript);
         co_await writer_.write_all(
@@ -97,6 +126,7 @@ public:
                 handshake_keys.client, 22, client_finished));
         nxt::tls::put_bytes(transcript, client_finished);
         handshaken_ = true;
+        co_await notify("ready");
     }
 
     task<> write_all(std::span<const std::byte> bytes)

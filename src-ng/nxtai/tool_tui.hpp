@@ -149,6 +149,15 @@ first_lines(std::string_view text, std::size_t max_lines)
     return lines;
 }
 
+inline std::vector<std::string>
+tail_lines(std::string_view text, std::size_t max_lines)
+{
+    auto lines = first_lines(text, static_cast<std::size_t>(-1));
+    if (lines.size() > max_lines)
+        lines.erase(lines.begin(), lines.begin() + (lines.size() - max_lines));
+    return lines;
+}
+
 inline auto body_line(std::string s, Rgba8 fg_color)
 {
     return text(std::move(s), fg(fg_color));
@@ -191,11 +200,11 @@ inline AnyLayout render_call(const call_view & c)
 
 inline AnyLayout thought_block(std::string s)
 {
-    return row(
-        std::vector<AnyLayout>{
-            hfill(1 * ch, page_bg),
-            flex_text(std::move(s), fg(sky_300)),
-        });
+    auto rows = std::vector<AnyLayout>{};
+    rows.push_back(chip(" thinking ", slate_950, sky_300, Emphasis::bold));
+    for (auto & line : tail_lines(s, 8))
+        rows.push_back(body_line(std::move(line), sky_300));
+    return window_rows(std::move(rows), 1 * ch);
 }
 
 inline AnyLayout render_turn(const turn_view & t)

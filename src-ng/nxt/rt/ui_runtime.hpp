@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <sstream>
 #include <string>
@@ -97,6 +98,7 @@ public:
 
     void signal_damage()
     {
+        ++damage_generation_;
         damage_event_.set();
     }
 
@@ -120,11 +122,13 @@ public:
 
     task<void> print_block(std::string text)
     {
-        co_await commands_.publish(
+        auto published = co_await commands_.publish(
             terminal_command{
                 .kind = terminal_command_kind::print_block,
                 .text = std::move(text),
             });
+        if (published)
+            signal_damage();
     }
 
     task<void> run_terminal_owner(
@@ -317,24 +321,31 @@ private:
 
     task<void> terminal_owner_loop(std::chrono::milliseconds frame_time)
     {
+        (void)frame_time;
         co_await enter_terminal();
-        auto next_frame = std::chrono::steady_clock::now();
+        auto next_size_refresh = std::chrono::steady_clock::now();
 
         while (!stop_requested()) {
+            auto rendered_generation = damage_generation_;
             drain_commands();
             if (has_terminal_surface()) {
-                (void)refresh_terminal_size();
+                auto now = std::chrono::steady_clock::now();
+                if (now >= next_size_refresh) {
+                    (void)refresh_terminal_size();
+                    next_size_refresh = now + std::chrono::milliseconds{250};
+                }
                 co_await write_stdout_all(render_frame_bytes(surface_));
             } else {
                 co_await write_stdout_all(render_output_only_bytes());
             }
 
-            next_frame += frame_time;
-            auto now = std::chrono::steady_clock::now();
-            if (next_frame < now)
-                next_frame = now + frame_time;
+            if (damage_generation_ != rendered_generation)
+                continue;
+            damage_event_.reset();
+            if (damage_generation_ != rendered_generation)
+                continue;
             try {
-                co_await op::timeout::after(next_frame - now);
+                co_await damage_event_;
             } catch (const operation_cancelled &) {
                 co_return;
             }
@@ -356,6 +367,7 @@ private:
     nxt::ui::TerminalCompositor compositor_;
     nxt::tui::Slot<nxt::tui::AnyLayout> surface_;
     event damage_event_;
+    std::uint64_t damage_generation_ = 0;
     channel<terminal_command> commands_;
     std::vector<queued_output> output_queue_;
     bool stopping_ = false;

@@ -36,6 +36,18 @@ struct text_delta_event
     std::string delta;
 };
 
+struct reasoning_summary_text_delta_event
+{
+    std::string type;
+    std::string delta;
+};
+
+struct reasoning_summary_text_done_event
+{
+    std::string type;
+    std::string text;
+};
+
 struct reasoning_item
 {
     std::string id;
