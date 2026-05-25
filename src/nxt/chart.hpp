@@ -105,6 +105,20 @@ inline std::string progress_bar(double fraction, std::size_t cells)
         });
 }
 
+inline std::string
+range_bar(double begin, double end, std::size_t cells)
+{
+    begin = std::clamp(begin, 0.0, 1.0);
+    end = std::clamp(end, begin, 1.0);
+    return project_cells(
+        cells,
+        [=](cell_slice cell, std::size_t) -> std::string_view {
+            auto coverage =
+                coverage_before(end, cell) - coverage_before(begin, cell);
+            return horizontal_eighth(coverage);
+        });
+}
+
 inline value_range dynamic_range(std::span<const double> values)
 {
     auto [lo_it, hi_it] = std::minmax_element(values.begin(), values.end());

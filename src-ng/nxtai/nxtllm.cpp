@@ -8,12 +8,14 @@
 #include <nxtai/responses_request.hpp>
 #include <nxtai/tool_batch.hpp>
 #include <nxtai/tool_tui.hpp>
+#include <nxtai/trace_tui.hpp>
 
 #include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -172,33 +174,6 @@ struct live_state
     bool done = false;
 };
 
-struct tls_stage_sample
-{
-    std::string name;
-    std::chrono::steady_clock::duration elapsed{};
-};
-
-struct tls_handshake_trace
-{
-    std::chrono::steady_clock::time_point started =
-        std::chrono::steady_clock::now();
-    std::chrono::steady_clock::duration display_delay{};
-    std::vector<tls_stage_sample> stages;
-
-    void record(std::string_view name)
-    {
-        auto elapsed = std::chrono::steady_clock::now() - started
-            - display_delay;
-        if (elapsed < std::chrono::steady_clock::duration{})
-            elapsed = {};
-        stages.push_back(
-            tls_stage_sample{
-                .name = std::string{name},
-                .elapsed = elapsed,
-            });
-    }
-};
-
 [[nodiscard]] bool response_status_is_success(
     const nxt::rt::http::response_head & head)
 {
@@ -280,46 +255,6 @@ void append_thought_delta(live_state & state, std::string_view delta)
     if (newline != std::string::npos)
         drop = newline + 1;
     state.turn.thought.erase(0, drop);
-}
-
-std::string format_elapsed(std::chrono::steady_clock::duration duration)
-{
-    auto us =
-        std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-    if (us < 1000)
-        return std::format("{}us", us);
-    if (us < 1000 * 1000)
-        return std::format("{}ms", (us + 500) / 1000);
-    return std::format("{:.2f}s", static_cast<double>(us) / 1000000.0);
-}
-
-std::string tls_handshake_block(
-    std::string host,
-    const tls_handshake_trace & trace)
-{
-    auto output = std::string{};
-    auto previous = std::chrono::steady_clock::duration{};
-    auto total = std::chrono::steady_clock::duration{};
-    for (const auto & stage : trace.stages) {
-        auto delta = stage.elapsed - previous;
-        if (delta < std::chrono::steady_clock::duration{})
-            delta = {};
-        output += std::format(
-            "{:<24} {:>7}  +{}\n",
-            stage.name,
-            format_elapsed(stage.elapsed),
-            format_elapsed(delta));
-        previous = stage.elapsed;
-        total = stage.elapsed;
-    }
-    if (output.empty())
-        output = "no TLS progress samples\n";
-
-    return std::format(
-        "tls  {}  TLS 1.3 handshake  {}\n{}",
-        host,
-        format_elapsed(total),
-        output);
 }
 
 std::string thinking_block(std::string_view summary)
@@ -413,24 +348,91 @@ nxt::rt::task<response_stream_result> stream_openai_response(
         live->status = "tls handshake";
         publish_live(ui, *live, true);
     }
-    auto tls_trace = tls_handshake_trace{};
-    static constexpr auto tls_stage_display_time =
-        std::chrono::milliseconds{35};
-    co_await tls.handshake(
-        "api.openai.com",
-        [&](std::string_view step) -> nxt::rt::task<> {
-            tls_trace.record(step);
-            if (live == nullptr)
-                co_return;
-            live->status = std::format("tls: {}", step);
-            publish_live(ui, *live, true);
-            co_await nxt::rt::op::timeout::after(tls_stage_display_time);
-            tls_trace.display_delay += tls_stage_display_time;
-        });
+    auto trace = nxt::rt::current_trace_context();
+    auto tls_span = nxt::rt::trace_span{};
+    if (trace != nullptr) {
+        tls_span = trace->start_span(
+            "tls.handshake",
+            nxt::rt::current_trace_span_id(),
+            {
+                {"net.peer.name", "api.openai.com"},
+                {"tls.version", "1.3"},
+            });
+    }
+    auto active_tls_spans = std::vector<nxt::rt::trace_span>{};
+    try {
+        co_await tls.handshake(
+            "api.openai.com",
+            [&](const nxt::rt::tls::handshake_progress & progress)
+                -> nxt::rt::task<> {
+                if (progress.kind
+                    == nxt::rt::tls::handshake_progress_kind::begin) {
+                    if (live != nullptr) {
+                        live->status =
+                            std::format(
+                                "tls: {}",
+                                nxt::ai::trace_tui::display_name(
+                                    progress.name));
+                        publish_live(ui, *live, true);
+                    }
+                    if (trace != nullptr && tls_span)
+                        active_tls_spans.push_back(
+                            trace->start_span(
+                                std::string{progress.name},
+                                tls_span.span_id()));
+                    co_return;
+                }
+
+                if (progress.kind
+                    == nxt::rt::tls::handshake_progress_kind::end) {
+                    for (auto it = active_tls_spans.rbegin();
+                         it != active_tls_spans.rend();
+                         ++it) {
+                        if (it->name() == progress.name) {
+                            it->finish("ok");
+                            active_tls_spans.erase(std::next(it).base());
+                            break;
+                        }
+                    }
+                    co_return;
+                }
+
+                if (trace != nullptr && tls_span)
+                    tls_span.event(std::string{progress.name});
+                if (live != nullptr) {
+                    live->status =
+                        std::format(
+                            "tls: {}",
+                            nxt::ai::trace_tui::display_name(progress.name));
+                    publish_live(ui, *live, true);
+                }
+            });
+        if (tls_span)
+            tls_span.finish("ok");
+    } catch (...) {
+        for (auto & span : active_tls_spans)
+            span.finish("error");
+        if (tls_span)
+            tls_span.finish("error");
+        throw;
+    }
     if (live != nullptr) {
-        if (ui != nullptr)
-            co_await ui->print_block(
-                tls_handshake_block("api.openai.com", tls_trace));
+        if (ui != nullptr) {
+            if (trace != nullptr && tls_span)
+                co_await ui->print(
+                    nxt::ai::trace_tui::render_span_waterfall(
+                        *trace,
+                        tls_span,
+                        {
+                            .label = "tls",
+                            .detail = "TLS 1.3",
+                            .subject = "api.openai.com",
+                            .accent = nxt::ai::tool_tui::teal_300,
+                        }));
+            else
+                co_await ui->print_block(
+                    "tls  api.openai.com  TLS 1.3 handshake\n");
+        }
         publish_live(ui, *live, true);
     }
 
@@ -678,24 +680,47 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
         .done = false,
     };
 
-    co_await nxt::rt::with_ui_zone([&](nxt::rt::ui_scope ui)
-        -> nxt::rt::task<void> {
-        publish_live(&ui, live, true);
-        try {
-            co_await run_agent_loop(
-                std::move(request), std::move(tools), &live, &ui);
-            live.status = "done";
-            live.done = true;
-            publish_live(&ui, live, true);
-            ui.request_shutdown();
-        } catch (...) {
-            live.status = "failed";
-            live.done = true;
-            publish_live(&ui, live, true);
-            ui.request_shutdown();
-            throw;
-        }
-    }, {}, frame_interval);
+    auto trace = std::make_shared<nxt::rt::trace_context>();
+    auto root_span = trace->start_span(
+        "nxtllm.request",
+        {},
+        {{"model", request.model}});
+
+    try {
+        co_await nxt::rt::with_env<nxt::rt::trace_context_key>(
+            trace,
+            [&]() -> nxt::rt::task<void> {
+            co_await nxt::rt::with_env<nxt::rt::trace_current_span_key>(
+                root_span.span_id(),
+                [&]() -> nxt::rt::task<void> {
+                co_await nxt::rt::with_ui_zone([&](nxt::rt::ui_scope ui)
+                    -> nxt::rt::task<void> {
+                    publish_live(&ui, live, true);
+                    try {
+                        co_await run_agent_loop(
+                            std::move(request),
+                            std::move(tools),
+                            &live,
+                            &ui);
+                        live.status = "done";
+                        live.done = true;
+                        publish_live(&ui, live, true);
+                        ui.request_shutdown();
+                    } catch (...) {
+                        live.status = "failed";
+                        live.done = true;
+                        publish_live(&ui, live, true);
+                        ui.request_shutdown();
+                        throw;
+                    }
+                }, {}, frame_interval);
+            });
+        });
+        root_span.finish("ok");
+    } catch (...) {
+        root_span.finish("error");
+        throw;
+    }
 
     if (!live.assistant_text.empty())
         co_await nxt::rt::write_stdout_all(live.assistant_text + "\n");

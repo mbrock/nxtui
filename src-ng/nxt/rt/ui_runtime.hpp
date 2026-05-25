@@ -131,6 +131,13 @@ public:
             signal_damage();
     }
 
+    template<nxt::tui::Layout Layout>
+    task<void> print(Layout && layout)
+    {
+        co_await print_block(
+            render_scrollback_layout(std::forward<Layout>(layout)));
+    }
+
     task<void> run_terminal_owner(
         std::chrono::milliseconds frame_time = std::chrono::milliseconds{16})
     {
@@ -235,6 +242,19 @@ private:
         for (const auto & output : pending)
             write_output(out, output);
         out.flush();
+    }
+
+    template<nxt::tui::Layout Layout>
+    [[nodiscard]] std::string render_scrollback_layout(Layout && layout)
+    {
+        auto height = layout.height_hint().min;
+        if (height.count() == 0)
+            height = 1 * ln;
+
+        auto raster = nxt::Raster(size_.w, height, glyphs_);
+        auto view = raster.view();
+        layout.render(view, raster.extent());
+        return nxt::ansi::render_raster(raster);
     }
 
     void write_output(std::ostream & out, const queued_output & output)
@@ -395,6 +415,12 @@ public:
     task<void> print_block(std::string text) const
     {
         co_await runtime_->print_block(std::move(text));
+    }
+
+    template<nxt::tui::Layout Layout>
+    task<void> print(Layout && layout) const
+    {
+        co_await runtime_->print(std::forward<Layout>(layout));
     }
 
     void request_shutdown() const noexcept

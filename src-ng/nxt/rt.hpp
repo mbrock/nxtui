@@ -14,4 +14,5 @@
 #include "nxt/rt/http.hpp"
 #include "nxt/rt/task.hpp"
 #include "nxt/rt/terminal_app.hpp"
+#include "nxt/rt/trace.hpp"
 #include "nxt/rt/wish.hpp"

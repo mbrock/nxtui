@@ -5,6 +5,7 @@
 #include <nxt/rt/http.hpp>
 #include <nxt/rt/kqueue_wand.hpp>
 #include <nxt/rt/task.hpp>
+#include <nxt/rt/terminal_app.hpp>
 #include <nxtai/tool_batch.hpp>
 
 #include "test.hpp"
@@ -385,6 +386,11 @@ static suite ng_runtime_tests{
             "progress bar projects fill coverage per cell"_test = [] {
                 expect(nxt::chart::progress_bar(0.625, 4) == "██▌ ");
             };
+
+            "range progress bar projects partial coverage per cell"_test =
+                [] {
+                expect(nxt::chart::range_bar(0.25, 0.625, 4) == " █▌ ");
+            };
         };
 
         "deck"_test = [] {
@@ -716,6 +722,81 @@ static suite ng_runtime_tests{
                 });
 
                 expect(result == 1210_i);
+            };
+
+            "trace context is inherited by forked tasks"_test = [&] {
+                auto trace = std::make_shared<nxt::rt::trace_context>();
+                auto root = trace->start_span("root");
+
+                auto traced_child =
+                    [](std::string name) -> nxt::rt::task<void> {
+                    auto trace = nxt::rt::current_trace_context();
+                    auto span = trace->start_span(
+                        std::move(name),
+                        nxt::rt::current_trace_span_id());
+                    co_await nxt::rt::yield();
+                    span.finish("ok");
+                };
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_env<nxt::rt::trace_context_key>(
+                        trace, [&]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::with_env<
+                            nxt::rt::trace_current_span_key>(
+                            root.span_id(), [&]() -> nxt::rt::task<void> {
+                            co_await nxt::rt::with_zone(
+                                [&]() -> nxt::rt::task<void> {
+                                nxt::rt::fork(traced_child("child-a"));
+                                nxt::rt::fork(traced_child("child-b"));
+                                co_return;
+                            });
+                        });
+                    });
+                });
+
+                root.finish("ok");
+                auto children = trace->children(root.span_id());
+                expect(children.size() == std::size_t{2});
+                expect(children[0].name == "child-a"sv);
+                expect(children[1].name == "child-b"sv);
+                expect(children[0].status == "ok"sv);
+                expect(children[1].status == "ok"sv);
+            };
+
+            "with trace span scopes task bodies"_test = [&] {
+                auto trace = std::make_shared<nxt::rt::trace_context>();
+                auto root = trace->start_span("root");
+
+                auto result = deck.sync_wait([&]() -> nxt::rt::task<int> {
+                    co_return co_await nxt::rt::with_env<
+                        nxt::rt::trace_context_key>(
+                        trace, [&]() -> nxt::rt::task<int> {
+                        co_return co_await nxt::rt::with_env<
+                            nxt::rt::trace_current_span_key>(
+                            root.span_id(), [&]() -> nxt::rt::task<int> {
+                            co_return co_await nxt::rt::with_trace_span(
+                                "child",
+                                []() -> nxt::rt::task<int> {
+                                co_await nxt::rt::yield();
+                                co_return 42;
+                            });
+                        });
+                    });
+                });
+
+                root.finish("ok");
+                auto children = trace->children(root.span_id());
+                expect(result == 42_i);
+                expect(children.size() == std::size_t{1});
+                expect(children[0].name == "child"sv);
+                expect(children[0].status == "ok"sv);
+            };
+        };
+
+        "terminal app"_test = [] {
+            "keeps the alternate screen opt-in"_test = [] {
+                auto options = nxt::rt::terminal_app_options{};
+                expect(!options.alternate_screen);
             };
         };
 

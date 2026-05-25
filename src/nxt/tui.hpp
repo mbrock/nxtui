@@ -659,6 +659,15 @@ inline std::string bar_string(percent_t pct, width_t width)
     return chart::progress_bar(fraction, width.count());
 }
 
+/// Build the glyph string for a fractional range progress bar.
+inline std::string range_bar_string(
+    double begin,
+    double end,
+    width_t width)
+{
+    return chart::range_bar(begin, end, width.count());
+}
+
 /// Create a one-line progress bar layout.
 inline auto progress_bar(
     percent_t pct,
@@ -668,6 +677,21 @@ inline auto progress_bar(
     return line_text(
         WidthHint::grow(),
         [=](width_t width) { return bar_string(pct, width); },
+        Style{fg, bg, DEFAULT_EMPHASIS});
+}
+
+/// Create a one-line progress bar for a subrange of [0,1].
+inline auto range_progress_bar(
+    double begin,
+    double end,
+    Rgba8 fg = Rgba8(100, 180, 255),
+    Rgba8 bg = Rgba8(50, 50, 50))
+{
+    return line_text(
+        WidthHint::grow(),
+        [=](width_t width) {
+            return range_bar_string(begin, end, width);
+        },
         Style{fg, bg, DEFAULT_EMPHASIS});
 }
 

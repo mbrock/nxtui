@@ -19,6 +19,55 @@
 
 namespace nxt::rt::tls {
 
+enum class handshake_progress_kind
+{
+    begin,
+    end,
+    event,
+};
+
+struct handshake_progress
+{
+    handshake_progress_kind kind = handshake_progress_kind::event;
+    std::string_view name;
+};
+
+template<typename Notify, task_factory Body>
+task<task_result_t<std::invoke_result_t<Body &>>>
+with_handshake_progress_span(
+    Notify & notify,
+    std::string_view name,
+    Body body)
+{
+    co_await notify(
+        handshake_progress{
+            .kind = handshake_progress_kind::begin,
+            .name = name,
+        });
+    if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Body &>>>) {
+        co_await std::invoke(body);
+        co_await notify(
+            handshake_progress{
+                .kind = handshake_progress_kind::end,
+                .name = name,
+            });
+    } else {
+        auto result = co_await std::invoke(body);
+        co_await notify(
+            handshake_progress{
+                .kind = handshake_progress_kind::end,
+                .name = name,
+            });
+        co_return result;
+    }
+}
+
+template<typename T>
+task<std::decay_t<T>> ready_task(T value)
+{
+    co_return std::move(value);
+}
+
 template<typename Reader, typename Writer>
 class tls13_client_session
 {
@@ -31,102 +80,139 @@ public:
 
     task<> handshake(std::string_view host)
     {
-        co_await handshake(host, [](std::string_view) {});
+        co_await handshake(host, [](const handshake_progress &) {});
     }
 
     template<typename Progress>
     task<> handshake(std::string_view host, Progress progress)
     {
-        auto notify = [&progress](std::string_view step) -> task<> {
+        auto notify = [&progress](handshake_progress step) -> task<> {
             using result_type =
-                std::invoke_result_t<Progress &, std::string_view>;
+                std::invoke_result_t<Progress &, const handshake_progress &>;
             if constexpr (nxt::rt::is_task_v<result_type>) {
                 co_await std::invoke(progress, step);
             } else {
                 std::invoke(progress, step);
             }
         };
+        auto span = [&](std::string_view name, task_factory auto body) {
+            return with_handshake_progress_span(notify, name, std::move(body));
+        };
+        auto event = [&](std::string_view name) -> task<> {
+            co_await notify(
+                handshake_progress{
+                    .kind = handshake_progress_kind::event,
+                    .name = name,
+                });
+        };
 
-        auto hello = nxt::tls::make_tls13_client_hello(host);
-        co_await notify("client hello");
-        co_await writer_.write_all(hello.record);
+        auto hello = co_await span("client_hello.make", [&] {
+            return ready_task(nxt::tls::make_tls13_client_hello(host));
+        });
+        co_await span("client_hello.write", [&] {
+            return writer_.write_all(hello.record);
+        });
 
-        co_await notify("server hello");
-        auto record = co_await nxt::tls::read_tls_record(reader_);
-        auto server_hello = nxt::tls::parse_tls13_server_hello(record);
-        co_await notify("x25519 shared secret");
-        auto shared_secret = nxt::crypto::x25519_dh(
-            hello.key_pair.secret_key, server_hello.key_share);
-        nxt::tls::require_tls(
-            shared_secret.has_value(), "X25519 shared secret failed");
+        auto record = co_await span("server_hello.read", [&] {
+            return nxt::tls::read_tls_record(reader_);
+        });
+        auto server_hello = co_await span("server_hello.parse", [&] {
+            return ready_task(nxt::tls::parse_tls13_server_hello(record));
+        });
+        auto shared_secret = co_await span("x25519.shared_secret", [&] {
+            auto secret = nxt::crypto::x25519_dh(
+                hello.key_pair.secret_key, server_hello.key_share);
+            nxt::tls::require_tls(
+                secret.has_value(), "X25519 shared secret failed");
+            return ready_task(std::move(secret));
+        });
 
         auto transcript =
             nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
-        co_await notify("handshake keys");
-        auto handshake_keys =
-            nxt::tls::derive_tls13_handshake_keys(*shared_secret, transcript);
+        auto handshake_keys = co_await span("keys.derive_handshake", [&] {
+            return ready_task(
+                nxt::tls::derive_tls13_handshake_keys(
+                    *shared_secret, transcript));
+        });
 
         auto leaf_public_key = std::optional<nxt::tls::bytes>{};
         auto saw_server_finished = false;
         while (!saw_server_finished) {
-            co_await notify("encrypted handshake");
-            record = co_await nxt::tls::read_tls_record(reader_);
-            if (record.type == 20)
+            record = co_await span("handshake_record.read", [&] {
+                return nxt::tls::read_tls_record(reader_);
+            });
+            if (record.type == 20) {
+                co_await event("change_cipher_spec");
                 continue;
+            }
 
-            co_await notify("decrypt handshake record");
-            auto plaintext =
-                nxt::tls::open_tls13_record(handshake_keys.server, record);
-            if (plaintext.inner_type != 22)
+            auto plaintext = co_await span("handshake_record.decrypt", [&] {
+                return ready_task(
+                    nxt::tls::open_tls13_record(
+                        handshake_keys.server, record));
+            });
+            if (plaintext.inner_type != 22) {
+                co_await event("non_handshake_record");
                 continue;
+            }
 
             for (auto const & message :
                  nxt::tls::split_handshake_messages(plaintext.content)) {
                 auto type = std::to_integer<std::uint8_t>(message[0]);
                 if (type == 11) {
-                    co_await notify("certificate");
-                    auto cert = nxt::tls::parse_tls13_certificate(message);
-                    leaf_public_key =
-                        nxt::tls::extract_p256_public_key_from_certificate(
-                            cert.leaf_der);
+                    co_await span("certificate.parse", [&]() -> task<> {
+                        auto cert =
+                            nxt::tls::parse_tls13_certificate(message);
+                        leaf_public_key =
+                            nxt::tls::extract_p256_public_key_from_certificate(
+                                cert.leaf_der);
+                        co_return;
+                    });
                 } else if (type == 15) {
-                    co_await notify("certificate verify");
-                    nxt::tls::require_tls(
-                        leaf_public_key.has_value(),
-                        "certificate_verify arrived before certificate");
-                    auto cert_verify =
-                        nxt::tls::parse_tls13_certificate_verify(message);
-                    auto ok = nxt::tls::verify_certificate_verify(
-                        *leaf_public_key, transcript, cert_verify);
-                    nxt::tls::require_tls(
-                        ok, "CertificateVerify signature failed");
+                    co_await span("certificate.verify", [&]() -> task<> {
+                        nxt::tls::require_tls(
+                            leaf_public_key.has_value(),
+                            "certificate_verify arrived before certificate");
+                        auto cert_verify =
+                            nxt::tls::parse_tls13_certificate_verify(message);
+                        auto ok = nxt::tls::verify_certificate_verify(
+                            *leaf_public_key, transcript, cert_verify);
+                        nxt::tls::require_tls(
+                            ok, "CertificateVerify signature failed");
+                        co_return;
+                    });
                 } else if (type == 20) {
-                    co_await notify("server finished");
-                    auto received =
-                        nxt::tls::parse_tls13_finished(message);
-                    auto ok = nxt::tls::verify_finished(
-                        handshake_keys.server.traffic_secret,
-                        transcript,
-                        received);
-                    nxt::tls::require_tls(ok, "server Finished failed");
-                    saw_server_finished = true;
+                    co_await span("server_finished.verify", [&]() -> task<> {
+                        auto received =
+                            nxt::tls::parse_tls13_finished(message);
+                        auto ok = nxt::tls::verify_finished(
+                            handshake_keys.server.traffic_secret,
+                            transcript,
+                            received);
+                        nxt::tls::require_tls(ok, "server Finished failed");
+                        saw_server_finished = true;
+                        co_return;
+                    });
                 }
                 nxt::tls::put_bytes(transcript, message);
             }
         }
 
-        co_await notify("application keys");
-        application_keys_ = nxt::tls::derive_tls13_application_keys(
-            handshake_keys.secret, transcript);
-        co_await notify("client finished");
+        application_keys_ = co_await span("keys.derive_application", [&] {
+            return ready_task(
+                nxt::tls::derive_tls13_application_keys(
+                    handshake_keys.secret, transcript));
+        });
         auto client_finished = nxt::tls::make_finished_message(
             handshake_keys.client.traffic_secret, transcript);
-        co_await writer_.write_all(
-            nxt::tls::seal_tls13_record(
-                handshake_keys.client, 22, client_finished));
+        co_await span("client_finished.write", [&]() -> task<> {
+            auto record = nxt::tls::seal_tls13_record(
+                handshake_keys.client, 22, client_finished);
+            co_await writer_.write_all(record);
+        });
         nxt::tls::put_bytes(transcript, client_finished);
         handshaken_ = true;
-        co_await notify("ready");
+        co_await event("ready");
     }
 
     task<> write_all(std::span<const std::byte> bytes)

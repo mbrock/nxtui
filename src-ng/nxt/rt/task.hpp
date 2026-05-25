@@ -491,6 +491,53 @@ with_env(typename Key::value_type value, Fn && fn)
     }
 }
 
+template<task_factory Fn>
+[[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
+with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
+{
+    auto context = current_trace_context();
+    if (context == nullptr) {
+        auto child = std::invoke(std::forward<Fn>(fn));
+        if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+            co_await child;
+        } else {
+            co_return co_await child;
+        }
+    } else {
+        auto span = context->start_span(
+            std::move(name), current_trace_span_id(), std::move(attributes));
+        try {
+            if constexpr (
+                std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+                co_await with_env<trace_current_span_key>(
+                    span.span_id(), [&]() -> task<void> {
+                    co_await std::invoke(fn);
+                });
+                span.finish("ok");
+            } else {
+                auto result = co_await with_env<trace_current_span_key>(
+                    span.span_id(),
+                    [&]() -> task<task_result_t<std::invoke_result_t<Fn>>> {
+                    co_return co_await std::invoke(fn);
+                });
+                span.finish("ok");
+                co_return std::move(result);
+            }
+        } catch (...) {
+            span.finish("error");
+            throw;
+        }
+    }
+}
+
+template<task_factory Fn>
+[[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
+with_trace_span(std::string name, Fn && fn)
+{
+    return with_trace_span(
+        std::move(name), {}, std::forward<Fn>(fn));
+}
+
 namespace detail {
 
 class started_handle_awaiter

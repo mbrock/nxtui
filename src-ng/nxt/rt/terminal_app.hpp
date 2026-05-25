@@ -15,7 +15,7 @@ namespace nxt::rt {
 struct terminal_app_options
 {
     bool raw_input = true;
-    bool alternate_screen = true;
+    bool alternate_screen = false;
     bool hide_cursor = true;
     bool clear_screen = true;
     nxt::Size fallback_size{96 * nxt::ch, 26 * nxt::ln};
