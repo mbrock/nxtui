@@ -64,7 +64,7 @@
 (struct forge-signature (term fields) #:transparent)
 (struct forge-field (term multiplicity range variable?) #:transparent)
 (struct forge-predicate (name body) #:transparent)
-(struct forge-run (name body scope) #:transparent)
+(struct forge-run (name body scope options) #:transparent)
 (struct forge-check (name body scope expect) #:transparent)
 (struct forge-option (name value) #:transparent)
 (struct forge-expr (op args) #:transparent)
@@ -242,8 +242,17 @@
 (define (check name body #:for [scope 'default] #:expect [expect 'checked])
   (forge-check name body scope expect))
 
-(define (run name body #:for scope)
-  (forge-run name body scope))
+(define (run name body
+             #:for scope
+             #:min-tracelength [min-tracelength #f]
+             #:max-tracelength [max-tracelength #f])
+  (forge-run name body scope
+             (append (if min-tracelength
+                         (list (forge-option 'min_tracelength min-tracelength))
+                         '())
+                     (if max-tracelength
+                         (list (forge-option 'max_tracelength max-tracelength))
+                         '()))))
 
 (define (model #:language [language 'forge/temporal] . parts)
   (define-values (options signatures predicates checks runs)
@@ -293,10 +302,15 @@
                                #:range (forge-field-range fld))]
     [else term]))
 
-(define (forge-option-hash model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])
+(define (forge-option-hash model
+                           #:run-options [run-options '()]
+                           #:run-sterling [run-sterling #f]
+                           #:export-run [export-run #f]
+                           #:export-xml [export-xml #f])
   (define base
     (for/fold ([options (hash)])
-              ([opt (in-list (forge-model-options model))])
+              ([opt (in-list (append (forge-model-options model)
+                                     run-options))])
       (define name (forge-option-name opt))
       (if (eq? name 'verbose)
           (hash-set (hash-set options 'verbosity (forge-option-value opt))
@@ -304,7 +318,9 @@
                     (forge-option-value opt))
           (hash-set options name (forge-option-value opt)))))
   (define with-defaults
-    (for/fold ([options f:DEFAULT-OPTIONS])
+    (for/fold ([options (hash-set (hash-set f:DEFAULT-OPTIONS
+                                            'verbosity 0)
+                                  'engine_verbosity 0)])
               ([(key value) (in-hash base)])
       (hash-set options key value)))
   (define with-language
@@ -516,13 +532,19 @@
       (define name (forge-run-name command))
       (define body (compile-forge-expr (forge-run-body command) sig-map relation-map predicate-map))
       (define run-body (run-with-field-constraints body))
+      (define run-options
+        (forge-option-hash model
+                           #:run-options (forge-run-options command)
+                           #:run-sterling run-sterling
+                           #:export-run export-run
+                           #:export-xml export-xml))
       (values name
               (f:make-run #:name name
                           #:preds (list run-body)
                           #:scope (scope->forge (forge-run-scope command) sigs)
                           #:sigs sigs
                           #:relations relations
-                          #:options options))))
+                          #:options run-options))))
   (compiled-forge-model sigs relations predicate-map runs checks options))
 
 (define (model->forge-runs model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])

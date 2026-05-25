@@ -19,10 +19,6 @@ ontology nxt "https://swa.sh/nxt#"
   property parked-on
 
 model runtime-model
-  option verbose 0
-  option min_tracelength 3
-  option max_tracelength 3
-
   signature deck
     waves one wand
   signature wand
@@ -148,7 +144,7 @@ model runtime-model
   run rich-runtime-shape-witness :for 6
     structural-invariants
     rich-runtime-shape
-  run rich-runtime-trace-witness :for 6
+  run rich-runtime-trace-witness :for 6 :trace-length 3
     always structural-invariants
     rich-runtime-shape
     staged-to-parked-to-idle

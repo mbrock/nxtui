@@ -156,6 +156,11 @@
 
 (define-syntax (forge-run stx)
   (syntax-parse stx
+    [(_ name:id #:for scope:expr #:trace-length trace-length:expr body)
+     #`(f:run 'name #,(runtime-ref #'body)
+              #:for scope
+              #:min-tracelength trace-length
+              #:max-tracelength trace-length)]
     [(_ name:id body #:for scope:expr)
      #'(f:run 'name (forge-body body) #:for scope)]
     [(_ name:id #:for scope:expr body)
