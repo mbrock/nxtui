@@ -261,6 +261,66 @@ private:
     int flags_ = 0;
 };
 
+template<typename Inner, typename Progress>
+class metered_byte_source final : public byte_source
+{
+public:
+    metered_byte_source(Inner inner, Progress progress)
+        : inner_(std::move(inner))
+        , progress_(std::move(progress))
+    {
+    }
+
+    task<read_result> read_some(std::span<std::byte> dst) override
+    {
+        auto result = co_await inner_.read_some(dst);
+        if (result.bytes > 0)
+            std::invoke(progress_, result.bytes);
+        co_return result;
+    }
+
+private:
+    Inner inner_;
+    Progress progress_;
+};
+
+template<typename Inner, typename Progress>
+auto meter_source(Inner inner, Progress progress)
+{
+    return metered_byte_source<Inner, Progress>{
+        std::move(inner), std::move(progress)};
+}
+
+template<typename Inner, typename Progress>
+class metered_byte_sink final : public byte_sink
+{
+public:
+    metered_byte_sink(Inner inner, Progress progress)
+        : inner_(std::move(inner))
+        , progress_(std::move(progress))
+    {
+    }
+
+    task<std::size_t> write_some(std::span<const std::byte> src) override
+    {
+        auto written = co_await inner_.write_some(src);
+        if (written > 0)
+            std::invoke(progress_, written);
+        co_return written;
+    }
+
+private:
+    Inner inner_;
+    Progress progress_;
+};
+
+template<typename Inner, typename Progress>
+auto meter_sink(Inner inner, Progress progress)
+{
+    return metered_byte_sink<Inner, Progress>{
+        std::move(inner), std::move(progress)};
+}
+
 inline task<std::size_t> send_some(
     int fd,
     std::span<const std::byte> buffer,

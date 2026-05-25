@@ -164,12 +164,23 @@ struct response_stream_result
     bool completed = false;
 };
 
+struct network_hud_state
+{
+    std::string phase;
+    std::size_t socket_rx = 0;
+    std::size_t socket_tx = 0;
+    double socket_rx_bps = 0.0;
+    double socket_tx_bps = 0.0;
+    std::size_t sse_events = 0;
+};
+
 struct live_state
 {
     std::string model;
     std::string status = "starting";
     std::string assistant_text;
     nxt::ai::tool_tui::turn_view turn;
+    network_hud_state network;
     std::chrono::steady_clock::time_point last_publish{};
     bool done = false;
 };
@@ -244,6 +255,62 @@ std::string join_lines(const std::vector<std::string> & lines)
     return out;
 }
 
+std::string format_bytes(std::size_t bytes)
+{
+    if (bytes < 1024)
+        return std::format("{} B", bytes);
+    auto kib = static_cast<double>(bytes) / 1024.0;
+    if (kib < 1024.0)
+        return std::format("{:.1f} KiB", kib);
+    return std::format("{:.1f} MiB", kib / 1024.0);
+}
+
+std::string format_rate(double bytes_per_second)
+{
+    if (bytes_per_second < 1024.0)
+        return std::format("{:.0f} B/s", bytes_per_second);
+    auto kib = bytes_per_second / 1024.0;
+    if (kib < 1024.0)
+        return std::format("{:.1f} KiB/s", kib);
+    return std::format("{:.1f} MiB/s", kib / 1024.0);
+}
+
+enum class cell_align { left, right };
+
+std::string fit_cell(std::string s, std::size_t width, cell_align align)
+{
+    if (width == 0)
+        return {};
+    if (s.size() > width) {
+        if (width == 1)
+            return s.substr(0, 1);
+        s.resize(width - 1);
+        s += "…";
+        return s;
+    }
+
+    auto pad = std::string(width - s.size(), ' ');
+    if (align == cell_align::right)
+        return pad + std::move(s);
+    s += pad;
+    return s;
+}
+
+auto fixed_cell(
+    nxt::width_t width,
+    std::string s,
+    nxt::tui::Style style,
+    cell_align align = cell_align::left)
+{
+    auto cells = static_cast<std::size_t>(width.count());
+    return nxt::tui::line_text(
+        nxt::tui::WidthHint::fixed(width),
+        [s = std::move(s), cells, align](nxt::width_t) {
+            return fit_cell(s, cells, align);
+        },
+        style);
+}
+
 void append_thought_delta(live_state & state, std::string_view delta)
 {
     static constexpr auto max_thought_bytes = std::size_t{4096};
@@ -288,6 +355,57 @@ auto activity_layout(const live_state & state)
         nxt::ai::tool_tui::render_turn(state.turn));
 }
 
+auto network_footer_layout(const live_state & state)
+{
+    namespace tt = nxt::ai::tool_tui;
+    const auto & net = state.network;
+    auto phase = net.phase.empty() ? std::string{"network"} : net.phase;
+    auto metric_style = nxt::tui::fg(tt::slate_500) | nxt::tui::bg(tt::page_bg);
+    auto value_style = nxt::tui::fg(tt::slate_300) | nxt::tui::bg(tt::page_bg);
+    auto phase_style = nxt::tui::fg(tt::teal_300) | nxt::tui::bg(tt::page_bg)
+                     | nxt::tui::em(nxt::Emphasis::bold);
+    return nxt::tui::either(
+        !net.phase.empty() || net.socket_rx != 0 || net.socket_tx != 0,
+        nxt::tui::empty(),
+        nxt::tui::row(
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
+            fixed_cell(22 * nxt::ch, std::move(phase), phase_style),
+            nxt::tui::hfill(2 * nxt::ch, tt::page_bg),
+            fixed_cell(2 * nxt::ch, "I", metric_style),
+            fixed_cell(
+                9 * nxt::ch,
+                format_bytes(net.socket_rx),
+                value_style,
+                cell_align::right),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
+            fixed_cell(
+                10 * nxt::ch,
+                format_rate(net.socket_rx_bps),
+                value_style,
+                cell_align::right),
+            nxt::tui::hfill(2 * nxt::ch, tt::page_bg),
+            fixed_cell(2 * nxt::ch, "O", metric_style),
+            fixed_cell(
+                9 * nxt::ch,
+                format_bytes(net.socket_tx),
+                value_style,
+                cell_align::right),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
+            fixed_cell(
+                10 * nxt::ch,
+                format_rate(net.socket_tx_bps),
+                value_style,
+                cell_align::right),
+            nxt::tui::hfill(2 * nxt::ch, tt::page_bg),
+            fixed_cell(2 * nxt::ch, "E", metric_style),
+            fixed_cell(
+                5 * nxt::ch,
+                std::to_string(net.sse_events),
+                value_style,
+                cell_align::right),
+            nxt::tui::flex_text("", nxt::tui::bg(tt::page_bg))));
+}
+
 auto live_layout(const live_state & state)
 {
     namespace tt = nxt::ai::tool_tui;
@@ -300,7 +418,42 @@ auto live_layout(const live_state & state)
         nxt::tui::column(
             header_layout(state),
             assistant_preview_layout(state),
-            activity_layout(state)));
+            activity_layout(state),
+            network_footer_layout(state)));
+}
+
+nxt::rt::task<void>
+sample_network_instruments(nxt::rt::ui_scope ui, live_state & state)
+{
+    using namespace std::chrono_literals;
+    auto rx = nxt::rt::ema_rate{700ms};
+    auto tx = nxt::rt::ema_rate{700ms};
+    auto last_rx = state.network.socket_rx;
+    auto last_tx = state.network.socket_tx;
+    auto last_time = std::chrono::steady_clock::now();
+
+    try {
+        while (!state.done && !nxt::rt::stop_requested()) {
+            co_await nxt::rt::op::timeout::after(100ms);
+            if (state.done || nxt::rt::stop_requested())
+                break;
+
+            auto now = std::chrono::steady_clock::now();
+            auto next_rx = state.network.socket_rx;
+            auto next_tx = state.network.socket_tx;
+            state.network.socket_rx_bps =
+                rx.sample(next_rx >= last_rx ? next_rx - last_rx : 0,
+                          now - last_time);
+            state.network.socket_tx_bps =
+                tx.sample(next_tx >= last_tx ? next_tx - last_tx : 0,
+                          now - last_time);
+            last_rx = next_rx;
+            last_tx = next_tx;
+            last_time = now;
+            ui.draw(live_layout(state));
+        }
+    } catch (const nxt::rt::operation_cancelled &) {
+    }
 }
 
 class plain_agent_presenter
@@ -365,6 +518,22 @@ public:
         const nxt::rt::trace_span &)
     {
         co_return;
+    }
+
+    void network_phase(std::string_view)
+    {
+    }
+
+    void socket_rx(std::size_t)
+    {
+    }
+
+    void socket_tx(std::size_t)
+    {
+    }
+
+    void sse_event()
+    {
     }
 };
 
@@ -507,6 +676,30 @@ public:
         publish(true);
     }
 
+    void network_phase(std::string_view phase)
+    {
+        hud_.network.phase = phase;
+        publish();
+    }
+
+    void socket_rx(std::size_t bytes)
+    {
+        hud_.network.socket_rx += bytes;
+        publish();
+    }
+
+    void socket_tx(std::size_t bytes)
+    {
+        hud_.network.socket_tx += bytes;
+        publish();
+    }
+
+    void sse_event()
+    {
+        ++hud_.network.sse_events;
+        publish();
+    }
+
     void done()
     {
         status("done");
@@ -532,19 +725,25 @@ nxt::rt::task<response_stream_result> stream_openai_response(
     presenter.status("connecting");
 
     auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
-    auto socket_output = nxt::rt::byte_writer<nxt::rt::socket_sink>{
-        nxt::rt::socket_sink{socket.get()},
+    presenter.network_phase("tcp connected");
+    auto socket_output = nxt::rt::byte_writer{
+        nxt::rt::meter_sink(
+            nxt::rt::socket_sink{socket.get()},
+            [&](std::size_t bytes) { presenter.socket_tx(bytes); }),
         4096,
     };
-    auto source = nxt::rt::socket_source{socket.get()};
+    auto source = nxt::rt::meter_source(
+        nxt::rt::socket_source{socket.get()},
+        [&](std::size_t bytes) { presenter.socket_rx(bytes); });
     auto input_storage = std::vector<std::byte>(18 * 1024);
-    auto reader = nxt::rt::byte_reader<nxt::rt::socket_source>{
+    auto reader = nxt::rt::byte_reader{
         source,
         std::span{input_storage},
     };
 
     auto tls = nxt::rt::tls::tls13_client_session{reader, socket_output};
     presenter.status("tls handshake");
+    presenter.network_phase("TLS handshake");
     auto trace = nxt::rt::current_trace_context();
     auto tls_span = nxt::rt::trace_span{};
     if (trace != nullptr) {
@@ -567,6 +766,11 @@ nxt::rt::task<response_stream_result> stream_openai_response(
                     presenter.status(
                         std::format(
                             "tls: {}",
+                            nxt::ai::trace_tui::display_name(
+                                progress.name)));
+                    presenter.network_phase(
+                        std::format(
+                            "TLS {}",
                             nxt::ai::trace_tui::display_name(
                                 progress.name)));
                     if (trace != nullptr && tls_span)
@@ -608,6 +812,7 @@ nxt::rt::task<response_stream_result> stream_openai_response(
         throw;
     }
     co_await presenter.tls_ready(trace, tls_span);
+    presenter.network_phase("TLS ready");
 
     auto http_request =
         nxt::ai::responses::openai_responses_http_request(request);
@@ -616,11 +821,13 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             header.value = "close";
     }
     auto request_text = nxt::http::serialize(http_request);
+    presenter.network_phase("http request");
     co_await tls.write_all(request_text);
 
     auto http_storage = std::vector<std::byte>(18 * 1024);
     auto http_reader =
         nxt::rt::byte_reader{tls, std::span{http_storage}};
+    presenter.network_phase("http response");
     auto head = co_await nxt::rt::http::read_response_head(http_reader);
     if (!response_status_is_success(head))
         throw nxt::rt::runtime_error{
@@ -634,9 +841,11 @@ nxt::rt::task<response_stream_result> stream_openai_response(
     auto sse_storage = std::vector<std::byte>(18 * 1024);
     auto sse_reader = nxt::rt::byte_reader{body, std::span{sse_storage}};
     auto result = response_stream_result{};
+    presenter.network_phase("streaming SSE");
     while (auto sse = co_await nxt::rt::http::parse_sse_event(sse_reader)) {
         if (sse->data == "[DONE]")
             break;
+        presenter.sse_event();
 
         auto terminal = sse->type == "response.completed"
                         || sse->type == "response.incomplete"
@@ -786,6 +995,7 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
         .status = "starting",
         .assistant_text = {},
         .turn = {},
+        .network = {},
         .last_publish = {},
         .done = false,
     };
@@ -805,6 +1015,8 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
                 [&]() -> nxt::rt::task<void> {
                 co_await nxt::rt::with_ui_zone([&](nxt::rt::ui_scope ui)
                     -> nxt::rt::task<void> {
+                    [[maybe_unused]] auto rate_sampler =
+                        ui.fork(sample_network_instruments(ui, live)).cope();
                     auto presenter = hud_agent_presenter{ui, live};
                     presenter.publish(true);
                     try {

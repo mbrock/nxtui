@@ -12,6 +12,7 @@
 #include "nxt/rt/exceptions.hpp"
 #include "nxt/rt/fs.hpp"
 #include "nxt/rt/http.hpp"
+#include "nxt/rt/sampling.hpp"
 #include "nxt/rt/task.hpp"
 #include "nxt/rt/terminal_app.hpp"
 #include "nxt/rt/trace.hpp"

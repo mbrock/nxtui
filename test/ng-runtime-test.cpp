@@ -5,6 +5,7 @@
 #include <nxt/rt/event.hpp>
 #include <nxt/rt/http.hpp>
 #include <nxt/rt/kqueue_wand.hpp>
+#include <nxt/rt/sampling.hpp>
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/terminal_app.hpp>
 #include <nxt/rt/ui_runtime.hpp>
@@ -1542,6 +1543,20 @@ static suite ng_runtime_tests{
         };
 
         "buffers"_test = [] {
+            "ema rate smooths byte deltas over time"_test = [] {
+                auto rate = nxt::rt::ema_rate{std::chrono::seconds{1}};
+
+                auto first =
+                    rate.sample(std::size_t{1000}, std::chrono::seconds{1});
+                auto second =
+                    rate.sample(std::size_t{0}, std::chrono::seconds{1});
+
+                expect(first > 999.0);
+                expect(first < 1001.0);
+                expect(second > 499.0);
+                expect(second < 501.0);
+            };
+
             "chunks are visited through reused storage"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
