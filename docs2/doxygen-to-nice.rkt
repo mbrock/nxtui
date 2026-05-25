@@ -257,7 +257,20 @@
                   (field-doc (forge-signature-term sig) fld))))
 
 (define (dexp-symbol name)
-  `(dexp-symbol (@ (name ,(format "~a" name)))))
+  `(dexp-symbol (@ (name ,(format "~a" name))
+                   (display ,(case name
+                               [(==) "="]
+                               [(=>) "⇒"]
+                               [(&&) "∧"]
+                               [(||) "∨"]
+                               [(in) "∈"]
+                               [(no) "∅"]
+                               [(some) "∃"]
+                               [(all) "∀"]
+                               [(lone) "≤1"]
+                               [(one) "1"]
+                               [(ge) "≥"]
+                               [else (format "~a" name)])))))
 
 (define (dexp-number value)
   `(dexp-number (@ (value ,(format "~a" value)))))

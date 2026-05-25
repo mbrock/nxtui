@@ -186,9 +186,16 @@
           .dexp.list[data-callee='block'] > .dexp.symbol:first-child {
             width: 100%;
           }
-          .dexp.list[data-callee='binding'] {
-            border-color: transparent;
-            padding-left: 0;
+          .dexp.list[data-callee='all'],
+          .dexp.list[data-callee='some'],
+          .dexp.list[data-callee='lone'] {
+            align-items: flex-start;
+          }
+          .dexp.list[data-callee='all'] > :nth-child(n+3),
+          .dexp.list[data-callee='some'] > :nth-child(n+3),
+          .dexp.list[data-callee='lone'] > :nth-child(n+3) {
+            margin-left: 1rem;
+            width: calc(100% - 1rem);
           }
           .dexp.list[data-callee='=>'],
           .dexp.list[data-callee='=='],
@@ -357,7 +364,7 @@
   </xsl:template>
 
   <xsl:template match="dexp-symbol">
-    <span class="dexp value symbol"><xsl:value-of select="@name"/></span>
+    <span class="dexp value symbol"><xsl:value-of select="@display"/></span>
   </xsl:template>
 
   <xsl:template match="dexp-number">
