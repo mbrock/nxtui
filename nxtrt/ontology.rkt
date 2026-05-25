@@ -4,7 +4,6 @@
          "runtime.rkt")
 
 (provide nxt
-         resource
          deck
          wand
          zone

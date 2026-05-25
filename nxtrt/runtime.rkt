@@ -1,14 +1,13 @@
 #lang rdf-forge
 
 ontology nxt "https://swa.sh/nxt#"
-  class resource :abstract
-  class deck :subclass-of resource
-  class wand :subclass-of resource
-  class zone :subclass-of resource
-  class task :subclass-of resource
-  class wish :subclass-of resource
-  class waiter :subclass-of resource
-  class deed :subclass-of resource
+  class deck
+  class wand
+  class zone
+  class task
+  class wish
+  class waiter
+  class deed
 
   property waves
   property belongs-to
