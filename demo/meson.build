@@ -32,6 +32,12 @@ if ng_ls_demo_available
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : ng_ls_demo_dependencies + [nxt_core_dep],
   )
+
+  executable('ng-shell-scope-demo',
+    'ng_shell_scope_demo.cpp',
+    include_directories : [nxt_inc, nxt_ng_inc],
+    dependencies : ng_ls_demo_dependencies + [nxt_core_dep],
+  )
 endif
 
 nxt_cares_dep = dependency('libcares', required : false)

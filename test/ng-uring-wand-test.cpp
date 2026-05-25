@@ -70,6 +70,36 @@ nxt::rt::task<void> timeout_once()
     co_await nxt::rt::op::timeout::after(1ms);
 }
 
+nxt::rt::task<int> timeout_value(int value)
+{
+    co_await nxt::rt::op::timeout::after(1ms);
+    co_return value;
+}
+
+nxt::rt::task<std::vector<int>> many_short_timeouts()
+{
+    auto deeds = co_await nxt::rt::with_zone(
+        nxt::rt::stop_on_failure{},
+        [](auto & policy)
+            -> nxt::rt::task<std::vector<nxt::rt::catching_deed<int>>> {
+            auto out = std::vector<nxt::rt::catching_deed<int>>{};
+            out.reserve(32);
+            for (auto i = 0; i != 32; ++i)
+                out.push_back(policy.fork(timeout_value(i)).cope());
+            co_return out;
+        });
+
+    auto values = std::vector<int>{};
+    values.reserve(deeds.size());
+    for (auto & deed : deeds) {
+        auto result = std::move(deed).get();
+        if (!result)
+            nxt::rt::rethrow(result.error());
+        values.push_back(*result);
+    }
+    co_return values;
+}
+
 nxt::rt::task<int> app_child_value(int value)
 {
     co_await nxt::rt::yield();
@@ -214,6 +244,36 @@ nxt::rt::task<nxt::rt::child_result> terminate_sleeping_shell()
         .signal = SIGTERM,
     };
     co_return co_await nxt::rt::op::wait_child{.pidfd = child.pid_fd()};
+}
+
+nxt::rt::task<nxt::rt::child_result> run_shell_in_pty()
+{
+    auto child = co_await nxt::rt::op::spawn_pty{
+        .argv = {"/bin/sh", "-c", "printf pty-ok"},
+        .columns = 40,
+        .rows = 8,
+    };
+
+    auto storage = std::array<std::byte, 128>{};
+    auto output = std::string{};
+    while (true) {
+        try {
+            auto n = co_await nxt::rt::op::read_some{
+                .fd = child.master_fd(),
+                .buffer = std::span{storage},
+            };
+            if (n == 0)
+                break;
+            output += nxt::rt::as_string_view(std::span{storage}.first(n));
+        } catch (const nxt::rt::runtime_error &) {
+            break;
+        }
+    }
+    child.master.reset();
+    if (output.find("pty-ok") == std::string::npos)
+        throw std::runtime_error{"pty did not carry child output"};
+
+    co_return co_await nxt::rt::subprocess::wait_child(child);
 }
 
 nxt::rt::task<nxt::rt::child_result> cleanup_sleeping_shell_after_cancel(
@@ -523,6 +583,18 @@ static suite ng_uring_wand_tests{
                 expect(status.signal == SIGTERM);
             };
 
+            "pty subprocesses run and wait through pidfds"_test = [] {
+                auto wand = nxt::rt::uring_wand{};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = run_shell_in_pty();
+
+                deck.start(task);
+                auto status = pump_until_done(deck, wand, task);
+
+                expect(status.exited);
+                expect(status.exit_code == 0_i);
+            };
+
             "subprocess cleanup is shielded after task cancellation"_test = [] {
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
@@ -556,6 +628,18 @@ static suite ng_uring_wand_tests{
                 pump_until_done(deck, wand, task);
 
                 expect(task.done());
+            };
+
+            "pending wishes wait for submission queue capacity"_test = [] {
+                auto wand = nxt::rt::uring_wand{4};
+                auto deck = nxt::rt::deck{&wand};
+                auto task = many_short_timeouts();
+
+                deck.start(task);
+                auto values = pump_until_done(deck, wand, task);
+
+                expect(task.done());
+                expect(values.size() == std::size_t{32});
             };
 
             "readiness is reported before a poll-until deadline"_test = [] {

@@ -13,9 +13,6 @@ int run(int argc, char ** argv);
 namespace nxt::cgroup_browser {
 int run(int argc, char ** argv);
 }
-namespace nxt::shell_scope {
-int run(int argc, char ** argv);
-}
 #ifdef NXTDEMO_HAVE_SPAN_BROWSER
 namespace nxt::span_browser {
 int run(int argc, char ** argv);
@@ -33,7 +30,6 @@ void print_usage(const char * program)
         "  build_sim       fake parallel build progress\n"
         "  cassette        render an agent trace as cassette cards\n"
         "  cgroup_browser  walk /sys/fs/cgroup\n"
-        "  shell_scope     spawn a shell session\n"
 #ifdef NXTDEMO_HAVE_SPAN_BROWSER
         "  span_browser    browse an otel parquet archive\n"
 #endif
@@ -62,8 +58,6 @@ int main(int argc, char ** argv)
         return nxt::cassette::run(sub_argc, sub_argv);
     if (std::strcmp(name, "cgroup_browser") == 0)
         return nxt::cgroup_browser::run(sub_argc, sub_argv);
-    if (std::strcmp(name, "shell_scope") == 0)
-        return nxt::shell_scope::run(sub_argc, sub_argv);
 #ifdef NXTDEMO_HAVE_SPAN_BROWSER
     if (std::strcmp(name, "span_browser") == 0)
         return nxt::span_browser::run(sub_argc, sub_argv);

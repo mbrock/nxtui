@@ -12,30 +12,18 @@
 
 namespace nxt::ai::responses {
 
-/// Parameters for one OpenAI Responses API request.
 struct openai_responses_request
 {
-    /// Bearer token used for the Authorization header.
     std::string api_key = {};
-    /// Model identifier sent as the `model` field.
     std::string model = "gpt-5-mini";
-    /// Plain text prompt used when `input_items` is empty.
     std::string input = {};
-    /// Structured Responses `input` array for multi-turn/stateless calls.
     std::vector<openai::raw_json> input_items = {};
-    /// Tool definitions in Responses function-tool schema.
     std::vector<openai::function_tool_definition> tools = {};
-    /// Extra response fields requested through the `include` option.
     std::vector<std::string> include = {};
-    /// Server-side response id to continue when `store` is true.
     std::string previous_response_id = {};
-    /// Upper bound for generated output tokens.
     std::size_t max_output_tokens = 6000;
-    /// Reasoning effort string accepted by the selected model.
     std::string reasoning_effort = "medium";
-    /// Optional reasoning summary mode.
     std::string reasoning_summary = {};
-    /// Whether OpenAI should persist the response for server-side continuity.
     bool store = false;
 };
 
@@ -64,7 +52,6 @@ struct openai_responses_body_payload
     std::optional<reasoning_options> reasoning = {};
 };
 
-/// Return the structured input array represented by a request.
 [[nodiscard]] inline std::vector<openai::raw_json>
 input_items_from_request(const openai_responses_request & request)
 {
@@ -78,7 +65,6 @@ input_items_from_request(const openai_responses_request & request)
     return input;
 }
 
-/// Build the typed payload sent as JSON to `POST /v1/responses`.
 [[nodiscard]] inline openai_responses_body_payload
 openai_responses_body_payload_from_request(
     const openai_responses_request & request)
@@ -114,7 +100,6 @@ openai_responses_body_payload_from_request(
     return body;
 }
 
-/// Serialize a request into a JSON body for `POST /v1/responses`.
 [[nodiscard]] inline std::string
 openai_responses_body(const openai_responses_request & request)
 {
@@ -122,7 +107,6 @@ openai_responses_body(const openai_responses_request & request)
     return glz::ex::write_json(body);
 }
 
-/// Build the HTTP request envelope for the OpenAI Responses endpoint.
 [[nodiscard]] inline nxt::http::request
 openai_responses_http_request(const openai_responses_request & request)
 {

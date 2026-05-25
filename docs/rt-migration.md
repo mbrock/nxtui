@@ -16,16 +16,19 @@ capabilities.
 - `nxt::rt::wand` implementations for platform waiting.
 - `nxt::rt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments.
+- Linux subprocess wishes for piped children, pty children, pidfd waits, and
+  pidfd signals.
+- OpenAI Responses request JSON, streaming, and basic tool-call batches.
 - Core terminal input types and parsing in `src/nxt/input.hpp`, shared by
   both the ng runtime and the legacy `nxtio` shim.
-- The default `nxtllm` executable, currently able to parse CLI options and
-  construct OpenAI Responses request envelopes on `nxt::rt`.
+- The default `nxtllm` executable, including one-shot streaming and
+  `read_file`/`rg_search`/`bash` tool execution on `nxt::rt`.
 
-The old application stack is no longer built.  It still contains useful UI and
-tooling code, but `src/nxtio/async-core.hpp` aliases `nxt::task`,
+The old application stack is no longer built. `src/nxtio/async-core.hpp` aliases `nxt::task`,
 `nxt::scheduler`, `nxt::queue`, `nxt::event`, `nxt::latch`, `sync_wait`, and
 `when_all` to removed libcoro primitives. Most of the legacy UI, process,
-signal, and old `nxtai` code enters async through those aliases.
+and signal code enters async through those aliases. The old `src/nxtai` LLM
+stack has been removed; the surviving LLM code lives in `src-ng/nxtai`.
 
 ## Migration table
 
@@ -42,7 +45,8 @@ signal, and old `nxtai` code enters async through those aliases.
 | `spawn_detached` | `nxt::rt::fork` in a zone | Detached work should still be owned by a root zone. |
 | `nxt::scope` | `nxt::rt::task_zone` + UI capabilities | Scope currently mixes lifetime, scheduler, and yard state. Split those. |
 | `nxtio/net` | `src-ng` HTTP/TLS/DNS | The OpenAI streaming path should use the new HTTP client directly. |
-| old `src/nxtai/nxtllm.cpp` | `src-ng/nxtai/nxtllm.cpp` | Started. The executable now builds on `nxt::rt`; streaming/HUD/tools still need ports. |
+| old shell/pty subprocess helpers | `nxt::rt::op::spawn_pty` + `nxt::rt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
+| old `src/nxtai/nxtllm.cpp` | `src-ng/nxtai/nxtllm.cpp` | The legacy file is gone. The ng executable streams one-shot turns and runs tool batches; HUD/TUI remains to port. |
 
 ## First code slices
 
@@ -55,29 +59,32 @@ signal, and old `nxtai` code enters async through those aliases.
    `nxt::rt::runtime`: it owns a `deck`, platform `wand`, root-zone run
    entrypoint, damage event, input channel, resize channel, and `sleep`.
    The next part is to layer terminal/compositor ownership and yard-like
-   surfaces on top of it.  `ng-tui-demo` is the first tiny compositor demo
-   running through this path.
+   surfaces on top of it. `ng-tui-demo` and `ng-shell-scope-demo` are the
+   first compositor demos running through this path.
 
 3. Port `nxtio/buffers.hpp` and `nxtio/http.hpp`-style helpers to
    `nxt::rt::task`.
    Keep request/response data structures free of runtime dependencies.
-   `src/nxtai/responses_request.hpp` is the model for that split.
+   `src-ng/nxtai/responses_request.hpp` is the model for that split.
 
-4. Make OpenAI streaming use `src-ng` networking.
-   `nxtai/response_turn.hpp` currently enters through
-   `runtime.scheduler_handle()` and `nxt::io::net::connect_tls`.  Replace
-   that path with a small `nxt::rt` stream reader that yields parsed SSE
-   events.
+4. Make OpenAI streaming use `src-ng` networking. Done for the one-shot
+   `nxtllm` path: it connects over `nxt::rt` TCP/TLS, reads HTTP/SSE, and
+   collects completed output items.
 
-5. Port tool execution after streaming works.
-   `nxtai/tools/subprocess.hpp`, `grep`, `bash`, and `web_fetch` take a
-   scheduler pointer today.  Move those to a runtime capability that offers
-   `poll`, `sleep`, and subprocess handling on `nxt::rt`.
+5. Port tool execution after streaming works. Started as
+   `src-ng/nxtai/tool_batch.hpp`, `ng_agent_tools.hpp`, and
+   `tool_process.hpp`. Batches fork one task per call in a zone and return
+   ordered `function_call_output` items.
 
 6. Re-enable `nxtllm` on the ng runtime. Started as
    `src-ng/nxtai/nxtllm.cpp`: the executable builds by default, parses CLI
-   options, enters `nxt::rt::runtime`, and constructs Responses request JSON.
-   Next success condition: stream a response over the `src-ng` HTTP/TLS stack.
+   options, enters `nxt::rt::runtime`, streams responses over the `src-ng`
+   HTTP/TLS stack, and can complete a bash tool-call smoke test.
+
+7. Use PTYs for live tool surfaces. Started with `ng-shell-scope-demo`: the
+   command runs through `spawn_pty`, feeds a `vterm` session, and renders as a
+   TUI surface. Cgroup sampling reads files through `openat`/`read_some`
+   wishes and batches each sample with `when_all`.
 
 ## Compatibility strategy
 
@@ -87,7 +94,8 @@ and a dual alias layer would hide the hard parts. Prefer explicit ports:
 
 - Move dependency-light data types first.
 - Port leaf async functions next.
-- Keep old UI demos as source references until the app facade is ready.
+- Keep only old UI demos that still teach an unported subsystem; delete them
+  once an ng successor exists.
 - Treat a clean default Meson build as the guardrail for new-runtime-only work.
 
 ## `nxtllm` path

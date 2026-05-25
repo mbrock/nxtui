@@ -228,6 +228,23 @@ struct piped_child
         return output.get();
     }
 };
+
+struct pty_child
+{
+    pid_t pid = -1;
+    nxt::unique_fd pidfd;
+    nxt::unique_fd master;
+
+    [[nodiscard]] int pid_fd() const noexcept
+    {
+        return pidfd.get();
+    }
+
+    [[nodiscard]] int master_fd() const noexcept
+    {
+        return master.get();
+    }
+};
 #endif
 
 namespace op {
@@ -299,6 +316,20 @@ struct spawn_piped
 
     bool stage_uring(uring_submission & submission);
     waiter<piped_child> operator co_await() const;
+};
+
+struct spawn_pty
+{
+    using result_type = pty_child;
+    static constexpr std::string_view name = "spawn-pty";
+
+    std::vector<std::string> argv;
+    std::size_t columns = 80;
+    std::size_t rows = 24;
+    std::shared_ptr<pty_child> child = std::make_shared<pty_child>();
+
+    bool stage_uring(uring_submission & submission);
+    waiter<pty_child> operator co_await() const;
 };
 
 struct wait_child
@@ -477,6 +508,7 @@ using wish_variant = std::variant<
     op::statx,
     op::getdents64,
     op::spawn_piped,
+    op::spawn_pty,
     op::wait_child,
     op::signal_child,
 #endif

@@ -1911,6 +1911,22 @@ inline waiter<piped_child> op::spawn_piped::operator co_await() const
         *this);
 }
 
+inline waiter<pty_child> op::spawn_pty::operator co_await() const
+{
+    auto context = detail::current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr)
+        throw runtime_error{
+            "nxt::rt spawn-pty wish awaited without a running wand"};
+
+    trace("wish spawn-pty prepare argv=" + std::to_string(argv.size()));
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        *this);
+}
+
 inline waiter<child_result> op::wait_child::operator co_await() const
 {
     auto context = detail::current_wish_context();

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
@@ -21,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/ioctl.h>
 #include <sys/pidfd.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -174,6 +176,9 @@ public:
                 if (has_pending_work()) {
                     wave(d);
                     poll(d);
+                    if (d.empty() && !root.done() && has_pending_work()
+                        && has_submitted_completions())
+                        wait(d);
                     continue;
                 }
                 if (!has_submitted_completions())
@@ -353,6 +358,9 @@ private:
                 } else if constexpr (std::is_same_v<T, piped_child>) {
                     state_->set_value(std::move(
                         *std::get<op::spawn_piped>(*this->request_).child));
+                } else if constexpr (std::is_same_v<T, pty_child>) {
+                    state_->set_value(std::move(
+                        *std::get<op::spawn_pty>(*this->request_).child));
                 } else if constexpr (std::is_same_v<T, child_result>) {
                     state_->set_value(child_result_from(
                         std::get<op::wait_child>(*this->request_).info));
@@ -414,6 +422,32 @@ private:
         return sqe;
     }
 
+    [[nodiscard]] unsigned sq_space_left() const noexcept
+    {
+        return io_uring_sq_space_left(
+            const_cast<io_uring *>(&ring_));
+    }
+
+    [[nodiscard]] static unsigned sqes_required(uring_wish const & request)
+    {
+        return std::visit(
+            [](auto const & op) -> unsigned {
+                using op_type = std::decay_t<decltype(op)>;
+                if constexpr (
+                    std::is_same_v<op_type, op::getdents64>
+                    || std::is_same_v<op_type, op::spawn_piped>
+                    || std::is_same_v<op_type, op::spawn_pty>
+                    || std::is_same_v<op_type, op::signal_child>) {
+                    return 0;
+                } else if constexpr (std::is_same_v<op_type, op::poll_until>) {
+                    return 2;
+                } else {
+                    return 1;
+                }
+            },
+            request);
+    }
+
     static void attach_token(io_uring_sqe * sqe, wait_token token) noexcept
     {
         io_uring_sqe_set_data64(sqe, static_cast<std::uint64_t>(token));
@@ -423,6 +457,7 @@ private:
     {
         auto tokens = std::vector<wait_token>{};
         tokens.swap(pending_submissions_);
+        auto deferred = std::vector<wait_token>{};
 
         for (auto token : tokens) {
             auto found = completions_.find(token);
@@ -437,9 +472,20 @@ private:
                 continue;
             }
 
+            auto required = sqes_required(completion.request());
+            if (required > sq_space_left()) {
+                deferred.push_back(token);
+                continue;
+            }
+
             if (stage_submission(d, token, completion.request()))
                 completion.mark_submitted();
         }
+
+        pending_submissions_.insert(
+            pending_submissions_.begin(),
+            deferred.begin(),
+            deferred.end());
     }
 
     bool stage_submission(deck & d, wait_token token, uring_wish & request)
@@ -454,7 +500,13 @@ private:
 
     void stage_cancellations()
     {
+        auto deferred = std::unordered_set<wait_token>{};
         for (auto token : pending_cancellations_) {
+            if (sq_space_left() == 0) {
+                deferred.insert(token);
+                continue;
+            }
+
             auto * sqe = get_sqe();
             io_uring_prep_cancel64(
                 sqe,
@@ -463,7 +515,7 @@ private:
             attach_token(sqe, cancel_token(token));
             trace("uring prepare cancel token=" + std::to_string(token));
         }
-        pending_cancellations_.clear();
+        pending_cancellations_ = std::move(deferred);
     }
 
     static constexpr wait_token cancel_token_bit =
@@ -639,6 +691,45 @@ inline int send_pidfd_signal(int pidfd, int signal)
 #endif
 }
 
+inline void set_cloexec(int fd)
+{
+    auto flags = ::fcntl(fd, F_GETFD);
+    if (flags < 0)
+        throw runtime_error{"fcntl(F_GETFD) failed: " + std::to_string(errno)};
+    if (::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
+        throw runtime_error{"fcntl(F_SETFD) failed: " + std::to_string(errno)};
+}
+
+inline winsize winsize_from(std::size_t columns, std::size_t rows)
+{
+    return winsize{
+        .ws_row = static_cast<unsigned short>(std::max<std::size_t>(1, rows)),
+        .ws_col = static_cast<unsigned short>(std::max<std::size_t>(1, columns)),
+        .ws_xpixel = 0,
+        .ws_ypixel = 0,
+    };
+}
+
+inline nxt::unique_fd open_pty_master()
+{
+    auto master = nxt::unique_fd{::posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)};
+    if (master.get() < 0)
+        throw runtime_error{"posix_openpt failed: " + std::to_string(errno)};
+    if (::grantpt(master.get()) < 0)
+        throw runtime_error{"grantpt failed: " + std::to_string(errno)};
+    if (::unlockpt(master.get()) < 0)
+        throw runtime_error{"unlockpt failed: " + std::to_string(errno)};
+    return master;
+}
+
+inline std::string pty_slave_name(int master_fd)
+{
+    auto name = std::array<char, 256>{};
+    if (::ptsname_r(master_fd, name.data(), name.size()) != 0)
+        throw runtime_error{"ptsname_r failed: " + std::to_string(errno)};
+    return name.data();
+}
+
 inline bool op::manual::stage_uring(uring_submission & submission)
 {
     auto * sqe = submission.get_sqe();
@@ -754,6 +845,86 @@ inline bool op::spawn_piped::stage_uring(uring_submission & submission)
         .pid = pid,
         .pidfd = nxt::unique_fd{pidfd},
         .output = std::move(read_fd),
+    };
+    submission.complete_sync(0);
+    return false;
+}
+
+inline bool op::spawn_pty::stage_uring(uring_submission & submission)
+{
+    if (argv.empty()) {
+        submission.complete_sync(-EINVAL);
+        return false;
+    }
+
+    auto master = nxt::unique_fd{};
+    auto slave = nxt::unique_fd{};
+    try {
+        master = open_pty_master();
+        auto slave_name = pty_slave_name(master.get());
+        slave = nxt::unique_fd{
+            ::open(slave_name.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC)};
+        if (slave.get() < 0) {
+            submission.complete_sync(-errno);
+            return false;
+        }
+        auto ws = winsize_from(columns, rows);
+        if (::ioctl(slave.get(), TIOCSWINSZ, &ws) < 0) {
+            submission.complete_sync(-errno);
+            return false;
+        }
+    } catch (const runtime_error &) {
+        submission.complete_sync(-errno);
+        return false;
+    }
+
+    auto ptrs = argv_ptrs(argv);
+    auto pid = ::fork();
+    if (pid < 0) {
+        submission.complete_sync(-errno);
+        return false;
+    }
+
+    if (pid == 0) {
+        ::close(master.get());
+        if (::setsid() < 0)
+            _exit(126);
+        if (::ioctl(slave.get(), TIOCSCTTY, 0) < 0)
+            _exit(126);
+        ::dup2(slave.get(), STDIN_FILENO);
+        ::dup2(slave.get(), STDOUT_FILENO);
+        ::dup2(slave.get(), STDERR_FILENO);
+        if (slave.get() > STDERR_FILENO)
+            ::close(slave.get());
+        ::execvp(ptrs[0], ptrs.data());
+        _exit(errno == ENOENT ? 127 : 126);
+    }
+
+    slave.reset();
+
+    auto pidfd = open_pidfd(pid);
+    if (pidfd < 0) {
+        auto saved_errno = errno;
+        ::kill(pid, SIGKILL);
+        (void)::waitpid(pid, nullptr, 0);
+        submission.complete_sync(-saved_errno);
+        return false;
+    }
+
+    try {
+        set_cloexec(master.get());
+    } catch (const runtime_error &) {
+        auto saved_errno = errno;
+        ::kill(pid, SIGKILL);
+        (void)::waitpid(pid, nullptr, 0);
+        submission.complete_sync(-saved_errno);
+        return false;
+    }
+
+    *child = pty_child{
+        .pid = pid,
+        .pidfd = nxt::unique_fd{pidfd},
+        .master = std::move(master),
     };
     submission.complete_sync(0);
     return false;
