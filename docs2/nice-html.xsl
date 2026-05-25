@@ -151,7 +151,7 @@
           }
           .dexp {
             align-items: center;
-            display: flex;
+            display: inline-flex;
             flex-wrap: wrap;
             gap: 0.08rem 0.28rem;
           }
@@ -184,9 +184,6 @@
             border-right-width: 0;
             flex-direction: column;
           }
-          .dexp.list[data-callee='block'] > .dexp.symbol:first-child {
-            width: 100%;
-          }
           .dexp.list[data-callee='all'],
           .dexp.list[data-callee='some'],
           .dexp.list[data-callee='lone'] {
@@ -196,7 +193,6 @@
           .dexp.list[data-callee='some'] > :nth-child(n+3),
           .dexp.list[data-callee='lone'] > :nth-child(n+3) {
             margin-left: 1rem;
-            width: calc(100% - 1rem);
           }
           .dexp.list[data-callee='=>'],
           .dexp.list[data-callee='=='],
