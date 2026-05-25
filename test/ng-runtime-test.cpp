@@ -486,8 +486,61 @@ static suite ng_runtime_tests{
                 expect(result == 22_i);
             };
 
+            "finally runs shielded cleanup before returning values"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                auto result = deck.sync_wait(nxt::rt::finally(
+                    value_after_yield(7),
+                    [&]() {
+                        return record_after_yield(events, 9);
+                    }));
+
+                expect(result == 7_i);
+                expect(events == std::vector<int>{91, 92});
+            };
+
+            "finally runs cleanup after body failure"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+                auto threw = false;
+
+                try {
+                    (void)deck.sync_wait(nxt::rt::finally(
+                        throw_int_after_yield(),
+                        [&]() {
+                            return record_after_yield(events, 8);
+                        }));
+                } catch (const std::exception &) {
+                    threw = true;
+                }
+
+                expect(threw);
+                expect(events == std::vector<int>{81, 82});
+            };
+
+            "finally groups body and cleanup failures"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto grouped = false;
+
+                try {
+                    (void)deck.sync_wait(nxt::rt::finally(
+                        throw_int_after_yield(),
+                        []() -> nxt::rt::task<void> {
+                            co_await nxt::rt::yield();
+                            throw nxt::rt::runtime_error{"cleanup boom"};
+                        }));
+                } catch (const nxt::rt::exception_group & group) {
+                    grouped = true;
+                    expect(group.exceptions().size() == std::size_t{2});
+                }
+
+                expect(grouped);
+            };
+
             "task adaptors flow through then and let_value"_test = [] {
                 auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
 
                 auto result = deck.sync_wait(
                     value_after_yield(10)
@@ -496,9 +549,13 @@ static suite ng_runtime_tests{
                     })
                     | nxt::rt::let_value([](int value) {
                         return value_after_yield(value + 5);
+                    })
+                    | nxt::rt::finally([&]() {
+                        return record_after_yield(events, 6);
                     }));
 
                 expect(result == 25_i);
+                expect(events == std::vector<int>{61, 62});
             };
 
             "for_each_task awaits lazy ranges of tasks"_test = [] {

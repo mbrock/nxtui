@@ -1092,6 +1092,62 @@ let_value(task<T> child, F fn)
     }
 }
 
+template<typename T, typename Cleanup>
+    requires stored_task_factory<Cleanup>
+        && std::is_void_v<stored_task_result_t<Cleanup>>
+[[nodiscard]] task<T> finally(task<T> child, Cleanup cleanup)
+{
+    auto body_failure = std::exception_ptr{};
+    auto cleanup_failure = std::exception_ptr{};
+
+    if constexpr (std::is_void_v<T>) {
+        try {
+            co_await child;
+        } catch (...) {
+            body_failure = std::current_exception();
+        }
+    } else {
+        auto result = std::optional<std::remove_cv_t<T>>{};
+        try {
+            result.emplace(co_await child);
+        } catch (...) {
+            body_failure = std::current_exception();
+        }
+
+        try {
+            co_await shield(std::invoke(cleanup));
+        } catch (...) {
+            cleanup_failure = std::current_exception();
+        }
+
+        if (body_failure && cleanup_failure)
+            throw_exceptions(
+                "task body and cleanup failed",
+                {body_failure, cleanup_failure});
+        if (cleanup_failure)
+            rethrow(std::move(cleanup_failure));
+        if (body_failure)
+            rethrow(std::move(body_failure));
+
+        co_return std::move(*result);
+    }
+
+    try {
+        co_await shield(std::invoke(cleanup));
+    } catch (...) {
+        cleanup_failure = std::current_exception();
+    }
+
+    if (body_failure && cleanup_failure)
+        throw_exceptions(
+            "task body and cleanup failed",
+            {body_failure, cleanup_failure});
+    if (cleanup_failure)
+        rethrow(std::move(cleanup_failure));
+    if (body_failure)
+        rethrow(std::move(body_failure));
+}
+
 template<typename F>
 class then_closure
 {
@@ -1108,6 +1164,24 @@ public:
 
 private:
     F fn_;
+};
+
+template<typename Cleanup>
+class finally_closure
+{
+public:
+    explicit finally_closure(Cleanup cleanup)
+        : cleanup_(std::move(cleanup))
+    {}
+
+    template<typename T>
+    [[nodiscard]] auto operator()(task<T> child) &&
+    {
+        return finally(std::move(child), std::move(cleanup_));
+    }
+
+private:
+    Cleanup cleanup_;
 };
 
 template<typename F>
@@ -1138,6 +1212,13 @@ template<typename F>
 [[nodiscard]] auto let_value(F fn)
 {
     return let_value_closure<std::decay_t<F>>{std::forward<F>(fn)};
+}
+
+template<typename Cleanup>
+[[nodiscard]] auto finally(Cleanup cleanup)
+{
+    return finally_closure<std::decay_t<Cleanup>>{
+        std::forward<Cleanup>(cleanup)};
 }
 
 template<typename T, typename Adaptor>
