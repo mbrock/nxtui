@@ -179,6 +179,37 @@
             color: var(--accent);
             font-weight: 700;
           }
+          .dexp.list[data-callee='block'],
+          .dexp.list[data-callee='all'],
+          .dexp.list[data-callee='some'],
+          .dexp.list[data-callee='lone'],
+          .dexp.list[data-callee='always'],
+          .dexp.list[data-callee='next-state'] {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+          .dexp.list[data-callee='block'] > .dexp.symbol:first-child,
+          .dexp.list[data-callee='all'] > .dexp.symbol:first-child,
+          .dexp.list[data-callee='some'] > .dexp.symbol:first-child,
+          .dexp.list[data-callee='lone'] > .dexp.symbol:first-child,
+          .dexp.list[data-callee='always'] > .dexp.symbol:first-child,
+          .dexp.list[data-callee='next-state'] > .dexp.symbol:first-child {
+            width: 100%;
+          }
+          .dexp.list[data-callee='bindings'] {
+            align-items: flex-start;
+            border-color: color-mix(in srgb, var(--line), transparent 20%);
+            flex-direction: column;
+          }
+          .dexp.list[data-callee='binding'] {
+            border-color: transparent;
+            padding-left: 0;
+          }
+          .dexp.list[data-callee='=>'],
+          .dexp.list[data-callee='=='],
+          .dexp.list[data-callee='in'] {
+            column-gap: 0.5rem;
+          }
           ul {
             margin: 0.75rem 0 1.25rem;
             padding-left: 1.3rem;
@@ -337,7 +368,7 @@
   </xsl:template>
 
   <xsl:template match="dexp-list">
-    <div class="dexp value list"><xsl:apply-templates/></div>
+    <div class="dexp value list" data-callee="{@callee}"><xsl:apply-templates/></div>
   </xsl:template>
 
   <xsl:template match="dexp-symbol">

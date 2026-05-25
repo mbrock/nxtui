@@ -262,8 +262,9 @@
 (define (dexp-number value)
   `(dexp-number (@ (value ,(format "~a" value)))))
 
-(define (dexp-list . children)
-  `(dexp-list ,@children))
+(define (dexp-list #:callee [callee #f] . children)
+  `(dexp-list (@ (callee ,(if callee (format "~a" callee) "")))
+              ,@children))
 
 (define (expr-doc expr)
   (cond
@@ -272,18 +273,22 @@
     [(term? expr) (dexp-symbol (term-display-name expr))]
     [(forge-expr? expr)
      (apply dexp-list
+            #:callee (forge-expr-op expr)
             (cons (dexp-symbol (forge-expr-op expr))
                   (map expr-doc (forge-expr-args expr))))]
     [(forge-quant? expr)
      (dexp-list
+      #:callee (forge-quant-kind expr)
       (dexp-symbol (forge-quant-kind expr))
       (apply dexp-list
+             #:callee 'bindings
              (for/list ([binding (in-list (forge-quant-bindings expr))])
-               (dexp-list (dexp-symbol (car binding))
+               (dexp-list #:callee 'binding
+                          (dexp-symbol (car binding))
                           (expr-doc (cdr binding)))))
       (expr-doc (forge-quant-body expr)))]
     [(list? expr)
-     (apply dexp-list (map expr-doc expr))]
+     (apply dexp-list #:callee 'list (map expr-doc expr))]
     [else (dexp-symbol (format "~a" expr))]))
 
 (define (predicate-doc pred)
