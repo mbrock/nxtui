@@ -7,7 +7,7 @@
 		"forge:unicode": "bun cassette/forge-unicode-graph.ts"
 	},
 	"dependencies": {
-		"@forge-fm/forge-graph": "github:mbrock/forge-graph#89c00b9"
+		"@forge-fm/forge-graph": "github:mbrock/forge-graph#b6ce40e"
 	},
 	"devDependencies": {
 		"@happy-dom/global-registrator": "^20.9.0"

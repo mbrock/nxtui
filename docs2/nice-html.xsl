@@ -28,7 +28,7 @@
             background: var(--paper);
           }
           main {
-            width: min(980px, calc(100% - 2rem));
+            width: min(1200px, calc(100% - 2rem));
             margin: 0 auto;
             padding: 4.5rem 0 5rem;
           }
@@ -70,16 +70,19 @@
             font-size: 1.08rem;
           }
           forge-doc-graph {
-            aspect-ratio: 16 / 10;
+            aspect-ratio: 16 / 9;
+            background: transparent;
             display: block;
+            margin: 2.25rem 0 3.25rem;
+            max-height: 760px;
             min-height: 360px;
-            max-height: 680px;
-            margin: 2rem 0 3rem;
             position: relative;
-            width: 100%;
+            width: min(1280px, calc(100vw - 2rem));
+            margin-left: calc((100% - min(1280px, calc(100vw - 2rem))) / 2);
           }
           forge-doc-graph forge-graph {
             aspect-ratio: inherit;
+            background: transparent;
             display: block;
             height: 100%;
             min-height: inherit;
@@ -103,9 +106,11 @@
             }
             header,
             .intro,
-            forge-doc-graph,
             section {
               grid-column: 1;
+            }
+            forge-doc-graph {
+              grid-column: 1 / -1;
             }
             nav {
               grid-column: 2;
@@ -138,8 +143,9 @@
             </xsl:for-each>
           </nav>
           <div class="intro">
-            <xsl:apply-templates select="paragraph | forge-graph"/>
+            <xsl:apply-templates select="paragraph"/>
           </div>
+          <xsl:apply-templates select="forge-graph"/>
           <xsl:apply-templates select="section"/>
         </main>
       </body>

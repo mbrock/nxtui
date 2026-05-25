@@ -5,7 +5,7 @@
     "": {
       "name": "nxtui-docs",
       "dependencies": {
-        "@forge-fm/forge-graph": "github:mbrock/forge-graph#89c00b9",
+        "@forge-fm/forge-graph": "github:mbrock/forge-graph#b6ce40e",
       },
       "devDependencies": {
         "@happy-dom/global-registrator": "^20.9.0",
@@ -47,7 +47,7 @@
 
     "@babel/types": ["@babel/types@7.29.0", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A=="],
 
-    "@forge-fm/forge-graph": ["forge-graph-workspace@github:mbrock/forge-graph#89c00b9", { "dependencies": { "d3": "^7.9.0", "js-yaml": "^4.1.0", "perfect-arrows": "^0.3.7", "spytial-core": "github:sidprasad/cnd-core#451f650", "webcola": "^3.4.0" } }, "mbrock-forge-graph-89c00b9", "sha512-7UiUvBFMLTLWN0qTByBb24G84qqTWy2hV3x6DpyZOr/Fm5XMGA8W17oeo77oQkwKbMnMvJ2igYPlwJjXEtNNag=="],
+    "@forge-fm/forge-graph": ["forge-graph-workspace@github:mbrock/forge-graph#b6ce40e", { "dependencies": { "d3": "^7.9.0", "js-yaml": "^4.1.0", "perfect-arrows": "^0.3.7", "spytial-core": "github:sidprasad/cnd-core#451f650", "webcola": "^3.4.0" } }, "mbrock-forge-graph-b6ce40e", "sha512-lk2ih1vYriG+b6ugfCDqdrbUqCB1GFY4bczIWWAQq5UYr6p47vJOesuyY1yOP4+Untwbua8pPtrICU4tYuGbwA=="],
 
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.9.0", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.9.0" } }, "sha512-lBW6/m5BIFl3pMuWPNN0lIOYw9LMCmPfix53ExS3FBi4E+NELEljQ3xH6aAV9IYiQRfn9YIIgzzMrD0vIcD7tw=="],
 
