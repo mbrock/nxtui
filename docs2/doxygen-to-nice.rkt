@@ -313,8 +313,7 @@
 (define (field-dexp signature-term fld)
   (apply call-doc
          (string->symbol (field-name signature-term fld))
-         (append (list (dexp-symbol (string->symbol (field-name signature-term fld))))
-                 (if (forge-field-variable? fld)
+         (append (if (forge-field-variable? fld)
                      (list (dexp-symbol 'var))
                      '())
                  (list (dexp-symbol (forge-field-multiplicity fld))

@@ -13,6 +13,7 @@
          deed
          waves
          belongs-to
+         is-ready-on
          continues-as
          wants
          holds
@@ -33,11 +34,10 @@
 (define-property nxt waves ((deck wand)))
 (define-property nxt belongs-to
   ((task zone)
-   (task deck)
-   (task waiter)
    (waiter task)
    (deed task)
    (deed zone)))
+(define-property nxt is-ready-on ((task deck)))
 (define-property nxt continues-as ((task task)))
 (define-property nxt wants ((waiter wish)))
 (define-property nxt holds ((waiter wand)))

@@ -20,8 +20,7 @@
    (signature zone)
    (signature task
      (belongs-to lone zone)
-     (belongs-to lone deck)
-     (belongs-to lone waiter)
+     (is-ready-on lone deck)
      (continues-as lone task))
    (signature wish)
    (signature waiter
@@ -43,31 +42,26 @@
                (all ([a waiter])
                  (lone (union (a staged-on)
                               (a parked-on))))
-               (all ([t task] [a waiter])
-                 (=> (== (t (belongs-to waiter)) a)
-                     (== (a (belongs-to (task waiter))) t)))
                (all ([d deed])
                  (== (d (belongs-to (task deed)) (belongs-to (zone task)))
                      (d (belongs-to (zone deed)))))
                (all ([z zone] [t (matching (belongs-to (zone task)) z)])
                  (lone ([d (matching (belongs-to (zone deed)) z)])
                    (== (d (belongs-to (task deed))) t)))
-               (all ([t task] [d deck])
-                 (=> (== (t (belongs-to deck)) d)
-                     (no (t (belongs-to waiter)))))
+               (all ([a waiter])
+                 (no (a (belongs-to (task waiter)) is-ready-on)))
                (all ([a waiter])
                  (=> (some (a parked-on))
-                     (== (a (belongs-to (task waiter)) (belongs-to waiter)) a)))))
+                     (no (a (belongs-to (task waiter)) is-ready-on))))))
 
    (predicate 'ready-task-has-a-deck
               (all ([t task])
-                (=> (some (t (belongs-to deck)))
-                    (one (t (belongs-to deck))))))
+                (=> (some (t is-ready-on))
+                    (one (t is-ready-on)))))
 
    (predicate 'waiting-task-has-a-wand
-              (all ([t task])
-                (=> (some (t (belongs-to waiter)))
-                    (one (t (belongs-to waiter) holds)))))
+              (all ([a waiter])
+                (one (a holds))))
 
    (predicate 'child-task-has-at-most-one-deed-in-its-zone
               (all ([z zone] [t (matching (belongs-to (zone task)) z)])
@@ -77,16 +71,16 @@
    (predicate 'parked-waiter-identifies-suspended-task
               (all ([a waiter])
                 (=> (some (a parked-on))
-                    (== (a (belongs-to (task waiter)) (belongs-to waiter)) a))))
+                    (no (a (belongs-to (task waiter)) is-ready-on)))))
 
    (predicate 'ready-task-on-deck
               (some ([t task])
-                (some (t (belongs-to deck)))))
+                (some (t is-ready-on))))
 
    (predicate 'task-awaiting-wish
               (some ([t task] [a waiter] [w wand])
                 (block
-                 (== (t (belongs-to waiter)) a)
+                 (== (a (belongs-to (task waiter))) t)
                  (== (a holds) w)
                  (== (a parked-on) w))))
 
@@ -125,13 +119,13 @@
               (some ([d deck] [w wand] [z zone])
                 (block
                  (== (d waves) w)
-                 (ge (count (matching (belongs-to deck) d)) 1)
+                 (ge (count (matching is-ready-on d)) 1)
                  (ge (count (matching (belongs-to (zone task)) z)) 2)
                  (some ([a waiter])
                    (|| (== (a staged-on) w)
                        (== (a parked-on) w)))
-                 (some ([t (matching (belongs-to (zone task)) z)])
-                   (some (t (belongs-to waiter)))))))
+                 (some ([a waiter] [t (matching (belongs-to (zone task)) z)])
+                   (== (a (belongs-to (task waiter))) t)))))
 
    (check 'ready-task-has-a-deck-checked
           (=> 'structural-invariants 'ready-task-has-a-deck))

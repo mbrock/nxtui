@@ -45,8 +45,7 @@ domain, so a signature can stay close to the ontology wording:
 ```racket
 (signature task
   (belongs-to lone zone)
-  (belongs-to lone deck)
-  (belongs-to lone waiter)
+  (is-ready-on lone deck)
   (continues-as lone task))
 ```
 
