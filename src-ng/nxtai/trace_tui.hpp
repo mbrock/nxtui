@@ -150,30 +150,29 @@ inline auto waterfall_header(
 {
     namespace tt = tool_tui;
 
-    auto header = std::vector<nxt::tui::AnyLayout>{};
-    if (!options.label.empty())
-        header.push_back(
+    return nxt::tui::row(
+        nxt::tui::either(
+            !options.label.empty(),
+            nxt::tui::empty(),
             tt::chip(" " + options.label + " ",
                      tt::slate_950,
                      options.accent,
-                     nxt::Emphasis::bold));
-    if (!options.detail.empty())
-        header.push_back(
+                     nxt::Emphasis::bold)),
+        nxt::tui::either(
+            !options.detail.empty(),
+            nxt::tui::empty(),
             tt::chip(" " + options.detail + " ",
                      options.accent,
                      tt::band_bg,
-                     nxt::Emphasis::bold));
-    header.push_back(
+                     nxt::Emphasis::bold)),
         nxt::tui::flex_text(
             view.subject,
-            nxt::tui::fg(tt::slate_300) | nxt::tui::bg(tt::band_bg)));
-    header.push_back(
+            nxt::tui::fg(tt::slate_300) | nxt::tui::bg(tt::band_bg)),
         tt::chip(
             std::format(" {} ", format_duration(view.total)),
             tt::slate_950,
             tt::amber_300,
             nxt::Emphasis::bold));
-    return nxt::tui::row(std::move(header));
 }
 
 inline auto waterfall_row_layout(
@@ -209,17 +208,9 @@ inline auto render_waterfall(
     waterfall_options options = {})
 {
     namespace tt = tool_tui;
-
-    auto rows = std::vector<nxt::tui::AnyLayout>{};
-    rows.push_back(waterfall_header(view, options));
-
-    if (view.rows.empty()) {
-        rows.push_back(tt::body_line("no completed child spans", tt::slate_500));
-    } else {
-        for (const auto & row : view.rows)
-            rows.push_back(
-                waterfall_row_layout(row, view.total, options.accent));
-    }
+    auto no_rows = view.rows.empty();
+    auto total = view.total;
+    auto accent = options.accent;
 
     return nxt::tui::surface(
         nxt::tui::Style{
@@ -227,7 +218,16 @@ inline auto render_waterfall(
             .bg = tt::page_bg,
             .em = nxt::DEFAULT_EMPHASIS,
         },
-        tt::block(std::move(rows)));
+        tt::block(
+            waterfall_header(view, options),
+            nxt::tui::either(
+                no_rows,
+                nxt::tui::mapped_column(
+                    std::move(view.rows),
+                    [total, accent](const waterfall_row & row) {
+                        return waterfall_row_layout(row, total, accent);
+                    }),
+                tt::body_line("no completed child spans", tt::slate_500))));
 }
 
 inline auto render_span_waterfall(

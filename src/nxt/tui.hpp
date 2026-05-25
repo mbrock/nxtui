@@ -1059,6 +1059,60 @@ auto dyn_column(std::vector<Child> children)
     return DynColumn<Child>{std::move(children)};
 }
 
+/// Dynamic vertical container that owns a runtime-sized vector of data and
+/// maps each item to a concrete layout when measured or rendered.
+template<typename T, typename ViewFn>
+struct MappedColumn
+{
+    std::vector<T> items;
+    ViewFn view;
+
+    WidthHint width_hint() const
+    {
+        width_t max_min = 0 * ch;
+        for (const auto & item : items) {
+            auto child = view(item);
+            max_min = std::max(max_min, child.width_hint().min);
+        }
+        return {max_min, 1.0 * one};
+    }
+
+    HeightHint height_hint() const
+    {
+        height_t total_min = 0 * ln;
+        for (const auto & item : items) {
+            auto child = view(item);
+            total_min += child.height_hint().min;
+        }
+        return HeightHint::fixed(total_min);
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        Pos cursor = Pos::origin();
+        for (const auto & item : items) {
+            auto child = view(item);
+            auto h = child.height_hint().min;
+            if (h.count() == 0)
+                continue;
+            if ((cursor.y - Pos::origin().y) + h > size.h)
+                break;
+            auto child_size = Size{size.w, h};
+            auto sub = subraster(raster, cursor, child_size);
+            child.render(sub, child_size);
+            cursor = cursor + h;
+        }
+    }
+};
+
+template<typename T, typename ViewFn>
+auto mapped_column(std::vector<T> items, ViewFn && view)
+{
+    return MappedColumn<T, std::decay_t<ViewFn>>{
+        std::move(items),
+        std::forward<ViewFn>(view)};
+}
+
 /// Render a span of items by mapping each item to a one-line layout.
 template<typename T, typename ViewFn>
 struct List

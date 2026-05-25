@@ -388,15 +388,15 @@ auto stream_activity_layout(
     std::string_view thought,
     std::string_view assistant_text)
 {
-    auto children = std::vector<nxt::tui::AnyLayout>{};
-    if (!thought.empty())
-        children.push_back(
-            nxt::ai::tool_tui::thought_block(std::string{thought}));
-    if (!assistant_text.empty())
-        children.push_back(assistant_preview_layout(assistant_text));
-    if (children.empty())
-        children.push_back(nxt::tui::empty());
-    return nxt::tui::column(std::move(children));
+    return nxt::tui::column(
+        nxt::tui::either(
+            !thought.empty(),
+            nxt::tui::empty(),
+            nxt::ai::tool_tui::thought_block(std::string{thought})),
+        nxt::tui::either(
+            !assistant_text.empty(),
+            nxt::tui::empty(),
+            assistant_preview_layout(assistant_text)));
 }
 
 auto network_footer_layout(const network_hud_state & net)
@@ -1088,7 +1088,7 @@ spawn_tool_call_children(
     auto out = std::vector<nxt::rt::catching_deed<function_call_result>>{};
     out.reserve(calls.size());
 
-    auto surfaces = std::vector<nxt::tui::AnyLayout>{};
+    auto surfaces = std::vector<nxt::rt::widget_slot>{};
     surfaces.reserve(calls.size());
     for (auto & call : calls) {
         auto child = nxt::rt::spawn_widget(
