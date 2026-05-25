@@ -1,0 +1,29 @@
+PROJECT_NAME = nxt
+PROJECT_BRIEF = "A small typed raster and terminal UI library for C++."
+OUTPUT_DIRECTORY = out/doxygen
+
+GENERATE_HTML = NO
+GENERATE_LATEX = NO
+GENERATE_XML = YES
+GENERATE_TAGFILE = out/nxt.tagfile.xml
+
+QUIET = YES
+WARN_IF_UNDOCUMENTED = NO
+WARN_AS_ERROR = NO
+
+EXTRACT_ALL = YES
+EXTRACT_PRIVATE = NO
+EXTRACT_STATIC = YES
+HIDE_UNDOC_MEMBERS = NO
+SHOW_INCLUDE_FILES = YES
+FULL_PATH_NAMES = YES
+
+INPUT = ../test ../src-ng ../src/nxt ../src/nxtai ../src/nxtio
+RECURSIVE = YES
+FILE_PATTERNS = *.h *.hpp
+STRIP_FROM_PATH = ../src-ng ../src ../test
+STRIP_FROM_INC_PATH = ../src-ng ../src
+
+ALIASES += "forgegraph{3}=\xmlonly <forge-graph frg=\"\1\" run=\"\2\" title=\"\3\"/> \endxmlonly"
+
+HAVE_DOT = NO

@@ -10,6 +10,7 @@
 /docs/xml/
 /docs/generated/
 /docs/forge-doc-graphs.js
+/docs2/out/
 .env
 /node_modules/
 compiled/
