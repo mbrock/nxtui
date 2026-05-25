@@ -466,6 +466,13 @@ public:
     template<typename Body>
     [[nodiscard]] auto spawn(Body body) const;
 
+    template<typename WorkerBody, typename CompanionBody, typename Layout>
+    [[nodiscard]] auto accompany(
+        WorkerBody worker_body,
+        CompanionBody companion_body,
+        Layout layout) const
+        -> task<task_result_t<std::invoke_result_t<WorkerBody &, ui_scope>>>;
+
 private:
     ui_runtime * runtime_ = nullptr;
     nxt::tui::Slot<nxt::tui::AnyLayout> surface_;
@@ -545,6 +552,47 @@ template<typename Body>
     auto child_deed =
         nxt::rt::fork(detail::run_ui_child(child_scope, std::move(body)));
     return ui_child<result_t>{std::move(child_scope), std::move(child_deed)};
+}
+
+template<typename WorkerBody, typename CompanionBody, typename Layout>
+[[nodiscard]] auto ui_scope::accompany(
+    WorkerBody worker_body,
+    CompanionBody companion_body,
+    Layout layout) const
+    -> task<task_result_t<std::invoke_result_t<WorkerBody &, ui_scope>>>
+{
+    using worker_task_t = std::invoke_result_t<WorkerBody &, ui_scope>;
+    using worker_result_t = task_result_t<worker_task_t>;
+    using worker_deed_t = catching_deed<worker_result_t>;
+
+    auto worker_deed = co_await with_zone([&]() mutable -> task<worker_deed_t> {
+        auto worker_scope = child();
+        auto companion_scope = child();
+
+        draw(std::invoke(
+            layout, worker_scope.surface(), companion_scope.surface()));
+
+        auto worker = nxt::rt::fork(
+            detail::stop_zone_on_completion(
+                detail::run_ui_child(
+                    std::move(worker_scope),
+                    std::move(worker_body)))).cope();
+        [[maybe_unused]] auto companion = nxt::rt::fork(
+            detail::run_ui_child(
+                std::move(companion_scope),
+                std::move(companion_body))).cope();
+
+        co_return std::move(worker);
+    });
+
+    auto worker = std::move(worker_deed).get();
+    if (!worker)
+        rethrow(worker.error());
+    if constexpr (std::is_void_v<worker_result_t>) {
+        co_return;
+    } else {
+        co_return std::move(*worker);
+    }
 }
 
 template<typename Body>

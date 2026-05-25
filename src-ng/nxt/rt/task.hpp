@@ -1710,11 +1710,16 @@ inline task<void> task_zone::join()
             co_await child.join();
             auto const exported = children_[i].use_count() > 1;
             if (!child.contained && !child.observed && !exported) {
-                if (auto failure = child.failure())
+                if (auto failure = child.failure();
+                    failure
+                    && !(stop_requested()
+                         && is_operation_cancelled(failure)))
                     exceptions.push_back(std::move(failure));
             }
         } catch (...) {
-            exceptions.push_back(std::current_exception());
+            auto failure = std::current_exception();
+            if (!(stop_requested() && is_operation_cancelled(failure)))
+                exceptions.push_back(std::move(failure));
         }
     }
 

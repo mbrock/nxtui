@@ -87,6 +87,19 @@ public:
 #endif
 }
 
+[[nodiscard]] inline bool is_operation_cancelled(std::exception_ptr failure)
+{
+    if (!failure)
+        return false;
+    try {
+        rethrow(std::move(failure));
+    } catch (const operation_cancelled &) {
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 [[noreturn]] inline void throw_exceptions(
     std::string message,
     std::vector<std::exception_ptr> exceptions)

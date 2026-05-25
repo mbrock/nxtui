@@ -884,6 +884,41 @@ static suite ng_runtime_tests{
                 expect(ran);
                 expect(captured.width_hint().min == 0 * nxt::ch);
             };
+
+            "accompany composes worker and companion surfaces"_test = [] {
+                auto runtime = nxt::rt::ui_runtime{
+                    {.render = false,
+                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                auto root = nxt::rt::ui_scope{runtime};
+                auto deck = nxt::rt::deck{};
+                auto companion_stopped = false;
+                auto composed_height = 0 * nxt::ln;
+
+                auto result = deck.sync_wait([&]() -> nxt::rt::task<int> {
+                    co_return co_await root.accompany(
+                        [&](nxt::rt::ui_scope worker)
+                            -> nxt::rt::task<int> {
+                            worker.draw(nxt::tui::text("work"));
+                            co_await nxt::rt::yield();
+                            composed_height = root.surface().height_hint().min;
+                            co_return 7;
+                        },
+                        [&](nxt::rt::ui_scope companion)
+                            -> nxt::rt::task<void> {
+                            companion.draw(nxt::tui::text("rate"));
+                            while (!nxt::rt::stop_requested())
+                                co_await nxt::rt::yield();
+                            companion_stopped = true;
+                        },
+                        [](const auto & worker, const auto & companion) {
+                            return nxt::tui::column(worker, companion);
+                        });
+                });
+
+                expect(result == 7);
+                expect(companion_stopped);
+                expect(composed_height == 2 * nxt::ln);
+            };
         };
 
         "zones"_test = [] {
@@ -1226,6 +1261,44 @@ static suite ng_runtime_tests{
                 });
 
                 expect(events == std::vector<int>{3});
+            };
+
+            "child cancellation is not a zone failure after stop"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto events = std::vector<int>{};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        nxt::rt::fork(
+                            value_after_two_yields_or_stop(events, 4));
+                        co_await nxt::rt::yield();
+                        nxt::rt::require_current_zone().stop();
+                    });
+                });
+
+                expect(events == std::vector<int>{4});
+            };
+
+            "child cancellation remains failure before zone stop"_test = [] {
+                auto deck = nxt::rt::deck{};
+                auto threw = false;
+
+                try {
+                    deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        co_await nxt::rt::with_zone(
+                            []() -> nxt::rt::task<void> {
+                                nxt::rt::fork(
+                                    []() -> nxt::rt::task<void> {
+                                        throw nxt::rt::operation_cancelled{};
+                                    }());
+                                co_return;
+                            });
+                    });
+                } catch (const nxt::rt::operation_cancelled &) {
+                    threw = true;
+                }
+
+                expect(threw);
             };
 
             "shielded child tasks do not inherit parent stop"_test = [] {

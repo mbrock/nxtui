@@ -10,6 +10,7 @@
 #include <nxtai/tool_tui.hpp>
 #include <nxtai/trace_tui.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -275,6 +276,13 @@ std::string format_rate(double bytes_per_second)
     return std::format("{:.1f} MiB/s", kib / 1024.0);
 }
 
+nxt::percent_t rate_percent(double bytes_per_second)
+{
+    static constexpr auto max_display_rate = 32.0 * 1024.0;
+    return std::clamp(bytes_per_second / max_display_rate, 0.0, 1.0)
+         * 100.0 * nxt::percent;
+}
+
 enum class cell_align { left, right };
 
 std::string fit_cell(std::string s, std::size_t width, cell_align align)
@@ -369,8 +377,8 @@ auto network_footer_layout(const live_state & state)
         nxt::tui::empty(),
         nxt::tui::row(
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
-            fixed_cell(22 * nxt::ch, std::move(phase), phase_style),
-            nxt::tui::hfill(2 * nxt::ch, tt::page_bg),
+            fixed_cell(18 * nxt::ch, std::move(phase), phase_style),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(2 * nxt::ch, "I", metric_style),
             fixed_cell(
                 9 * nxt::ch,
@@ -379,11 +387,18 @@ auto network_footer_layout(const live_state & state)
                 cell_align::right),
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(
-                10 * nxt::ch,
+                9 * nxt::ch,
                 format_rate(net.socket_rx_bps),
                 value_style,
                 cell_align::right),
-            nxt::tui::hfill(2 * nxt::ch, tt::page_bg),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
+            nxt::tui::fixed_width(
+                7 * nxt::ch,
+                nxt::tui::progress_bar(
+                    rate_percent(net.socket_rx_bps),
+                    tt::teal_300,
+                    tt::slate_900)),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(2 * nxt::ch, "O", metric_style),
             fixed_cell(
                 9 * nxt::ch,
@@ -392,11 +407,18 @@ auto network_footer_layout(const live_state & state)
                 cell_align::right),
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(
-                10 * nxt::ch,
+                9 * nxt::ch,
                 format_rate(net.socket_tx_bps),
                 value_style,
                 cell_align::right),
-            nxt::tui::hfill(2 * nxt::ch, tt::page_bg),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
+            nxt::tui::fixed_width(
+                7 * nxt::ch,
+                nxt::tui::progress_bar(
+                    rate_percent(net.socket_tx_bps),
+                    tt::amber_300,
+                    tt::slate_900)),
+            nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(2 * nxt::ch, "E", metric_style),
             fixed_cell(
                 5 * nxt::ch,
@@ -418,8 +440,7 @@ auto live_layout(const live_state & state)
         nxt::tui::column(
             header_layout(state),
             assistant_preview_layout(state),
-            activity_layout(state),
-            network_footer_layout(state)));
+            activity_layout(state)));
 }
 
 nxt::rt::task<void>
@@ -434,7 +455,7 @@ sample_network_instruments(nxt::rt::ui_scope ui, live_state & state)
 
     try {
         while (!state.done && !nxt::rt::stop_requested()) {
-            co_await nxt::rt::op::timeout::after(100ms);
+            co_await nxt::rt::op::timeout::after(frame_interval);
             if (state.done || nxt::rt::stop_requested())
                 break;
 
@@ -450,7 +471,7 @@ sample_network_instruments(nxt::rt::ui_scope ui, live_state & state)
             last_rx = next_rx;
             last_tx = next_tx;
             last_time = now;
-            ui.draw(live_layout(state));
+            ui.draw(network_footer_layout(state));
         }
     } catch (const nxt::rt::operation_cancelled &) {
     }
@@ -1015,22 +1036,40 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
                 [&]() -> nxt::rt::task<void> {
                 co_await nxt::rt::with_ui_zone([&](nxt::rt::ui_scope ui)
                     -> nxt::rt::task<void> {
-                    [[maybe_unused]] auto rate_sampler =
-                        ui.fork(sample_network_instruments(ui, live)).cope();
-                    auto presenter = hud_agent_presenter{ui, live};
-                    presenter.publish(true);
-                    try {
-                        co_await run_agent_loop(
-                            std::move(request),
-                            std::move(tools),
-                            presenter);
-                        presenter.done();
-                        ui.request_shutdown();
-                    } catch (...) {
-                        presenter.failed();
-                        ui.request_shutdown();
-                        throw;
-                    }
+                    co_await ui.accompany(
+                        [&](nxt::rt::ui_scope worker_ui)
+                            -> nxt::rt::task<void> {
+                            auto presenter =
+                                hud_agent_presenter{worker_ui, live};
+                            presenter.publish(true);
+                            try {
+                                co_await run_agent_loop(
+                                    std::move(request),
+                                    std::move(tools),
+                                    presenter);
+                                presenter.done();
+                                ui.request_shutdown();
+                            } catch (...) {
+                                presenter.failed();
+                                ui.request_shutdown();
+                                throw;
+                            }
+                        },
+                        [&](nxt::rt::ui_scope instrument_ui)
+                            -> nxt::rt::task<void> {
+                            co_await sample_network_instruments(
+                                instrument_ui, live);
+                        },
+                        [](const auto & worker, const auto & instrument) {
+                            namespace tt = nxt::ai::tool_tui;
+                            return nxt::tui::surface(
+                                nxt::tui::Style{
+                                    .fg = tt::slate_300,
+                                    .bg = tt::page_bg,
+                                    .em = nxt::DEFAULT_EMPHASIS,
+                                },
+                                nxt::tui::column(worker, instrument));
+                        });
                 }, {}, frame_interval);
             });
         });
