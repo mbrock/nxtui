@@ -1,0 +1,60 @@
+
+  TLS 1.3 api.openai.com                                                                       38ms
+ client hello make           +    0us    24ms  ██████████████████████████████████▏
+ client hello write          +   24ms   669us                                    █▏
+ server hello read           +   25ms     7ms                                     █████████▊
+ server hello parse          +   32ms   532us                                              ▕▌
+ x25519 shared secret        +   32ms    36us
+ keys derive handshake       +   33ms    72us                                                ▏
+ handshake record read       +   33ms   676us                                                ▕▊
+ handshake record read       +   34ms   537us                                                  ▐▏
+ handshake record decrypt    +   35ms   465us                                                   ▋
+ certificate parse           +   35ms   102us                                                   ▕
+ certificate verify          +   36ms    99us                                                    ▏
+ server finished verify      +   36ms   176us                                                     ▎
+ keys derive application     +   37ms   443us                                                     ▐▎
+ client finished write       +   37ms   528us                                                      ▊
+  thinking
+
+ Clarifying user request
+
+ The user asked to use the shell tool, but no specific command was provided. I need to
+ ask what they want me to run. I noticed the instruction about using the shell tool with
+ short sleeps and stdout lines suggests they want to test terminal rendering with a small
+ command. I can create a bash command that echoes lines with sleeps. I’ll use a for loop
+ to print lines and incorporate sleep for timing!
+ shell script                                                                    1123ms  2.4M  169B
+ $ for i in {1..6}; do echo "stdout line ${i}"; sleep 0.15; done; echo "stderr line" 1>&2; sleep 0.1
+  output
+ Referenced but unset environment variable evaluates to an empty string: i
+ stdout line
+ stdout line
+ stdout line
+ stdout line
+ stdout line
+ stdout line
+ stderr line
+  TLS 1.3 api.openai.com                                                                       13ms
+ client hello make           +    0us    44us  ▏
+ client hello write          +   82us   533us  ▐█▌
+ server hello read           +  645us     6ms    ▐██████████████████████████▎
+ server hello parse          +    7ms   439us                               ▐█▎
+ x25519 shared secret        +    8ms    36us                                 ▏
+ keys derive handshake       +    8ms    50us                                   ▎
+ handshake record read       +    8ms   676us                                    ▕██▋
+ handshake record read       +   10ms   539us                                         ▐█▉
+ handshake record decrypt    +   10ms   440us                                            █▊
+ certificate parse           +   11ms    75us                                              ▎
+ certificate verify          +   11ms    91us                                                ▍
+ server finished verify      +   12ms   177us                                                 ▕▋
+ keys derive application     +   12ms   447us                                                  ▕█▋
+ client finished write       +   12ms   515us                                                    ▕██
+
+
+
+
+
+
+
+ nxtllm gpt-5.4-nano  tls: ready
+ streaming SSE     60K↓                 354/s↓   4.3K↑                  39/s↑  #144

@@ -27,6 +27,14 @@ using invalid_argument = std::invalid_argument;
 using out_of_range = std::out_of_range;
 #endif
 
+class interrupted_system_call : public runtime_error
+{
+public:
+    interrupted_system_call()
+        : runtime_error{"interrupted system call"}
+    {}
+};
+
 class exception_group : public std::exception
 {
 public:

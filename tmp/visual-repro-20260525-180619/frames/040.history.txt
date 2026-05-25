@@ -1,0 +1,44 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ nxtllm gpt-5.4-nano  thinking
+  thinking
+
+ Preparing terminal test
+
+ The user wants me to use the shell
+ streaming SSE     11K↓                3.8K/s↓   2.0K↑                 229/s↑   #13

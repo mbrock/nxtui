@@ -170,11 +170,18 @@ public:
 
     task<read_result> read_some(std::span<std::byte> dst) override
     {
-        auto n = co_await op::read_some{
-            .fd = fd_,
-            .buffer = dst,
-            .offset = -1,
-        };
+        auto n = std::size_t{0};
+        while (true) {
+            try {
+                n = co_await op::read_some{
+                    .fd = fd_,
+                    .buffer = dst,
+                    .offset = -1,
+                };
+                break;
+            } catch (const interrupted_system_call &) {
+            }
+        }
         co_return read_result{
             .bytes = n,
             .eof = n == 0,
@@ -195,11 +202,16 @@ public:
 
     task<std::size_t> write_some(std::span<const std::byte> src) override
     {
-        co_return co_await op::write_some{
-            .fd = fd_,
-            .buffer = src,
-            .offset = -1,
-        };
+        while (true) {
+            try {
+                co_return co_await op::write_some{
+                    .fd = fd_,
+                    .buffer = src,
+                    .offset = -1,
+                };
+            } catch (const interrupted_system_call &) {
+            }
+        }
     }
 
 private:
@@ -222,11 +234,18 @@ public:
 
     task<read_result> read_some(std::span<std::byte> dst) override
     {
-        auto n = co_await op::recv_some{
-            .fd = fd_,
-            .buffer = dst,
-            .flags = flags_,
-        };
+        auto n = std::size_t{0};
+        while (true) {
+            try {
+                n = co_await op::recv_some{
+                    .fd = fd_,
+                    .buffer = dst,
+                    .flags = flags_,
+                };
+                break;
+            } catch (const interrupted_system_call &) {
+            }
+        }
         co_return read_result{
             .bytes = n,
             .eof = n == 0,
@@ -249,11 +268,16 @@ public:
 
     task<std::size_t> write_some(std::span<const std::byte> src) override
     {
-        co_return co_await op::send_some{
-            .fd = fd_,
-            .buffer = src,
-            .flags = flags_,
-        };
+        while (true) {
+            try {
+                co_return co_await op::send_some{
+                    .fd = fd_,
+                    .buffer = src,
+                    .flags = flags_,
+                };
+            } catch (const interrupted_system_call &) {
+            }
+        }
     }
 
 private:

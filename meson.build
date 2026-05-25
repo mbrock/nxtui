@@ -169,6 +169,7 @@ if get_option('llm_tool')
   endif
 
   nxtllm_dependencies = [nxt_core_dep, glaze_dep]
+  nxtllm_dependencies += nxt_stacktrace_deps
   if host_machine.system() == 'linux' and nxt_llm_liburing_dep.found()
     nxtllm_dependencies += nxt_llm_liburing_dep
   elif host_machine.system() == 'linux'
@@ -182,6 +183,7 @@ if get_option('llm_tool')
     'src-ng/nxtai/nxtllm.cpp',
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : nxtllm_dependencies,
+    cpp_args : nxt_stacktrace_cpp_args,
   )
 endif
 

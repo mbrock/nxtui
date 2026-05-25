@@ -1,0 +1,38 @@
+ output with sleep. I can accomplish this with a for loop that echoes lines with a sleep
+ of 0.2 seconds between each. Since the user's primary goal is to run the command, I’ll
+ ensure to proceed with that straightforwardly.
+ shell script                                                                    2043ms  3.4M  200B
+ $ bash -lc 'for i in {1..12}; do echo "stdout line $i"; sleep 0.15; done; echo "stderr line (simula
+  output
+ stdout line 1
+ stdout line 2
+ stdout line 3
+ stdout line 4
+ stdout line 5
+ stdout line 6
+ stdout line 7
+ stdout line 8
+  TLS 1.3 api.openai.com                                                                       13ms
+ client hello make           +    0us    43us  ▏
+ client hello write          +   83us   479us  ▐█▎
+ server hello read           +  594us     7ms    ▐███████████████████████████▍
+ server hello parse          +    8ms   426us                                ▐█▎
+ x25519 shared secret        +    8ms    37us                                  ▏
+ keys derive handshake       +    9ms    50us                                    ▎
+ handshake record read       +    9ms   667us                                     ▐██▍
+ handshake record read       +   10ms   527us                                          ██▍
+ handshake record decrypt    +   11ms   442us                                            ▐█▎
+ certificate parse           +   11ms    78us                                              ▍
+ certificate verify          +   12ms    92us                                                ▍
+ server finished verify      +   12ms   170us                                                  ▋
+ keys derive application     +   12ms   442us                                                   █▊
+ client finished write       +   13ms   517us                                                    ▕██
+
+
+
+
+
+
+
+ nxtllm gpt-5.4-nano  tls: ready
+ streaming SSE     62K↓                9.6K/s↓   4.4K↑                1.6K/s↑  #151

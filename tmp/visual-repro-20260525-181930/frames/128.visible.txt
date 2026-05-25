@@ -1,0 +1,38 @@
+ certificate verify          +   12ms    89us                                                ▕▏
+ server finished verify      +   13ms   170us                                                  ▐▏
+ keys derive application     +   13ms   432us                                                   █▉
+ client finished write       +   13ms   501us                                                     ██
+
+
+
+
+
+
+
+
+  assistant
+ Ran a simple terminal output test (with short sleeps) via the shell tool:
+
+ `sh
+ for i in {1..12}; do printf 'stdout line %02d\n' "$i"; sleep 0.15; done
+ `
+
+ Output:
+ `
+ stdout line 01
+ stdout line 02
+ stdout line 03
+ stdout line 04
+ stdout line 05
+ stdout line 06
+ stdout line 07
+ stdout line 08
+ stdout line 09
+ stdout line 10
+ stdout line 11
+ stdout line 12
+ `
+ nxtllm gpt-5.4-nano  streaming
+
+@@NXT_DONE:0
+

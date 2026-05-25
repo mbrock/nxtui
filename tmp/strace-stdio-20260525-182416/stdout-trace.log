@@ -1,0 +1,1216 @@
+stdout write #1 bytes 6
+  at ../src-ng/nxt/rt/ui_runtime.hpp:370 in nxt::rt::task<void> nxt::rt::ui_runtime::enter_terminal()
+  preview "\e[?25l"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #2 bytes 240
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e[0m\e7\e[1;37r\e8\e7\e[38;1H\e[48;2;252;211;77m\e[38;2;2;6;23m\e[1m nxtllm \e[38;9H\e[0m\e[38;2;2;6;23m\e[48;2;252;211;77m\e[48;2;15;23;42m\e[38;2;148;163;184mgpt-5.4-nano  connecting                                                                    \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #3 bytes 60
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;23H\e[48;2;15;23;42m\e[38;2;148;163;184mtls handshake\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #4 bytes 662
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e[0m\e[1S\e[1A\e7\e[1;36r\e8\e7\e[37;1H\e[2K\e[38;1H\e[2K\e8\e7\e[37;1H\e[48;2;252;211;77m\e[38;2;2;6;23m\e[1m nxtllm \e[37;9H\e[0m\e[38;2;2;6;23m\e[48;2;252;211;77m\e[48;2;15;23;42m\e[38;2;148;163;184mgpt-5.4-nano  tls: client hello write                                                       \e[38;1H\e[48;2;2;6;23m\e[38;2;203;213;225m \e[38;2H\e[38;2;94;234;212m\e[1mTLS client he\xe2\x80\xa6\e[38;16H\e[0m\e[38;2;94;234;212m\e[48;2;2;6;23m\e[38;2;203;213;225m      0\xe2\x86\x93 \e[38;25H\e[48;2;24;48;62m                  0/s\xe2\x86\x93\e[38;47H\e[48;2;2;6;23m      0\xe2\x86\x91 \e[38;56H\e[48;2;43;45;46m                  0/s\xe2\x86\x91\e[38;78H\e[48;2;2;6;23m \e[38;79H\e[38;2;100;116;139m     \e[38;84H\e[38;2;203;213;225m                 \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #5 bytes 66
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mserver\e[37;41Hread \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #6 bytes 52
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;41H\e[48;2;15;23;42m\e[38;2;148;163;184mparse\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #7 bytes 74
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mx25519\e[37;35Hshared secret\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #8 bytes 68
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mkeys derive handshake\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #9 bytes 75
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mhandshake recor\e[37;44H read\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #10 bytes 75
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mchange ciph\e[37;40Hr spec   \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #11 bytes 75
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mhandshake r\e[37;40Hcord read\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #12 bytes 61
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;45H\e[48;2;15;23;42m\e[38;2;148;163;184md\e[37;47Hcrypt\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #13 bytes 78
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mcertificate pa\e[37;43Hse       \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #14 bytes 60
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;40H\e[48;2;15;23;42m\e[38;2;148;163;184mve\e[37;43Hify\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #15 bytes 83
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mk\e[37;30Hys deriv\e[37;40Happlication\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #16 bytes 84
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mclient f\e[37;37Hnished wri\e[37;48He  \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #17 bytes 316
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;28H\e[48;2;15;23;42m\e[38;2;148;163;184mready \e[37;35H        \e[37;44H     \e[38;13H\e[48;2;2;6;23m\e[38;2;94;234;212m\e[1mfi\e[38;19H\e[0m\e[38;2;94;234;212m\e[48;2;2;6;23m\e[38;2;203;213;225m2.8K\e[38;25H\e[48;2;28;58;70m               2.7K/s\xe2\x86\x93\e[38;51H\e[48;2;2;6;23m193\e[38;56H\e[48;2;44;46;46m                189/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #18 bytes 3950
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e[0m\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m \e[0m\e[38;2;94;234;212m\e[48;2;15;23;42m\e[1m TLS 1.3 \e[0m\e[38;2;203;213;225m\e[48;2;15;23;42mapi.openai.com                                                                      \e[0m\e[38;2;2;6;23m\e[48;2;252;211;77m\e[1m 42ms \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m client hello make           \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+    0us \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m   25ms  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x8a                     \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m client hello write          \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   25ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m    1ms  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                               \xe2\x96\x95\xe2\x96\x88\xe2\x96\x8f                   \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m server hello read           \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   26ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m    7ms  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x8b           \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m server hello parse          \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   33ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  897us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                         \xe2\x96\x90\xe2\x96\x8a          \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m x25519 shared secret        \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   34ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m   36us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                                     \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m keys derive handshake       \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   34ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  275us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                           \xe2\x96\x95\xe2\x96\x8f        \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m handshake record read       \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   35ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m    1ms  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                            \xe2\x96\x90\xe2\x96\x88       \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m handshake record read       \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   37ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  831us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                              \xe2\x96\x95\xe2\x96\x89     \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m handshake record decrypt    \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   38ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  669us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                               \xe2\x96\x95\xe2\x96\x8a    \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m certificate parse           \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   38ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  179us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                                \xe2\x96\x95\xe2\x96\x8f   \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m certificate verify          \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   39ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  127us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                                 \xe2\x96\x95\xe2\x96\x8f  \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m server finished verify      \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   40ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  381us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                                  \xe2\x96\x8c  \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m keys derive application     \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   40ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  646us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                                   \xe2\x96\x89 \e[0m\n\e[0m\e[38;2;203;213;225m\e[48;2;2;6;23m client finished write       \e[0m\e[38;2;100;116;139m\e[48;2;2;6;23m+   41ms \e[0m\e[38;2;148;163;184m\e[48;2;2;6;23m  853us  \e[0m\e[38;2;94;234;212m\e[48;2;30;41;59m                                                   \xe2\x96\x95\xe2\x96\x88\e[0m\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #19 bytes 176
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;2H\e[48;2;2;6;23m\e[38;2;94;234;212m\e[1mhttp response \e[38;50H\e[0m\e[38;2;94;234;212m\e[48;2;2;6;23m\e[38;2;203;213;225m2.0K\e[38;56H\e[48;2;51;52;47m               1.9K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #20 bytes 96
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;28;58;70m\e[38;2;203;213;225m6\e[38;56H\e[48;2;51;51;47m               1.9K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #21 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #22 bytes 73
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;28;58;70m\e[38;2;203;213;225m5\e[38;73H\e[48;2;51;51;47m8\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #23 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;28;57;70m\e[38;2;203;213;225m               2.5K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #24 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #25 bytes 119
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;27;57;69m\e[38;2;203;213;225m               2.4K/s\xe2\x86\x93\e[38;56H\e[48;2;50;51;47m               1.7K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #26 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #27 bytes 48
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;27;57;69m\e[38;2;203;213;225m3\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #28 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #29 bytes 48
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;73H\e[48;2;50;51;47m\e[38;2;203;213;225m6\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #30 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;27;56;69m\e[38;2;203;213;225m               2.2K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #31 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;56H\e[48;2;50;50;47m\e[38;2;203;213;225m               1.6K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #32 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #33 bytes 96
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;27;56;68m\e[38;2;203;213;225m               2.1K/s\xe2\x86\x93\e[38;73H\e[48;2;50;50;47m5\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #34 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;56H\e[48;2;49;50;47m\e[38;2;203;213;225m               1.5K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #35 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #36 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #37 bytes 230
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;2H\e[48;2;2;6;23m\e[38;2;94;234;212m\e[1ms\e[38;4Hreaming SSE\e[38;19H\e[0m\e[38;2;94;234;212m\e[48;2;2;6;23m\e[38;2;203;213;225m8\e[38;21H2\e[38;25H\e[48;2;35;76;85m               7.4K/s\xe2\x86\x93\e[38;82H\e[48;2;2;6;23m\e[38;2;100;116;139m#2\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #38 bytes 96
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;76;84m\e[38;2;203;213;225m               7.2K/s\xe2\x86\x93\e[38;73H\e[48;2;49;50;47m4\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #39 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;75;84m\e[38;2;203;213;225m               7.1K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #40 bytes 48
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;34;75;84m\e[38;2;203;213;225m0\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #41 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;74;83m\e[38;2;203;213;225m               6.9K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #42 bytes 73
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;34;74;83m\e[38;2;203;213;225m8\e[38;73H\e[48;2;49;50;47m3\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #43 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;73;82m\e[38;2;203;213;225m               6.7K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #44 bytes 119
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;73;82m\e[38;2;203;213;225m               6.6K/s\xe2\x86\x93\e[38;56H\e[48;2;49;49;47m               1.3K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #45 bytes 96
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;33;73;82m\e[38;2;203;213;225m5\e[38;56H\e[48;2;48;49;47m               1.3K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #46 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;72;82m\e[38;2;203;213;225m               6.4K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #47 bytes 119
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;72;81m\e[38;2;203;213;225m               6.3K/s\xe2\x86\x93\e[38;56H\e[48;2;48;49;46m               1.2K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #48 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;71;81m\e[38;2;203;213;225m               6.2K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #49 bytes 48
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;33;71;81m\e[38;2;203;213;225m1\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #50 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;71;80m\e[38;2;203;213;225m               6.0K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #51 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;32;70;80m\e[38;2;203;213;225m               5.9K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #52 bytes 73
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;32;70;80m\e[38;2;203;213;225m8\e[38;73H\e[48;2;48;49;46m1\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #53 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #54 bytes 778
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e[0m\e[1S\e[1A\e7\e[1;35r\e8\e7\e[36;1H\e[2K\e[37;1H\e[2K\e[38;1H\e[2K\e8\e7\e[36;1H\e[48;2;252;211;77m\e[38;2;2;6;23m\e[1m nxtllm \e[36;9H\e[0m\e[38;2;2;6;23m\e[48;2;252;211;77m\e[48;2;15;23;42m\e[38;2;148;163;184mgpt-5.4-nano  streaming                                                                     \e[37;1H\e[48;2;2;6;23m\e[38;2;203;213;225mHello                                                                                               \e[38;1H \e[38;2H\e[38;2;94;234;212m\e[1mstreaming SSE \e[38;16H\e[0m\e[38;2;94;234;212m\e[48;2;2;6;23m\e[38;2;203;213;225m   8.2K\xe2\x86\x93 \e[38;25H\e[48;2;32;70;80m               5.8K/s\xe2\x86\x93\e[38;47H\e[48;2;2;6;23m   2.0K\xe2\x86\x91 \e[38;56H\e[48;2;48;49;46m               1.1K/s\xe2\x86\x91\e[38;78H\e[48;2;2;6;23m \e[38;79H\e[38;2;100;116;139m   #2\e[38;84H\e[38;2;203;213;225m                 \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #55 bytes 145
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;19H\e[48;2;2;6;23m\e[38;2;203;213;225m9\e[38;21H3\e[38;25H\e[48;2;34;74;83m               6.8K/s\xe2\x86\x93\e[38;83H\e[48;2;2;6;23m\e[38;2;100;116;139m6\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #56 bytes 136
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;21H\e[48;2;2;6;23m\e[38;2;203;213;225m7\e[38;25H\e[48;2;34;75;84m               7.0K/s\xe2\x86\x93\e[38;83H\e[48;2;2;6;23m\e[38;2;100;116;139m7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #57 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;74;83m\e[38;2;203;213;225m               6.9K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #58 bytes 48
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;34;74;83m\e[38;2;203;213;225m8\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #59 bytes 119
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;73;83m\e[38;2;203;213;225m               6.7K/s\xe2\x86\x93\e[38;56H\e[48;2;47;49;46m               1.1K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #60 bytes 96
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;73;82m\e[38;2;203;213;225m               6.6K/s\xe2\x86\x93\e[38;73H\e[48;2;47;49;46m0\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #61 bytes 48
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;33;73;82m\e[38;2;203;213;225m5\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #62 bytes 119
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;72;82m\e[38;2;203;213;225m               6.4K/s\xe2\x86\x93\e[38;56H\e[48;2;47;48;46m               1.0K/s\xe2\x86\x91\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #63 bytes 71
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;72;81m\e[38;2;203;213;225m               6.3K/s\xe2\x86\x93\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #64 bytes 56
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[37;6H\e[48;2;2;6;23m\e[38;2;203;213;225m!\e[37;8H\xf0\x9f\x91\x8b\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #65 bytes 164
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;21H\e[48;2;2;6;23m\e[38;2;203;213;225m9\e[38;25H\e[48;2;33;73;82m               6.5K/s\xe2\x86\x93\e[38;71H\e[48;2;47;48;46m 999\e[38;83H\e[48;2;2;6;23m\e[38;2;100;116;139m8\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #66 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #67 bytes 166
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;19H\e[48;2;2;6;23m\e[38;2;203;213;225m 11\e[38;25H\e[48;2;34;75;84m               7.1K/s\xe2\x86\x93\e[38;73H\e[48;2;47;48;46m83\e[38;81H\e[48;2;2;6;23m\e[38;2;100;116;139m#10\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #68 bytes 97
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;34;74;83m\e[38;2;203;213;225m               7.0K/s\xe2\x86\x93\e[38;73H\e[48;2;47;48;46m68\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #69 bytes 83
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;40H\e[48;2;34;74;83m\e[38;2;203;213;225m6\e[38;42H9\e[38;73H\e[48;2;47;48;46m52\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #70 bytes 74
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;34;74;83m\e[38;2;203;213;225m8\e[38;73H\e[48;2;47;48;46m37\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #71 bytes 97
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;25H\e[48;2;33;73;82m\e[38;2;203;213;225m               6.6K/s\xe2\x86\x93\e[38;73H\e[48;2;47;48;46m22\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #72 bytes 74
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e[38;42H\e[48;2;33;73;82m\e[38;2;203;213;225m5\e[38;73H\e[48;2;47;48;46m08\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #73 bytes 4
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #74 bytes 993
+  at ../src-ng/nxt/rt/ui_runtime.hpp:440 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e[0m\e7\e[1;36r\e8\e7\e[36;1H\e[2K\e[37;1H\e[2K\e[38;1H\e[2K\e8\e[0m\n\e[0m\e[48;2;2;6;23m \e[0m\e[38;2;2;6;23m\e[48;2;110;231;183m\e[1m assistant                                                                                         \e[0m\n\e[0m\e[48;2;2;6;23m \e[0m\e[38;2;203;213;225m\e[48;2;2;6;23mHello! \xf0\x9f\x91\x8b                                                                                          \e[0m\e7\e[37;1H\e[48;2;252;211;77m\e[38;2;2;6;23m\e[1m nxtllm \e[37;9H\e[0m\e[38;2;2;6;23m\e[48;2;252;211;77m\e[48;2;15;23;42m\e[38;2;148;163;184mgpt-5.4-nano  streaming                                                                     \e[38;1H\e[48;2;2;6;23m\e[38;2;203;213;225m \e[38;2H\e[38;2;94;234;212m\e[1mstreaming SSE \e[38;16H\e[0m\e[38;2;94;234;212m\e[48;2;2;6;23m\e[38;2;203;213;225m    11K\xe2\x86\x93 \e[38;25H\e[48;2;33;73;82m               6.5K/s\xe2\x86\x93\e[38;47H\e[48;2;2;6;23m   2.0K\xe2\x86\x91 \e[38;56H\e[48;2;47;48;46m                908/s\xe2\x86\x91\e[38;78H\e[48;2;2;6;23m \e[38;79H\e[38;2;100;116;139m  #10\e[38;84H\e[38;2;203;213;225m                 \e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #75 bytes 41
+  at ../src-ng/nxt/rt/ui_runtime.hpp:460 in nxt::rt::task<void> nxt::rt::ui_runtime::terminal_owner_loop(std::chrono::milliseconds)
+  preview "\e[0m\e7\e[r\e8\e7\e[37;1H\e[2K\e[38;1H\e[2K\e8\e7\e8"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+
+stdout write #76 bytes 28
+  at ../src-ng/nxt/rt/ui_runtime.hpp:236 in nxt::rt::task<void> nxt::rt::ui_runtime::cleanup()
+  preview "\e7\e[r\e8\e[38;1H\e[2K\e[0m\e[?25h"
+Stack trace (most recent call first):
+#0  0x00005a1eddb9ee37 in write_stdout_all at /home/mbrock/nxtui/build/../src-ng/nxt/rt/ui_runtime.hpp:40:23
+#1  0x00005a1eddc3e1ac in std::__n4861::coroutine_handle<void>::resume() const at /usr/include/c++/15/coroutine:142:50
+#2  0x00005a1eddc43e46 in nxt::rt::deck::ready_item::resume_if_ready(nxt::rt::deck&) const at /home/mbrock/nxtui/build/../src-ng/nxt/rt/task.hpp:1901:18
+#3  0x00005a1eddc40354 in nxt::rt::deck::run_ready_with() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:200:33
+#4  0x00005a1eddc400a8 in nxt::rt::deck::run_ready() at /home/mbrock/nxtui/build/../src-ng/nxt/rt/deck.hpp:130:23
+#5  0x00005a1eddcda65a in void nxt::rt::uring_wand::run_until_done<int>(nxt::rt::deck&, nxt::rt::task<int>&) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/uring_wand.hpp:173:28
+#6  0x00005a1eddcadb85 in int nxt::rt::runtime::run<int>(nxt::rt::task<int>) at /home/mbrock/nxtui/build/../src-ng/nxt/rt/app.hpp:141:29
+#7  0x00005a1eddbb18ce in main at /home/mbrock/nxtui/build/../src-ng/nxtai/nxtllm.cpp:1284:18
+#8  0x000072819ba2a600 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:59:16
+#9  0x000072819ba2a717 in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#10 0x00005a1eddb8ef24 in _start at /home/mbrock/nxtui/build/nxtllm
+

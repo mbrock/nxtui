@@ -1,0 +1,38 @@
+ x25519 shared secret        +   33ms    61us                                               ▏
+ keys derive handshake       +   34ms    76us                                                ▏
+ handshake record read       +   34ms   679us                                                ▕▊
+ handshake record read       +   35ms   576us                                                  ▐▏
+ handshake record decrypt    +   36ms   472us                                                   ▋
+ certificate parse           +   36ms   107us                                                   ▕▏
+ certificate verify          +   37ms   101us                                                    ▏
+ server finished verify      +   37ms   175us                                                     ▎
+ keys derive application     +   37ms   451us                                                     ▐▎
+ client finished write       +   38ms   535us                                                      █
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ nxtllm gpt-5.4-nano  thinking
+  thinking
+
+ Testing shell tool use
+
+ The user
+ streaming SSE    9.4K↓                2.9K/s↓   2.0K↑                 329/s↑    #6

@@ -1,0 +1,52 @@
+
+  TLS 1.3 api.openai.com                                                                       38ms
+ client hello make           +    0us    24ms  ██████████████████████████████████▏
+ client hello write          +   24ms   669us                                    █▏
+ server hello read           +   25ms     7ms                                     █████████▊
+ server hello parse          +   32ms   532us                                              ▕▌
+ x25519 shared secret        +   32ms    36us
+ keys derive handshake       +   33ms    72us                                                ▏
+ handshake record read       +   33ms   676us                                                ▕▊
+ handshake record read       +   34ms   537us                                                  ▐▏
+ handshake record decrypt    +   35ms   465us                                                   ▋
+ certificate parse           +   35ms   102us                                                   ▕
+ certificate verify          +   36ms    99us                                                    ▏
+ server finished verify      +   36ms   176us                                                     ▎
+ keys derive application     +   37ms   443us                                                     ▐▎
+ client finished write       +   37ms   528us                                                      ▊
+  thinking
+
+ Clarifying user request
+
+ The user asked to use the shell tool, but no specific command was provided. I need to
+ ask what they want me to run. I noticed the instruction about using the shell tool with
+ short sleeps and stdout lines suggests they want to test terminal rendering with a small
+ command. I can create a bash command that echoes lines with sleeps. I’ll use a for loop
+ to print lines and incorporate sleep for timing!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ shell script                                                                                 690ms
+ $ for i in {1..6}; do echo "stdout line ${i}"; sleep 0.15; done; echo "stderr line" 1>&2; sleep 0.1
+  running
+ waiting for process output
+ streaming SSE     52K↓                 13K/s↓   2.0K↑                  36/s↑  #141

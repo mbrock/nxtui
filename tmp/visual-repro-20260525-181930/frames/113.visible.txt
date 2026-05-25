@@ -1,0 +1,38 @@
+
+
+
+
+
+
+
+ $ for i in {1..12}; do printf 'stdout line %02d\n' "$i"; sleep 0.15; done       1865ms  2.2M  180B
+  output
+ stdout line 01
+ stdout line 02
+ stdout line 03
+ stdout line 04
+ stdout line 05
+ stdout line 06
+ stdout line 07
+ stdout line 08
+  TLS 1.3 api.openai.com                                                                       14ms
+ client hello make           +    0us    58us  ▎
+ client hello write          +  110us   626us  ▐█▉
+ server hello read           +  774us     7ms     ██████████████████████████
+ server hello parse          +    8ms   530us                               ██▏
+ x25519 shared secret        +    8ms    46us                                 ▏
+ keys derive handshake       +    9ms    62us                                   ▕
+ handshake record read       +    9ms   864us                                     ▐██▋
+ handshake record read       +   11ms   545us                                          ▕█▉
+ handshake record decrypt    +   11ms   439us                                             █▋
+ certificate parse           +   12ms    76us                                              ▕▏
+ certificate verify          +   12ms    89us                                                ▕▏
+ server finished verify      +   13ms   170us                                                  ▐▏
+ keys derive application     +   13ms   432us                                                   █▉
+ client finished write       +   13ms   501us                                                     ██
+ nxtllm gpt-5.4-nano  streaming
+Ran a simple terminal output test (with short sleeps) via the shell tool:
+
+```sh
+for i in {1..12}; do printf 'stdout line %
+ streaming SSE     70K↓                 15K/s↓   4.3K↑                 643/s↑  #175

@@ -347,6 +347,12 @@ private:
                 }
 
                 if (result < 0) {
+                    if (result == -EINTR) {
+                        state_->set_exception(
+                            std::make_exception_ptr(
+                                interrupted_system_call{}));
+                        return;
+                    }
                     state_->set_exception(
                         std::make_exception_ptr(
                             runtime_error{

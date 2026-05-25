@@ -1,0 +1,38 @@
+ client hello write          +   25ms   651us                                   ▐▍
+ server hello read           +   25ms     8ms                                    ▐██████████
+ server hello parse          +   33ms   549us                                               ▊
+ x25519 shared secret        +   34ms    36us
+ keys derive handshake       +   34ms    75us                                                ▏
+ handshake record read       +   35ms   678us                                                 ▉
+ handshake record read       +   36ms   535us                                                  ▐▍
+ handshake record decrypt    +   36ms   445us                                                   ▋
+ certificate parse           +   37ms   103us                                                    ▏
+ certificate verify          +   37ms    99us                                                    ▏
+ server finished verify      +   38ms   171us                                                     ▎
+ keys derive application     +   38ms   444us                                                     ▐▎
+ client finished write       +   38ms   511us                                                      ▊
+
+
+
+
+
+
+
+
+
+
+  thinking
+
+ Clarifying shell tool usage
+
+ The user wants to use the shell tool, but I notice they haven't provided a specific
+ command. They hinted at wanting a demo script with delays, probably for outputting
+ lines. They then mentioned "terminal rendering harness test," so I think they're looking
+ for a sample. I’ll suggest a small bash loop that uses printf and sleep. To generate
+ output, I can run a simple command that incorporates short sleeps. Let's proceed with
+ that!
+
+ $ for i in {1..12}; do printf 'stdout line %02d\n' "$i"; sleep 0.15; done                    433ms
+  running
+ waiting for process output
+ streaming SSE     51K↓                 16K/s↓   2.0K↑                  53/s↑  #134

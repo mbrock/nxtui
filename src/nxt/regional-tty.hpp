@@ -217,10 +217,10 @@ struct repartition
                 return {};
             }
 
-            // Legacy fallback for callers that cannot observe the starting
-            // cursor. Most command invocations start on the terminal's fresh
-            // bottom row, so reserve the whole incoming fixed region.
-            return {.rows = next.bottom_fixed.height()};
+            // If the starting cursor is unknown, do not invent a bottom-row
+            // insertion target. The scrollback writer should follow the real
+            // cursor; callers that can observe it pass insertion_cursor.
+            return {};
         }
 
         if (!old || !old->windowed()) {
@@ -263,8 +263,8 @@ struct repartition
             return {next.terminal.bottom_exclusive,
                     next.terminal.bottom_exclusive};
 
-        if (release().active())
-            return next.bottom_fixed;
+        if (next.hidden() && old)
+            return old->bottom_fixed;
 
         auto start = next.chrome_start();
         if (old)
@@ -553,12 +553,6 @@ template<backend Backend>
         out.emit(Backend::reset_scroll_region());
 
     out.emit(Backend::restore_cursor());
-
-    auto release = change.release();
-    if (release.active()) {
-        out.emit(Backend::scroll_down(release.rows));
-        out.emit(Backend::move_down(release.rows));
-    }
 
     auto clear = change.chrome_to_clear();
     if (!clear.empty()) {

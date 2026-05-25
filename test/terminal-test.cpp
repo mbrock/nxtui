@@ -216,7 +216,7 @@ static suite regional_tty_tests{
                 == std::size_t{3});
         };
 
-        "move fresh cursor rows above the HUD during initial repartition"_test =
+        "unknown initial cursor does not invent bottom-row insertion"_test =
             [] {
                 auto partition =
                     rtty::screen_partition::for_bottom_fixed_height(
@@ -224,28 +224,36 @@ static suite regional_tty_tests{
                 auto change = rtty::repartition::initial(partition);
                 auto reservation = change.reservation();
 
-                expect(reservation.active());
-                expect(reservation.rows == 2 * ln);
+                expect(!reservation.active());
 
                 auto program =
                     rtty::emit_repartition<rtty::command_list_backend>(
                         change);
-                expect(program.size() == std::size_t{6});
+                expect(program.size() == std::size_t{4});
                 expect(
                     program[0].kind == rtty::command_kind::reset_graphics);
-                expect(program[1].kind == rtty::command_kind::scroll_up);
-                expect(program[1].amount == 2 * ln);
-                expect(program[2].kind == rtty::command_kind::move_up);
-                expect(program[2].amount == 2 * ln);
-                expect(program[3].kind == rtty::command_kind::save_cursor);
+                expect(program[1].kind == rtty::command_kind::save_cursor);
                 expect(
-                    program[4].kind
+                    program[2].kind
                     == rtty::command_kind::set_scroll_region);
                 expect(
-                    program[4].scroll.bottom_margin().index()
+                    program[2].scroll.bottom_margin().index()
                     == std::size_t{3});
                 expect(
-                    program[5].kind == rtty::command_kind::restore_cursor);
+                    program[3].kind == rtty::command_kind::restore_cursor);
+            };
+
+        "observed bottom initial cursor reserves incoming HUD rows"_test =
+            [] {
+                auto partition =
+                    rtty::screen_partition::for_bottom_fixed_height(
+                        6 * ln, 2 * ln);
+                auto change = rtty::repartition::initial(
+                    partition, terminal_origin_v + 5 * ln);
+                auto reservation = change.reservation();
+
+                expect(reservation.active());
+                expect(reservation.rows == 2 * ln);
             };
 
         "reserve incoming fixed regions when showing windows"_test = [] {
@@ -277,7 +285,7 @@ static suite regional_tty_tests{
             expect(reservation.rows == 2 * ln);
         };
 
-        "release rows into scrollback while shrinking"_test = [] {
+        "shrinking expands scrollback without inserting blank rows"_test = [] {
             auto tall_hud = rtty::screen_partition::for_bottom_fixed_height(
                 6 * ln, 3 * ln);
             auto short_hud =
@@ -300,14 +308,10 @@ static suite regional_tty_tests{
                 program[2].scroll.bottom_margin().index()
                 == std::size_t{3});
             expect(program[3].kind == rtty::command_kind::restore_cursor);
-            expect(program[4].kind == rtty::command_kind::scroll_down);
-            expect(program[4].amount == 1 * ln);
-            expect(program[5].kind == rtty::command_kind::move_down);
-            expect(program[5].amount == 1 * ln);
-            expect(program[6].kind == rtty::command_kind::save_cursor);
-            expect(program[7].kind == rtty::command_kind::move_to_left);
-            expect(program[7].row.index() == std::size_t{4});
-            expect(program[8].kind == rtty::command_kind::clear_line);
+            expect(program[4].kind == rtty::command_kind::save_cursor);
+            expect(program[5].kind == rtty::command_kind::move_to_left);
+            expect(program[5].row.index() == std::size_t{3});
+            expect(program[6].kind == rtty::command_kind::clear_line);
             expect(program[11].kind == rtty::command_kind::restore_cursor);
         };
 
@@ -366,7 +370,7 @@ static suite regional_tty_tests{
                 rtty::emit_repartition<rtty::ansi_string_backend>(
                     rtty::repartition::initial(partition));
 
-            expect(program == "\x1b[0m\x1b[2S\x1b[2A\x1b"
+            expect(program == "\x1b[0m\x1b"
                           "7\x1b[1;4r\x1b"
                           "8");
         };
@@ -1007,8 +1011,8 @@ static suite hud_tests{
                         term,
                         {
                             "",
-                            "",
                             "BOTTOM",
+                            "",
                             "",
                             "",
                             "",

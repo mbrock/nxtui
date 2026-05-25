@@ -2,6 +2,7 @@
 
 #include "nxt/rt/app.hpp"
 #include "nxt/rt/buffers.hpp"
+#include "nxt/rt/stdout_trace.hpp"
 #include "nxt/rt/terminal_app.hpp"
 
 #include <nxt/ansi.hpp>
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <poll.h>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -31,8 +33,11 @@
 
 namespace nxt::rt {
 
-[[nodiscard]] inline task<void> write_stdout_all(std::string bytes)
+[[nodiscard]] inline task<void> write_stdout_all(
+    std::string bytes,
+    std::source_location where = std::source_location::current())
 {
+    trace_stdout_write(bytes, where);
     auto stdout_sink = standard_output();
     co_await write_all(stdout_sink, std::move(bytes));
 }
@@ -220,6 +225,10 @@ public:
             w.save_cursor();
             w.reset_scroll_region();
             w.restore_cursor();
+            w.move_to(nxt::Pos{
+                nxt::terminal_origin + 0 * nxt::ch,
+                nxt::terminal_origin_v + size_.h - 1 * nxt::ln});
+            w.clear_line();
             w.reset();
             w.show_cursor();
             out << restore;
@@ -306,8 +315,10 @@ private:
             return std::nullopt;
         if (terminal_geometry_initialized_)
             return std::nullopt;
-        if (auto pos = nxt::ansi::query_cursor_position())
-            return pos->y;
+        // Cursor position reporting is an in-band terminal protocol response.
+        // Do not synchronously poll stdin from the render path; a future
+        // terminal owner can observe CPR asynchronously and feed it into the
+        // geometry model.
         return std::nullopt;
     }
 
@@ -321,7 +332,14 @@ private:
         auto raster = nxt::Raster(size_.w, height, glyphs_);
         auto view = raster.view();
         layout.render(view, raster.extent());
-        return nxt::ansi::render_raster(raster);
+        auto out = std::string{};
+        // Scrollback cassettes often intentionally paint full-width bands. If
+        // autowrap is left enabled, writing the last terminal column followed by
+        // a newline can consume an extra row on real terminals.
+        out += "\x1b[?7l";
+        out += nxt::ansi::render_raster(raster);
+        out += "\x1b[?7h";
+        return out;
     }
 
     void write_output(std::ostream & out, const queued_output & output)

@@ -1,0 +1,38 @@
+
+
+
+
+
+
+
+
+
+
+
+
+  TLS 1.3 api.openai.com                                                                       39ms
+ client hello make           +    0us    25ms  █████████████████████████████████▍
+ client hello write          +   25ms   651us                                   ▐▍
+ server hello read           +   25ms     8ms                                    ▐██████████
+ server hello parse          +   33ms   549us                                               ▊
+ x25519 shared secret        +   34ms    36us
+ keys derive handshake       +   34ms    75us                                                ▏
+ handshake record read       +   35ms   678us                                                 ▉
+ handshake record read       +   36ms   535us                                                  ▐▍
+ handshake record decrypt    +   36ms   445us                                                   ▋
+ certificate parse           +   37ms   103us                                                    ▏
+ certificate verify          +   37ms    99us                                                    ▏
+ server finished verify      +   38ms   171us                                                     ▎
+ keys derive application     +   38ms   444us                                                     ▐▎
+ client finished write       +   38ms   511us                                                      ▊
+ nxtllm gpt-5.4-nano  thinking
+  thinking
+
+ Clarifying shell tool usage
+
+ The user wants to use the shell tool, but I notice they haven't provided a specific
+ command. They hinted at wanting a demo script with delays, probably for outputting
+ lines. They then mentioned "terminal rendering harness test," so I think they're looking
+ for a sample. I’ll suggest a small bash loop that uses printf and sleep. To generate
+ output, I can run a
+ streaming SSE     32K↓                 15K/s↓   2.0K↑                 128/s↑   #82

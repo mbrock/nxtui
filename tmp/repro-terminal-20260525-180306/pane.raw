@@ -1,0 +1,56 @@
+
+
+
+
+
+
+
+
+
+
+
+[38;2;203;213;225m[48;2;2;6;23m [1m[38;2;253;230;138m[48;2;15;23;42m$ bash -c 'for i in {1..6}; do echo "stdout line $i"; sleep 0.2; done; echo "do…[0m[38;2;100;116;139m[48;2;15;23;42m 1260ms [38;2;148;163;184m 3.1M  89B 
+[38;2;203;213;225m[48;2;2;6;23m [1m[38;2;100;116;139m output                                                                                            
+[0m[38;2;203;213;225m[48;2;2;6;23m stdout line 1                                                                                      
+ stdout line 2                                                                                      
+ stdout line 3                                                                                      
+ stdout line 4                                                                                      
+ stdout line 5                                                                                      
+ stdout line 6                                                                                      
+ done                                                                                               
+[39m [1m[38;2;2;6;23m[48;2;110;231;183m assistant                                                                                         
+[0m[48;2;2;6;23m [38;2;203;213;225mstdout line 1                                                                                      
+[39m [38;2;203;213;225mstdout line 2                                                                                      
+[39m [38;2;203;213;225mstdout line 3                                                                                      
+[39m [38;2;203;213;225mstdout line 4                                                                                      
+[39m [38;2;203;213;225mstdout line 5                                                                                      
+[39m [38;2;203;213;225mstdout line 6                                                                                      
+[39m [38;2;203;213;225mdone                                                                                               
+[39m[49m@@NXT_DONE:0
+
+
+
+
+
+
+
+
+[1m[38;2;2;6;23m[48;2;252;211;77m nxtllm [0m[38;2;148;163;184m[48;2;15;23;42mgpt-5.4-nano  running 1 tool call(s)                                                        
+[38;2;203;213;225m[48;2;2;6;23m [1m[38;2;253;230;138m[48;2;15;23;42m$ bash -c 'for i in {1..6}; do echo "stdout line $i"; sleep 0.2; done; echo "do…[0m[38;2;100;116;139m[48;2;15;23;42m 1243ms [38;2;148;163;184m 3.1M  89B 
+[38;2;203;213;225m[48;2;2;6;23m [1m[38;2;100;116;139m output                                                                                            
+[0m[38;2;203;213;225m[48;2;2;6;23m stdout line 1                                                                                      
+ stdout line 2                                                                                      
+ stdout line 3                                                                                      
+ stdout line 4                                                                                      
+ stdout line 5                                                                                      
+ stdout line 6                                                                                      
+ done                                                                                               
+[1m[38;2;2;6;23m[48;2;252;211;77m nxtllm [0m[38;2;148;163;184m[48;2;15;23;42mgpt-5.4-nano  streaming                                                                     
+[38;2;203;213;225m[48;2;2;6;23mstdout line 1                                                                                       
+stdout line 2                                                                                       
+stdout line 3                                                                                       
+stdout line 4                                                                                       
+stdout line 5                                                                                       
+stdout line 6                                                                                       
+[1m[38;2;2;6;23m[48;2;252;211;77m nxtllm [0m[38;2;148;163;184m[48;2;15;23;42mgpt-5.4-nano  streaming                                                                     
+[38;2;203;213;225m[48;2;2;6;23m [1m[38;2;94;234;212mstreaming SSE [0m[38;2;203;213;225m[48;2;2;6;23m    41K↓ [48;2;41;94;99m                12K/s↓[48;2;2;6;23m   4.2K↑ [48;2;45;47;46m                531/s↑[48;2;2;6;23m [38;2;100;116;139m  #84[38;2;203;213;225m                 

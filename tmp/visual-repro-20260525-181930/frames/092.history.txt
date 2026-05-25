@@ -1,0 +1,109 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  TLS 1.3 api.openai.com                                                                       39ms
+ client hello make           +    0us    25ms  █████████████████████████████████▍
+ client hello write          +   25ms   651us                                   ▐▍
+ server hello read           +   25ms     8ms                                    ▐██████████
+ server hello parse          +   33ms   549us                                               ▊
+ x25519 shared secret        +   34ms    36us
+ keys derive handshake       +   34ms    75us                                                ▏
+ handshake record read       +   35ms   678us                                                 ▉
+ handshake record read       +   36ms   535us                                                  ▐▍
+ handshake record decrypt    +   36ms   445us                                                   ▋
+ certificate parse           +   37ms   103us                                                    ▏
+ certificate verify          +   37ms    99us                                                    ▏
+ server finished verify      +   38ms   171us                                                     ▎
+ keys derive application     +   38ms   444us                                                     ▐▎
+ client finished write       +   38ms   511us                                                      ▊
+
+
+
+
+
+
+
+
+
+
+  thinking
+
+ Clarifying shell tool usage
+
+ The user wants to use the shell tool, but I notice they haven't provided a specific
+ command. They hinted at wanting a demo script with delays, probably for outputting
+ lines. They then mentioned "terminal rendering harness test," so I think they're looking
+ for a sample. I’ll suggest a small bash loop that uses printf and sleep. To generate
+ output, I can run a simple command that incorporates short sleeps. Let's proceed with
+ that!
+
+
+
+
+
+
+
+
+
+
+
+ $ for i in {1..12}; do printf 'stdout line %02d\n' "$i"; sleep 0.15; done       1865ms  2.2M  180B
+  output
+ stdout line 01
+ stdout line 02
+ stdout line 03
+ stdout line 04
+ stdout line 05
+ stdout line 06
+ stdout line 07
+ stdout line 08
+  TLS 1.3 api.openai.com                                                                       14ms
+ client hello make           +    0us    58us  ▎
+ client hello write          +  110us   626us  ▐█▉
+ server hello read           +  774us     7ms     ██████████████████████████
+ server hello parse          +    8ms   530us                               ██▏
+ x25519 shared secret        +    8ms    46us                                 ▏
+ keys derive handshake       +    9ms    62us                                   ▕
+ handshake record read       +    9ms   864us                                     ▐██▋
+ handshake record read       +   11ms   545us                                          ▕█▉
+ handshake record decrypt    +   11ms   439us                                             █▋
+ certificate parse           +   12ms    76us                                              ▕▏
+ certificate verify          +   12ms    89us                                                ▕▏
+ server finished verify      +   13ms   170us                                                  ▐▏
+ keys derive application     +   13ms   432us                                                   █▉
+ client finished write       +   13ms   501us                                                     ██
+ nxtllm gpt-5.4-nano  tls: ready
+ http response     54K↓                6.0K/s↓   4.3K↑                2.1K/s↑  #134
