@@ -23,6 +23,7 @@
 #include <functional>
 #include <poll.h>
 #include <source_location>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -682,6 +683,20 @@ template<typename Body>
     return widget_child<result_t>{
         std::move(child_slot),
         std::move(child_deed)};
+}
+
+inline auto child_slots_column(std::span<const widget_slot> slots)
+{
+    return nxt::tui::each(
+        slots,
+        [](const widget_slot & slot) {
+            return slot;
+        });
+}
+
+inline auto child_slots_column(const std::vector<widget_slot> & slots)
+{
+    return child_slots_column(std::span<const widget_slot>{slots});
 }
 
 namespace detail {

@@ -143,6 +143,29 @@ static suite layout_tests{
                 expect(true_selected.width_hint().flex == 1.0 * one);
                 expect(true_selected.height_hint().min == 1 * ln);
             };
+
+            "when is an optional typed child"_test = [] {
+                auto hidden = when(false, text("hidden"));
+                expect(hidden.width_hint().min == 0 * ch);
+                expect(hidden.height_hint().min == 0 * ln);
+
+                renders(column(text("top"), hidden, text("bottom")))
+                    | "top" | "bottom";
+                renders(when(true, text("visible"))) | "visible";
+            };
+        };
+
+        "data views"_test = [] {
+            "each maps borrowed items to variable-height layouts"_test = [] {
+                auto items = std::vector<std::string>{"a\nb", "c"};
+                auto layout = each(items, [](const std::string & item) {
+                    return text_lines(item);
+                });
+
+                expect(layout.height_hint().min == 3 * ln);
+                expect(layout.width_hint().min == 1 * ch);
+                renders(layout) | "a" | "b" | "c";
+            };
         };
 
         "rules and styles"_test = [] {

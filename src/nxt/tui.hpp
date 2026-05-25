@@ -162,6 +162,16 @@ auto either(
     };
 }
 
+/// Conditional layout that renders a child only when `condition` is true.
+template<Layout Child>
+auto when(bool condition, Child && child)
+{
+    return either(
+        condition,
+        empty(),
+        std::forward<Child>(child));
+}
+
 /// Write UTF-8 text into a raster.
 inline col_t write_text(RasterView & r, Pos pos, std::string_view text)
 {
@@ -1059,12 +1069,15 @@ auto dyn_column(std::vector<Child> children)
     return DynColumn<Child>{std::move(children)};
 }
 
-/// Dynamic vertical container that owns a runtime-sized vector of data and
-/// maps each item to a concrete layout when measured or rendered.
+/// Dynamic vertical container for a borrowed runtime-sized span of data.
+///
+/// Each item is mapped to a concrete layout when measured or rendered. This
+/// is the multi-line counterpart to `list`: item layouts may have arbitrary
+/// heights, and no vector of materialized child layouts is retained.
 template<typename T, typename ViewFn>
-struct MappedColumn
+struct Each
 {
-    std::vector<T> items;
+    std::span<const T> items;
     ViewFn view;
 
     WidthHint width_hint() const
@@ -1106,9 +1119,47 @@ struct MappedColumn
 };
 
 template<typename T, typename ViewFn>
-auto mapped_column(std::vector<T> items, ViewFn && view)
+auto each(std::span<const T> items, ViewFn && view)
 {
-    return MappedColumn<T, std::decay_t<ViewFn>>{
+    return Each<T, std::decay_t<ViewFn>>{
+        items,
+        std::forward<ViewFn>(view)};
+}
+
+template<typename T, typename ViewFn>
+auto each(const std::vector<T> & items, ViewFn && view)
+{
+    return each(std::span<const T>{items}, std::forward<ViewFn>(view));
+}
+
+/// Owning variant used by value-returning helper functions that compute the
+/// data locally and package it into a layout.
+template<typename T, typename ViewFn>
+struct OwningEach
+{
+    std::vector<T> items;
+    ViewFn view;
+
+    WidthHint width_hint() const
+    {
+        return each(items, view).width_hint();
+    }
+
+    HeightHint height_hint() const
+    {
+        return each(items, view).height_hint();
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        each(items, view).render(raster, size);
+    }
+};
+
+template<typename T, typename ViewFn>
+auto each(std::vector<T> && items, ViewFn && view)
+{
+    return OwningEach<T, std::decay_t<ViewFn>>{
         std::move(items),
         std::forward<ViewFn>(view)};
 }

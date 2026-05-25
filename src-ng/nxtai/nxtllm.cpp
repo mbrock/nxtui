@@ -377,9 +377,8 @@ auto assistant_preview_layout(std::string_view assistant_text)
 {
     namespace tt = nxt::ai::tool_tui;
     auto preview = join_lines(last_lines(assistant_text, 8));
-    return nxt::tui::either(
+    return nxt::tui::when(
         !assistant_text.empty(),
-        nxt::tui::empty(),
         nxt::tui::text_lines(
             std::move(preview), nxt::tui::fg(tt::slate_300)));
 }
@@ -389,13 +388,11 @@ auto stream_activity_layout(
     std::string_view assistant_text)
 {
     return nxt::tui::column(
-        nxt::tui::either(
+        nxt::tui::when(
             !thought.empty(),
-            nxt::tui::empty(),
             nxt::ai::tool_tui::thought_block(std::string{thought})),
-        nxt::tui::either(
+        nxt::tui::when(
             !assistant_text.empty(),
-            nxt::tui::empty(),
             assistant_preview_layout(assistant_text)));
 }
 
@@ -407,9 +404,8 @@ auto network_footer_layout(const network_hud_state & net)
     auto phase_style = nxt::tui::fg(tt::teal_300) | nxt::tui::bg(tt::page_bg)
                      | nxt::tui::em(nxt::Emphasis::bold);
     auto event_style = nxt::tui::fg(tt::slate_500) | nxt::tui::bg(tt::page_bg);
-    return nxt::tui::either(
+    return nxt::tui::when(
         !net.phase.empty() || net.socket_rx != 0 || net.socket_tx != 0,
-        nxt::tui::empty(),
         nxt::tui::row(
             nxt::tui::hfill(1 * nxt::ch, tt::page_bg),
             fixed_cell(14 * nxt::ch, std::move(phase), phase_style),
@@ -1082,13 +1078,13 @@ nxt::rt::task<std::vector<nxt::rt::catching_deed<function_call_result>>>
 spawn_tool_call_children(
     const ToolSet & tools,
     std::vector<function_call> & calls,
+    std::vector<nxt::rt::widget_slot> & surfaces,
     std::chrono::milliseconds settle_delay,
     std::size_t & done_count)
 {
     auto out = std::vector<nxt::rt::catching_deed<function_call_result>>{};
     out.reserve(calls.size());
 
-    auto surfaces = std::vector<nxt::rt::widget_slot>{};
     surfaces.reserve(calls.size());
     for (auto & call : calls) {
         auto child = nxt::rt::spawn_widget(
@@ -1105,7 +1101,7 @@ spawn_tool_call_children(
         surfaces.emplace_back(child.surface());
         out.push_back(std::move(child).cope());
     }
-    nxt::rt::draw(nxt::tui::dyn_column(std::move(surfaces)));
+    nxt::rt::draw(nxt::rt::child_slots_column(surfaces));
 
     while (done_count < out.size())
         co_await nxt::rt::op::timeout::after(frame_interval);
@@ -1138,26 +1134,34 @@ run_function_tool_batch_ui(
     }
 
     auto done_count = std::size_t{};
+    auto surfaces = std::vector<nxt::rt::widget_slot>{};
     auto deeds = co_await nxt::rt::with_zone(
         [&] {
             return spawn_tool_call_children(
                 tools,
                 calls,
+                surfaces,
                 settle_delay,
                 done_count);
         });
 
-    auto out = std::vector<nxt::ai::tools::function_call_result>{};
-    out.reserve(deeds.size());
-    for (auto & deed : deeds) {
-        auto result = std::move(deed).get();
-        if (result) {
-            out.push_back(std::move(*result));
-        } else {
-            nxt::rt::rethrow(result.error());
+    try {
+        auto out = std::vector<nxt::ai::tools::function_call_result>{};
+        out.reserve(deeds.size());
+        for (auto & deed : deeds) {
+            auto result = std::move(deed).get();
+            if (result) {
+                out.push_back(std::move(*result));
+            } else {
+                nxt::rt::rethrow(result.error());
+            }
         }
+        nxt::rt::clear_widget();
+        co_return out;
+    } catch (...) {
+        nxt::rt::clear_widget();
+        throw;
     }
-    co_return out;
 }
 
 template<typename ToolSet>

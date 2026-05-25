@@ -151,16 +151,14 @@ inline auto waterfall_header(
     namespace tt = tool_tui;
 
     return nxt::tui::row(
-        nxt::tui::either(
+        nxt::tui::when(
             !options.label.empty(),
-            nxt::tui::empty(),
             tt::chip(" " + options.label + " ",
                      tt::slate_950,
                      options.accent,
                      nxt::Emphasis::bold)),
-        nxt::tui::either(
+        nxt::tui::when(
             !options.detail.empty(),
-            nxt::tui::empty(),
             tt::chip(" " + options.detail + " ",
                      options.accent,
                      tt::band_bg,
@@ -222,7 +220,7 @@ inline auto render_waterfall(
             waterfall_header(view, options),
             nxt::tui::either(
                 no_rows,
-                nxt::tui::mapped_column(
+                nxt::tui::each(
                     std::move(view.rows),
                     [total, accent](const waterfall_row & row) {
                         return waterfall_row_layout(row, total, accent);

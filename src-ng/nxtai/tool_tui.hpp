@@ -171,13 +171,11 @@ inline auto call_header(const call_view & c)
             band_bg,
             Emphasis::bold),
         flex_text(primary_arg(c), fg(slate_500) | bg(band_bg)),
-        either(
+        when(
             c.elapsed_ms >= 0,
-            empty(),
             chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg)),
-        either(
+        when(
             !c.output.empty(),
-            empty(),
             chip(std::format(" {}B ", c.output.size()), slate_400, band_bg)));
 }
 
@@ -263,17 +261,14 @@ inline auto shell_header(
         flex_text(
             std::move(title),
             fg(title_color) | bg(band_bg) | em(Emphasis::bold)),
-        either(
+        when(
             c.elapsed_ms >= 0,
-            empty(),
             chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg)),
-        either(
+        when(
             !latest_memory.empty(),
-            empty(),
             chip(std::format(" {} ", latest_memory), slate_400, band_bg)),
-        either(
+        when(
             !c.output.empty(),
-            empty(),
             chip(std::format(" {}B ", c.output.size()), slate_400, band_bg)));
 }
 
@@ -325,13 +320,11 @@ inline auto render_bash_call(const call_view & c)
     auto script = command.value_or(std::string{});
     return column(
         inset_block(shell_header(c, std::move(title), title_color)),
-        either(
+        when(
             command.has_value() && !short_command,
-            empty(),
             shell_script_window(script)),
-        either(
+        when(
             !c.output.empty() || c.state == status::running,
-            empty(),
             shell_output_window(c)));
 }
 
@@ -339,9 +332,8 @@ inline auto render_generic_call(const call_view & c)
 {
     return column(
         inset_block(call_header(c)),
-        either(
+        when(
             !c.output.empty() || c.state == status::running,
-            empty(),
             result_window(c)));
 }
 
@@ -379,16 +371,15 @@ inline auto render_turn(const turn_view & t)
     return surface(
         Style{.fg = slate_300, .bg = page_bg, .em = DEFAULT_EMPHASIS},
         column(
-            either(has_thought, empty(), thought_block(t.thought)),
-            either(
+            when(has_thought, thought_block(t.thought)),
+            when(
                 has_calls,
-                empty(),
-                mapped_column(
+                each(
                     std::vector<call_view>{t.calls},
                     [](const call_view & c) {
                         return render_call(c);
                     })),
-            either(!has_thought && !has_calls, empty(), text(""))));
+            when(!has_thought && !has_calls, text(""))));
 }
 
 } // namespace nxt::ai::tool_tui
