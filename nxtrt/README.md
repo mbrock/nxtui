@@ -1,12 +1,19 @@
 # nxtrt Racket ontology/model prototype
 
-This directory is a small experiment in making the `nxt::rt` Forge model a
-pair of Racket modules.
+This directory is a small experiment in making the `nxt::rt` domain a
+single `#lang rdf-forge` source file.
 
-- `ontology.rkt` declares the `nxt` ontology and provides top-level bindings
-  such as `task`, `zone`, `belongs-to`, and `parked-on`.
-- `model.rkt` imports those bindings, builds a Forge model value, and runs it
-  through Forge's functional API without generating `.frg` text.
+- `runtime.rkt` declares the ontology and model together.
+- `ontology.rkt` is a compatibility entrypoint that prints the ontology as
+  Turtle/RDFS/OWL.
+- `model.rkt` is a compatibility entrypoint that runs the model through
+  Forge's functional API without generating `.frg` text.
+
+Install the local language once in this checkout:
+
+```sh
+raco pkg install --auto --link -n rdf-forge rdf-forge
+```
 
 Generate a basic Turtle/RDFS/OWL view of the ontology:
 
@@ -26,13 +33,15 @@ Run the structured checks:
 racket nxtrt/model.rkt --check
 ```
 
-Predicates in `model.rkt` are written as Racket data expressions rather than
-raw Forge text. For example:
+Predicates in `runtime.rkt` are written in the indentation-sensitive
+`rdf-forge` language rather than raw Forge text. For example:
 
 ```racket
-(all ([a waiter])
-  (=> (some (follow a parked-on))
-      (== (a (belongs-to (task waiter)) (belongs-to waiter)) a)))
+predicate task-awaiting-wish
+  some ([t task] [a waiter] [w wand])
+    == (a (belongs-to (task waiter))) t
+    == (a holds) w
+    == (a parked-on) w
 ```
 
 Quantified variables are callable inside predicate bodies. Calling a variable
@@ -43,16 +52,16 @@ Field declarations resolve overloaded properties from the enclosing signature
 domain, so a signature can stay close to the ontology wording:
 
 ```racket
-(signature task
-  (belongs-to lone zone)
-  (is-ready-on lone deck)
-  (continues-as lone task))
+signature task
+  belongs-to lone zone
+  is-ready-on lone deck
+  continues-as lone task
 ```
 
 Use `follow` for outgoing relation paths and `matching` for inverse lookups:
 
 ```racket
-(all ([z zone] [t (matching (belongs-to (zone task)) z)])
-  (lone ([d (matching (belongs-to (zone deed)) z)])
-    (== (follow d (belongs-to (task deed))) t)))
+all ([z zone] [t (matching (belongs-to (zone task)) z)])
+  lone ([d (matching (belongs-to (zone deed)) z)])
+    == (d (belongs-to (task deed))) t
 ```
