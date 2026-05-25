@@ -1,4 +1,4 @@
-.PHONY: all setup build test spec docs docs-publish clean traces
+.PHONY: all setup build full test spec docs docs-publish clean traces
 
 all: build
 
@@ -6,9 +6,13 @@ setup:
 	meson setup build
 
 build:
+	meson compile -C build nxtllm
+
+full:
 	meson compile -C build
 
-test: build
+test:
+	meson compile -C build ng-tests
 	meson test -C build
 
 spec:

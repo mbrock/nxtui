@@ -637,9 +637,10 @@ public:
         hud_.turn.thought.clear();
         hud_.status = "thinking done";
         if (!summary.empty())
-            co_await hud_ui_.print(
+            hud_ui_.print(
                 nxt::ai::tool_tui::thought_block(std::move(summary)));
         publish(true);
+        co_return;
     }
 
     void output_delta(std::string_view delta)
@@ -658,7 +659,7 @@ public:
     {
         if (hud_.assistant_text.empty())
             co_return;
-        co_await hud_ui_.print(
+        hud_ui_.print(
             nxt::ai::tool_tui::assistant_block(
                 std::move(hud_.assistant_text)));
         hud_.assistant_text.clear();
@@ -716,10 +717,11 @@ public:
         }
 
         if (!hud_.turn.calls.empty()) {
-            co_await hud_ui_.print(nxt::ai::tool_tui::render_turn(hud_.turn));
+            hud_ui_.print(nxt::ai::tool_tui::render_turn(hud_.turn));
             hud_.turn.calls.clear();
             publish(true);
         }
+        co_return;
     }
 
     nxt::rt::task<void> tls_ready(
@@ -727,7 +729,7 @@ public:
         const nxt::rt::trace_span & tls_span)
     {
         if (trace != nullptr && tls_span)
-            co_await hud_ui_.print(
+            hud_ui_.print(
                 nxt::ai::trace_tui::render_span_waterfall(
                     *trace,
                     tls_span,
@@ -738,9 +740,10 @@ public:
                         .accent = nxt::ai::tool_tui::teal_300,
                     }));
         else
-            co_await hud_ui_.print_block(
+            hud_ui_.print_block(
                 "tls  api.openai.com  TLS 1.3 handshake\n");
         publish(true);
+        co_return;
     }
 
     void network_phase(std::string_view phase)

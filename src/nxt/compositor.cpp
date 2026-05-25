@@ -133,6 +133,14 @@ void TerminalCompositor::set_hud_height(
     if (next_partition == partition_)
         return;
 
+    if (!geometry_initialized_ && next_partition.hidden()) {
+        partition_ = next_partition;
+        auto raster_w = front_.width();
+        front_ = Raster(raster_w, 0 * ln, glyphs_);
+        back_ = Raster(raster_w, 0 * ln, glyphs_);
+        return;
+    }
+
     auto change = geometry_initialized_
                       ? rtty::repartition::from(partition_, next_partition)
                       : rtty::repartition::initial(

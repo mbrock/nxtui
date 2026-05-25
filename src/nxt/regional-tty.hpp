@@ -600,4 +600,46 @@ template<backend Backend>
     return std::move(out).finish();
 }
 
+/// Stateful durable-output appender.
+///
+/// A complete scrollback block should stop on its final visible row. The next
+/// block, not the previous one, spends the line feed needed to start a new row.
+/// That keeps HUD repartitions from promoting a speculative blank row into the
+/// terminal scrollback history.
+struct scrollback_append_state
+{
+    bool after_block = false;
+
+    template<backend Backend>
+    [[nodiscard]] typename Backend::program_type append_block(
+        const screen_partition &,
+        std::string_view block)
+    {
+        auto out = program_builder<Backend>{};
+        if (block.empty())
+            return std::move(out).finish();
+
+        out.emit(Backend::reset_graphics());
+        if (after_block)
+            out.emit(Backend::line_feed());
+
+        auto remaining = block;
+        while (true) {
+            auto end = remaining.find('\n');
+            auto line =
+                end == std::string_view::npos ? remaining
+                                               : remaining.substr(0, end);
+            if (!line.empty())
+                out.emit(Backend::text(line));
+            if (end == std::string_view::npos)
+                break;
+            out.emit(Backend::line_feed());
+            remaining.remove_prefix(end + 1);
+        }
+
+        after_block = true;
+        return std::move(out).finish();
+    }
+};
+
 } // namespace nxt::regional_tty

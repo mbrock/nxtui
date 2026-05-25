@@ -131,9 +131,9 @@ public:
             nxt::tui::AnyLayout{std::forward<Layout>(layout)});
     }
 
-    task<void> print_block(std::string text)
+    void print_block(std::string text)
     {
-        auto published = co_await commands_.publish(
+        auto published = commands_.try_publish(
             terminal_command{
                 .kind = terminal_command_kind::print_block,
                 .text = std::move(text),
@@ -143,9 +143,9 @@ public:
     }
 
     template<nxt::tui::Layout Layout>
-    task<void> print(Layout && layout)
+    void print(Layout && layout)
     {
-        co_await print_block(
+        print_block(
             render_scrollback_layout(std::forward<Layout>(layout)));
     }
 
@@ -168,12 +168,7 @@ public:
         auto storage = std::array<std::byte, 256>{};
 
         while (!stop_requested()) {
-            auto ready = co_await op::poll_until::after(
-                STDIN_FILENO,
-                POLLIN,
-                std::chrono::milliseconds{100});
-            if (ready.timed_out)
-                continue;
+            co_await op::timeout::after(std::chrono::milliseconds{16});
 
             while (true) {
                 auto n = ::read(
@@ -195,7 +190,7 @@ public:
                     static_cast<std::size_t>(n)};
                 for (auto & event : parser.feed(bytes)) {
                     if (event.is_ctrl_l()) {
-                        co_await print_block(d.runtime_dump_text());
+                        print_block(d.runtime_dump_text());
                         continue;
                     }
                     if (event.is_ctrl_c() || event.is_ctrl_z()) {
@@ -309,7 +304,7 @@ private:
     {
         if (!has_terminal_surface())
             return std::nullopt;
-        if (compositor_.hud_height() > 0 * ln)
+        if (terminal_geometry_initialized_)
             return std::nullopt;
         if (auto pos = nxt::ansi::query_cursor_position())
             return pos->y;
@@ -344,7 +339,7 @@ private:
 
         const auto & partition = compositor_.partition();
         if (partition.hidden()) {
-            auto buf = regional_tty::append_block<
+            auto buf = scrollback_.append_block<
                 regional_tty::ansi_string_backend>(partition, block_text);
             out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
             return;
@@ -353,9 +348,8 @@ private:
         if (!partition.windowed())
             return;
 
-        auto buf =
-            regional_tty::append_block<regional_tty::ansi_string_backend>(
-                partition, block_text);
+        auto buf = scrollback_.append_block<
+            regional_tty::ansi_string_backend>(partition, block_text);
         out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     }
 
@@ -388,13 +382,17 @@ private:
             auto reserved_log_rows = 7 * ln;
             if (size_.h > reserved_log_rows)
                 target_h = std::min(target_h, size_.h - reserved_log_rows);
-
         }
 
-        flush_output_queue(out);
-
+        auto insertion_cursor = target_h > 0 * ln
+                                    ? query_insertion_cursor()
+                                    : std::optional<row_t>{};
         compositor_.set_hud_height(
-            target_h, size_.h, out, query_insertion_cursor());
+            target_h, size_.h, out, insertion_cursor);
+        if (target_h > 0 * ln)
+            terminal_geometry_initialized_ = true;
+
+        flush_output_queue(out);
 
         auto & buffer = compositor_.back_buffer();
         buffer.clear();
@@ -465,8 +463,10 @@ private:
     std::uint64_t damage_generation_ = 0;
     channel<terminal_command> commands_;
     std::vector<queued_output> output_queue_;
+    regional_tty::scrollback_append_state scrollback_;
     bool stopping_ = false;
     bool cleaned_up_ = false;
+    bool terminal_geometry_initialized_ = false;
 };
 
 class ui_scope
@@ -510,15 +510,15 @@ public:
         surface_.publish(nxt::tui::AnyLayout{});
     }
 
-    task<void> print_block(std::string text) const
+    void print_block(std::string text) const
     {
-        co_await runtime_->print_block(std::move(text));
+        runtime_->print_block(std::move(text));
     }
 
     template<nxt::tui::Layout Layout>
-    task<void> print(Layout && layout) const
+    void print(Layout && layout) const
     {
-        co_await runtime_->print(std::forward<Layout>(layout));
+        runtime_->print(std::forward<Layout>(layout));
     }
 
     void request_shutdown() const noexcept

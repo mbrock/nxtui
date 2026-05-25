@@ -1,7 +1,7 @@
 #include "vterm-wrapper.hpp"
 #include <nxt/ansi.hpp>
+#include <nxt/compositor.hpp>
 #include <nxt/regional-tty.hpp>
-#include <nxtio/app.hpp>
 #include <nxt/tui.hpp>
 #include <nxt/tui_terminal.hpp>
 
@@ -179,6 +179,18 @@ void append_runtime_block(
     term.write(apply_onlcr(buf));
 }
 
+void append_runtime_block(
+    vterm::Terminal & term,
+    rtty::scrollback_append_state & state,
+    const rtty::screen_partition & partition,
+    std::string_view text)
+{
+    ansi::mode = ansi::Mode::enabled;
+    auto buf = state.append_block<rtty::ansi_string_backend>(
+        partition, text);
+    term.write(apply_onlcr(buf));
+}
+
 // ============================================================================
 // Regional TTY model tests
 // ============================================================================
@@ -317,6 +329,32 @@ static suite regional_tty_tests{
                 expect(program[3].kind == rtty::command_kind::text);
                 expect(program[3].text == "SECOND");
                 expect(program[4].kind == rtty::command_kind::line_feed);
+            };
+
+        "stateful scrollback blocks spend the separator before the next block"_test =
+            [] {
+                auto partition =
+                    rtty::screen_partition::for_bottom_fixed_height(
+                        6 * ln, 2 * ln);
+                auto state = rtty::scrollback_append_state{};
+
+                auto first = state.append_block<rtty::command_list_backend>(
+                    partition, "FIRST\nSECOND");
+                expect(first.size() == std::size_t{4});
+                expect(first[0].kind == rtty::command_kind::reset_graphics);
+                expect(first[1].kind == rtty::command_kind::text);
+                expect(first[1].text == "FIRST");
+                expect(first[2].kind == rtty::command_kind::line_feed);
+                expect(first[3].kind == rtty::command_kind::text);
+                expect(first[3].text == "SECOND");
+
+                auto second = state.append_block<rtty::command_list_backend>(
+                    partition, "THIRD");
+                expect(second.size() == std::size_t{3});
+                expect(second[0].kind == rtty::command_kind::reset_graphics);
+                expect(second[1].kind == rtty::command_kind::line_feed);
+                expect(second[2].kind == rtty::command_kind::text);
+                expect(second[2].text == "THIRD");
             };
 
         "render the same initial repartition through ANSI"_test = [] {
@@ -634,6 +672,34 @@ static suite hud_tests{
                     });
             };
 
+            "keeps first zero-height frame from consuming initial attachment"_test =
+                [] {
+                    GlyphTable glyphs;
+                    ui::TerminalCompositor compositor(
+                        {20 * ch, 8 * ln}, glyphs);
+                    vterm::Terminal term(8, 20);
+
+                    write_at(term, terminal_origin_v + 0 * ln, "PROMPT");
+                    move_cursor_to(term, terminal_origin_v + 1 * ln);
+
+                    set_hud_height(compositor, term, 0 * ln, 8 * ln);
+                    set_hud_height(compositor, term, 2 * ln, 8 * ln);
+
+                    expect(term.scrollback_lines().empty());
+                    check_display(
+                        term,
+                        {
+                            "PROMPT",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                        });
+                };
+
             "preserves wrapped shell commands through the first block"_test =
                 [] {
                     GlyphTable glyphs;
@@ -852,6 +918,43 @@ static suite hud_tests{
                         });
                 };
 
+            "does not promote a speculative blank row while growing after a block"_test =
+                [] {
+                    GlyphTable glyphs;
+                    ui::TerminalCompositor compositor(
+                        {20 * ch, 8 * ln}, glyphs);
+                    vterm::Terminal term(8, 20);
+                    auto append_state = rtty::scrollback_append_state{};
+
+                    move_cursor_to(term, terminal_origin_v + 0 * ln);
+                    set_hud_height(compositor, term, 1 * ln, 8 * ln);
+                    append_runtime_block(
+                        term,
+                        append_state,
+                        compositor.partition(),
+                        "L1\nL2\nL3\nL4");
+
+                    set_hud_height(compositor, term, 3 * ln, 8 * ln);
+
+                    auto history = term.scrollback_lines();
+                    expect(history.size() == std::size_t{2});
+                    expect(history[0] == "L1");
+                    expect(history[1] == "L2");
+
+                    check_display(
+                        term,
+                        {
+                            "L3",
+                            "L4",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                        });
+                };
+
             "preserves bottom box footers when entering from zero height"_test =
                 [] {
                     GlyphTable glyphs;
@@ -1007,6 +1110,7 @@ static suite hud_tests{
                             "",
                         });
                 };
+
         };
     }};
 

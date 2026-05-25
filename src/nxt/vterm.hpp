@@ -167,6 +167,7 @@ public:
         : vt_(std::move(other.vt_))
         , screen_(std::exchange(other.screen_, nullptr))
         , state_(std::exchange(other.state_, nullptr))
+        , scrollback_(std::move(other.scrollback_))
         , cursor_visible_(other.cursor_visible_)
         , cursor_shape_(other.cursor_shape_)
     {
@@ -179,6 +180,7 @@ public:
             vt_ = std::move(other.vt_);
             screen_ = std::exchange(other.screen_, nullptr);
             state_ = std::exchange(other.state_, nullptr);
+            scrollback_ = std::move(other.scrollback_);
             cursor_visible_ = other.cursor_visible_;
             cursor_shape_ = other.cursor_shape_;
             install_screen_callbacks();
@@ -289,6 +291,13 @@ public:
         auto [rows, cols] = get_size();
         (void) rows;
         return get_text(row, 0, row, cols - 1);
+    }
+
+    /// Lines pushed into the terminal scrollback by scroll-region movement.
+    [[nodiscard]] const std::vector<std::string> & scrollback_lines() const
+        noexcept
+    {
+        return scrollback_;
     }
 
     /// Current terminal size as `{rows, cols}`.
@@ -471,9 +480,66 @@ private:
             VTermScreenCallbacks cbs{};
             cbs.movecursor = &Terminal::on_move_cursor;
             cbs.settermprop = &Terminal::on_set_term_prop;
+            cbs.sb_pushline = &Terminal::on_scrollback_pushline;
+            cbs.sb_clear = &Terminal::on_scrollback_clear;
             return cbs;
         }();
         return &callbacks;
+    }
+
+    static void append_utf8(std::string & out, std::uint32_t cp)
+    {
+        if (cp <= 0x7f) {
+            out.push_back(static_cast<char>(cp));
+        } else if (cp <= 0x7ff) {
+            out.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        } else if (cp <= 0xffff) {
+            out.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        } else {
+            out.push_back(static_cast<char>(0xf0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        }
+    }
+
+    static std::string cell_text(const VTermScreenCell & cell)
+    {
+        auto out = std::string{};
+        for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i]; ++i)
+            append_utf8(out, cell.chars[i]);
+        if (out.empty() && cell.width > 0)
+            out = " ";
+        return out;
+    }
+
+    static int on_scrollback_pushline(
+        int cols,
+        const VTermScreenCell * cells,
+        void * user) noexcept
+    {
+        auto * self = static_cast<Terminal *>(user);
+        if (self == nullptr || cells == nullptr)
+            return 1;
+
+        auto line = std::string{};
+        for (int col = 0; col < cols; ++col)
+            line += cell_text(cells[col]);
+        while (!line.empty() && line.back() == ' ')
+            line.pop_back();
+        self->scrollback_.push_back(std::move(line));
+        return 1;
+    }
+
+    static int on_scrollback_clear(void * user) noexcept
+    {
+        auto * self = static_cast<Terminal *>(user);
+        if (self != nullptr)
+            self->scrollback_.clear();
+        return 1;
     }
 
     static int on_move_cursor(
@@ -508,6 +574,7 @@ private:
     std::unique_ptr<VTerm, void (*)(VTerm *)> vt_;
     VTermScreen * screen_ = nullptr;
     VTermState * state_ = nullptr;
+    std::vector<std::string> scrollback_;
     bool cursor_visible_ = true;
     int cursor_shape_ = VTERM_PROP_CURSORSHAPE_BLOCK;
 };

@@ -261,6 +261,15 @@ private:
         virtual ~completion_base() = default;
         virtual void complete(int result) = 0;
 
+        [[nodiscard]] std::string describe() const
+        {
+            return std::visit(
+                [](auto const & wish) {
+                    return detail::describe_wish(wish);
+                },
+                *request_);
+        }
+
         void request_cancel() noexcept
         {
             cancel_requested_ = true;
@@ -326,8 +335,7 @@ private:
                     state_->set_exception(
                         std::make_exception_ptr(
                             runtime_error{
-                                "io_uring operation failed: "
-                                + std::to_string(-result)}));
+                                failure_message(result)}));
                 }
             } else {
                 if constexpr (std::is_void_v<T>) {
@@ -342,8 +350,7 @@ private:
                     state_->set_exception(
                         std::make_exception_ptr(
                             runtime_error{
-                                "io_uring operation failed: "
-                                + std::to_string(-result)}));
+                                failure_message(result)}));
                     return;
                 }
 
@@ -385,6 +392,19 @@ private:
                         ? info.si_status
                         : 0,
             };
+        }
+
+        [[nodiscard]] std::string failure_message(int result) const
+        {
+            auto code = -result;
+            auto message = std::string{"io_uring "}
+                + this->describe()
+                + " failed: "
+                + std::strerror(code)
+                + " ("
+                + std::to_string(code)
+                + ")";
+            return message;
         }
 
         std::shared_ptr<wait_state<T>> state_;
@@ -1058,7 +1078,7 @@ inline bool op::poll_until::stage_uring(uring_submission & submission)
     io_uring_prep_link_timeout(
         timeout_sqe,
         &timeout,
-        IORING_TIMEOUT_ETIME_SUCCESS);
+        0);
     submission.attach(timeout_sqe);
     return true;
 }

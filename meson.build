@@ -191,6 +191,7 @@ if get_option('tests')
   nxt_ng_test_sources = files(
     'test/ng-include-test.cpp',
     'test/ng-runtime-test.cpp',
+    'test/terminal-test.cpp',
     'src/nxtio/stacktrace.cpp',
     'test/test-main.cpp',
   )
