@@ -4,6 +4,7 @@
 #include <nxt/rt/subprocess.hpp>
 #include <nxt/rt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
+#include <nxtai/tool_process.hpp>
 
 #include "test.hpp"
 
@@ -188,14 +189,7 @@ nxt::rt::task<void> write_to_fd(int fd, std::string_view text)
         throw std::runtime_error{"short write wish"};
 }
 
-struct captured_process
-{
-    nxt::rt::child_result status;
-    bool output_truncated = false;
-    std::string output;
-};
-
-nxt::rt::task<captured_process> capture_shell(
+nxt::rt::task<nxt::ai::tool_process::result> capture_shell(
     std::string command,
     std::size_t cap_bytes = 64 * 1024)
 {
@@ -203,49 +197,8 @@ nxt::rt::task<captured_process> capture_shell(
     argv.emplace_back("/bin/sh");
     argv.emplace_back("-c");
     argv.push_back(std::move(command));
-    auto child = co_await nxt::rt::op::spawn_piped{.argv = std::move(argv)};
-
-    auto output = std::string{};
-    auto output_truncated = false;
-    auto storage = std::array<std::byte, 4096>{};
-    auto source = nxt::rt::fd_source{child.output_fd()};
-    while (true) {
-        auto read = co_await source.read_some(storage);
-        if (read.bytes != 0) {
-            auto text =
-                nxt::rt::as_string_view(std::span{storage}.first(read.bytes));
-            if (output.size() + text.size() > cap_bytes) {
-                auto remaining = cap_bytes > output.size()
-                    ? cap_bytes - output.size()
-                    : std::size_t{};
-                output.append(text.substr(0, remaining));
-                output_truncated = true;
-                break;
-            }
-            output += text;
-        }
-        if (read.eof)
-            break;
-    }
-
-    child.output.reset();
-    auto status = nxt::rt::child_result{};
-    if (output_truncated) {
-        co_await nxt::rt::op::signal_child{
-            .pidfd = child.pid_fd(),
-            .signal = SIGTERM,
-        };
-        status = co_await nxt::rt::op::wait_child{.pidfd = child.pid_fd()};
-    } else {
-        status = co_await nxt::rt::op::wait_child{.pidfd = child.pid_fd()};
-    }
-    if (output_truncated)
-        output += "\n...(output truncated)\n";
-    co_return captured_process{
-        .status = status,
-        .output_truncated = output_truncated,
-        .output = std::move(output),
-    };
+    co_return co_await nxt::ai::tool_process::capture(
+        std::move(argv), cap_bytes);
 }
 
 nxt::rt::task<nxt::rt::child_result> terminate_sleeping_shell()
@@ -523,7 +476,8 @@ static suite ng_uring_wand_tests{
                 expect(child.status.exited);
                 expect(child.status.exit_code == 0_i);
                 expect(child.output == "outerr");
-                expect(!child.output_truncated);
+                expect(!child.failed);
+                expect(!child.output_too_large);
             };
 
             "subprocess capture records nonzero exits"_test = [] {
@@ -537,18 +491,24 @@ static suite ng_uring_wand_tests{
                 expect(child.status.exited);
                 expect(child.status.exit_code == 7_i);
                 expect(child.output == "nope");
+                expect(!child.failed);
             };
 
-            "subprocess capture caps output"_test = [] {
+            "subprocess capture fails oversized output after draining"_test = [] {
                 auto wand = nxt::rt::uring_wand{};
                 auto deck = nxt::rt::deck{&wand};
-                auto task = capture_shell("printf 'abcdefgh'", 5);
+                auto task = capture_shell("printf 'abcdefgh'; exit 7", 5);
 
                 deck.start(task);
                 auto child = pump_until_done(deck, wand, task);
 
-                expect(child.output_truncated);
-                expect(child.output.starts_with("abcde"));
+                expect(child.status.exited);
+                expect(child.status.exit_code == 7_i);
+                expect(child.failed);
+                expect(child.output_too_large);
+                expect(child.failure_reason
+                    == "tool output exceeded capture limit (5 bytes)");
+                expect(child.output.find("abcde") != std::string::npos);
             };
 
             "subprocess children are signalled through pidfds"_test = [] {
