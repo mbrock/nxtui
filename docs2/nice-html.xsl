@@ -28,7 +28,7 @@
             background: var(--paper);
           }
           main {
-            width: min(1200px, calc(100% - 2rem));
+            width: min(1120px, calc(100% - 2rem));
             margin: 0 auto;
             padding: 4.5rem 0 5rem;
           }
@@ -70,12 +70,12 @@
             font-size: 1.08rem;
           }
           forge-doc-graph {
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 21 / 10;
             background: transparent;
             display: block;
-            margin: 2.25rem 0 3.25rem;
-            max-height: 760px;
-            min-height: 360px;
+            margin: 2.25rem 0 3rem;
+            max-height: 620px;
+            min-height: 320px;
             position: relative;
             width: min(1280px, calc(100vw - 2rem));
             margin-left: calc((100% - min(1280px, calc(100vw - 2rem))) / 2);
@@ -97,38 +97,6 @@
             padding-left: 1.3rem;
           }
           li + li { margin-top: 0.25rem; }
-          @media (min-width: 1000px) {
-            main {
-              display: grid;
-              grid-template-columns: 1fr 260px;
-              gap: 3.5rem;
-              align-items: start;
-            }
-            header,
-            .intro,
-            section {
-              grid-column: 1;
-            }
-            forge-doc-graph {
-              grid-column: 1 / -1;
-            }
-            nav {
-              grid-column: 2;
-              grid-row: 1 / span 20;
-              position: sticky;
-              top: 2rem;
-              border-left: 1px solid var(--line);
-              padding-left: 1.2rem;
-              color: var(--muted);
-            }
-          }
-          nav a {
-            display: block;
-            color: inherit;
-            text-decoration: none;
-            margin: 0.35rem 0;
-          }
-          nav a:hover { color: var(--accent); }
         </style>
       </head>
       <body>
@@ -137,11 +105,6 @@
             <h1><xsl:value-of select="title"/></h1>
             <p class="source"><xsl:value-of select="source"/></p>
           </header>
-          <nav aria-label="Sections">
-            <xsl:for-each select="section">
-              <a href="#{@id}"><xsl:value-of select="title"/></a>
-            </xsl:for-each>
-          </nav>
           <div class="intro">
             <xsl:apply-templates select="paragraph"/>
           </div>
