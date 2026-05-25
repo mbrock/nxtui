@@ -2,8 +2,11 @@
 
 #include <nxt/any_layout.hpp>
 #include <nxt/tui.hpp>
+#include <nxt/tui_text.hpp>
+#include <nxtai/openai_types.hpp>
 
 #include <format>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,18 +105,48 @@ inline auto chip(
     return text(std::move(s), style);
 }
 
+inline auto status_chip(
+    std::string_view s,
+    Rgba8 fg_color,
+    Rgba8 bg_color,
+    Emphasis em_flags = DEFAULT_EMPHASIS)
+{
+    return chip(
+        std::format(" {} ", s), fg_color, bg_color, em_flags);
+}
+
+inline AnyLayout cassette_row(AnyLayout row, width_t pad = 1 * ch)
+{
+    return AnyLayout{
+        nxt::tui::row(
+            std::vector<AnyLayout>{
+                hfill(pad, page_bg),
+                std::move(row),
+                flex_fill(page_bg),
+            })};
+}
+
+inline auto cassette_rows(std::vector<AnyLayout> rows, width_t pad = 1 * ch)
+{
+    auto padded = std::vector<AnyLayout>{};
+    padded.reserve(rows.size());
+    for (auto & r : rows)
+        padded.push_back(cassette_row(std::move(r), pad));
+    return column(std::move(padded));
+}
+
 inline auto spine(const call_view & c)
 {
     auto k = classify(c.name);
     switch (c.state) {
     case status::ok:
-        return chip(" ok", slate_950, k.accent, Emphasis::bold);
+        return status_chip("ok", slate_950, k.accent, Emphasis::bold);
     case status::error:
-        return chip(" !!", slate_950, rose_300, Emphasis::bold);
+        return status_chip("!!", slate_950, rose_300, Emphasis::bold);
     case status::running:
-        return chip(" ..", amber_200, band_bg);
+        return status_chip("..", amber_200, band_bg);
     }
-    return chip("   ", slate_300, band_bg);
+    return status_chip("", slate_300, band_bg);
 }
 
 inline auto call_header(const call_view & c)
@@ -133,6 +166,31 @@ inline auto call_header(const call_view & c)
     return row(std::move(parts));
 }
 
+struct bash_arguments_view
+{
+    std::string command;
+};
+
+inline std::optional<std::string> bash_command(std::string_view arguments)
+{
+    if (arguments.empty())
+        return std::nullopt;
+
+    auto args = bash_arguments_view{};
+    if (glz::read<openai::json_read_opts>(args, arguments))
+        return std::nullopt;
+    if (args.command.empty())
+        return std::nullopt;
+    return std::move(args.command);
+}
+
+inline bool short_shell_oneliner(std::string_view command)
+{
+    return command.find('\n') == std::string_view::npos
+        && command.find('\r') == std::string_view::npos
+        && command.size() <= 86;
+}
+
 inline std::vector<std::string>
 first_lines(std::string_view text, std::size_t max_lines)
 {
@@ -149,33 +207,9 @@ first_lines(std::string_view text, std::size_t max_lines)
     return lines;
 }
 
-inline std::vector<std::string>
-tail_lines(std::string_view text, std::size_t max_lines)
-{
-    auto lines = first_lines(text, static_cast<std::size_t>(-1));
-    if (lines.size() > max_lines)
-        lines.erase(lines.begin(), lines.begin() + (lines.size() - max_lines));
-    return lines;
-}
-
 inline auto body_line(std::string s, Rgba8 fg_color)
 {
     return text(std::move(s), fg(fg_color));
-}
-
-inline auto window_rows(std::vector<AnyLayout> rows, width_t pad = 2 * ch)
-{
-    auto padded = std::vector<AnyLayout>{};
-    padded.reserve(rows.size());
-    for (auto & r : rows) {
-        padded.push_back(
-            row(std::vector<AnyLayout>{
-                hfill(pad, page_bg),
-                std::move(r),
-                flex_fill(page_bg),
-            }));
-    }
-    return column(std::move(padded));
 }
 
 inline AnyLayout result_window(const call_view & c)
@@ -186,13 +220,91 @@ inline AnyLayout result_window(const call_view & c)
         rows.push_back(body_line(std::move(line), line_color));
     if (rows.empty())
         rows.push_back(body_line("running", slate_700));
-    return window_rows(std::move(rows));
+    return cassette_rows(std::move(rows));
+}
+
+inline AnyLayout shell_header(
+    const call_view & c,
+    std::string title,
+    Rgba8 title_color)
+{
+    auto parts = std::vector<AnyLayout>{};
+    parts.push_back(flex_text(std::move(title),
+                              fg(title_color) | bg(band_bg)
+                                  | em(Emphasis::bold)));
+    if (c.elapsed_ms >= 0)
+        parts.push_back(
+            chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg));
+    if (!c.output.empty())
+        parts.push_back(chip(
+            std::format(" {}B ", c.output.size()), slate_400, band_bg));
+    return row(std::move(parts));
+}
+
+inline AnyLayout shell_script_window(std::string_view command)
+{
+    auto rows = std::vector<AnyLayout>{};
+    auto prefix = std::string{"$ "};
+    for (auto & line : first_lines(command, 12)) {
+        rows.push_back(
+            row(std::vector<AnyLayout>{
+                text(prefix, fg(orange_300)),
+                flex_text(std::move(line), fg(amber_200)),
+            }));
+        prefix = "> ";
+    }
+    return cassette_rows(std::move(rows));
+}
+
+inline AnyLayout shell_output_window(const call_view & c)
+{
+    auto rows = std::vector<AnyLayout>{};
+    auto line_color = c.state == status::error ? rose_300 : slate_300;
+    rows.push_back(chip(
+        c.state == status::running ? " running " : " output ",
+        c.state == status::error ? rose_300 : slate_500,
+        page_bg,
+        c.state == status::running ? DEFAULT_EMPHASIS : Emphasis::bold));
+    if (!c.output.empty()) {
+        auto sanitized = nxt::tui::text_flow::sanitize_terminal_text(c.output);
+        auto output_lines =
+            nxt::tui::text_flow::wrap_text(sanitized, 88 * ch);
+        if (output_lines.size() > 8)
+            output_lines.resize(8);
+        for (auto & line : output_lines)
+            rows.push_back(body_line(std::move(line), line_color));
+    }
+    if (c.output.empty() && c.state == status::running)
+        rows.push_back(body_line("waiting for process output", slate_700));
+    return cassette_rows(std::move(rows));
+}
+
+inline AnyLayout render_bash_call(const call_view & c)
+{
+    auto command = bash_command(c.arguments);
+    auto pieces = std::vector<AnyLayout>{};
+    if (command && short_shell_oneliner(*command)) {
+        pieces.push_back(cassette_row(
+            shell_header(c, std::format("$ {}", *command), amber_200)));
+    } else {
+        pieces.push_back(cassette_row(
+            shell_header(c, "shell script", orange_300)));
+        if (command)
+            pieces.push_back(shell_script_window(*command));
+    }
+
+    if (!c.output.empty() || c.state == status::running)
+        pieces.push_back(shell_output_window(c));
+    return column(std::move(pieces));
 }
 
 inline AnyLayout render_call(const call_view & c)
 {
+    if (c.name == "bash")
+        return render_bash_call(c);
+
     auto pieces = std::vector<AnyLayout>{};
-    pieces.push_back(call_header(c));
+    pieces.push_back(cassette_row(call_header(c)));
     if (!c.output.empty() || c.state == status::running)
         pieces.push_back(result_window(c));
     return column(std::move(pieces));
@@ -202,9 +314,26 @@ inline AnyLayout thought_block(std::string s)
 {
     auto rows = std::vector<AnyLayout>{};
     rows.push_back(chip(" thinking ", slate_950, sky_300, Emphasis::bold));
-    for (auto & line : tail_lines(s, 8))
-        rows.push_back(body_line(std::move(line), sky_300));
-    return window_rows(std::move(rows), 1 * ch);
+    rows.push_back(
+        nxt::tui::text_flow::markdown_block(
+            s,
+            fg(slate_300),
+            88 * ch,
+            Style{.fg = slate_300, .bg = page_bg}));
+    return cassette_rows(std::move(rows));
+}
+
+inline AnyLayout assistant_block(std::string s)
+{
+    auto rows = std::vector<AnyLayout>{};
+    rows.push_back(chip(" assistant ", slate_950, emerald_300, Emphasis::bold));
+    rows.push_back(
+        nxt::tui::text_flow::markdown_block(
+            s,
+            fg(slate_300),
+            88 * ch,
+            Style{.fg = slate_300, .bg = page_bg}));
+    return cassette_rows(std::move(rows));
 }
 
 inline AnyLayout render_turn(const turn_view & t)

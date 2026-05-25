@@ -84,6 +84,17 @@ inline std::string_view horizontal_eighth(double fraction)
     return blocks[eighth_index(fraction)];
 }
 
+inline std::string_view horizontal_eighth_from_right(double fraction)
+{
+    // Unicode has a complete left-flushed eighth-block family, but only
+    // right one-eighth and right half. Use the closest right-flushed glyphs
+    // for range starts, falling back to full block for mostly-filled cells.
+    static constexpr auto blocks = std::array<std::string_view, 9>{
+        " ", "▕", "▕", "▐", "▐", "▐", "█", "█", "█",
+    };
+    return blocks[eighth_index(fraction)];
+}
+
 inline std::string_view
 vertical_cell(double fraction, std::size_t row, std::size_t rows)
 {
@@ -113,8 +124,13 @@ range_bar(double begin, double end, std::size_t cells)
     return project_cells(
         cells,
         [=](cell_slice cell, std::size_t) -> std::string_view {
-            auto coverage =
-                coverage_before(end, cell) - coverage_before(begin, cell);
+            auto before_begin = coverage_before(begin, cell);
+            auto before_end = coverage_before(end, cell);
+            auto coverage = before_end - before_begin;
+            if (coverage <= 0.0)
+                return " ";
+            if (before_begin > 0.0 && before_end >= 1.0)
+                return horizontal_eighth_from_right(coverage);
             return horizontal_eighth(coverage);
         });
 }

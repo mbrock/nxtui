@@ -91,6 +91,12 @@ public:
         return surface_;
     }
 
+    [[nodiscard]] nxt::tui::Slot<nxt::tui::AnyLayout> make_surface()
+    {
+        return nxt::tui::Slot<nxt::tui::AnyLayout>{
+            nxt::tui::AnyLayout{}, [this] { signal_damage(); }};
+    }
+
     [[nodiscard]] event & damage_event() noexcept
     {
         return damage_event_;
@@ -397,8 +403,14 @@ private:
 class ui_scope
 {
 public:
-    explicit ui_scope(ui_runtime & runtime) noexcept
+    explicit ui_scope(ui_runtime & runtime)
         : runtime_(&runtime)
+        , surface_(runtime.surface())
+    {}
+
+    ui_scope(ui_runtime & runtime, nxt::tui::Slot<nxt::tui::AnyLayout> surface)
+        : runtime_(&runtime)
+        , surface_(std::move(surface))
     {}
 
     [[nodiscard]] bool has_terminal_surface() const noexcept
@@ -406,10 +418,27 @@ public:
         return runtime_->has_terminal_surface();
     }
 
+    [[nodiscard]] const nxt::tui::Slot<nxt::tui::AnyLayout> & surface()
+        const noexcept
+    {
+        return surface_;
+    }
+
+    [[nodiscard]] ui_scope child() const
+    {
+        return ui_scope{*runtime_, runtime_->make_surface()};
+    }
+
     template<nxt::tui::Layout Layout>
     void draw(Layout && layout) const
     {
-        runtime_->draw(std::forward<Layout>(layout));
+        surface_.publish(
+            nxt::tui::AnyLayout{std::forward<Layout>(layout)});
+    }
+
+    void clear() const
+    {
+        surface_.publish(nxt::tui::AnyLayout{});
     }
 
     task<void> print_block(std::string text) const
@@ -434,9 +463,89 @@ public:
         return nxt::rt::fork(std::move(child));
     }
 
+    template<typename Body>
+    [[nodiscard]] auto spawn(Body body) const;
+
 private:
     ui_runtime * runtime_ = nullptr;
+    nxt::tui::Slot<nxt::tui::AnyLayout> surface_;
 };
+
+template<typename T>
+class ui_child
+{
+public:
+    ui_child(ui_scope scope, deed<T> child)
+        : scope_(std::move(scope))
+        , child_(std::move(child))
+    {}
+
+    ui_child(const ui_child &) = delete;
+    ui_child & operator=(const ui_child &) = delete;
+    ui_child(ui_child &&) noexcept = default;
+    ui_child & operator=(ui_child &&) noexcept = default;
+
+    [[nodiscard]] const nxt::tui::Slot<nxt::tui::AnyLayout> & surface()
+        const noexcept
+    {
+        return scope_.surface();
+    }
+
+    [[nodiscard]] const ui_scope & scope() const noexcept
+    {
+        return scope_;
+    }
+
+    [[nodiscard]] deed<T> release() &&
+    {
+        return std::move(child_);
+    }
+
+    [[nodiscard]] catching_deed<T> cope() &&
+    {
+        return std::move(child_).cope();
+    }
+
+private:
+    ui_scope scope_;
+    deed<T> child_;
+};
+
+namespace detail {
+
+template<typename Body>
+    requires std::invocable<Body &, ui_scope>
+        && is_task_v<std::invoke_result_t<Body &, ui_scope>>
+[[nodiscard]] auto run_ui_child(ui_scope child, Body body)
+    -> task<task_result_t<std::invoke_result_t<Body &, ui_scope>>>
+{
+    using result_t = task_result_t<std::invoke_result_t<Body &, ui_scope>>;
+    auto work = std::invoke(body, child);
+    auto cleanup = [child]() -> task<void> {
+        child.clear();
+        co_return;
+    };
+
+    if constexpr (std::is_void_v<result_t>) {
+        co_await finally(std::move(work), std::move(cleanup));
+    } else {
+        co_return co_await finally(std::move(work), std::move(cleanup));
+    }
+}
+
+} // namespace detail
+
+template<typename Body>
+[[nodiscard]] auto ui_scope::spawn(Body body) const
+{
+    using task_t = std::invoke_result_t<Body &, ui_scope>;
+    using result_t = task_result_t<task_t>;
+
+    auto child_scope = child();
+    auto child_deed =
+        nxt::rt::fork(detail::run_ui_child(child_scope, std::move(body)));
+    return ui_child<result_t>{std::move(child_scope), std::move(child_deed)};
+}
 
 template<typename Body>
     requires std::invocable<Body &, ui_scope>

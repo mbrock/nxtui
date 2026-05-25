@@ -1,4 +1,5 @@
 #include <nxt/sparkline.hpp>
+#include <nxt/tui_text.hpp>
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/channel.hpp>
 #include <nxt/rt/event.hpp>
@@ -6,6 +7,7 @@
 #include <nxt/rt/kqueue_wand.hpp>
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/terminal_app.hpp>
+#include <nxt/rt/ui_runtime.hpp>
 #include <nxtai/tool_batch.hpp>
 
 #include "test.hpp"
@@ -390,6 +392,44 @@ static suite ng_runtime_tests{
             "range progress bar projects partial coverage per cell"_test =
                 [] {
                 expect(nxt::chart::range_bar(0.25, 0.625, 4) == " █▌ ");
+                expect(nxt::chart::range_bar(0.125, 0.75, 4) == "▐██ ");
+            };
+        };
+
+        "text flow"_test = [] {
+            "wraps paragraphs with markdown list continuation"_test = [] {
+                auto lines = nxt::tui::text_flow::wrap_text(
+                    "- hello wide world\n\nnext paragraph",
+                    12 * nxt::ch);
+
+                expect(
+                    lines
+                    == std::vector<std::string>{
+                        "- hello wide",
+                        "  world",
+                        "",
+                        "next",
+                        "paragraph"});
+            };
+
+            "parses simple inline markdown spans"_test = [] {
+                auto spans = nxt::tui::text_flow::parse_inline_markdown(
+                    "a **bold** `code`", nxt::tui::fg(nxt::Rgba8::white()));
+
+                expect(spans.size() == std::size_t{4});
+                expect(spans[0].text == "a ");
+                expect(spans[1].text == "bold");
+                expect(has_emphasis(spans[1].style.em, nxt::Emphasis::bold));
+                expect(spans[2].text == " ");
+                expect(spans[3].text == "code");
+                expect(spans[3].style.bg != nxt::DEFAULT_COLOR);
+            };
+
+            "sanitizes terminal controls while preserving newlines"_test = [] {
+                auto text = nxt::tui::text_flow::sanitize_terminal_text(
+                    "a\x1b[31mb\tc\r\nd\x01");
+
+                expect(text == "ab    c\nd");
             };
         };
 
@@ -797,6 +837,51 @@ static suite ng_runtime_tests{
             "keeps the alternate screen opt-in"_test = [] {
                 auto options = nxt::rt::terminal_app_options{};
                 expect(!options.alternate_screen);
+            };
+        };
+
+        "ui scopes"_test = [] {
+            "child scopes expose independently drawable surfaces"_test = [] {
+                auto runtime = nxt::rt::ui_runtime{
+                    {.render = false,
+                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                auto root = nxt::rt::ui_scope{runtime};
+                auto child = root.child();
+
+                root.draw(nxt::tui::row(child.surface(), nxt::tui::text("!")));
+                child.draw(nxt::tui::text("hi"));
+
+                expect(child.surface().width_hint().min == 2 * nxt::ch);
+                expect(root.surface().width_hint().min == 3 * nxt::ch);
+            };
+
+            "spawned child scopes clear their surface on exit"_test = [] {
+                auto runtime = nxt::rt::ui_runtime{
+                    {.render = false,
+                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                auto root = nxt::rt::ui_scope{runtime};
+                auto captured =
+                    nxt::tui::Slot<nxt::tui::AnyLayout>{nxt::tui::AnyLayout{}};
+                auto ran = false;
+                auto deck = nxt::rt::deck{};
+
+                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                        auto child = root.spawn(
+                            [&](nxt::rt::ui_scope child_scope)
+                                -> nxt::rt::task<void> {
+                                child_scope.draw(nxt::tui::text("busy"));
+                                ran = true;
+                                co_return;
+                            });
+                        captured = child.surface();
+                        root.draw(captured);
+                        co_return;
+                    });
+                });
+
+                expect(ran);
+                expect(captured.width_hint().min == 0 * nxt::ch);
             };
         };
 

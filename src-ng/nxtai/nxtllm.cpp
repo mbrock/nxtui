@@ -257,13 +257,6 @@ void append_thought_delta(live_state & state, std::string_view delta)
     state.turn.thought.erase(0, drop);
 }
 
-std::string thinking_block(std::string_view summary)
-{
-    if (summary.empty())
-        return {};
-    return std::format("thinking\n{}\n", summary);
-}
-
 auto header_layout(const live_state & state)
 {
     namespace tt = nxt::ai::tool_tui;
@@ -424,7 +417,7 @@ nxt::rt::task<response_stream_result> stream_openai_response(
                         *trace,
                         tls_span,
                         {
-                            .label = "tls",
+                            .label = "",
                             .detail = "TLS 1.3",
                             .subject = "api.openai.com",
                             .accent = nxt::ai::tool_tui::teal_300,
@@ -509,7 +502,8 @@ nxt::rt::task<response_stream_result> stream_openai_response(
                 live->turn.thought.clear();
                 live->status = "thinking done";
                 if (ui != nullptr && !summary.empty())
-                    co_await ui->print_block(thinking_block(summary));
+                    co_await ui->print(
+                        nxt::ai::tool_tui::thought_block(std::move(summary)));
                 publish_live(ui, *live, true);
             }
         } else if (event.type == "response.output_text.delta") {
@@ -560,8 +554,17 @@ nxt::rt::task<void> run_agent_loop(
         auto response = co_await stream_openai_response(request, live, ui);
         auto calls =
             nxt::ai::tools::function_calls_from_items(response.output_items);
-        if (calls.empty())
+        if (calls.empty()) {
+            if (live != nullptr && ui != nullptr
+                && !live->assistant_text.empty()) {
+                co_await ui->print(
+                    nxt::ai::tool_tui::assistant_block(
+                        std::move(live->assistant_text)));
+                live->assistant_text.clear();
+                publish_live(ui, *live, true);
+            }
             co_return;
+        }
 
         if (request.store && !response.response_id)
             throw nxt::rt::runtime_error{
@@ -612,6 +615,11 @@ nxt::rt::task<void> run_agent_loop(
                           << (result.result.failed ? "failed" : "ok") << " ("
                           << result.result.output.size() << " bytes)\n";
             }
+        }
+        if (live != nullptr && ui != nullptr && !live->turn.calls.empty()) {
+            co_await ui->print(nxt::ai::tool_tui::render_turn(live->turn));
+            live->turn.calls.clear();
+            publish_live(ui, *live, true);
         }
 
         auto outputs = nxt::ai::tools::output_items_from_results(results);

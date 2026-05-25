@@ -195,7 +195,9 @@ if get_option('tests')
     'test/test-main.cpp',
   )
   nxt_ng_test_deps = []
+  nxt_ng_test_deps += nxt_core_dep
   nxt_ng_test_deps += glaze_dep
+  nxt_ng_test_deps += utf8proc_dep
   nxt_ng_test_deps += nxt_stacktrace_deps
 
   if host_machine.system() == 'linux'

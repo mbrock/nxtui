@@ -152,11 +152,12 @@ inline nxt::tui::AnyLayout render_waterfall(
 
     auto rows = std::vector<nxt::tui::AnyLayout>{};
     auto header = std::vector<nxt::tui::AnyLayout>{};
-    header.push_back(
-        tt::chip(" " + options.label + " ",
-                 tt::slate_950,
-                 options.accent,
-                 nxt::Emphasis::bold));
+    if (!options.label.empty())
+        header.push_back(
+            tt::chip(" " + options.label + " ",
+                     tt::slate_950,
+                     options.accent,
+                     nxt::Emphasis::bold));
     if (!options.detail.empty())
         header.push_back(
             tt::chip(" " + options.detail + " ",
