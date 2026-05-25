@@ -53,6 +53,12 @@ if ng_ls_demo_available
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : ng_ls_demo_dependencies,
   )
+
+  executable('ng-tui-demo',
+    'ng_tui_demo.cpp',
+    include_directories : [nxt_inc, nxt_ng_inc],
+    dependencies : ng_ls_demo_dependencies + [nxt_core_dep],
+  )
 endif
 
 nxt_cares_dep = dependency('libcares', required : false)

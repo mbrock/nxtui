@@ -16,7 +16,8 @@ zones, and explicit UI/runtime capabilities.
 - `nxt::rt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments that do not require libcoro.
 
-The old application stack still depends on libcoro through
+The default build now leaves the old application stack out.  That stack
+still depends on libcoro through
 `src/nxtio/async-core.hpp`.  That header aliases `nxt::task`,
 `nxt::scheduler`, `nxt::queue`, `nxt::event`, `nxt::latch`,
 `sync_wait`, and `when_all` to libcoro primitives.  Most of the UI,
@@ -48,7 +49,8 @@ process, signal, and `nxtai` code enters async through those aliases.
    `nxt::rt::runtime`: it owns a `deck`, platform `wand`, root-zone run
    entrypoint, damage event, input channel, resize channel, and `sleep`.
    The next part is to layer terminal/compositor ownership and yard-like
-   surfaces on top of it.
+   surfaces on top of it.  `ng-tui-demo` is the first tiny compositor demo
+   running through this path.
 
 3. Port `nxtio/buffers.hpp` and `nxtio/http.hpp`-style helpers to
    `nxt::rt::task`.
