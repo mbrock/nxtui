@@ -208,7 +208,6 @@
 
 (define (property-doc value)
   `(property (@ (name ,(term-display-name value))
-                (forge-name ,(term-forge-name value))
                 (iri ,(term-iri value))
                 (domain ,(if (term-option-ref value 'domain)
                              (term-display-name (term-option-ref value 'domain))
@@ -240,9 +239,6 @@
   `(field (@ (name ,(if relation-term
                         (term-display-name relation-term)
                         (format "~a" (forge-field-term fld))))
-             (forge-name ,(if relation-term
-                              (term-forge-name relation-term)
-                              (format "~a" (forge-field-term fld))))
              (multiplicity ,(symbol->string (forge-field-multiplicity fld)))
              (range ,(term-display-name (forge-field-range fld)))
              (variable ,(if (forge-field-variable? fld) "true" "false")))))
@@ -264,9 +260,16 @@
            (scope ,(format "~a" (forge-run-scope run-command))))
         (forge-graph (@ (frg ,frg-path)
                         (run ,run-name)
-                        (title ,(symbol-title (forge-run-name run-command)))))))
+                        (title ,(case (forge-run-name run-command)
+                                  [(rich-runtime-shape-witness)
+                                   "Runtime shape"]
+                                  [(rich-runtime-trace-witness)
+                                   "Runtime trace"]
+                                  [else
+                                   (symbol-title (forge-run-name run-command))]))))))
 
 (define (model-doc frg-path mdl)
+  (define shown-runs '(rich-runtime-shape-witness rich-runtime-trace-witness))
   `(model-section
     (title "Runtime Forge model")
     (signatures
@@ -276,7 +279,9 @@
     (checks
      ,@(map check-doc (forge-model-checks mdl)))
     (runs
-     ,@(for/list ([run-command (in-list (forge-model-runs mdl))])
+     ,@(for/list ([run-command (in-list (filter (lambda (run-command)
+                                                  (member (forge-run-name run-command) shown-runs))
+                                                (forge-model-runs mdl)))])
          (run-doc frg-path run-command)))))
 
 (define (runtime-model-doc)

@@ -90,41 +90,43 @@
             font-size: 1rem;
             margin: 1.6rem 0 0.55rem;
           }
-          .model-table {
-            border-collapse: collapse;
-            font-size: 0.9rem;
-            line-height: 1.35;
-            margin: 0.75rem 0 1.2rem;
-            width: 100%;
-          }
-          .model-table th {
-            color: var(--muted);
-            font-weight: 650;
-            text-align: left;
-          }
-          .model-table th,
-          .model-table td {
-            border-bottom: 1px solid var(--line);
-            padding: 0.45rem 0.55rem 0.45rem 0;
-            vertical-align: top;
-          }
-          .model-table code {
-            background: transparent;
-            padding: 0;
-          }
+          .term-cloud,
+          .relation-list,
           .signature-list,
-          .run-list {
+          .run-list,
+          .inline-list {
             display: grid;
-            gap: 1.2rem;
+            gap: 0.65rem;
           }
+          .term-cloud {
+            grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+          }
+          .term,
+          .relation,
           .signature,
           .run {
             border-top: 1px solid var(--line);
-            padding-top: 0.8rem;
+            padding-top: 0.75rem;
           }
+          .term strong,
+          .relation strong,
           .signature h3,
           .run h3 {
             margin-top: 0;
+          }
+          .term p,
+          .relation p,
+          .signature p,
+          .run p {
+            margin: 0.25rem 0 0;
+          }
+          .phrase-list {
+            list-style: none;
+            margin: 0.45rem 0 0;
+            padding: 0;
+          }
+          .phrase-list li {
+            margin: 0.2rem 0;
           }
           .inline-list {
             display: flex;
@@ -203,41 +205,35 @@
     <section class="model-doc ontology">
       <h2><xsl:value-of select="title"/></h2>
       <p>
-        <code><xsl:value-of select="ontology-prefix"/></code>
-        <xsl:text> </xsl:text>
-        <span class="source"><xsl:value-of select="ontology-base"/></span>
+        The runtime domain uses the <code><xsl:value-of select="ontology-prefix"/></code>
+        vocabulary at <span class="source"><xsl:value-of select="ontology-base"/></span>.
       </p>
       <h3>Classes</h3>
-      <table class="model-table">
-        <thead>
-          <tr><th>Name</th><th>Parent</th><th>IRI</th></tr>
-        </thead>
-        <tbody>
-          <xsl:for-each select="classes/class">
-            <tr>
-              <td><code><xsl:value-of select="@name"/></code></td>
-              <td><code><xsl:value-of select="@parent"/></code></td>
-              <td><xsl:value-of select="@iri"/></td>
-            </tr>
-          </xsl:for-each>
-        </tbody>
-      </table>
-      <h3>Properties</h3>
-      <table class="model-table">
-        <thead>
-          <tr><th>Name</th><th>Domain</th><th>Range</th><th>Forge</th></tr>
-        </thead>
-        <tbody>
-          <xsl:for-each select="properties/property">
-            <tr>
-              <td><code><xsl:value-of select="@name"/></code></td>
-              <td><code><xsl:value-of select="@domain"/></code></td>
-              <td><code><xsl:value-of select="@range"/></code></td>
-              <td><code><xsl:value-of select="@forge-name"/></code></td>
-            </tr>
-          </xsl:for-each>
-        </tbody>
-      </table>
+      <div class="term-cloud">
+        <xsl:for-each select="classes/class">
+          <div class="term">
+            <strong><code><xsl:value-of select="@name"/></code></strong>
+            <xsl:if test="@parent != ''">
+              <p class="source">a kind of <code><xsl:value-of select="@parent"/></code></p>
+            </xsl:if>
+          </div>
+        </xsl:for-each>
+      </div>
+      <h3>Relations</h3>
+      <div class="relation-list">
+        <xsl:for-each select="properties/property">
+          <div class="relation">
+            <strong><xsl:value-of select="translate(@name, '-', ' ')"/></strong>
+            <p>
+              <code><xsl:value-of select="@domain"/></code>
+              <xsl:text> </xsl:text>
+              <xsl:value-of select="translate(@name, '-', ' ')"/>
+              <xsl:text> </xsl:text>
+              <code><xsl:value-of select="@range"/></code>
+            </p>
+          </div>
+        </xsl:for-each>
+      </div>
     </section>
   </xsl:template>
 
@@ -249,42 +245,38 @@
         <xsl:for-each select="signatures/signature">
           <section class="signature">
             <h3><code><xsl:value-of select="@name"/></code></h3>
-            <table class="model-table">
-              <thead>
-                <tr><th>Field</th><th>Multiplicity</th><th>Range</th><th>Temporal</th><th>Forge</th></tr>
-              </thead>
-              <tbody>
-                <xsl:for-each select="field">
-                  <tr>
-                    <td><code><xsl:value-of select="@name"/></code></td>
-                    <td><code><xsl:value-of select="@multiplicity"/></code></td>
-                    <td><code><xsl:value-of select="@range"/></code></td>
-                    <td><xsl:if test="@variable='true'">var</xsl:if></td>
-                    <td><code><xsl:value-of select="@forge-name"/></code></td>
-                  </tr>
-                </xsl:for-each>
-              </tbody>
-            </table>
+            <xsl:choose>
+              <xsl:when test="field">
+                <ul class="phrase-list">
+                  <xsl:for-each select="field">
+                    <li>
+                      <xsl:value-of select="translate(@name, '-', ' ')"/>
+                      <xsl:text> </xsl:text>
+                      <xsl:choose>
+                        <xsl:when test="@multiplicity='one'">exactly one </xsl:when>
+                        <xsl:when test="@multiplicity='lone'">at most one </xsl:when>
+                        <xsl:otherwise>any number of </xsl:otherwise>
+                      </xsl:choose>
+                      <code><xsl:value-of select="@range"/></code>
+                      <xsl:if test="@variable='true'">
+                        <xsl:text>, changing over time</xsl:text>
+                      </xsl:if>
+                    </li>
+                  </xsl:for-each>
+                </ul>
+              </xsl:when>
+              <xsl:otherwise>
+                <p class="source">No fields.</p>
+              </xsl:otherwise>
+            </xsl:choose>
           </section>
         </xsl:for-each>
       </div>
-      <h3>Predicates</h3>
-      <div class="inline-list">
-        <xsl:for-each select="predicates/predicate">
-          <code><xsl:value-of select="@name"/></code>
-        </xsl:for-each>
-      </div>
-      <h3>Checks</h3>
-      <div class="inline-list">
-        <xsl:for-each select="checks/check">
-          <code><xsl:value-of select="@name"/></code>
-        </xsl:for-each>
-      </div>
-      <h3>Runs</h3>
+      <h3>Witnesses</h3>
       <div class="run-list">
         <xsl:for-each select="runs/run">
           <section class="run">
-            <h3><code><xsl:value-of select="@name"/></code></h3>
+            <h3><xsl:value-of select="forge-graph/@title"/></h3>
             <p class="source">scope <code><xsl:value-of select="@scope"/></code></p>
             <xsl:apply-templates select="forge-graph"/>
           </section>
