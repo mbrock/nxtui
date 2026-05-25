@@ -315,6 +315,32 @@ static suite regional_tty_tests{
             expect(program[11].kind == rtty::command_kind::restore_cursor);
         };
 
+        "hiding spends released rows below durable scrollback"_test = [] {
+            auto windowed =
+                rtty::screen_partition::for_bottom_fixed_height(
+                    6 * ln, 2 * ln);
+            auto hidden = rtty::screen_partition::for_bottom_fixed_height(
+                6 * ln, 0 * ln);
+            auto change = rtty::repartition::from(windowed, hidden);
+            auto release = change.release();
+
+            expect(release.active());
+            expect(release.rows == 2 * ln);
+
+            auto program =
+                rtty::emit_repartition<rtty::command_list_backend>(change);
+            expect(program.size() == std::size_t{12});
+            expect(program[0].kind == rtty::command_kind::reset_graphics);
+            expect(
+                program[2].kind
+                == rtty::command_kind::reset_scroll_region);
+            expect(program[9].kind == rtty::command_kind::restore_cursor);
+            expect(program[10].kind == rtty::command_kind::scroll_down);
+            expect(program[10].amount == 2 * ln);
+            expect(program[11].kind == rtty::command_kind::move_down);
+            expect(program[11].amount == 2 * ln);
+        };
+
         "print complete appended block lines and leave the cursor on the next row"_test =
             [] {
                 auto partition =

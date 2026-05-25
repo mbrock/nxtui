@@ -339,6 +339,107 @@ nxt::rt::task<void> record_task_stop_state_after_yield(
     events.push_back(nxt::rt::task_stop_requested() ? value : -value);
 }
 
+nxt::rt::task<void> draw_busy_and_mark(bool & ran)
+{
+    nxt::rt::draw(nxt::tui::text("busy"));
+    ran = true;
+    co_return;
+}
+
+nxt::rt::task<void> spawn_widget_and_capture(
+    nxt::rt::widget_slot & captured,
+    bool & ran)
+{
+    auto child = nxt::rt::spawn_widget(
+        [&ran] {
+            return draw_busy_and_mark(ran);
+        });
+    captured = child.surface();
+    nxt::rt::draw(captured);
+    co_return;
+}
+
+nxt::rt::task<void> run_spawned_widget_clear_test(
+    nxt::rt::ui_runtime & runtime,
+    nxt::rt::widget_slot root,
+    nxt::rt::widget_slot & captured,
+    bool & ran)
+{
+    auto body = [&] {
+        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+            &runtime,
+            [&] {
+                return nxt::rt::with_widget_slot(
+                    root,
+                    [&] {
+                        return spawn_widget_and_capture(captured, ran);
+                    });
+            });
+    };
+    co_await nxt::rt::with_zone(body);
+}
+
+nxt::rt::task<int> draw_work_measure_and_stop(
+    nxt::rt::widget_slot root,
+    nxt::height_t & composed_height)
+{
+    nxt::rt::draw(nxt::tui::text("work"));
+    co_await nxt::rt::yield();
+    composed_height = root.height_hint().min;
+    nxt::rt::require_current_zone().stop();
+    co_return 7;
+}
+
+nxt::rt::task<void> draw_rate_until_stopped(bool & companion_stopped)
+{
+    nxt::rt::draw(nxt::tui::text("rate"));
+    while (!nxt::rt::stop_requested())
+        co_await nxt::rt::yield();
+    companion_stopped = true;
+}
+
+nxt::rt::task<nxt::rt::catching_deed<int>> spawn_sibling_widgets(
+    nxt::rt::widget_slot root,
+    bool & companion_stopped,
+    nxt::height_t & composed_height)
+{
+    auto worker = nxt::rt::spawn_widget(
+        [root, &composed_height] {
+            return draw_work_measure_and_stop(root, composed_height);
+        });
+    auto companion = nxt::rt::spawn_widget(
+        [&companion_stopped] {
+            return draw_rate_until_stopped(companion_stopped);
+        });
+    nxt::rt::draw(
+        nxt::tui::column(worker.surface(), companion.surface()));
+    co_return std::move(worker).cope();
+}
+
+nxt::rt::task<nxt::rt::catching_deed<int>>
+run_sibling_widget_compose_test(
+    nxt::rt::ui_runtime & runtime,
+    nxt::rt::widget_slot root,
+    bool & companion_stopped,
+    nxt::height_t & composed_height)
+{
+    auto body = [&] {
+        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+            &runtime,
+            [&] {
+                return nxt::rt::with_widget_slot(
+                    root,
+                    [&] {
+                        return spawn_sibling_widgets(
+                            root,
+                            companion_stopped,
+                            composed_height);
+                    });
+            });
+    };
+    co_return co_await nxt::rt::with_zone(body);
+}
+
 static suite ng_runtime_tests{
     "Runtime", [] {
         "charting"_test = [] {
@@ -844,81 +945,63 @@ static suite ng_runtime_tests{
             };
         };
 
-        "ui scopes"_test = [] {
-            "child scopes expose independently drawable surfaces"_test = [] {
+        "widget slots"_test = [] {
+            "child slots expose independently drawable surfaces"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
-                auto root = nxt::rt::ui_scope{runtime};
-                auto child = root.child();
+                auto root = runtime.surface();
+                auto child = runtime.make_surface();
 
-                root.draw(nxt::tui::row(child.surface(), nxt::tui::text("!")));
-                child.draw(nxt::tui::text("hi"));
+                root.publish(
+                    nxt::tui::AnyLayout{
+                        nxt::tui::row(child, nxt::tui::text("!"))});
+                child.publish(nxt::tui::AnyLayout{nxt::tui::text("hi")});
 
-                expect(child.surface().width_hint().min == 2 * nxt::ch);
-                expect(root.surface().width_hint().min == 3 * nxt::ch);
+                expect(child.width_hint().min == 2 * nxt::ch);
+                expect(root.width_hint().min == 3 * nxt::ch);
             };
 
-            "spawned child scopes clear their surface on exit"_test = [] {
+            "spawned child widgets clear their slot on exit"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
-                auto root = nxt::rt::ui_scope{runtime};
+                auto root = runtime.surface();
                 auto captured =
                     nxt::tui::Slot<nxt::tui::AnyLayout>{nxt::tui::AnyLayout{}};
                 auto ran = false;
                 auto deck = nxt::rt::deck{};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        auto child = root.spawn(
-                            [&](nxt::rt::ui_scope child_scope)
-                                -> nxt::rt::task<void> {
-                                child_scope.draw(nxt::tui::text("busy"));
-                                ran = true;
-                                co_return;
-                            });
-                        captured = child.surface();
-                        root.draw(captured);
-                        co_return;
-                    });
-                });
+                deck.sync_wait(
+                    run_spawned_widget_clear_test(
+                        runtime,
+                        root,
+                        captured,
+                        ran));
 
                 expect(ran);
                 expect(captured.width_hint().min == 0 * nxt::ch);
             };
 
-            "accompany composes worker and companion surfaces"_test = [] {
+            "ambient child widgets compose as siblings"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
-                auto root = nxt::rt::ui_scope{runtime};
+                auto root = runtime.surface();
                 auto deck = nxt::rt::deck{};
                 auto companion_stopped = false;
                 auto composed_height = 0 * nxt::ln;
 
-                auto result = deck.sync_wait([&]() -> nxt::rt::task<int> {
-                    co_return co_await root.accompany(
-                        [&](nxt::rt::ui_scope worker)
-                            -> nxt::rt::task<int> {
-                            worker.draw(nxt::tui::text("work"));
-                            co_await nxt::rt::yield();
-                            composed_height = root.surface().height_hint().min;
-                            co_return 7;
-                        },
-                        [&](nxt::rt::ui_scope companion)
-                            -> nxt::rt::task<void> {
-                            companion.draw(nxt::tui::text("rate"));
-                            while (!nxt::rt::stop_requested())
-                                co_await nxt::rt::yield();
-                            companion_stopped = true;
-                        },
-                        [](const auto & worker, const auto & companion) {
-                            return nxt::tui::column(worker, companion);
-                        });
-                });
+                auto worker_deed = deck.sync_wait(
+                    run_sibling_widget_compose_test(
+                        runtime,
+                        root,
+                        companion_stopped,
+                        composed_height));
 
-                expect(result == 7);
+                auto result = std::move(worker_deed).get();
+                expect(result.has_value());
+                expect(*result == 7_i);
                 expect(companion_stopped);
                 expect(composed_height == 2 * nxt::ln);
             };

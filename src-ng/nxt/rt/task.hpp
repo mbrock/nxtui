@@ -450,9 +450,11 @@ private:
     coroutine_handle coroutine_{nullptr};
 };
 
-template<typename Key, task_factory Fn>
-[[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
-with_env(typename Key::value_type value, Fn && fn)
+namespace detail {
+
+template<typename Key, stored_task_factory Fn>
+[[nodiscard]] task<stored_task_result_t<Fn>>
+with_env_bound(typename Key::value_type value, Fn fn)
 {
     auto * current = detail::current_env;
     auto * promise = current == nullptr ? nullptr : current->current_promise;
@@ -482,13 +484,26 @@ with_env(typename Key::value_type value, Fn && fn)
     };
     promise->env.bindings = &binding;
     current->bindings = &binding;
-    auto child = std::invoke(std::forward<Fn>(fn));
+    auto child = std::invoke(fn);
 
-    if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
         co_await child;
     } else {
         co_return co_await child;
     }
+}
+
+} // namespace detail
+
+template<typename Key, typename Fn>
+    requires stored_task_factory<std::decay_t<Fn>>
+[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
+with_env(typename Key::value_type value, Fn && fn)
+{
+    using factory_type = std::decay_t<Fn>;
+    return detail::with_env_bound<Key>(
+        std::move(value),
+        factory_type{std::forward<Fn>(fn)});
 }
 
 template<task_factory Fn>

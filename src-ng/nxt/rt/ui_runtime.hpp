@@ -33,6 +33,8 @@
 
 namespace nxt::rt {
 
+using widget_slot = nxt::tui::Slot<nxt::tui::AnyLayout>;
+
 [[nodiscard]] inline task<void> write_stdout_all(
     std::string bytes,
     std::source_location where = std::source_location::current())
@@ -96,15 +98,16 @@ public:
         return size_;
     }
 
-    [[nodiscard]] nxt::tui::Slot<nxt::tui::AnyLayout> surface() const
+    [[nodiscard]] widget_slot surface() const
     {
         return surface_;
     }
 
-    [[nodiscard]] nxt::tui::Slot<nxt::tui::AnyLayout> make_surface()
+    [[nodiscard]] widget_slot make_surface()
     {
-        return nxt::tui::Slot<nxt::tui::AnyLayout>{
-            nxt::tui::AnyLayout{}, [this] { signal_damage(); }};
+        return widget_slot{nxt::tui::AnyLayout{}, [this] {
+            signal_damage();
+        }};
     }
 
     [[nodiscard]] event & damage_event() noexcept
@@ -389,7 +392,7 @@ private:
         }
     }
 
-    std::string render_frame_bytes(const nxt::tui::Slot<nxt::tui::AnyLayout> & layout)
+    std::string render_frame_bytes(const widget_slot & layout)
     {
         auto out = std::ostringstream{};
         auto hint = layout.height_hint();
@@ -476,7 +479,7 @@ private:
     nxt::GlyphTable glyphs_;
     nxt::Size size_;
     nxt::ui::TerminalCompositor compositor_;
-    nxt::tui::Slot<nxt::tui::AnyLayout> surface_;
+    widget_slot surface_;
     event damage_event_;
     std::uint64_t damage_generation_ = 0;
     channel<terminal_command> commands_;
@@ -487,107 +490,110 @@ private:
     bool terminal_geometry_initialized_ = false;
 };
 
-class ui_scope
+struct current_ui_runtime_key
 {
-public:
-    explicit ui_scope(ui_runtime & runtime)
-        : runtime_(&runtime)
-        , surface_(runtime.surface())
-    {}
-
-    ui_scope(ui_runtime & runtime, nxt::tui::Slot<nxt::tui::AnyLayout> surface)
-        : runtime_(&runtime)
-        , surface_(std::move(surface))
-    {}
-
-    [[nodiscard]] bool has_terminal_surface() const noexcept
-    {
-        return runtime_->has_terminal_surface();
-    }
-
-    [[nodiscard]] const nxt::tui::Slot<nxt::tui::AnyLayout> & surface()
-        const noexcept
-    {
-        return surface_;
-    }
-
-    [[nodiscard]] ui_scope child() const
-    {
-        return ui_scope{*runtime_, runtime_->make_surface()};
-    }
-
-    template<nxt::tui::Layout Layout>
-    void draw(Layout && layout) const
-    {
-        surface_.publish(
-            nxt::tui::AnyLayout{std::forward<Layout>(layout)});
-    }
-
-    void clear() const
-    {
-        surface_.publish(nxt::tui::AnyLayout{});
-    }
-
-    void print_block(std::string text) const
-    {
-        runtime_->print_block(std::move(text));
-    }
-
-    template<nxt::tui::Layout Layout>
-    void print(Layout && layout) const
-    {
-        runtime_->print(std::forward<Layout>(layout));
-    }
-
-    void request_shutdown() const noexcept
-    {
-        runtime_->request_shutdown();
-    }
-
-    template<typename T>
-    [[nodiscard]] deed<T> fork(task<T> child) const
-    {
-        return nxt::rt::fork(std::move(child));
-    }
-
-    template<typename Body>
-    [[nodiscard]] auto spawn(Body body) const;
-
-    template<typename WorkerBody, typename CompanionBody, typename Layout>
-    [[nodiscard]] auto accompany(
-        WorkerBody worker_body,
-        CompanionBody companion_body,
-        Layout layout) const
-        -> task<task_result_t<std::invoke_result_t<WorkerBody &, ui_scope>>>;
-
-private:
-    ui_runtime * runtime_ = nullptr;
-    nxt::tui::Slot<nxt::tui::AnyLayout> surface_;
+    using value_type = ui_runtime *;
+    static constexpr auto name = "ui-runtime";
 };
 
+struct current_widget_slot_key
+{
+    using value_type = widget_slot;
+    static constexpr auto name = "widget-slot";
+};
+
+inline ui_runtime * current_ui_runtime() noexcept
+{
+    auto * value = env_get<current_ui_runtime_key>();
+    if (value == nullptr)
+        return nullptr;
+    return *value;
+}
+
+inline ui_runtime & require_current_ui_runtime()
+{
+    auto * ui = current_ui_runtime();
+    if (ui == nullptr)
+        throw runtime_error{"nxt::rt ui operation used without ui runtime"};
+    return *ui;
+}
+
+inline const widget_slot * current_widget_slot() noexcept
+{
+    return env_get<current_widget_slot_key>();
+}
+
+inline const widget_slot & require_current_widget_slot()
+{
+    auto * slot = current_widget_slot();
+    if (slot == nullptr)
+        throw runtime_error{"nxt::rt draw used without widget slot"};
+    return *slot;
+}
+
+[[nodiscard]] inline widget_slot make_widget_slot()
+{
+    return require_current_ui_runtime().make_surface();
+}
+
+template<nxt::tui::Layout Layout>
+void draw(Layout && layout)
+{
+    require_current_widget_slot().publish(
+        nxt::tui::AnyLayout{std::forward<Layout>(layout)});
+}
+
+inline void clear_widget()
+{
+    require_current_widget_slot().publish(nxt::tui::AnyLayout{});
+}
+
+inline bool has_terminal_surface()
+{
+    return require_current_ui_runtime().has_terminal_surface();
+}
+
+inline void print_block(std::string text)
+{
+    require_current_ui_runtime().print_block(std::move(text));
+}
+
+template<nxt::tui::Layout Layout>
+void print(Layout && layout)
+{
+    require_current_ui_runtime().print(std::forward<Layout>(layout));
+}
+
+inline void request_ui_shutdown()
+{
+    require_current_ui_runtime().request_shutdown();
+}
+
+template<typename Fn>
+    requires stored_task_factory<std::decay_t<Fn>>
+[[nodiscard]] auto with_widget_slot(widget_slot slot, Fn && fn)
+{
+    return with_env<current_widget_slot_key>(
+        std::move(slot), std::forward<Fn>(fn));
+}
+
 template<typename T>
-class ui_child
+class widget_child
 {
 public:
-    ui_child(ui_scope scope, deed<T> child)
-        : scope_(std::move(scope))
+    widget_child(widget_slot slot, deed<T> child)
+        : slot_(std::move(slot))
         , child_(std::move(child))
     {}
 
-    ui_child(const ui_child &) = delete;
-    ui_child & operator=(const ui_child &) = delete;
-    ui_child(ui_child &&) noexcept = default;
-    ui_child & operator=(ui_child &&) noexcept = default;
+    widget_child(const widget_child &) = delete;
+    widget_child & operator=(const widget_child &) = delete;
+    widget_child(widget_child &&) noexcept = default;
+    widget_child & operator=(widget_child &&) noexcept = default;
 
-    [[nodiscard]] const nxt::tui::Slot<nxt::tui::AnyLayout> & surface()
-        const noexcept
+    [[nodiscard]] const widget_slot & surface() const noexcept
     {
-        return scope_.surface();
-    }
-
-    [[nodiscard]] const ui_scope & scope() const noexcept
-    {
-        return scope_;
+        return slot_;
     }
 
     [[nodiscard]] deed<T> release() &&
@@ -601,24 +607,30 @@ public:
     }
 
 private:
-    ui_scope scope_;
+    widget_slot slot_;
     deed<T> child_;
 };
 
 namespace detail {
 
 template<typename Body>
-    requires std::invocable<Body &, ui_scope>
-        && is_task_v<std::invoke_result_t<Body &, ui_scope>>
-        && std::is_void_v<
-            task_result_t<std::invoke_result_t<Body &, ui_scope>>>
+    requires std::invocable<Body &>
+        && is_task_v<std::invoke_result_t<Body &>>
+        && std::is_void_v<task_result_t<std::invoke_result_t<Body &>>>
 task<void> run_ui_zone_body_child(
     Body & body,
-    ui_scope & scope,
     ui_runtime & ui)
 {
     try {
-        co_await std::invoke(body, scope);
+        co_await with_env<current_ui_runtime_key>(
+            &ui,
+            [&] {
+                return with_widget_slot(
+                    ui.surface(),
+                    [&] {
+                        return std::invoke(body);
+                    });
+            });
     } catch (...) {
         ui.request_shutdown();
         throw;
@@ -626,17 +638,24 @@ task<void> run_ui_zone_body_child(
     ui.request_shutdown();
 }
 
-template<typename Body>
-    requires std::invocable<Body &, ui_scope>
-        && is_task_v<std::invoke_result_t<Body &, ui_scope>>
-[[nodiscard]] auto run_ui_child(ui_scope child, Body body)
-    -> task<task_result_t<std::invoke_result_t<Body &, ui_scope>>>
+inline task<void> clear_widget_slot_task(widget_slot slot)
 {
-    using result_t = task_result_t<std::invoke_result_t<Body &, ui_scope>>;
-    auto work = std::invoke(body, child);
-    auto cleanup = [child]() -> task<void> {
-        child.clear();
-        co_return;
+    slot.publish(nxt::tui::AnyLayout{});
+    co_return;
+}
+
+template<typename Body>
+    requires std::invocable<Body &>
+        && is_task_v<std::invoke_result_t<Body &>>
+[[nodiscard]] auto run_widget_child(widget_slot child, Body body)
+    -> task<task_result_t<std::invoke_result_t<Body &>>>
+{
+    using result_t = task_result_t<std::invoke_result_t<Body &>>;
+    auto work = with_widget_slot(child, [&body] {
+        return std::invoke(body);
+    });
+    auto cleanup = [child] {
+        return clear_widget_slot_task(child);
     };
 
     if constexpr (std::is_void_v<result_t>) {
@@ -649,85 +668,72 @@ template<typename Body>
 } // namespace detail
 
 template<typename Body>
-[[nodiscard]] auto ui_scope::spawn(Body body) const
+    requires std::invocable<Body &>
+        && is_task_v<std::invoke_result_t<Body &>>
+[[nodiscard]] auto spawn_widget(Body body)
 {
-    using task_t = std::invoke_result_t<Body &, ui_scope>;
+    using task_t = std::invoke_result_t<Body &>;
     using result_t = task_result_t<task_t>;
 
-    auto child_scope = child();
+    auto child_slot = make_widget_slot();
     auto child_deed =
-        nxt::rt::fork(detail::run_ui_child(child_scope, std::move(body)));
-    return ui_child<result_t>{std::move(child_scope), std::move(child_deed)};
+        nxt::rt::fork(
+            detail::run_widget_child(child_slot, std::move(body)));
+    return widget_child<result_t>{
+        std::move(child_slot),
+        std::move(child_deed)};
 }
 
-template<typename WorkerBody, typename CompanionBody, typename Layout>
-[[nodiscard]] auto ui_scope::accompany(
-    WorkerBody worker_body,
-    CompanionBody companion_body,
-    Layout layout) const
-    -> task<task_result_t<std::invoke_result_t<WorkerBody &, ui_scope>>>
-{
-    using worker_task_t = std::invoke_result_t<WorkerBody &, ui_scope>;
-    using worker_result_t = task_result_t<worker_task_t>;
-    using worker_deed_t = catching_deed<worker_result_t>;
-
-    auto worker_deed = co_await with_zone([&]() mutable -> task<worker_deed_t> {
-        auto worker_scope = child();
-        auto companion_scope = child();
-
-        draw(std::invoke(
-            layout, worker_scope.surface(), companion_scope.surface()));
-
-        auto worker = nxt::rt::fork(
-            detail::stop_zone_on_completion(
-                detail::run_ui_child(
-                    std::move(worker_scope),
-                    std::move(worker_body)))).cope();
-        [[maybe_unused]] auto companion = nxt::rt::fork(
-            detail::run_ui_child(
-                std::move(companion_scope),
-                std::move(companion_body))).cope();
-
-        co_return std::move(worker);
-    });
-
-    auto worker = std::move(worker_deed).get();
-    if (!worker)
-        rethrow(worker.error());
-    if constexpr (std::is_void_v<worker_result_t>) {
-        co_return;
-    } else {
-        co_return std::move(*worker);
-    }
-}
+namespace detail {
 
 template<typename Body>
-    requires std::invocable<Body &, ui_scope>
-        && is_task_v<std::invoke_result_t<Body &, ui_scope>>
-        && std::is_void_v<
-            task_result_t<std::invoke_result_t<Body &, ui_scope>>>
+    requires std::invocable<Body &>
+        && is_task_v<std::invoke_result_t<Body &>>
+        && std::is_void_v<task_result_t<std::invoke_result_t<Body &>>>
+task<void> run_ui_zone_children(
+    Body & body,
+    ui_runtime & ui,
+    std::chrono::milliseconds frame_time,
+    catching_deed<void> & owner,
+    catching_deed<void> & input,
+    catching_deed<void> & worker)
+{
+    owner = fork(ui.run_terminal_owner(frame_time)).cope();
+    auto * deck = current_deck();
+    if (deck == nullptr)
+        throw runtime_error{"nxt::rt ui input used without a deck"};
+    input = fork(ui.run_input_owner(*deck)).cope();
+    worker = fork(
+        detail::stop_zone_on_completion(
+            detail::run_ui_zone_body_child(body, ui)))
+        .cope();
+    co_return;
+}
+
+} // namespace detail
+
+template<typename Body>
+    requires std::invocable<Body &>
+        && is_task_v<std::invoke_result_t<Body &>>
+        && std::is_void_v<task_result_t<std::invoke_result_t<Body &>>>
 task<void> with_ui_zone(
     Body body,
     ui_runtime_options options = {},
     std::chrono::milliseconds frame_time = std::chrono::milliseconds{16})
 {
     auto ui = ui_runtime{options};
-    auto scope = ui_scope{ui};
     auto owner = catching_deed<void>{};
     auto input = catching_deed<void>{};
     auto worker = catching_deed<void>{};
 
-    co_await with_zone([&]() -> task<void> {
-        owner = fork(ui.run_terminal_owner(frame_time)).cope();
-        auto * deck = current_deck();
-        if (deck == nullptr)
-            throw runtime_error{"nxt::rt ui input used without a deck"};
-        input = fork(ui.run_input_owner(*deck)).cope();
-        worker = fork(
-            detail::stop_zone_on_completion(
-                detail::run_ui_zone_body_child(body, scope, ui)))
-            .cope();
-        co_return;
+    co_await with_zone([&] {
+        return detail::run_ui_zone_children(
+            body,
+            ui,
+            frame_time,
+            owner,
+            input,
+            worker);
     });
 
     auto worked = std::move(worker).get();

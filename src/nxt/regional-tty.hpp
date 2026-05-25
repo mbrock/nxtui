@@ -565,6 +565,12 @@ template<backend Backend>
         out.emit(Backend::restore_cursor());
     }
 
+    auto release = change.release();
+    if (release.active() && change.next.hidden()) {
+        out.emit(Backend::scroll_down(release.rows));
+        out.emit(Backend::move_down(release.rows));
+    }
+
     return std::move(out).finish();
 }
 

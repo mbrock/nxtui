@@ -488,11 +488,9 @@ nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
 run_function_tool_batch_ui(
     const ToolSet & tools,
     std::vector<nxt::ai::tools::function_call> calls,
-    nxt::rt::ui_scope ui,
     std::chrono::milliseconds settle_delay);
 
 void publish_stream_view(
-    nxt::rt::ui_scope & ui,
     std::string_view thought,
     std::string_view assistant_text,
     network_hud_state & network,
@@ -504,7 +502,7 @@ void publish_stream_view(
     std::chrono::steady_clock::time_point & last_publish,
     bool force = false)
 {
-    if (!ui.has_terminal_surface())
+    if (!nxt::rt::has_terminal_surface())
         return;
 
     auto now = std::chrono::steady_clock::now();
@@ -525,7 +523,7 @@ void publish_stream_view(
     last_tx = next_tx;
     last_sample = now;
     last_publish = now;
-    ui.draw(stream_layout(thought, assistant_text, network));
+    nxt::rt::draw(stream_layout(thought, assistant_text, network));
 }
 
 void note_tls_progress(
@@ -568,15 +566,14 @@ void note_tls_progress(
 }
 
 nxt::rt::task<void> print_tls_ready(
-    nxt::rt::ui_scope ui,
     const std::shared_ptr<nxt::rt::trace_context> & trace,
     const nxt::rt::trace_span & tls_span)
 {
-    if (!ui.has_terminal_surface())
+    if (!nxt::rt::has_terminal_surface())
         co_return;
 
     if (trace != nullptr && tls_span)
-        ui.print(
+        nxt::rt::print(
             nxt::ai::trace_tui::render_span_waterfall(
                 *trace,
                 tls_span,
@@ -587,13 +584,12 @@ nxt::rt::task<void> print_tls_ready(
                     .accent = nxt::ai::tool_tui::teal_300,
                 }));
     else
-        ui.print_block("tls  api.openai.com  TLS 1.3 handshake\n");
+        nxt::rt::print_block("tls  api.openai.com  TLS 1.3 handshake\n");
     co_return;
 }
 
 nxt::rt::task<stream_phase_result> stream_openai_response(
-    const llm_request & request,
-    nxt::rt::ui_scope ui)
+    const llm_request & request)
 {
     auto thought = std::string{};
     auto assistant_text = std::string{};
@@ -606,7 +602,6 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
     auto last_publish = std::chrono::steady_clock::time_point{};
     auto publish = [&] (bool force = false) {
         publish_stream_view(
-            ui,
             thought,
             assistant_text,
             network,
@@ -676,7 +671,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             tls_span.finish("error");
         throw;
     }
-    co_await print_tls_ready(ui, trace, tls_span);
+    co_await print_tls_ready(trace, tls_span);
     network.phase = "TLS ready";
     publish(true);
 
@@ -748,8 +743,8 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
                 thought = std::move(done.text);
             auto summary = std::move(thought);
             thought.clear();
-            if (ui.has_terminal_surface() && !summary.empty())
-                ui.print(
+            if (nxt::rt::has_terminal_surface() && !summary.empty())
+                nxt::rt::print(
                     nxt::ai::tool_tui::thought_block(std::move(summary)));
             publish(true);
         } else if (event.type == "response.output_text.delta") {
@@ -757,7 +752,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             auto first_stream_delta = assistant_text.empty();
             auto text = std::move(delta.delta);
             assistant_text += text;
-            if (ui.has_terminal_surface()) {
+            if (nxt::rt::has_terminal_surface()) {
                 publish(first_stream_delta);
             } else {
                 co_await nxt::rt::write_stdout_all(std::move(text));
@@ -775,7 +770,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             break;
     }
 
-    if (!ui.has_terminal_surface())
+    if (!nxt::rt::has_terminal_surface())
         co_await nxt::rt::write_stdout_all("\n");
     co_return stream_phase_result{
         .response = std::move(result),
@@ -795,16 +790,15 @@ T take_phase_result(nxt::rt::catching_deed<T> deed)
 nxt::rt::task<nxt::rt::catching_deed<stream_phase_result>>
 spawn_stream_phase_child(
     const llm_request & request,
-    nxt::rt::ui_scope ui,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text)
 {
-    auto child = ui.spawn(
-        [&request](nxt::rt::ui_scope child_ui) {
-            return stream_openai_response(request, std::move(child_ui));
+    auto child = nxt::rt::spawn_widget(
+        [&request] {
+            return stream_openai_response(request);
         });
-    ui.draw(
+    nxt::rt::draw(
         agent_layout(
             model, status, assistant_text, child.surface()));
     co_return std::move(child).cope();
@@ -812,7 +806,6 @@ spawn_stream_phase_child(
 
 nxt::rt::task<stream_phase_result> run_stream_phase(
     const llm_request & request,
-    nxt::rt::ui_scope ui,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text)
@@ -821,7 +814,6 @@ nxt::rt::task<stream_phase_result> run_stream_phase(
         [&] {
             return spawn_stream_phase_child(
                 request,
-                ui,
                 model,
                 status,
                 assistant_text);
@@ -834,23 +826,21 @@ nxt::rt::task<nxt::rt::catching_deed<std::vector<function_call_result>>>
 spawn_tool_phase_child(
     const ToolSet & tools,
     std::vector<function_call> calls,
-    nxt::rt::ui_scope ui,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text,
     std::chrono::milliseconds settle_delay)
 {
-    auto child = ui.spawn(
+    auto child = nxt::rt::spawn_widget(
         [&tools,
          calls = std::move(calls),
-         settle_delay](nxt::rt::ui_scope child_ui) mutable {
+         settle_delay]() mutable {
             return run_function_tool_batch_ui(
                 tools,
                 std::move(calls),
-                std::move(child_ui),
                 settle_delay);
         });
-    ui.draw(
+    nxt::rt::draw(
         agent_layout(
             model, status, assistant_text, child.surface()));
     co_return std::move(child).cope();
@@ -861,7 +851,6 @@ nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
 run_tool_phase(
     const ToolSet & tools,
     std::vector<nxt::ai::tools::function_call> calls,
-    nxt::rt::ui_scope ui,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text,
@@ -872,7 +861,6 @@ run_tool_phase(
             return spawn_tool_phase_child(
                 tools,
                 std::move(calls),
-                ui,
                 model,
                 status,
                 assistant_text,
@@ -881,13 +869,11 @@ run_tool_phase(
     co_return take_phase_result(std::move(deed));
 }
 
-void print_assistant_if_terminal(
-    nxt::rt::ui_scope & ui,
-    std::string & assistant_text)
+void print_assistant_if_terminal(std::string & assistant_text)
 {
-    if (!ui.has_terminal_surface() || assistant_text.empty())
+    if (!nxt::rt::has_terminal_surface() || assistant_text.empty())
         return;
-    ui.print(
+    nxt::rt::print(
         nxt::ai::tool_tui::assistant_block(
             std::move(assistant_text)));
     assistant_text.clear();
@@ -897,7 +883,6 @@ template<typename ToolSet>
 nxt::rt::task<void> run_agent_loop(
     llm_request request,
     ToolSet tools,
-    nxt::rt::ui_scope ui,
     std::size_t max_steps = 32)
 {
     auto original = request;
@@ -905,24 +890,24 @@ nxt::rt::task<void> run_agent_loop(
     auto assistant_text = std::string{};
     auto status = std::string{"starting"};
     auto model = request.model;
-    auto settle_delay = ui.has_terminal_surface()
+    auto settle_delay = nxt::rt::has_terminal_surface()
         ? std::chrono::milliseconds{900}
         : std::chrono::milliseconds{0};
     prepare_tool_request(request, tools);
-    ui.draw(agent_layout(model, status, assistant_text, nxt::tui::empty()));
+    nxt::rt::draw(agent_layout(model, status, assistant_text, nxt::tui::empty()));
 
     for (std::size_t step = 0; step < max_steps; ++step) {
         status = std::format("turn {} streaming", step + 1);
         auto stream = co_await run_stream_phase(
-            request, ui, model, status, assistant_text);
+            request, model, status, assistant_text);
         auto response = std::move(stream.response);
         assistant_text += stream.assistant_text;
         auto calls =
             nxt::ai::tools::function_calls_from_items(response.output_items);
         if (calls.empty()) {
-            print_assistant_if_terminal(ui, assistant_text);
+            print_assistant_if_terminal(assistant_text);
             status = "done";
-            ui.draw(
+            nxt::rt::draw(
                 agent_layout(
                     model, status, assistant_text, nxt::tui::empty()));
             co_return;
@@ -938,7 +923,6 @@ nxt::rt::task<void> run_agent_loop(
         auto results = co_await run_tool_phase(
             tools,
             std::move(calls),
-            ui,
             model,
             status,
             assistant_text,
@@ -949,7 +933,8 @@ nxt::rt::task<void> run_agent_loop(
                 .count();
         status = std::format(
             "{} tool call(s) in {}ms", results.size(), elapsed);
-        ui.draw(agent_layout(model, status, assistant_text, nxt::tui::empty()));
+        nxt::rt::draw(
+            agent_layout(model, status, assistant_text, nxt::tui::empty()));
 
         auto outputs = nxt::ai::tools::output_items_from_results(results);
         request = original;
@@ -994,7 +979,6 @@ nxt::rt::task<nxt::rt::catching_deed<tool_result>>
 run_one_tool_call_meter(
     const ToolSet & tools,
     const function_call & call,
-    nxt::rt::ui_scope ui,
     std::chrono::steady_clock::time_point started,
     nxt::ai::tool_tui::call_view & view,
     bool & done)
@@ -1008,7 +992,7 @@ run_one_tool_call_meter(
                 std::chrono::steady_clock::now() - started)
                 .count();
         view.elapsed_ms = static_cast<int>(elapsed);
-        ui.draw(nxt::ai::tool_tui::render_call(view));
+        nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
         co_await nxt::rt::op::timeout::after(frame_interval);
     }
     co_return std::move(deed);
@@ -1018,7 +1002,6 @@ template<typename ToolSet>
 nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
     const ToolSet & tools,
     nxt::ai::tools::function_call call,
-    nxt::rt::ui_scope ui,
     std::chrono::milliseconds settle_delay)
 {
     auto started = std::chrono::steady_clock::now();
@@ -1030,7 +1013,7 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
         .state = nxt::ai::tool_tui::status::running,
         .elapsed_ms = -1,
     };
-    ui.draw(nxt::ai::tool_tui::render_call(view));
+    nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
 
     auto done = false;
     auto worker = co_await nxt::rt::with_zone(
@@ -1038,7 +1021,6 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
             return run_one_tool_call_meter(
                 tools,
                 call,
-                ui,
                 started,
                 view,
                 done);
@@ -1059,7 +1041,7 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
     view.output = result.output;
     view.observed = result.observed;
     view.elapsed_ms = static_cast<int>(elapsed);
-    ui.draw(nxt::ai::tool_tui::render_call(view));
+    nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
     if (settle_delay > std::chrono::milliseconds{0})
         co_await nxt::rt::op::timeout::after(settle_delay);
 
@@ -1079,7 +1061,6 @@ nxt::rt::task<nxt::ai::tools::function_call_result>
 run_one_tool_call_counted(
     const ToolSet & tools,
     nxt::ai::tools::function_call call,
-    nxt::rt::ui_scope ui,
     std::chrono::milliseconds settle_delay,
     std::size_t & done_count)
 {
@@ -1087,7 +1068,6 @@ run_one_tool_call_counted(
         auto result = co_await run_one_tool_call_ui(
             tools,
             std::move(call),
-            std::move(ui),
             settle_delay);
         ++done_count;
         co_return result;
@@ -1102,7 +1082,6 @@ nxt::rt::task<std::vector<nxt::rt::catching_deed<function_call_result>>>
 spawn_tool_call_children(
     const ToolSet & tools,
     std::vector<function_call> & calls,
-    nxt::rt::ui_scope ui,
     std::chrono::milliseconds settle_delay,
     std::size_t & done_count)
 {
@@ -1112,22 +1091,21 @@ spawn_tool_call_children(
     auto surfaces = std::vector<nxt::tui::AnyLayout>{};
     surfaces.reserve(calls.size());
     for (auto & call : calls) {
-        auto child = ui.spawn(
+        auto child = nxt::rt::spawn_widget(
             [&tools,
              call = std::move(call),
              settle_delay,
-             &done_count](nxt::rt::ui_scope child_ui) mutable {
+             &done_count]() mutable {
                 return run_one_tool_call_counted(
                     tools,
                     std::move(call),
-                    std::move(child_ui),
                     settle_delay,
                     done_count);
             });
         surfaces.emplace_back(child.surface());
         out.push_back(std::move(child).cope());
     }
-    ui.draw(nxt::tui::dyn_column(std::move(surfaces)));
+    nxt::rt::draw(nxt::tui::dyn_column(std::move(surfaces)));
 
     while (done_count < out.size())
         co_await nxt::rt::op::timeout::after(frame_interval);
@@ -1139,10 +1117,9 @@ nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
 run_function_tool_batch_ui(
     const ToolSet & tools,
     std::vector<nxt::ai::tools::function_call> calls,
-    nxt::rt::ui_scope ui,
     std::chrono::milliseconds settle_delay)
 {
-    if (!ui.has_terminal_surface()) {
+    if (!nxt::rt::has_terminal_surface()) {
         co_await nxt::rt::write_stdout_all(
             std::format(
                 "[tools] running {} tool call(s)\n", calls.size()));
@@ -1166,7 +1143,6 @@ run_function_tool_batch_ui(
             return spawn_tool_call_children(
                 tools,
                 calls,
-                ui,
                 settle_delay,
                 done_count);
         });
@@ -1187,17 +1163,15 @@ run_function_tool_batch_ui(
 template<typename ToolSet>
 nxt::rt::task<void> run_agent_ui_zone(
     llm_request request,
-    ToolSet tools,
-    nxt::rt::ui_scope ui)
+    ToolSet tools)
 {
     try {
         co_await run_agent_loop(
             std::move(request),
-            std::move(tools),
-            ui);
-        ui.request_shutdown();
+            std::move(tools));
+        nxt::rt::request_ui_shutdown();
     } catch (...) {
-        ui.request_shutdown();
+        nxt::rt::request_ui_shutdown();
         throw;
     }
 }
@@ -1247,12 +1221,10 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
                     [&]() mutable {
                         return nxt::rt::with_ui_zone(
                             [request = std::move(request),
-                             tools = std::move(tools)](
-                                nxt::rt::ui_scope ui) mutable {
+                             tools = std::move(tools)]() mutable {
                                 return run_agent_ui_zone(
                                     std::move(request),
-                                    std::move(tools),
-                                    std::move(ui));
+                                    std::move(tools));
                             },
                             {},
                             frame_interval);
