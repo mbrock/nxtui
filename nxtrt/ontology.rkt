@@ -11,17 +11,13 @@
          wish
          waiter
          deed
-         waves-wand
+         waves
          belongs-to
-         notifies
          continues-as
-         wants-wish
-         holds-wand
-         waits-on-task
-         is-staged-on-wand
-         is-parked-on-wand
-         records-task
-         happens-in-zone)
+         wants
+         holds
+         staged-on
+         parked-on)
 
 (define-ontology nxt "https://swa.sh/nxt#")
 
@@ -34,17 +30,19 @@
 (define-class nxt waiter #:subclass-of resource)
 (define-class nxt deed #:subclass-of resource)
 
-(define-property nxt waves-wand #:domain deck #:range wand)
-(define-property nxt belongs-to ((task zone) (task deck)))
-(define-property nxt notifies #:domain task #:range waiter)
-(define-property nxt continues-as #:domain task #:range task)
-(define-property nxt wants-wish #:domain waiter #:range wish)
-(define-property nxt holds-wand #:domain waiter #:range wand)
-(define-property nxt waits-on-task #:domain waiter #:range task)
-(define-property nxt is-staged-on-wand #:domain waiter #:range wand)
-(define-property nxt is-parked-on-wand #:domain waiter #:range wand)
-(define-property nxt records-task #:domain deed #:range task)
-(define-property nxt happens-in-zone #:domain deed #:range zone)
+(define-property nxt waves ((deck wand)))
+(define-property nxt belongs-to
+  ((task zone)
+   (task deck)
+   (task waiter)
+   (waiter task)
+   (deed task)
+   (deed zone)))
+(define-property nxt continues-as ((task task)))
+(define-property nxt wants ((waiter wish)))
+(define-property nxt holds ((waiter wand)))
+(define-property nxt staged-on ((waiter wand)))
+(define-property nxt parked-on ((waiter wand)))
 
 (module+ main
   (display (ontology->turtle nxt)))
