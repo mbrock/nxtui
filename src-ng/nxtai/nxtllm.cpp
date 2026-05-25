@@ -486,7 +486,7 @@ run_function_tool_batch_ui(
     std::vector<nxt::ai::tools::function_call> calls,
     std::chrono::milliseconds settle_delay);
 
-void publish_stream_view(
+nxt::rt::task<void> publish_stream_view(
     std::string_view thought,
     std::string_view assistant_text,
     network_hud_state & network,
@@ -499,13 +499,13 @@ void publish_stream_view(
     bool force = false)
 {
     if (!nxt::rt::has_terminal_surface())
-        return;
+        co_return;
 
     auto now = std::chrono::steady_clock::now();
     if (!force
         && last_publish != std::chrono::steady_clock::time_point{}
         && now - last_publish < frame_interval)
-        return;
+        co_return;
 
     auto next_rx = network.socket_rx;
     auto next_tx = network.socket_tx;
@@ -519,7 +519,84 @@ void publish_stream_view(
     last_tx = next_tx;
     last_sample = now;
     last_publish = now;
-    nxt::rt::draw(stream_layout(thought, assistant_text, network));
+    co_await nxt::rt::draw(stream_layout(thought, assistant_text, network));
+}
+
+struct stream_view_publisher
+{
+    std::string & thought;
+    std::string & assistant_text;
+    network_hud_state & network;
+    nxt::rt::ema_rate & rx_rate;
+    nxt::rt::ema_rate & tx_rate;
+    std::size_t last_rx;
+    std::size_t last_tx;
+    std::chrono::steady_clock::time_point last_sample;
+    std::chrono::steady_clock::time_point last_publish{};
+    bool pending = false;
+    bool force_pending = false;
+
+    void request(bool force = false) noexcept
+    {
+        pending = true;
+        force_pending = force_pending || force;
+    }
+
+    nxt::rt::task<void> publish(bool force = false)
+    {
+        pending = false;
+        force_pending = false;
+        co_await publish_stream_view(
+            thought,
+            assistant_text,
+            network,
+            rx_rate,
+            tx_rate,
+            last_rx,
+            last_tx,
+            last_sample,
+            last_publish,
+            force);
+    }
+
+    nxt::rt::task<void> flush()
+    {
+        if (!pending)
+            co_return;
+        auto force = force_pending;
+        pending = false;
+        force_pending = false;
+        co_await publish_stream_view(
+            thought,
+            assistant_text,
+            network,
+            rx_rate,
+            tx_rate,
+            last_rx,
+            last_tx,
+            last_sample,
+            last_publish,
+            force);
+    }
+};
+
+stream_view_publisher make_stream_view_publisher(
+    std::string & thought,
+    std::string & assistant_text,
+    network_hud_state & network,
+    nxt::rt::ema_rate & rx_rate,
+    nxt::rt::ema_rate & tx_rate)
+{
+    return stream_view_publisher{
+        .thought = thought,
+        .assistant_text = assistant_text,
+        .network = network,
+        .rx_rate = rx_rate,
+        .tx_rate = tx_rate,
+        .last_rx = network.socket_rx,
+        .last_tx = network.socket_tx,
+        .last_sample = std::chrono::steady_clock::now(),
+    };
 }
 
 void note_tls_progress(
@@ -592,34 +669,19 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
     auto network = network_hud_state{.phase = "connecting"};
     auto rx_rate = nxt::rt::ema_rate{std::chrono::milliseconds{700}};
     auto tx_rate = nxt::rt::ema_rate{std::chrono::milliseconds{700}};
-    auto last_rx = network.socket_rx;
-    auto last_tx = network.socket_tx;
-    auto last_sample = std::chrono::steady_clock::now();
-    auto last_publish = std::chrono::steady_clock::time_point{};
-    auto publish = [&] (bool force = false) {
-        publish_stream_view(
-            thought,
-            assistant_text,
-            network,
-            rx_rate,
-            tx_rate,
-            last_rx,
-            last_tx,
-            last_sample,
-            last_publish,
-            force);
-    };
-    publish(true);
+    auto publisher = make_stream_view_publisher(
+        thought, assistant_text, network, rx_rate, tx_rate);
+    co_await publisher.publish(true);
 
     auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
     network.phase = "tcp connected";
-    publish(true);
+    co_await publisher.publish(true);
     auto socket_output = nxt::rt::byte_writer{
         nxt::rt::meter_sink(
             nxt::rt::socket_sink{socket.get()},
             [&](std::size_t bytes) {
                 network.socket_tx += bytes;
-                publish();
+                publisher.request();
             }),
         4096,
     };
@@ -627,7 +689,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
         nxt::rt::socket_source{socket.get()},
         [&](std::size_t bytes) {
             network.socket_rx += bytes;
-            publish();
+            publisher.request();
         });
     auto input_storage = std::vector<std::byte>(18 * 1024);
     auto reader = nxt::rt::byte_reader{
@@ -637,7 +699,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
 
     auto tls = nxt::rt::tls::tls13_client_session{reader, socket_output};
     network.phase = "TLS handshake";
-    publish(true);
+    co_await publisher.publish(true);
     auto trace = nxt::rt::current_trace_context();
     auto tls_span = nxt::rt::trace_span{};
     if (trace != nullptr) {
@@ -655,9 +717,10 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             const nxt::rt::tls::handshake_progress & step) {
             note_tls_progress(
                 step, trace, tls_span, active_tls_spans, network);
-            publish(true);
+            publisher.request(true);
         };
         co_await tls.handshake("api.openai.com", progress);
+        co_await publisher.flush();
         if (tls_span)
             tls_span.finish("ok");
     } catch (...) {
@@ -669,7 +732,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
     }
     co_await print_tls_ready(trace, tls_span);
     network.phase = "TLS ready";
-    publish(true);
+    co_await publisher.publish(true);
 
     auto http_request =
         nxt::ai::responses::openai_responses_http_request(request);
@@ -679,15 +742,17 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
     }
     auto request_text = nxt::http::serialize(http_request);
     network.phase = "http request";
-    publish(true);
+    co_await publisher.publish(true);
     co_await tls.write_all(request_text);
+    co_await publisher.flush();
 
     auto http_storage = std::vector<std::byte>(18 * 1024);
     auto http_reader =
         nxt::rt::byte_reader{tls, std::span{http_storage}};
     network.phase = "http response";
-    publish(true);
+    co_await publisher.publish(true);
     auto head = co_await nxt::rt::http::read_response_head(http_reader);
+    co_await publisher.flush();
     if (!response_status_is_success(head))
         throw nxt::rt::runtime_error{
             "OpenAI Responses HTTP error: " + std::to_string(head.status)
@@ -701,12 +766,13 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
     auto sse_reader = nxt::rt::byte_reader{body, std::span{sse_storage}};
     auto result = response_stream_result{};
     network.phase = "streaming SSE";
-    publish(true);
+    co_await publisher.publish(true);
     while (auto sse = co_await nxt::rt::http::parse_sse_event(sse_reader)) {
+        co_await publisher.flush();
         if (sse->data == "[DONE]")
             break;
         ++network.sse_events;
-        publish();
+        co_await publisher.publish();
 
         auto terminal = sse->type == "response.completed"
                         || sse->type == "response.incomplete"
@@ -724,13 +790,13 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             auto payload = event.read<nxt::ai::openai::output_item_event>();
             result.output_items.push_back(std::move(payload.item));
         } else if (event.type == "response.reasoning_summary_part.added") {
-            publish(true);
+            co_await publisher.publish(true);
         } else if (event.type == "response.reasoning_summary_text.delta") {
             auto delta =
                 event.read<
                     nxt::ai::openai::reasoning_summary_text_delta_event>();
             append_thought_delta(thought, delta.delta);
-            publish();
+            co_await publisher.publish();
         } else if (event.type == "response.reasoning_summary_text.done") {
             auto done =
                 event.read<
@@ -742,14 +808,14 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             if (nxt::rt::has_terminal_surface() && !summary.empty())
                 nxt::rt::print(
                     nxt::ai::tool_tui::thought_block(std::move(summary)));
-            publish(true);
+            co_await publisher.publish(true);
         } else if (event.type == "response.output_text.delta") {
             auto delta = event.read<nxt::ai::openai::text_delta_event>();
             auto first_stream_delta = assistant_text.empty();
             auto text = std::move(delta.delta);
             assistant_text += text;
             if (nxt::rt::has_terminal_surface()) {
-                publish(first_stream_delta);
+                co_await publisher.publish(first_stream_delta);
             } else {
                 co_await nxt::rt::write_stdout_all(std::move(text));
             }
@@ -794,7 +860,7 @@ spawn_stream_phase_child(
         [&request] {
             return stream_openai_response(request);
         });
-    nxt::rt::draw(
+    co_await nxt::rt::draw(
         agent_layout(
             model, status, assistant_text, child.surface()));
     co_return std::move(child).cope();
@@ -836,7 +902,7 @@ spawn_tool_phase_child(
                 std::move(calls),
                 settle_delay);
         });
-    nxt::rt::draw(
+    co_await nxt::rt::draw(
         agent_layout(
             model, status, assistant_text, child.surface()));
     co_return std::move(child).cope();
@@ -890,7 +956,8 @@ nxt::rt::task<void> run_agent_loop(
         ? std::chrono::milliseconds{900}
         : std::chrono::milliseconds{0};
     prepare_tool_request(request, tools);
-    nxt::rt::draw(agent_layout(model, status, assistant_text, nxt::tui::empty()));
+    co_await nxt::rt::draw(
+        agent_layout(model, status, assistant_text, nxt::tui::empty()));
 
     for (std::size_t step = 0; step < max_steps; ++step) {
         status = std::format("turn {} streaming", step + 1);
@@ -903,7 +970,7 @@ nxt::rt::task<void> run_agent_loop(
         if (calls.empty()) {
             print_assistant_if_terminal(assistant_text);
             status = "done";
-            nxt::rt::draw(
+            co_await nxt::rt::draw(
                 agent_layout(
                     model, status, assistant_text, nxt::tui::empty()));
             co_return;
@@ -929,7 +996,7 @@ nxt::rt::task<void> run_agent_loop(
                 .count();
         status = std::format(
             "{} tool call(s) in {}ms", results.size(), elapsed);
-        nxt::rt::draw(
+        co_await nxt::rt::draw(
             agent_layout(model, status, assistant_text, nxt::tui::empty()));
 
         auto outputs = nxt::ai::tools::output_items_from_results(results);
@@ -988,7 +1055,7 @@ run_one_tool_call_meter(
                 std::chrono::steady_clock::now() - started)
                 .count();
         view.elapsed_ms = static_cast<int>(elapsed);
-        nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
+        co_await nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
         co_await nxt::rt::op::timeout::after(frame_interval);
     }
     co_return std::move(deed);
@@ -1009,7 +1076,7 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
         .state = nxt::ai::tool_tui::status::running,
         .elapsed_ms = -1,
     };
-    nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
+    co_await nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
 
     auto done = false;
     auto worker = co_await nxt::rt::with_zone(
@@ -1037,7 +1104,7 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
     view.output = result.output;
     view.observed = result.observed;
     view.elapsed_ms = static_cast<int>(elapsed);
-    nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
+    co_await nxt::rt::draw(nxt::ai::tool_tui::render_call(view));
     if (settle_delay > std::chrono::milliseconds{0})
         co_await nxt::rt::op::timeout::after(settle_delay);
 
@@ -1101,7 +1168,7 @@ spawn_tool_call_children(
         surfaces.emplace_back(child.surface());
         out.push_back(std::move(child).cope());
     }
-    nxt::rt::draw(nxt::rt::child_slots_column(surfaces));
+    co_await nxt::rt::draw(nxt::rt::child_slots_column(surfaces));
 
     while (done_count < out.size())
         co_await nxt::rt::op::timeout::after(frame_interval);

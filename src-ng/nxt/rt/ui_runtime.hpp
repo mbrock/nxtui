@@ -19,6 +19,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <coroutine>
 #include <cstdint>
 #include <functional>
 #include <poll.h>
@@ -537,11 +538,36 @@ inline const widget_slot & require_current_widget_slot()
     return require_current_ui_runtime().make_surface();
 }
 
-template<nxt::tui::Layout Layout>
-void draw(Layout && layout)
+class draw_awaiter
 {
-    require_current_widget_slot().publish(
-        nxt::tui::AnyLayout{std::forward<Layout>(layout)});
+public:
+    explicit draw_awaiter(nxt::tui::AnyLayout layout)
+        : layout_(std::move(layout))
+    {}
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return true;
+    }
+
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+
+    void await_resume()
+    {
+        throw_if_stop_requested();
+        require_current_widget_slot().publish(std::move(layout_));
+    }
+
+private:
+    nxt::tui::AnyLayout layout_;
+};
+
+template<nxt::tui::Layout Layout>
+[[nodiscard]] draw_awaiter draw(Layout && layout)
+{
+    throw_if_stop_requested();
+    return draw_awaiter{
+        nxt::tui::AnyLayout{std::forward<Layout>(layout)}};
 }
 
 inline void clear_widget()

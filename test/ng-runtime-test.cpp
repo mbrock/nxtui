@@ -341,7 +341,7 @@ nxt::rt::task<void> record_task_stop_state_after_yield(
 
 nxt::rt::task<void> draw_busy_and_mark(bool & ran)
 {
-    nxt::rt::draw(nxt::tui::text("busy"));
+    co_await nxt::rt::draw(nxt::tui::text("busy"));
     ran = true;
     co_return;
 }
@@ -355,7 +355,7 @@ nxt::rt::task<void> spawn_widget_and_capture(
             return draw_busy_and_mark(ran);
         });
     captured = child.surface();
-    nxt::rt::draw(captured);
+    co_await nxt::rt::draw(captured);
     co_return;
 }
 
@@ -383,7 +383,7 @@ nxt::rt::task<int> draw_work_measure_and_stop(
     nxt::rt::widget_slot root,
     nxt::height_t & composed_height)
 {
-    nxt::rt::draw(nxt::tui::text("work"));
+    co_await nxt::rt::draw(nxt::tui::text("work"));
     co_await nxt::rt::yield();
     composed_height = root.height_hint().min;
     nxt::rt::require_current_zone().stop();
@@ -392,7 +392,7 @@ nxt::rt::task<int> draw_work_measure_and_stop(
 
 nxt::rt::task<void> draw_rate_until_stopped(bool & companion_stopped)
 {
-    nxt::rt::draw(nxt::tui::text("rate"));
+    co_await nxt::rt::draw(nxt::tui::text("rate"));
     while (!nxt::rt::stop_requested())
         co_await nxt::rt::yield();
     companion_stopped = true;
@@ -411,7 +411,7 @@ nxt::rt::task<nxt::rt::catching_deed<int>> spawn_sibling_widgets(
         [&companion_stopped] {
             return draw_rate_until_stopped(companion_stopped);
         });
-    nxt::rt::draw(
+    co_await nxt::rt::draw(
         nxt::tui::column(worker.surface(), companion.surface()));
     co_return std::move(worker).cope();
 }
@@ -434,6 +434,35 @@ run_sibling_widget_compose_test(
                             root,
                             companion_stopped,
                             composed_height);
+                    });
+            });
+    };
+    co_return co_await nxt::rt::with_zone(body);
+}
+
+nxt::rt::task<bool> draw_after_stopping_current_zone()
+{
+    nxt::rt::require_current_zone().stop();
+    try {
+        co_await nxt::rt::draw(nxt::tui::text("after-stop"));
+    } catch (const nxt::rt::operation_cancelled &) {
+        co_return true;
+    }
+    co_return false;
+}
+
+nxt::rt::task<bool> run_draw_after_stop_check(
+    nxt::rt::ui_runtime & runtime,
+    nxt::rt::widget_slot root)
+{
+    auto body = [&] {
+        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+            &runtime,
+            [&] {
+                return nxt::rt::with_widget_slot(
+                    root,
+                    [] {
+                        return draw_after_stopping_current_zone();
                     });
             });
     };
@@ -1004,6 +1033,20 @@ static suite ng_runtime_tests{
                 expect(*result == 7_i);
                 expect(companion_stopped);
                 expect(composed_height == 2 * nxt::ln);
+            };
+
+            "draw observes zone stop before publishing"_test = [] {
+                auto runtime = nxt::rt::ui_runtime{
+                    {.render = false,
+                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                auto root = runtime.surface();
+                auto deck = nxt::rt::deck{};
+
+                auto cancelled = deck.sync_wait(
+                    run_draw_after_stop_check(runtime, root));
+
+                expect(cancelled);
+                expect(root.width_hint().min == 0 * nxt::ch);
             };
         };
 
