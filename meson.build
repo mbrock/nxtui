@@ -175,6 +175,9 @@ if get_option('llm_tool')
     error('nxtllm requires liburing on Linux')
   endif
 
+  nxt_llm_cares_dep = dependency('libcares', required : true)
+  nxtllm_dependencies += nxt_llm_cares_dep
+
   executable('nxtllm',
     'src-ng/nxtai/nxtllm.cpp',
     include_directories : [nxt_inc, nxt_ng_inc],
