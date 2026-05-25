@@ -30,6 +30,9 @@
 namespace {
 
 using llm_request = nxt::ai::responses::openai_responses_request;
+using function_call = nxt::ai::tools::function_call;
+using function_call_result = nxt::ai::tools::function_call_result;
+using tool_result = nxt::ai::tools::tool_result;
 
 constexpr std::size_t default_max_output_tokens = 128000;
 constexpr auto frame_interval = std::chrono::milliseconds{16};
@@ -176,15 +179,10 @@ struct network_hud_state
     std::size_t sse_events = 0;
 };
 
-struct live_state
+struct stream_phase_result
 {
-    std::string model;
-    std::string status = "starting";
+    response_stream_result response;
     std::string assistant_text;
-    nxt::ai::tool_tui::turn_view turn;
-    network_hud_state network;
-    std::chrono::steady_clock::time_point last_publish{};
-    bool done = false;
 };
 
 [[nodiscard]] bool response_status_is_success(
@@ -350,23 +348,23 @@ auto rate_cell(std::string label, double bytes_per_second, nxt::Rgba8 color)
         style);
 }
 
-void append_thought_delta(live_state & state, std::string_view delta)
+void append_thought_delta(std::string & thought, std::string_view delta)
 {
     static constexpr auto max_thought_bytes = std::size_t{4096};
-    state.turn.thought.append(delta);
-    if (state.turn.thought.size() <= max_thought_bytes)
+    thought.append(delta);
+    if (thought.size() <= max_thought_bytes)
         return;
-    auto drop = state.turn.thought.size() - max_thought_bytes;
-    auto newline = state.turn.thought.find('\n', drop);
+    auto drop = thought.size() - max_thought_bytes;
+    auto newline = thought.find('\n', drop);
     if (newline != std::string::npos)
         drop = newline + 1;
-    state.turn.thought.erase(0, drop);
+    thought.erase(0, drop);
 }
 
-auto header_layout(const live_state & state)
+auto header_layout(std::string_view model, std::string_view status)
 {
     namespace tt = nxt::ai::tool_tui;
-    auto summary = std::format("{}  {}", state.model, state.status);
+    auto summary = std::format("{}  {}", model, status);
     return nxt::tui::row(
         tt::chip(" nxtllm ", tt::slate_950, tt::amber_300,
                  nxt::Emphasis::bold),
@@ -375,29 +373,35 @@ auto header_layout(const live_state & state)
             nxt::tui::fg(tt::slate_400) | nxt::tui::bg(tt::band_bg)));
 }
 
-auto assistant_preview_layout(const live_state & state)
+auto assistant_preview_layout(std::string_view assistant_text)
 {
     namespace tt = nxt::ai::tool_tui;
-    auto preview = join_lines(last_lines(state.assistant_text, 8));
+    auto preview = join_lines(last_lines(assistant_text, 8));
     return nxt::tui::either(
-        !state.assistant_text.empty(),
+        !assistant_text.empty(),
         nxt::tui::empty(),
         nxt::tui::text_lines(
             std::move(preview), nxt::tui::fg(tt::slate_300)));
 }
 
-auto activity_layout(const live_state & state)
+auto stream_activity_layout(
+    std::string_view thought,
+    std::string_view assistant_text)
 {
-    return nxt::tui::either(
-        !state.turn.thought.empty() || !state.turn.calls.empty(),
-        nxt::tui::empty(),
-        nxt::ai::tool_tui::render_turn(state.turn));
+    auto children = std::vector<nxt::tui::AnyLayout>{};
+    if (!thought.empty())
+        children.push_back(
+            nxt::ai::tool_tui::thought_block(std::string{thought}));
+    if (!assistant_text.empty())
+        children.push_back(assistant_preview_layout(assistant_text));
+    if (children.empty())
+        children.push_back(nxt::tui::empty());
+    return nxt::tui::column(std::move(children));
 }
 
-auto network_footer_layout(const live_state & state)
+auto network_footer_layout(const network_hud_state & net)
 {
     namespace tt = nxt::ai::tool_tui;
-    const auto & net = state.network;
     auto phase = net.phase.empty() ? std::string{"network"} : net.phase;
     auto value_style = nxt::tui::fg(tt::slate_300) | nxt::tui::bg(tt::page_bg);
     auto phase_style = nxt::tui::fg(tt::teal_300) | nxt::tui::bg(tt::page_bg)
@@ -442,7 +446,12 @@ auto network_footer_layout(const live_state & state)
             nxt::tui::flex_text("", nxt::tui::bg(tt::page_bg))));
 }
 
-auto live_layout(const live_state & state)
+template<nxt::tui::Layout Child>
+auto agent_layout(
+    std::string_view model,
+    std::string_view status,
+    std::string_view assistant_text,
+    Child && child)
 {
     namespace tt = nxt::ai::tool_tui;
     return nxt::tui::surface(
@@ -452,43 +461,26 @@ auto live_layout(const live_state & state)
             .em = nxt::DEFAULT_EMPHASIS,
         },
         nxt::tui::column(
-            header_layout(state),
-            assistant_preview_layout(state),
-            activity_layout(state)));
+            header_layout(model, status),
+            assistant_preview_layout(assistant_text),
+            std::forward<Child>(child)));
 }
 
-nxt::rt::task<void>
-sample_network_instruments(nxt::rt::ui_scope ui, live_state & state)
+auto stream_layout(
+    std::string_view thought,
+    std::string_view assistant_text,
+    const network_hud_state & network)
 {
-    using namespace std::chrono_literals;
-    auto rx = nxt::rt::ema_rate{700ms};
-    auto tx = nxt::rt::ema_rate{700ms};
-    auto last_rx = state.network.socket_rx;
-    auto last_tx = state.network.socket_tx;
-    auto last_time = std::chrono::steady_clock::now();
-
-    try {
-        while (!state.done && !nxt::rt::stop_requested()) {
-            co_await nxt::rt::op::timeout::after(frame_interval);
-            if (state.done || nxt::rt::stop_requested())
-                break;
-
-            auto now = std::chrono::steady_clock::now();
-            auto next_rx = state.network.socket_rx;
-            auto next_tx = state.network.socket_tx;
-            state.network.socket_rx_bps =
-                rx.sample(next_rx >= last_rx ? next_rx - last_rx : 0,
-                          now - last_time);
-            state.network.socket_tx_bps =
-                tx.sample(next_tx >= last_tx ? next_tx - last_tx : 0,
-                          now - last_time);
-            last_rx = next_rx;
-            last_tx = next_tx;
-            last_time = now;
-            ui.draw(network_footer_layout(state));
-        }
-    } catch (const nxt::rt::operation_cancelled &) {
-    }
+    namespace tt = nxt::ai::tool_tui;
+    return nxt::tui::surface(
+        nxt::tui::Style{
+            .fg = tt::slate_300,
+            .bg = tt::page_bg,
+            .em = nxt::DEFAULT_EMPHASIS,
+        },
+        nxt::tui::column(
+            stream_activity_layout(thought, assistant_text),
+            network_footer_layout(network)));
 }
 
 template<typename ToolSet>
@@ -496,315 +488,156 @@ nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
 run_function_tool_batch_ui(
     const ToolSet & tools,
     std::vector<nxt::ai::tools::function_call> calls,
-    nxt::rt::ui_scope ui);
+    nxt::rt::ui_scope ui,
+    std::chrono::milliseconds settle_delay);
 
-class plain_agent_presenter
+void publish_stream_view(
+    nxt::rt::ui_scope & ui,
+    std::string_view thought,
+    std::string_view assistant_text,
+    network_hud_state & network,
+    nxt::rt::ema_rate & rx_rate,
+    nxt::rt::ema_rate & tx_rate,
+    std::size_t & last_rx,
+    std::size_t & last_tx,
+    std::chrono::steady_clock::time_point & last_sample,
+    std::chrono::steady_clock::time_point & last_publish,
+    bool force = false)
 {
-public:
-    void status(std::string, bool = true)
-    {
-    }
+    if (!ui.has_terminal_surface())
+        return;
 
-    void publish(bool = false)
-    {
-    }
+    auto now = std::chrono::steady_clock::now();
+    if (!force
+        && last_publish != std::chrono::steady_clock::time_point{}
+        && now - last_publish < frame_interval)
+        return;
 
-    void reasoning_started()
-    {
-    }
+    auto next_rx = network.socket_rx;
+    auto next_tx = network.socket_tx;
+    network.socket_rx_bps =
+        rx_rate.sample(next_rx >= last_rx ? next_rx - last_rx : 0,
+                       now - last_sample);
+    network.socket_tx_bps =
+        tx_rate.sample(next_tx >= last_tx ? next_tx - last_tx : 0,
+                       now - last_sample);
+    last_rx = next_rx;
+    last_tx = next_tx;
+    last_sample = now;
+    last_publish = now;
+    ui.draw(stream_layout(thought, assistant_text, network));
+}
 
-    void reasoning_delta(std::string_view)
-    {
-    }
-
-    nxt::rt::task<void> reasoning_done(std::string)
-    {
-        co_return;
-    }
-
-    void output_delta(std::string_view delta)
-    {
-        std::cout << delta << std::flush;
-    }
-
-    void finish_plain_output()
-    {
-        std::cout << '\n';
-    }
-
-    nxt::rt::task<void> finish_assistant()
-    {
-        co_return;
-    }
-
-    void begin_tool_batch(
-        const std::vector<nxt::ai::tools::function_call> & calls)
-    {
-        std::cout << "[tools] running " << calls.size() << " tool call(s)\n";
-    }
-
-    template<typename ToolSet>
-    nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
-    run_tool_batch(
-        const ToolSet & tools,
-        std::vector<nxt::ai::tools::function_call> calls)
-    {
-        co_return co_await nxt::ai::tools::run_function_tool_batch(
-            tools,
-            std::move(calls));
-    }
-
-    nxt::rt::task<void> finish_tool_batch(
-        const std::vector<nxt::ai::tools::function_call_result> & results,
-        int)
-    {
-        for (const auto & result : results) {
-            std::cout << "[tool] " << result.call.name << " -> "
-                      << (result.result.failed ? "failed" : "ok") << " ("
-                      << result.result.output.size() << " bytes)\n";
-        }
-        co_return;
-    }
-
-    nxt::rt::task<void> tls_ready(
-        const std::shared_ptr<nxt::rt::trace_context> &,
-        const nxt::rt::trace_span &)
-    {
-        co_return;
-    }
-
-    void network_phase(std::string_view)
-    {
-    }
-
-    void socket_rx(std::size_t)
-    {
-    }
-
-    void socket_tx(std::size_t)
-    {
-    }
-
-    void sse_event()
-    {
-    }
-};
-
-class hud_agent_presenter
+void note_tls_progress(
+    const nxt::rt::tls::handshake_progress & progress,
+    const std::shared_ptr<nxt::rt::trace_context> & trace,
+    const nxt::rt::trace_span & tls_span,
+    std::vector<nxt::rt::trace_span> & active_tls_spans,
+    network_hud_state & network)
 {
-public:
-    hud_agent_presenter(nxt::rt::ui_scope & ui, live_state & state)
-        : hud_ui_{ui}
-        , hud_{state}
-    {
-    }
-
-    void status(std::string text, bool force = true)
-    {
-        hud_.status = std::move(text);
-        publish(force);
-    }
-
-    void publish(bool force = false)
-    {
-        auto now = std::chrono::steady_clock::now();
-        if (!force
-            && hud_.last_publish != std::chrono::steady_clock::time_point{}
-            && now - hud_.last_publish < frame_interval)
-            return;
-        hud_.last_publish = now;
-        hud_ui_.draw(live_layout(hud_));
-    }
-
-    void reasoning_started()
-    {
-        hud_.status = "thinking";
-        publish(true);
-    }
-
-    void reasoning_delta(std::string_view delta)
-    {
-        hud_.status = "thinking";
-        append_thought_delta(hud_, delta);
-        publish();
-    }
-
-    nxt::rt::task<void> reasoning_done(std::string text)
-    {
-        if (!text.empty())
-            hud_.turn.thought = std::move(text);
-        auto summary = std::move(hud_.turn.thought);
-        hud_.turn.thought.clear();
-        hud_.status = "thinking done";
-        if (!summary.empty())
-            hud_ui_.print(
-                nxt::ai::tool_tui::thought_block(std::move(summary)));
-        publish(true);
-        co_return;
-    }
-
-    void output_delta(std::string_view delta)
-    {
-        auto first_stream_delta = hud_.status != "streaming";
-        hud_.status = "streaming";
-        hud_.assistant_text += delta;
-        publish(first_stream_delta);
-    }
-
-    void finish_plain_output()
-    {
-    }
-
-    nxt::rt::task<void> finish_assistant()
-    {
-        if (hud_.assistant_text.empty())
-            co_return;
-        hud_ui_.print(
-            nxt::ai::tool_tui::assistant_block(
-                std::move(hud_.assistant_text)));
-        hud_.assistant_text.clear();
-        publish(true);
-    }
-
-    void begin_tool_batch(
-        const std::vector<nxt::ai::tools::function_call> & calls)
-    {
-        hud_.status = std::format("running {} tool call(s)", calls.size());
-        hud_.turn.calls.clear();
-        hud_.turn.calls.reserve(calls.size());
-        for (const auto & call : calls) {
-                hud_.turn.calls.push_back(
-                nxt::ai::tool_tui::call_view{
-                    .name = call.name,
-                    .arguments = call.arguments,
-                    .output = {},
-                    .observed = std::nullopt,
-                    .state = nxt::ai::tool_tui::status::running,
-                    .elapsed_ms = -1,
-                });
-        }
-        publish(true);
-    }
-
-    template<typename ToolSet>
-    nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
-    run_tool_batch(
-        const ToolSet & tools,
-        std::vector<nxt::ai::tools::function_call> calls)
-    {
-        co_return co_await run_function_tool_batch_ui(
-            tools,
-            std::move(calls),
-            hud_ui_);
-    }
-
-    nxt::rt::task<void> finish_tool_batch(
-        const std::vector<nxt::ai::tools::function_call_result> & results,
-        int elapsed_ms)
-    {
-        for (std::size_t i = 0; i < results.size(); ++i) {
-            const auto & result = results[i];
-            if (i < hud_.turn.calls.size()) {
-                auto & call = hud_.turn.calls[i];
-                call.state = result.result.failed
-                    ? nxt::ai::tool_tui::status::error
-                    : nxt::ai::tool_tui::status::ok;
-                call.output = result.result.output;
-                call.observed = result.result.observed;
-                call.elapsed_ms = elapsed_ms;
-            }
-            publish(true);
-        }
-
-        if (!hud_.turn.calls.empty()) {
-            hud_ui_.print(nxt::ai::tool_tui::render_turn(hud_.turn));
-            hud_.turn.calls.clear();
-            publish(true);
-        }
-        co_return;
-    }
-
-    nxt::rt::task<void> tls_ready(
-        const std::shared_ptr<nxt::rt::trace_context> & trace,
-        const nxt::rt::trace_span & tls_span)
-    {
+    if (progress.kind == nxt::rt::tls::handshake_progress_kind::begin) {
+        network.phase = std::format(
+            "TLS {}",
+            nxt::ai::trace_tui::display_name(progress.name));
         if (trace != nullptr && tls_span)
-            hud_ui_.print(
-                nxt::ai::trace_tui::render_span_waterfall(
-                    *trace,
-                    tls_span,
-                    {
-                        .label = "",
-                        .detail = "TLS 1.3",
-                        .subject = "api.openai.com",
-                        .accent = nxt::ai::tool_tui::teal_300,
-                    }));
-        else
-            hud_ui_.print_block(
-                "tls  api.openai.com  TLS 1.3 handshake\n");
-        publish(true);
-        co_return;
+            active_tls_spans.push_back(
+                trace->start_span(
+                    std::string{progress.name},
+                    tls_span.span_id()));
+        return;
     }
 
-    void network_phase(std::string_view phase)
-    {
-        hud_.network.phase = phase;
-        publish();
+    if (progress.kind == nxt::rt::tls::handshake_progress_kind::end) {
+        for (auto it = active_tls_spans.rbegin();
+             it != active_tls_spans.rend();
+             ++it) {
+            if (it->name() == progress.name) {
+                it->finish("ok");
+                active_tls_spans.erase(std::next(it).base());
+                break;
+            }
+        }
+        return;
     }
 
-    void socket_rx(std::size_t bytes)
-    {
-        hud_.network.socket_rx += bytes;
-        publish();
-    }
+    if (trace != nullptr && tls_span)
+        tls_span.event(std::string{progress.name});
+    network.phase = std::format(
+        "TLS {}",
+        nxt::ai::trace_tui::display_name(progress.name));
+}
 
-    void socket_tx(std::size_t bytes)
-    {
-        hud_.network.socket_tx += bytes;
-        publish();
-    }
-
-    void sse_event()
-    {
-        ++hud_.network.sse_events;
-        publish();
-    }
-
-    void done()
-    {
-        status("done");
-        hud_.done = true;
-    }
-
-    void failed()
-    {
-        status("failed");
-        hud_.done = true;
-    }
-
-private:
-    nxt::rt::ui_scope & hud_ui_;
-    live_state & hud_;
-};
-
-template<typename Presenter>
-nxt::rt::task<response_stream_result> stream_openai_response(
-    const llm_request & request,
-    Presenter & presenter)
+nxt::rt::task<void> print_tls_ready(
+    nxt::rt::ui_scope ui,
+    const std::shared_ptr<nxt::rt::trace_context> & trace,
+    const nxt::rt::trace_span & tls_span)
 {
-    presenter.status("connecting");
+    if (!ui.has_terminal_surface())
+        co_return;
+
+    if (trace != nullptr && tls_span)
+        ui.print(
+            nxt::ai::trace_tui::render_span_waterfall(
+                *trace,
+                tls_span,
+                {
+                    .label = "",
+                    .detail = "TLS 1.3",
+                    .subject = "api.openai.com",
+                    .accent = nxt::ai::tool_tui::teal_300,
+                }));
+    else
+        ui.print_block("tls  api.openai.com  TLS 1.3 handshake\n");
+    co_return;
+}
+
+nxt::rt::task<stream_phase_result> stream_openai_response(
+    const llm_request & request,
+    nxt::rt::ui_scope ui)
+{
+    auto thought = std::string{};
+    auto assistant_text = std::string{};
+    auto network = network_hud_state{.phase = "connecting"};
+    auto rx_rate = nxt::rt::ema_rate{std::chrono::milliseconds{700}};
+    auto tx_rate = nxt::rt::ema_rate{std::chrono::milliseconds{700}};
+    auto last_rx = network.socket_rx;
+    auto last_tx = network.socket_tx;
+    auto last_sample = std::chrono::steady_clock::now();
+    auto last_publish = std::chrono::steady_clock::time_point{};
+    auto publish = [&] (bool force = false) {
+        publish_stream_view(
+            ui,
+            thought,
+            assistant_text,
+            network,
+            rx_rate,
+            tx_rate,
+            last_rx,
+            last_tx,
+            last_sample,
+            last_publish,
+            force);
+    };
+    publish(true);
 
     auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
-    presenter.network_phase("tcp connected");
+    network.phase = "tcp connected";
+    publish(true);
     auto socket_output = nxt::rt::byte_writer{
         nxt::rt::meter_sink(
             nxt::rt::socket_sink{socket.get()},
-            [&](std::size_t bytes) { presenter.socket_tx(bytes); }),
+            [&](std::size_t bytes) {
+                network.socket_tx += bytes;
+                publish();
+            }),
         4096,
     };
     auto source = nxt::rt::meter_source(
         nxt::rt::socket_source{socket.get()},
-        [&](std::size_t bytes) { presenter.socket_rx(bytes); });
+        [&](std::size_t bytes) {
+            network.socket_rx += bytes;
+            publish();
+        });
     auto input_storage = std::vector<std::byte>(18 * 1024);
     auto reader = nxt::rt::byte_reader{
         source,
@@ -812,8 +645,8 @@ nxt::rt::task<response_stream_result> stream_openai_response(
     };
 
     auto tls = nxt::rt::tls::tls13_client_session{reader, socket_output};
-    presenter.status("tls handshake");
-    presenter.network_phase("TLS handshake");
+    network.phase = "TLS handshake";
+    publish(true);
     auto trace = nxt::rt::current_trace_context();
     auto tls_span = nxt::rt::trace_span{};
     if (trace != nullptr) {
@@ -827,51 +660,13 @@ nxt::rt::task<response_stream_result> stream_openai_response(
     }
     auto active_tls_spans = std::vector<nxt::rt::trace_span>{};
     try {
-        co_await tls.handshake(
-            "api.openai.com",
-            [&](const nxt::rt::tls::handshake_progress & progress)
-                -> nxt::rt::task<> {
-                if (progress.kind
-                    == nxt::rt::tls::handshake_progress_kind::begin) {
-                    presenter.status(
-                        std::format(
-                            "tls: {}",
-                            nxt::ai::trace_tui::display_name(
-                                progress.name)));
-                    presenter.network_phase(
-                        std::format(
-                            "TLS {}",
-                            nxt::ai::trace_tui::display_name(
-                                progress.name)));
-                    if (trace != nullptr && tls_span)
-                        active_tls_spans.push_back(
-                            trace->start_span(
-                                std::string{progress.name},
-                                tls_span.span_id()));
-                    co_return;
-                }
-
-                if (progress.kind
-                    == nxt::rt::tls::handshake_progress_kind::end) {
-                    for (auto it = active_tls_spans.rbegin();
-                         it != active_tls_spans.rend();
-                         ++it) {
-                        if (it->name() == progress.name) {
-                            it->finish("ok");
-                            active_tls_spans.erase(std::next(it).base());
-                            break;
-                        }
-                    }
-                    co_return;
-                }
-
-                if (trace != nullptr && tls_span)
-                    tls_span.event(std::string{progress.name});
-                presenter.status(
-                    std::format(
-                        "tls: {}",
-                        nxt::ai::trace_tui::display_name(progress.name)));
-            });
+        auto progress = [&](
+            const nxt::rt::tls::handshake_progress & step) {
+            note_tls_progress(
+                step, trace, tls_span, active_tls_spans, network);
+            publish(true);
+        };
+        co_await tls.handshake("api.openai.com", progress);
         if (tls_span)
             tls_span.finish("ok");
     } catch (...) {
@@ -881,8 +676,9 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             tls_span.finish("error");
         throw;
     }
-    co_await presenter.tls_ready(trace, tls_span);
-    presenter.network_phase("TLS ready");
+    co_await print_tls_ready(ui, trace, tls_span);
+    network.phase = "TLS ready";
+    publish(true);
 
     auto http_request =
         nxt::ai::responses::openai_responses_http_request(request);
@@ -891,13 +687,15 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             header.value = "close";
     }
     auto request_text = nxt::http::serialize(http_request);
-    presenter.network_phase("http request");
+    network.phase = "http request";
+    publish(true);
     co_await tls.write_all(request_text);
 
     auto http_storage = std::vector<std::byte>(18 * 1024);
     auto http_reader =
         nxt::rt::byte_reader{tls, std::span{http_storage}};
-    presenter.network_phase("http response");
+    network.phase = "http response";
+    publish(true);
     auto head = co_await nxt::rt::http::read_response_head(http_reader);
     if (!response_status_is_success(head))
         throw nxt::rt::runtime_error{
@@ -911,11 +709,13 @@ nxt::rt::task<response_stream_result> stream_openai_response(
     auto sse_storage = std::vector<std::byte>(18 * 1024);
     auto sse_reader = nxt::rt::byte_reader{body, std::span{sse_storage}};
     auto result = response_stream_result{};
-    presenter.network_phase("streaming SSE");
+    network.phase = "streaming SSE";
+    publish(true);
     while (auto sse = co_await nxt::rt::http::parse_sse_event(sse_reader)) {
         if (sse->data == "[DONE]")
             break;
-        presenter.sse_event();
+        ++network.sse_events;
+        publish();
 
         auto terminal = sse->type == "response.completed"
                         || sse->type == "response.incomplete"
@@ -933,20 +733,35 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             auto payload = event.read<nxt::ai::openai::output_item_event>();
             result.output_items.push_back(std::move(payload.item));
         } else if (event.type == "response.reasoning_summary_part.added") {
-            presenter.reasoning_started();
+            publish(true);
         } else if (event.type == "response.reasoning_summary_text.delta") {
             auto delta =
                 event.read<
                     nxt::ai::openai::reasoning_summary_text_delta_event>();
-            presenter.reasoning_delta(delta.delta);
+            append_thought_delta(thought, delta.delta);
+            publish();
         } else if (event.type == "response.reasoning_summary_text.done") {
             auto done =
                 event.read<
                     nxt::ai::openai::reasoning_summary_text_done_event>();
-            co_await presenter.reasoning_done(std::move(done.text));
+            if (!done.text.empty())
+                thought = std::move(done.text);
+            auto summary = std::move(thought);
+            thought.clear();
+            if (ui.has_terminal_surface() && !summary.empty())
+                ui.print(
+                    nxt::ai::tool_tui::thought_block(std::move(summary)));
+            publish(true);
         } else if (event.type == "response.output_text.delta") {
             auto delta = event.read<nxt::ai::openai::text_delta_event>();
-            presenter.output_delta(delta.delta);
+            auto first_stream_delta = assistant_text.empty();
+            auto text = std::move(delta.delta);
+            assistant_text += text;
+            if (ui.has_terminal_surface()) {
+                publish(first_stream_delta);
+            } else {
+                co_await nxt::rt::write_stdout_all(std::move(text));
+            }
         } else if (
             event.type == "response.failed"
             || event.type == "response.incomplete") {
@@ -960,28 +775,156 @@ nxt::rt::task<response_stream_result> stream_openai_response(
             break;
     }
 
-    presenter.finish_plain_output();
-    co_return result;
+    if (!ui.has_terminal_surface())
+        co_await nxt::rt::write_stdout_all("\n");
+    co_return stream_phase_result{
+        .response = std::move(result),
+        .assistant_text = std::move(assistant_text),
+    };
 }
 
-template<typename ToolSet, typename Presenter>
+template<typename T>
+T take_phase_result(nxt::rt::catching_deed<T> deed)
+{
+    auto result = std::move(deed).get();
+    if (result)
+        return std::move(*result);
+    nxt::rt::rethrow(result.error());
+}
+
+nxt::rt::task<nxt::rt::catching_deed<stream_phase_result>>
+spawn_stream_phase_child(
+    const llm_request & request,
+    nxt::rt::ui_scope ui,
+    std::string_view model,
+    std::string_view status,
+    std::string_view assistant_text)
+{
+    auto child = ui.spawn(
+        [&request](nxt::rt::ui_scope child_ui) {
+            return stream_openai_response(request, std::move(child_ui));
+        });
+    ui.draw(
+        agent_layout(
+            model, status, assistant_text, child.surface()));
+    co_return std::move(child).cope();
+}
+
+nxt::rt::task<stream_phase_result> run_stream_phase(
+    const llm_request & request,
+    nxt::rt::ui_scope ui,
+    std::string_view model,
+    std::string_view status,
+    std::string_view assistant_text)
+{
+    auto deed = co_await nxt::rt::with_zone(
+        [&] {
+            return spawn_stream_phase_child(
+                request,
+                ui,
+                model,
+                status,
+                assistant_text);
+        });
+    co_return take_phase_result(std::move(deed));
+}
+
+template<typename ToolSet>
+nxt::rt::task<nxt::rt::catching_deed<std::vector<function_call_result>>>
+spawn_tool_phase_child(
+    const ToolSet & tools,
+    std::vector<function_call> calls,
+    nxt::rt::ui_scope ui,
+    std::string_view model,
+    std::string_view status,
+    std::string_view assistant_text,
+    std::chrono::milliseconds settle_delay)
+{
+    auto child = ui.spawn(
+        [&tools,
+         calls = std::move(calls),
+         settle_delay](nxt::rt::ui_scope child_ui) mutable {
+            return run_function_tool_batch_ui(
+                tools,
+                std::move(calls),
+                std::move(child_ui),
+                settle_delay);
+        });
+    ui.draw(
+        agent_layout(
+            model, status, assistant_text, child.surface()));
+    co_return std::move(child).cope();
+}
+
+template<typename ToolSet>
+nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
+run_tool_phase(
+    const ToolSet & tools,
+    std::vector<nxt::ai::tools::function_call> calls,
+    nxt::rt::ui_scope ui,
+    std::string_view model,
+    std::string_view status,
+    std::string_view assistant_text,
+    std::chrono::milliseconds settle_delay)
+{
+    auto deed = co_await nxt::rt::with_zone(
+        [&]() mutable {
+            return spawn_tool_phase_child(
+                tools,
+                std::move(calls),
+                ui,
+                model,
+                status,
+                assistant_text,
+                settle_delay);
+        });
+    co_return take_phase_result(std::move(deed));
+}
+
+void print_assistant_if_terminal(
+    nxt::rt::ui_scope & ui,
+    std::string & assistant_text)
+{
+    if (!ui.has_terminal_surface() || assistant_text.empty())
+        return;
+    ui.print(
+        nxt::ai::tool_tui::assistant_block(
+            std::move(assistant_text)));
+    assistant_text.clear();
+}
+
+template<typename ToolSet>
 nxt::rt::task<void> run_agent_loop(
     llm_request request,
     ToolSet tools,
-    Presenter & presenter,
+    nxt::rt::ui_scope ui,
     std::size_t max_steps = 32)
 {
     auto original = request;
     auto stateless_input = nxt::ai::responses::input_items_from_request(request);
+    auto assistant_text = std::string{};
+    auto status = std::string{"starting"};
+    auto model = request.model;
+    auto settle_delay = ui.has_terminal_surface()
+        ? std::chrono::milliseconds{900}
+        : std::chrono::milliseconds{0};
     prepare_tool_request(request, tools);
+    ui.draw(agent_layout(model, status, assistant_text, nxt::tui::empty()));
 
     for (std::size_t step = 0; step < max_steps; ++step) {
-        presenter.status(std::format("turn {}", step + 1));
-        auto response = co_await stream_openai_response(request, presenter);
+        status = std::format("turn {} streaming", step + 1);
+        auto stream = co_await run_stream_phase(
+            request, ui, model, status, assistant_text);
+        auto response = std::move(stream.response);
+        assistant_text += stream.assistant_text;
         auto calls =
             nxt::ai::tools::function_calls_from_items(response.output_items);
         if (calls.empty()) {
-            co_await presenter.finish_assistant();
+            print_assistant_if_terminal(ui, assistant_text);
+            status = "done";
+            ui.draw(
+                agent_layout(
+                    model, status, assistant_text, nxt::tui::empty()));
             co_return;
         }
 
@@ -990,17 +933,23 @@ nxt::rt::task<void> run_agent_loop(
                 "tool call response had no response id"};
 
         auto started = std::chrono::steady_clock::now();
-        presenter.begin_tool_batch(calls);
+        status = std::format("running {} tool call(s)", calls.size());
 
-        auto results = co_await presenter.run_tool_batch(
+        auto results = co_await run_tool_phase(
             tools,
-            std::move(calls));
+            std::move(calls),
+            ui,
+            model,
+            status,
+            assistant_text,
+            settle_delay);
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started)
                 .count();
-        co_await presenter.finish_tool_batch(
-            results, static_cast<int>(elapsed));
+        status = std::format(
+            "{} tool call(s) in {}ms", results.size(), elapsed);
+        ui.draw(agent_layout(model, status, assistant_text, nxt::tui::empty()));
 
         auto outputs = nxt::ai::tools::output_items_from_results(results);
         request = original;
@@ -1041,10 +990,36 @@ nxt::rt::task<nxt::ai::tools::tool_result> run_one_tool_call_worker(
 }
 
 template<typename ToolSet>
+nxt::rt::task<nxt::rt::catching_deed<tool_result>>
+run_one_tool_call_meter(
+    const ToolSet & tools,
+    const function_call & call,
+    nxt::rt::ui_scope ui,
+    std::chrono::steady_clock::time_point started,
+    nxt::ai::tool_tui::call_view & view,
+    bool & done)
+{
+    auto deed = nxt::rt::fork(
+        run_one_tool_call_worker(tools, call, done)).cope();
+
+    while (!done) {
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count();
+        view.elapsed_ms = static_cast<int>(elapsed);
+        ui.draw(nxt::ai::tool_tui::render_call(view));
+        co_await nxt::rt::op::timeout::after(frame_interval);
+    }
+    co_return std::move(deed);
+}
+
+template<typename ToolSet>
 nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
     const ToolSet & tools,
     nxt::ai::tools::function_call call,
-    nxt::rt::ui_scope ui)
+    nxt::rt::ui_scope ui,
+    std::chrono::milliseconds settle_delay)
 {
     auto started = std::chrono::steady_clock::now();
     auto view = nxt::ai::tool_tui::call_view{
@@ -1059,21 +1034,14 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
 
     auto done = false;
     auto worker = co_await nxt::rt::with_zone(
-        [&]() -> nxt::rt::task<
-            nxt::rt::catching_deed<nxt::ai::tools::tool_result>> {
-            auto deed = nxt::rt::fork(
-                run_one_tool_call_worker(tools, call, done)).cope();
-
-            while (!done) {
-                auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - started)
-                        .count();
-                view.elapsed_ms = static_cast<int>(elapsed);
-                ui.draw(nxt::ai::tool_tui::render_call(view));
-                co_await nxt::rt::op::timeout::after(frame_interval);
-            }
-            co_return std::move(deed);
+        [&] {
+            return run_one_tool_call_meter(
+                tools,
+                call,
+                ui,
+                started,
+                view,
+                done);
         });
 
     auto finished = std::move(worker).get();
@@ -1092,6 +1060,8 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
     view.observed = result.observed;
     view.elapsed_ms = static_cast<int>(elapsed);
     ui.draw(nxt::ai::tool_tui::render_call(view));
+    if (settle_delay > std::chrono::milliseconds{0})
+        co_await nxt::rt::op::timeout::after(settle_delay);
 
     auto output_item =
         nxt::ai::tools::function_call_output(
@@ -1105,52 +1075,100 @@ nxt::rt::task<nxt::ai::tools::function_call_result> run_one_tool_call_ui(
 }
 
 template<typename ToolSet>
+nxt::rt::task<nxt::ai::tools::function_call_result>
+run_one_tool_call_counted(
+    const ToolSet & tools,
+    nxt::ai::tools::function_call call,
+    nxt::rt::ui_scope ui,
+    std::chrono::milliseconds settle_delay,
+    std::size_t & done_count)
+{
+    try {
+        auto result = co_await run_one_tool_call_ui(
+            tools,
+            std::move(call),
+            std::move(ui),
+            settle_delay);
+        ++done_count;
+        co_return result;
+    } catch (...) {
+        ++done_count;
+        throw;
+    }
+}
+
+template<typename ToolSet>
+nxt::rt::task<std::vector<nxt::rt::catching_deed<function_call_result>>>
+spawn_tool_call_children(
+    const ToolSet & tools,
+    std::vector<function_call> & calls,
+    nxt::rt::ui_scope ui,
+    std::chrono::milliseconds settle_delay,
+    std::size_t & done_count)
+{
+    auto out = std::vector<nxt::rt::catching_deed<function_call_result>>{};
+    out.reserve(calls.size());
+
+    auto surfaces = std::vector<nxt::tui::AnyLayout>{};
+    surfaces.reserve(calls.size());
+    for (auto & call : calls) {
+        auto child = ui.spawn(
+            [&tools,
+             call = std::move(call),
+             settle_delay,
+             &done_count](nxt::rt::ui_scope child_ui) mutable {
+                return run_one_tool_call_counted(
+                    tools,
+                    std::move(call),
+                    std::move(child_ui),
+                    settle_delay,
+                    done_count);
+            });
+        surfaces.emplace_back(child.surface());
+        out.push_back(std::move(child).cope());
+    }
+    ui.draw(nxt::tui::dyn_column(std::move(surfaces)));
+
+    while (done_count < out.size())
+        co_await nxt::rt::op::timeout::after(frame_interval);
+    co_return out;
+}
+
+template<typename ToolSet>
 nxt::rt::task<std::vector<nxt::ai::tools::function_call_result>>
 run_function_tool_batch_ui(
     const ToolSet & tools,
     std::vector<nxt::ai::tools::function_call> calls,
-    nxt::rt::ui_scope ui)
+    nxt::rt::ui_scope ui,
+    std::chrono::milliseconds settle_delay)
 {
+    if (!ui.has_terminal_surface()) {
+        co_await nxt::rt::write_stdout_all(
+            std::format(
+                "[tools] running {} tool call(s)\n", calls.size()));
+        auto results = co_await nxt::ai::tools::run_function_tool_batch(
+            tools,
+            std::move(calls));
+        for (const auto & result : results) {
+            co_await nxt::rt::write_stdout_all(
+                std::format(
+                    "[tool] {} -> {} ({} bytes)\n",
+                    result.call.name,
+                    result.result.failed ? "failed" : "ok",
+                    result.result.output.size()));
+        }
+        co_return results;
+    }
+
     auto done_count = std::size_t{};
     auto deeds = co_await nxt::rt::with_zone(
-        [&]() -> nxt::rt::task<
-            std::vector<
-                nxt::rt::catching_deed<
-                    nxt::ai::tools::function_call_result>>> {
-            auto out = std::vector<
-                nxt::rt::catching_deed<
-                    nxt::ai::tools::function_call_result>>{};
-            out.reserve(calls.size());
-
-            auto surfaces = std::vector<nxt::tui::AnyLayout>{};
-            surfaces.reserve(calls.size());
-            for (auto & call : calls) {
-                auto child = ui.spawn(
-                    [&tools,
-                     call = std::move(call),
-                     &done_count](nxt::rt::ui_scope child_ui)
-                        mutable -> nxt::rt::task<
-                            nxt::ai::tools::function_call_result> {
-                        try {
-                            auto result = co_await run_one_tool_call_ui(
-                                tools,
-                                std::move(call),
-                                std::move(child_ui));
-                            ++done_count;
-                            co_return result;
-                        } catch (...) {
-                            ++done_count;
-                            throw;
-                        }
-                    });
-                surfaces.emplace_back(child.surface());
-                out.push_back(std::move(child).cope());
-            }
-            ui.draw(nxt::tui::dyn_column(std::move(surfaces)));
-
-            while (done_count < out.size())
-                co_await nxt::rt::op::timeout::after(frame_interval);
-            co_return out;
+        [&] {
+            return spawn_tool_call_children(
+                tools,
+                calls,
+                ui,
+                settle_delay,
+                done_count);
         });
 
     auto out = std::vector<nxt::ai::tools::function_call_result>{};
@@ -1164,6 +1182,24 @@ run_function_tool_batch_ui(
         }
     }
     co_return out;
+}
+
+template<typename ToolSet>
+nxt::rt::task<void> run_agent_ui_zone(
+    llm_request request,
+    ToolSet tools,
+    nxt::rt::ui_scope ui)
+{
+    try {
+        co_await run_agent_loop(
+            std::move(request),
+            std::move(tools),
+            ui);
+        ui.request_shutdown();
+    } catch (...) {
+        ui.request_shutdown();
+        throw;
+    }
 }
 
 nxt::rt::task<int> run_nxtllm(cli_options options)
@@ -1196,23 +1232,6 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
         co_return EXIT_FAILURE;
     }
 
-    if (::isatty(STDOUT_FILENO) == 0) {
-        auto presenter = plain_agent_presenter{};
-        co_await run_agent_loop(
-            std::move(request), std::move(tools), presenter);
-        co_return EXIT_SUCCESS;
-    }
-
-    auto live = live_state{
-        .model = request.model,
-        .status = "starting",
-        .assistant_text = {},
-        .turn = {},
-        .network = {},
-        .last_publish = {},
-        .done = false,
-    };
-
     auto trace = std::make_shared<nxt::rt::trace_context>();
     auto root_span = trace->start_span(
         "nxtllm.request",
@@ -1222,57 +1241,29 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
     try {
         co_await nxt::rt::with_env<nxt::rt::trace_context_key>(
             trace,
-            [&]() -> nxt::rt::task<void> {
-            co_await nxt::rt::with_env<nxt::rt::trace_current_span_key>(
-                root_span.span_id(),
-                [&]() -> nxt::rt::task<void> {
-                co_await nxt::rt::with_ui_zone([&](nxt::rt::ui_scope ui)
-                    -> nxt::rt::task<void> {
-                    co_await ui.accompany(
-                        [&](nxt::rt::ui_scope worker_ui)
-                            -> nxt::rt::task<void> {
-                            auto presenter =
-                                hud_agent_presenter{worker_ui, live};
-                            presenter.publish(true);
-                            try {
-                                co_await run_agent_loop(
+            [&]() mutable {
+                return nxt::rt::with_env<nxt::rt::trace_current_span_key>(
+                    root_span.span_id(),
+                    [&]() mutable {
+                        return nxt::rt::with_ui_zone(
+                            [request = std::move(request),
+                             tools = std::move(tools)](
+                                nxt::rt::ui_scope ui) mutable {
+                                return run_agent_ui_zone(
                                     std::move(request),
                                     std::move(tools),
-                                    presenter);
-                                presenter.done();
-                                ui.request_shutdown();
-                            } catch (...) {
-                                presenter.failed();
-                                ui.request_shutdown();
-                                throw;
-                            }
-                        },
-                        [&](nxt::rt::ui_scope instrument_ui)
-                            -> nxt::rt::task<void> {
-                            co_await sample_network_instruments(
-                                instrument_ui, live);
-                        },
-                        [](const auto & worker, const auto & instrument) {
-                            namespace tt = nxt::ai::tool_tui;
-                            return nxt::tui::surface(
-                                nxt::tui::Style{
-                                    .fg = tt::slate_300,
-                                    .bg = tt::page_bg,
-                                    .em = nxt::DEFAULT_EMPHASIS,
-                                },
-                                nxt::tui::column(worker, instrument));
-                        });
-                }, {}, frame_interval);
+                                    std::move(ui));
+                            },
+                            {},
+                            frame_interval);
+                    });
             });
-        });
         root_span.finish("ok");
     } catch (...) {
         root_span.finish("error");
         throw;
     }
 
-    if (!live.assistant_text.empty())
-        co_await nxt::rt::write_stdout_all(live.assistant_text + "\n");
     co_return EXIT_SUCCESS;
 }
 
