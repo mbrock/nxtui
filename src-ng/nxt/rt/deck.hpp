@@ -232,12 +232,14 @@ public:
     }
 
 private:
+    /// @cond
     friend struct detail::promise_base;
     template<typename T>
     friend class task;
     friend class task_zone;
     friend struct parked_task;
     friend struct yield_awaiter;
+    /// @endcond
 
     struct ready_item
     {

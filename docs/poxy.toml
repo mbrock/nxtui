@@ -7,6 +7,10 @@ theme = 'dark'
 main_page = true
 show_includes = true
 generate_tagfile = true
+scripts = 'forge-doc-graphs.js'
+
+[aliases]
+"forgegraph{3}" = '@htmlonly <forge-doc-graph frg="\1" run="\2" title="\3"></forge-doc-graph> @endhtmlonly'
 
 [sources]
 extract_all = true
@@ -14,6 +18,7 @@ paths = [
     '../test',
 ]
 recursive_paths = [
+    '../src-ng',
     '../src/nxt',
     '../src/nxtai',
     '../src/nxtio',
@@ -23,10 +28,12 @@ patterns = [
     '*.hpp',
 ]
 strip_paths = [
+    '../src-ng',
     '../src',
     '../test',
 ]
 strip_includes = [
+    '../src-ng/',
     '../src/',
 ]
 

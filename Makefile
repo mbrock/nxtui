@@ -12,6 +12,8 @@ test: build
 	meson test -C build
 
 docs:
+	bun docs/forge_graphs.ts prepare
+	bun docs/forge_graphs.ts install
 	cd docs && uv run --with poxy poxy poxy.toml
 
 docs-publish: docs

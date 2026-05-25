@@ -8,7 +8,11 @@
 /fonts/
 /docs/html/
 /docs/xml/
+/docs/generated/
+/docs/forge-doc-graphs.js
 .env
+/node_modules/
+compiled/
 
 # Meson fallback downloads created by optional subprojects. The checked-in
 # wraps/vendor trees stay visible, but configure-time downloads should not.

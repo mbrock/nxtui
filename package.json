@@ -1,0 +1,15 @@
+{
+	"name": "nxtui-docs",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"forge:text": "bun cassette/forge-layout-text.ts",
+		"forge:unicode": "bun cassette/forge-unicode-graph.ts"
+	},
+	"dependencies": {
+		"@forge-fm/forge-graph": "github:mbrock/forge-graph#89c00b9"
+	},
+	"devDependencies": {
+		"@happy-dom/global-registrator": "^20.9.0"
+	}
+}
