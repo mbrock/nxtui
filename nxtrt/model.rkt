@@ -28,8 +28,8 @@
      (wants one wish)
      (holds one wand)
      (belongs-to one task)
-     (staged-on lone wand)
-     (parked-on lone wand))
+     (staged-on var lone wand)
+     (parked-on var lone wand))
    (signature deed
      (belongs-to one task)
      (belongs-to one zone))
@@ -106,6 +106,21 @@
               (some ([parent task] [child task])
                 (== (child continues-as) parent)))
 
+   (predicate 'staged-to-parked-to-idle
+              (some ([a waiter] [w wand])
+                (block
+                 (== (a holds) w)
+                 (== (a staged-on) w)
+                 (no (a parked-on))
+                 (next-state
+                  (block
+                   (no (a staged-on))
+                   (== (a parked-on) w)
+                   (next-state
+                    (block
+                     (no (a staged-on))
+                     (no (a parked-on)))))))))
+
    (predicate 'rich-runtime-shape
               (some ([d deck] [w wand] [z zone])
                 (block
@@ -146,6 +161,11 @@
    (run 'rich-runtime-shape-witness
         (block 'structural-invariants
                'rich-runtime-shape)
+        #:for 6)
+   (run 'rich-runtime-trace-witness
+        (block (always 'structural-invariants)
+               'rich-runtime-shape
+               'staged-to-parked-to-idle)
         #:for 6)
    (run 'rich-runtime-shape-always
         (block 'structural-invariants

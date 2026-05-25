@@ -49,6 +49,8 @@
  count
  ge
  always
+ next-state
+ prime
  model->forge-runs
  run-forge-model
  check-forge-model
@@ -59,7 +61,7 @@
 
 (struct forge-model (language options signatures predicates checks runs) #:transparent)
 (struct forge-signature (term fields) #:transparent)
-(struct forge-field (term multiplicity range) #:transparent)
+(struct forge-field (term multiplicity range variable?) #:transparent)
 (struct forge-predicate (name body) #:transparent)
 (struct forge-run (name body scope) #:transparent)
 (struct forge-check (name body scope expect) #:transparent)
@@ -121,6 +123,12 @@
 (define (always body)
   (forge-expr 'always (list body)))
 
+(define (next-state body)
+  (forge-expr 'next-state (list body)))
+
+(define (prime expr)
+  (forge-expr 'prime (list expr)))
+
 (define-syntax (with-forge-vars stx)
   (syntax-parse stx
     [(_ (var:id ...) body:expr)
@@ -160,11 +168,19 @@
     [(_ expr:expr)
      #'(forge-expr 'lone (list expr))]))
 
-(define (make-field term multiplicity range)
-  (forge-field term multiplicity range))
+(define (make-field term multiplicity range #:variable? [variable? #f])
+  (forge-field term multiplicity range variable?))
 
 (define-syntax (field stx)
   (syntax-parse stx
+    [(_ name:id #:var #:one range:expr)
+     #'(make-field (forge-field-ref 'name) 'one range #:variable? #t)]
+    [(_ name:id #:var #:lone range:expr)
+     #'(make-field (forge-field-ref 'name) 'lone range #:variable? #t)]
+    [(_ name:id #:var #:set range:expr)
+     #'(make-field (forge-field-ref 'name) 'set range #:variable? #t)]
+    [(_ name:id #:var range:expr)
+     #'(make-field (forge-field-ref 'name) 'one range #:variable? #t)]
     [(_ name:id #:one range:expr)
      #'(make-field (forge-field-ref 'name) 'one range)]
     [(_ name:id #:lone range:expr)
@@ -179,6 +195,14 @@
      #'(make-field term 'lone range)]
     [(_ term:expr #:set range:expr)
      #'(make-field term 'set range)]
+    [(_ term:expr #:var #:one range:expr)
+     #'(make-field term 'one range #:variable? #t)]
+    [(_ term:expr #:var #:lone range:expr)
+     #'(make-field term 'lone range #:variable? #t)]
+    [(_ term:expr #:var #:set range:expr)
+     #'(make-field term 'set range #:variable? #t)]
+    [(_ term:expr #:var range:expr)
+     #'(make-field term 'one range #:variable? #t)]
     [(_ term:expr range:expr)
      #'(make-field term 'one range)]))
 
@@ -202,6 +226,12 @@
      #'(make-field (forge-field-ref 'name) 'lone range)]
     [(_ (name:id (~datum set) range:expr))
      #'(make-field (forge-field-ref 'name) 'set range)]
+    [(_ (name:id (~datum var) (~datum one) range:expr))
+     #'(make-field (forge-field-ref 'name) 'one range #:variable? #t)]
+    [(_ (name:id (~datum var) (~datum lone) range:expr))
+     #'(make-field (forge-field-ref 'name) 'lone range #:variable? #t)]
+    [(_ (name:id (~datum var) (~datum set) range:expr))
+     #'(make-field (forge-field-ref 'name) 'set range #:variable? #t)]
     [(_ other:expr)
      #'other]))
 
@@ -319,7 +349,8 @@
     (hash-set! relation-map
                relation-term
                (f:make-relation (string->symbol (forge-name relation-term))
-                                (list domain range))))
+                                (list domain range)
+                                #:is-var (forge-field-variable? fld))))
   relation-map)
 
 (define (compile-field-constraints signatures sig-map relation-map)
@@ -398,6 +429,8 @@
              (f:int>/func (compile-arg (first args)) (compile-arg (second args)))
              (f:int=/func (compile-arg (first args)) (compile-arg (second args))))]
        ['always (f:always/func (compile-arg (first args)))]
+       ['next-state (f:next_state/func (compile-arg (first args)))]
+       ['prime (f:prime/func (compile-arg (first args)))]
        [other (raise-argument-error 'compile-forge-expr "known forge expression" other)])]
     [else (raise-argument-error 'compile-forge-expr "forge expression" expr)]))
 
@@ -433,12 +466,23 @@
                 [fld (in-list (forge-signature-fields sig))])
       (hash-ref relation-map (field-term-for-domain (forge-signature-term sig) fld))))
   (define options (forge-option-hash model #:run-sterling run-sterling #:export-run export-run #:export-xml export-xml))
+  (define temporal? (eq? (forge-model-language model) 'forge/temporal))
+  (define field-constraints-body
+    (and (not (null? field-constraints))
+         (apply f:&&/func field-constraints)))
+  (define field-constraints-for-run
+    (and field-constraints-body
+         (if temporal?
+             (f:always/func field-constraints-body)
+             field-constraints-body)))
   (define (run-with-field-constraints body)
-    (apply f:&&/func (append field-constraints (list body))))
+    (if field-constraints-for-run
+        (f:&&/func field-constraints-for-run body)
+        body))
   (define (check-with-field-constraints body)
-    (if (null? field-constraints)
-        body
-        (f:=>/func (apply f:&&/func field-constraints) body)))
+    (cond
+      [(not field-constraints-for-run) body]
+      [else (f:=>/func field-constraints-for-run body)]))
   (define checks
     (for/list ([command (in-list (forge-model-checks model))])
       (define body (compile-forge-expr (forge-check-body command) sig-map relation-map predicate-map))

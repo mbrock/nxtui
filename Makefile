@@ -14,6 +14,7 @@ test: build
 docs:
 	rm -rf docs/html
 	mkdir -p docs/html
+	cd ../src/forge-graph && bun run build:forge-graph
 	cd docs2 && doxygen Doxyfile
 	racket docs2/doxygen-to-nice.rkt \
 		--input docs2/out/doxygen/xml/rt_overview.xml \
