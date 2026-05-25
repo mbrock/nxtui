@@ -27,6 +27,18 @@ Export a witness as Alloy XML:
 racket nxtrt/model.rkt --direct-xml /tmp/nxtrt-direct.xml --run rich-runtime-shape-witness
 ```
 
+Print a witness as readable text:
+
+```sh
+racket nxtrt/model.rkt --text --run rich-runtime-shape-witness
+```
+
+Print all model witnesses as readable text:
+
+```sh
+make spec
+```
+
 Run the structured checks:
 
 ```sh
@@ -37,31 +49,28 @@ Predicates in `runtime.rkt` are written in the indentation-sensitive
 `rdf-forge` language rather than raw Forge text. For example:
 
 ```racket
-predicate task-awaiting-wish
-  some ([t task] [a waiter] [w wand])
-    == (a (belongs-to (task waiter))) t
-    == (a holds) w
-    == (a parked-on) w
+predicate wand-has-parked-exec
+  some ([w wand])
+    some (w has-parked)
 ```
 
 Quantified variables are callable inside predicate bodies. Calling a variable
-with relation steps follows that path from the variable, so `(a parked-on)` is
-the same relation expression as `(follow a parked-on)`.
+with relation steps follows that path from the variable, so `(w has-parked)` is
+the same relation expression as `(follow w has-parked)`.
 
 Field declarations resolve overloaded properties from the enclosing signature
 domain, so a signature can stay close to the ontology wording:
 
 ```racket
-signature task
-  belongs-to lone zone
-  is-ready-on lone deck
-  continues-as lone task
+signature zone
+  spawned set task
+  issued set deed
 ```
 
 Use `follow` for outgoing relation paths and `matching` for inverse lookups:
 
 ```racket
-all ([z zone] [t (matching (belongs-to (zone task)) z)])
-  lone ([d (matching (belongs-to (zone deed)) z)])
-    == (d (belongs-to (task deed))) t
+all ([z zone] [t (z spawned)])
+  lone ([d (z issued)])
+    == (d observes) t
 ```

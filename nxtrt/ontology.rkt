@@ -9,16 +9,18 @@
          zone
          task
          wish
-         waiter
+         exec
          deed
          waves
-         belongs-to
-         is-ready-on
-         continues-as
-         wants
-         holds
-         staged-on
-         parked-on)
+         has-ready
+         has-prepared
+         has-submitted
+         has-parked
+         spawned
+         issued
+         observes
+         has-continuation
+         realizes)
 
 (module+ main
   (display (ontology->turtle nxt)))

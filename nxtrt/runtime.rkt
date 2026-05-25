@@ -6,148 +6,76 @@ ontology nxt "https://swa.sh/nxt#"
   class zone
   class task
   class wish
-  class waiter
+  class exec
   class deed
 
   property waves
-  property belongs-to
-  property is-ready-on
-  property continues-as
-  property wants
-  property holds
-  property staged-on
-  property parked-on
+  property has-ready
+  property has-prepared
+  property has-submitted
+  property has-parked
+  property spawned
+  property issued
+  property observes
+  property has-continuation
+  property realizes
 
 model runtime-model
   signature deck
-    waves one wand
+    has-ready var set task
   signature wand
+    has-prepared var set exec
+    has-submitted var set exec
+    has-parked var set exec
   signature zone
+    spawned set task
+    issued set deed
   signature task
-    belongs-to lone zone
-    is-ready-on lone deck
-    continues-as lone task
+    has-continuation lone task
   signature wish
-  signature waiter
-    wants one wish
-    holds one wand
-    belongs-to one task
-    staged-on var lone wand
-    parked-on var lone wand
+  signature exec
+    realizes one wish
+    has-continuation one task
   signature deed
-    belongs-to one task
-    belongs-to one zone
+    observes one task
 
   predicate structural-invariants
-    all ([a waiter])
-      in (union (a staged-on) (a parked-on)) (a holds)
-    all ([a waiter])
-      lone (union (a staged-on) (a parked-on))
-    all ([d deed])
-      == (d (belongs-to (task deed)) (belongs-to (zone task))) (d (belongs-to (zone deed)))
-    all ([z zone] [t (matching (belongs-to (zone task)) z)])
-      lone ([d (matching (belongs-to (zone deed)) z)])
-        == (d (belongs-to (task deed))) t
-    all ([a waiter])
-      no (a (belongs-to (task waiter)) is-ready-on)
-    all ([a waiter])
-      => (some (a parked-on)) (no (a (belongs-to (task waiter)) is-ready-on))
+    all ([z zone] [t (z spawned)])
+      some ([d (z issued)])
+        == (d observes) t
+    all ([z zone] [t (z spawned)])
+      lone ([d (z issued)])
+        == (d observes) t
+    all ([z zone] [d (z issued)])
+      in (d observes) (z spawned)
+    all ([w wand])
+      no (intersect (w has-prepared) (w has-submitted))
+    all ([w wand])
+      no (intersect (w has-prepared) (w has-parked))
+    all ([w wand])
+      no (intersect (w has-submitted) (w has-parked))
+    all ([w wand] [a (w has-parked)])
+      no (matching has-ready (a (has-continuation (task exec))))
 
-  predicate ready-task-has-a-deck
-    all ([t task])
-      => (some (t is-ready-on)) (one (t is-ready-on))
-
-  predicate waiting-task-has-a-wand
-    all ([a waiter])
-      one (a holds)
-
-  predicate child-task-has-at-most-one-deed-in-its-zone
-    all ([z zone] [t (matching (belongs-to (zone task)) z)])
-      lone ([d (matching (belongs-to (zone deed)) z)])
-        == (d (belongs-to (task deed))) t
-
-  predicate parked-waiter-identifies-suspended-task
-    all ([a waiter])
-      => (some (a parked-on)) (no (a (belongs-to (task waiter)) is-ready-on))
-
-  predicate ready-task-on-deck
-    some ([t task])
-      some (t is-ready-on)
-
-  predicate task-awaiting-wish
-    some ([t task] [a waiter] [w wand])
-      == (a (belongs-to (task waiter))) t
-      == (a holds) w
-      == (a parked-on) w
-
-  predicate zone-with-children
-    some ([z zone])
-      ge (count (matching (belongs-to (zone task)) z)) 2
-      ge (count (matching (belongs-to (zone deed)) z)) 2
-
-  predicate staged-but-not-parked-yet
-    some ([a waiter] [w wand])
-      == (a staged-on) w
-      no (a parked-on)
-
-  predicate parent-child-continuation
-    some ([parent task] [child task])
-      == (child continues-as) parent
-
-  predicate staged-to-parked-to-idle
-    some ([a waiter] [w wand])
-      == (a holds) w
-      == (a staged-on) w
-      no (a parked-on)
-      next-state
-        no (a staged-on)
-        == (a parked-on) w
-        next-state
-          no (a staged-on)
-          no (a parked-on)
+  predicate phase-changes-once
+    next-state
+      some ([w wand])
+        either (some (w has-submitted)) (some (w has-parked))
 
   predicate rich-runtime-shape
     some ([d deck] [w wand] [z zone])
-      == (d waves) w
-      ge (count (matching is-ready-on d)) 1
-      ge (count (matching (belongs-to (zone task)) z)) 2
-      some ([a waiter])
-        either (== (a staged-on) w) (== (a parked-on) w)
-      some ([a waiter] [t (matching (belongs-to (zone task)) z)])
-        == (a (belongs-to (task waiter))) t
+      some (d has-ready)
+      ge (count (z spawned)) 2
+      some (w has-prepared)
+      no (w has-submitted)
+      no (w has-parked)
+      some ([a exec] [t (z spawned)])
+        == (a (has-continuation (task exec))) t
 
-  check ready-task-has-a-deck-checked
-    structural-invariants
-    ready-task-has-a-deck
-  check waiting-task-has-a-wand-checked
-    structural-invariants
-    waiting-task-has-a-wand
-  check child-task-has-at-most-one-deed-in-its-zone-checked
-    structural-invariants
-    child-task-has-at-most-one-deed-in-its-zone
-  check parked-waiter-identifies-suspended-task-checked
-    structural-invariants
-    parked-waiter-identifies-suspended-task
-
-  run ready-task-witness :for 4
-    structural-invariants
-    ready-task-on-deck
-  run awaiting-wish-witness :for 4
-    structural-invariants
-    task-awaiting-wish
-  run zone-with-children-witness :for 5
-    structural-invariants
-    zone-with-children
-  run staged-but-not-parked-witness :for 4
-    structural-invariants
-    staged-but-not-parked-yet
-  run rich-runtime-shape-witness :for 6
+  run rich-runtime-shape-witness :for ([1 deck wand zone wish exec] [2 task deed])
     structural-invariants
     rich-runtime-shape
-  run rich-runtime-trace-witness :for 6 :trace-length 3
+  run rich-runtime-trace-witness :for ([1 deck wand zone wish exec] [2 task deed]) :trace-length 5
     always structural-invariants
     rich-runtime-shape
-    staged-to-parked-to-idle
-  run rich-runtime-shape-always :for 6
-    structural-invariants
-    always rich-runtime-shape
+    phase-changes-once

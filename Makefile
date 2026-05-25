@@ -1,4 +1,4 @@
-.PHONY: all setup build test docs docs-publish clean traces
+.PHONY: all setup build test spec docs docs-publish clean traces
 
 all: build
 
@@ -10,6 +10,9 @@ build:
 
 test: build
 	meson test -C build
+
+spec:
+	racket nxtrt/model.rkt --run-all
 
 docs:
 	rm -rf docs/html

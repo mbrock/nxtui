@@ -37,6 +37,7 @@
          follow
          matching
          union
+         intersect
          count
          ge
          prime
@@ -67,6 +68,33 @@
      #`(f:block #,@(map runtime-ref (syntax->list #'(body ...))))]
     [other
      #'other]))
+
+(define-for-syntax (scope-ref stx)
+  (define datum (syntax->datum stx))
+  (define (unwrap-seq value)
+    (if (and (list? value)
+             (= (length value) 2)
+             (eq? (car value) '#%seq))
+        (cadr value)
+        value))
+  (define groups
+    (and (list? datum) (map unwrap-seq datum)))
+  (define (scope-group? group)
+    (and (list? group)
+         (pair? group)
+         (exact-nonnegative-integer? (car group))
+         (andmap symbol? (cdr group))))
+  (cond
+    [(and groups (andmap scope-group? groups))
+     (define compiled
+       (apply append
+              (for/list ([group (in-list groups)])
+                (define count (car group))
+                (for/list ([sig (in-list (cdr group))])
+                  (list sig count count)))))
+     (datum->syntax stx `(quote ,compiled))]
+    [else
+     stx]))
 
 (define-for-syntax (ontology-clause-binding stx)
   (syntax-parse stx
@@ -156,19 +184,19 @@
 
 (define-syntax (forge-run stx)
   (syntax-parse stx
-    [(_ name:id #:for scope:expr #:trace-length trace-length:expr body)
+    [(_ name:id #:for scope #:trace-length trace-length:expr body)
      #`(f:run 'name #,(runtime-ref #'body)
-              #:for scope
+              #:for #,(scope-ref #'scope)
               #:min-tracelength trace-length
               #:max-tracelength trace-length)]
-    [(_ name:id body #:for scope:expr)
-     #'(f:run 'name (forge-body body) #:for scope)]
-    [(_ name:id #:for scope:expr body)
-     #`(f:run 'name #,(runtime-ref #'body) #:for scope)]
-    [(_ name:expr body #:for scope:expr)
-     #'(f:run name (forge-body body) #:for scope)]
-    [(_ name:expr #:for scope:expr body)
-     #'(f:run name (forge-body body) #:for scope)]))
+    [(_ name:id body #:for scope)
+     #`(f:run 'name (forge-body body) #:for #,(scope-ref #'scope))]
+    [(_ name:id #:for scope body)
+     #`(f:run 'name #,(runtime-ref #'body) #:for #,(scope-ref #'scope))]
+    [(_ name:expr body #:for scope)
+     #`(f:run name (forge-body body) #:for #,(scope-ref #'scope))]
+    [(_ name:expr #:for scope body)
+     #`(f:run name (forge-body body) #:for #,(scope-ref #'scope))]))
 
 (define-syntax (forge-check stx)
   (syntax-parse stx

@@ -191,6 +191,7 @@ ${records.join("\n")}
 }
 
 async function prepare() {
+	await rm(generated, { recursive: true, force: true });
 	await mkdir(generated, { recursive: true });
 	const graphs = await scanGraphs();
 	const seen = new Set<string>();

@@ -3,6 +3,9 @@
 (require racket/list
          racket/match
          racket/file
+         racket/port
+         racket/string
+         xml
          "ontology.rkt"
          (only-in forge/choose-lang-specific set-checker-hash! set-ast-checker-hash!)
          (only-in forge/lang/lang-specific-checks forge-checker-hash forge-ast-checker-hash)
@@ -47,6 +50,7 @@
  follow
  matching
  union
+ intersect
  count
  ge
  always
@@ -56,6 +60,7 @@
  run-forge-model
  check-forge-model
  write-forge-run-xml
+ forge-run->text
  )
 
 (struct compiled-forge-model (sigs relations predicates runs checks options) #:transparent)
@@ -114,6 +119,9 @@
 
 (define (union . body)
   (forge-expr 'union body))
+
+(define (intersect . body)
+  (forge-expr 'intersect body))
 
 (define (count expr)
   (forge-expr 'count (list expr)))
@@ -461,6 +469,7 @@
        ['join (f:join/func (compile-arg (first args)) (compile-arg (second args)))]
        ['rjoin (f:join/func (compile-arg (first args)) (compile-arg (second args)))]
        ['union (apply f:+/func (map compile-arg args))]
+       ['intersect (apply f:&/func (map compile-arg args))]
        ['count (f:card/func (compile-arg (first args)))]
        ['ge (f:||/func
              (f:int>/func (compile-arg (first args)) (compile-arg (second args)))
@@ -477,7 +486,29 @@
     [(integer? scope)
      (for/list ([sig (in-list sigs)])
        (list sig scope))]
+    [(and (list? scope)
+          (andmap (lambda (entry)
+                    (and (list? entry)
+                         (pair? entry)
+                         (or (symbol? (car entry))
+                             (string? (car entry)))))
+                  scope))
+     (define sig-by-name
+       (for/hash ([sig (in-list sigs)])
+         (values (f:Sig-name sig) sig)))
+     (for/list ([entry (in-list scope)])
+       (match entry
+         [(list name upper)
+          (list (hash-ref sig-by-name (scope-name->symbol name)) upper)]
+         [(list name lower upper)
+          (list (hash-ref sig-by-name (scope-name->symbol name)) lower upper)]
+         [_ (raise-argument-error 'scope->forge
+                                  "'(signature upper) or '(signature lower upper)"
+                                  entry)]))]
     [else scope]))
+
+(define (scope-name->symbol name)
+  (if (symbol? name) name (string->symbol name)))
 
 (define (model->compiled-forge model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])
   (cond
@@ -577,22 +608,317 @@
                  #:expect (forge-check-expect command)
                  #:options (compiled-forge-model-options compiled))))
 
-(define (write-forge-run-xml run output-path)
+(define (forge-run->xml-string run)
   (define inst (f:tree:get-value (f:Run-result run)))
   (set-box! (f:Run-last-sterling-instance run) inst)
   (define run-spec (f:Run-run-spec run))
   (define options (f:State-options (f:Run-spec-state run-spec)))
-  (define xml
-    (solution-to-XML-string inst
-                            (f:get-relation-map run)
-                            (f:Run-name run)
-                            (format "(run ~a)" (f:Run-name run))
-                            "/dev/null"
-                            (f:get-bitwidth run-spec)
-                            forge-version
-                            #:tuple-annotations (hash)
-                            #:run-options options))
+  (solution-to-XML-string inst
+                          (f:get-relation-map run)
+                          (f:Run-name run)
+                          (format "(run ~a)" (f:Run-name run))
+                          "/dev/null"
+                          (f:get-bitwidth run-spec)
+                          forge-version
+                          #:tuple-annotations (hash)
+                          #:run-options options))
+
+(define (write-forge-run-xml run output-path)
+  (define xml (forge-run->xml-string run))
   (make-parent-directory* output-path)
   (call-with-output-file output-path
     (lambda (out) (display xml out))
     #:exists 'replace))
+
+(struct text-atom (id type) #:transparent)
+(struct text-field (name tuples order) #:transparent)
+(struct text-instance (command filename version atoms fields atom-order type-counts) #:transparent)
+
+(define (forge-run->text run)
+  (forge-xml->text (forge-run->xml-string run)))
+
+(define (forge-xml->text xml)
+  (define instances (parse-forge-xml xml))
+  (cond
+    [(null? instances)
+     (error 'forge-xml->text "Forge XML did not contain an instance")]
+    [(null? (cdr instances))
+     (instance->text (car instances))]
+    [else
+     (trace->text instances)]))
+
+(define (instance->text instance)
+  (define lines
+    (append
+     (list (format "## ~a" (words (text-instance-command instance)))
+           "")
+     (instance-sentences instance)))
+  (string-append (string-join lines "\n") "\n"))
+
+(define (trace->text instances)
+  (define heading (words (text-instance-command (car instances))))
+  (define-values (lines previous-facts)
+    (for/fold ([lines (list (format "## ~a" heading) "")]
+               [previous-facts #f])
+              ([instance (in-list instances)]
+               [step (in-naturals 1)])
+      (define facts (instance-atomic-facts instance))
+      (define step-lines
+        (cond
+          [(not previous-facts)
+           (append (list (format "### step ~a" step))
+                   facts)]
+          [else
+           (define removed (set-subtract/string previous-facts facts))
+           (define added (set-subtract/string facts previous-facts))
+           (cond
+             [(and (null? removed) (null? added))
+              '()]
+             [else
+              (append
+               (list (format "### step ~a" step))
+               (for/list ([fact (in-list removed)])
+                 (format "- ~a" fact))
+               (for/list ([fact (in-list added)])
+                 (format "+ ~a" fact)))])]))
+      (values (append lines step-lines (list ""))
+              facts)))
+  (void previous-facts)
+  (string-append (string-join (drop-right lines 1) "\n") "\n"))
+
+(define (instance-sentences instance)
+  (for/list ([atom-id (in-list (text-instance-atom-order instance))]
+             #:do [(define phrases (atom-phrases instance atom-id))]
+             #:when (pair? phrases))
+    (format "~a ~a."
+            (capitalize
+             (pretty-atom atom-id
+                          (text-atom-type
+                           (hash-ref (text-instance-atoms instance) atom-id))
+                          (text-instance-type-counts instance)))
+            (join-english phrases))))
+
+(define (instance-atomic-facts instance)
+  (define atoms (text-instance-atoms instance))
+  (define type-counts (text-instance-type-counts instance))
+  (define order (for/hash ([id (in-list (text-instance-atom-order instance))]
+                           [index (in-naturals)])
+                  (values id index)))
+  (define facts
+    (for*/list ([field (in-list (text-instance-fields instance))]
+                [tuple (in-list (sort-tuples (text-field-tuples field) order))]
+                #:when (pair? tuple))
+      (define relation (field-relation (text-field-name field)))
+      (format "~a ~a ~a."
+              (pretty-atom (car tuple)
+                           (text-atom-type
+                            (hash-ref atoms (car tuple) (text-atom (car tuple) "")))
+                           type-counts)
+              relation
+              (pretty-tuple (cdr tuple) atoms type-counts relation))))
+  (sort facts string<?))
+
+(define (set-subtract/string left right)
+  (filter (lambda (item) (not (member item right string=?))) left))
+
+(define (parse-forge-xml xml)
+  (define root
+    (xml->xexpr
+     (document-element
+      (read-xml (open-input-string xml)))))
+  (for/list ([instance (in-list (children-named root 'instance))])
+    (parse-forge-instance instance)))
+
+(define (parse-forge-instance instance)
+  (define sig-names (make-hash))
+  (define atoms (make-hash))
+  (define type-counts (make-hash))
+  (define atom-order '())
+  (for ([sig (in-list (children-named instance 'sig))])
+    (define id (attr-ref sig 'ID ""))
+    (define label (attr-ref sig 'label id))
+    (unless (or (string=? id "") (string=? (attr-ref sig 'builtin "") "yes"))
+      (hash-set! sig-names id label)
+      (for ([atom (in-list (children-named sig 'atom))])
+        (define atom-id (attr-ref atom 'label ""))
+        (unless (string=? atom-id "")
+          (hash-set! atoms atom-id (text-atom atom-id label))
+          (hash-update! type-counts label add1 0)
+          (set! atom-order (append atom-order (list atom-id)))))))
+  (define fields
+    (for/list ([(field order) (in-indexed (children-named instance 'field))]
+               #:do [(define name (attr-ref field 'label ""))]
+               #:unless (or (string=? name "")
+                            (string=? name "no-field-guard")))
+      (text-field
+       name
+       (for/list ([tuple (in-list (children-named field 'tuple))])
+         (for/list ([atom (in-list (children-named tuple 'atom))])
+           (attr-ref atom 'label "")))
+       order)))
+  (text-instance
+   (attr-ref instance 'command "")
+   (attr-ref instance 'filename "")
+   (attr-ref instance 'version "")
+   atoms
+   fields
+   (sort atom-order atom-id<? #:key (lambda (atom-id)
+                                      (hash-ref atoms atom-id)))
+   type-counts))
+
+(define (atom-id<? left right)
+  (define left-type (words (text-atom-type left)))
+  (define right-type (words (text-atom-type right)))
+  (cond
+    [(string<? left-type right-type) #t]
+    [(string<? right-type left-type) #f]
+    [else (string<? (text-atom-id left) (text-atom-id right))]))
+
+(define (atom-phrases instance atom-id)
+  (define atoms (text-instance-atoms instance))
+  (define type-counts (text-instance-type-counts instance))
+  (define order (for/hash ([id (in-list (text-instance-atom-order instance))]
+                           [index (in-naturals)])
+                  (values id index)))
+  (for/list ([field (in-list (text-instance-fields instance))]
+             #:do [(define matching
+                     (filter (lambda (tuple)
+                               (and (pair? tuple)
+                                    (string=? (car tuple) atom-id)))
+                             (text-field-tuples field)))]
+             #:when (pair? matching))
+    (define relation (field-relation (text-field-name field)))
+    (define values
+      (for/list ([tuple (in-list (sort-tuples (map cdr matching) order))])
+        (pretty-tuple tuple atoms type-counts relation)))
+    (format "~a ~a" relation (string-join values ", "))))
+
+(define (sort-tuples tuples order)
+  (sort tuples tuple<?
+        #:cache-keys? #t
+        #:key (lambda (tuple)
+                (for/list ([atom-id (in-list tuple)])
+                  (cons (hash-ref order atom-id +inf.0) atom-id)))))
+
+(define (tuple<? left right)
+  (cond
+    [(and (null? left) (null? right)) #f]
+    [(null? left) #t]
+    [(null? right) #f]
+    [(< (caar left) (caar right)) #t]
+    [(> (caar left) (caar right)) #f]
+    [(string<? (cdar left) (cdar right)) #t]
+    [(string<? (cdar right) (cdar left)) #f]
+    [else (tuple<? (cdr left) (cdr right))]))
+
+(define (pretty-tuple tuple atoms type-counts relation)
+  (cond
+    [(null? tuple) "true"]
+    [else
+     (string-join
+      (for/list ([atom-id (in-list tuple)]
+                 [index (in-naturals)])
+        (pretty-atom atom-id
+                     (text-atom-type
+                      (hash-ref atoms atom-id (text-atom atom-id "")))
+                     type-counts
+                     #:context (if (zero? index) relation "")))
+      " to ")]))
+
+(define (pretty-atom atom-id type type-counts #:context [context ""])
+  (match-define (cons base number) (split-number-suffix atom-id))
+  (define type-words (words (if (string=? type "") base type)))
+  (define base-words (words base))
+  (define (class-name value)
+    (string-upcase value))
+  (cond
+    [(= (hash-ref type-counts type 0) 1)
+     (class-name type-words)]
+    [(and (not (string=? number ""))
+          (context-names-type? context type-words))
+     number]
+    [(string=? number "") (class-name base-words)]
+    [(same-words? type-words base-words)
+     (format "~a ~a" (class-name type-words) (display-number number))]
+    [else
+     (format "~a ~a" (class-name base-words) (display-number number))]))
+
+(define (display-number number)
+  (number->string (add1 (string->number number))))
+
+(define (field-relation name)
+  (match (regexp-match #rx"^(.+)-for-[^-]+-[^-]+$" name)
+    [(list _ relation) (words relation)]
+    [_ (words name)]))
+
+(define (split-number-suffix value)
+  (match (regexp-match #rx"^(.+?)([0-9]+)$" value)
+    [(list _ base number) (cons base number)]
+    [_ (cons value "")]))
+
+(define (words value)
+  (string-downcase
+   (string-trim
+    (regexp-replace*
+     #rx"[[:space:]]+"
+     (regexp-replace*
+      #rx"[-_()]+"
+      (regexp-replace*
+       #rx"([a-z0-9])([A-Z])"
+       (format "~a" value)
+       "\\1 \\2")
+      " ")
+     " "))))
+
+(define (same-words? left right)
+  (string=? (regexp-replace* #rx"[[:space:]]+" left "")
+            (regexp-replace* #rx"[[:space:]]+" right "")))
+
+(define (context-names-type? context type)
+  (and (not (string=? context ""))
+       (not (string=? type ""))
+       (let ([context-parts (string-split context)]
+             [type-parts (string-split type)])
+         (and (>= (length context-parts) (length type-parts))
+              (equal? (take-right context-parts (length type-parts))
+                      type-parts)))))
+
+(define (join-english items)
+  (match items
+    ['() ""]
+    [(list item) item]
+    [(list left right) (format "~a and ~a" left right)]
+    [_ (format "~a, and ~a"
+               (string-join (drop-right items 1) ", ")
+               (last items))]))
+
+(define (capitalize value)
+  (if (string=? value "")
+      value
+      (string-append (string-upcase (substring value 0 1))
+                     (substring value 1))))
+
+(define (find-child xexpr name)
+  (for/or ([child (in-list (xexpr-children xexpr))])
+    (and (pair? child) (eq? (car child) name) child)))
+
+(define (children-named xexpr name)
+  (for/list ([child (in-list (xexpr-children xexpr))]
+             #:when (and (pair? child) (eq? (car child) name)))
+    child))
+
+(define (xexpr-attrs xexpr)
+  (match xexpr
+    [(list* (? symbol?) (and attrs (list (list (? symbol?) _) ...)) _) attrs]
+    [_ '()]))
+
+(define (xexpr-children xexpr)
+  (match xexpr
+    [(list* (? symbol?) (list (list (? symbol?) _) ...) children) children]
+    [(list* (? symbol?) children) children]
+    [_ '()]))
+
+(define (attr-ref xexpr name [default #f])
+  (match (assoc name (xexpr-attrs xexpr))
+    [(list _ value) value]
+    [_ default]))

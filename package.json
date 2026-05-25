@@ -2,10 +2,6 @@
 	"name": "nxtui-docs",
 	"private": true,
 	"type": "module",
-	"scripts": {
-		"forge:text": "bun cassette/forge-layout-text.ts",
-		"forge:unicode": "bun cassette/forge-unicode-graph.ts"
-	},
 	"dependencies": {
 		"@forge-fm/forge-graph": "file:../src/forge-graph/packages/forge-graph"
 	},
