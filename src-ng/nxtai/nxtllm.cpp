@@ -5,9 +5,6 @@
 #include <nxtai/openai_types.hpp>
 #include <nxtai/responses_request.hpp>
 
-#include <algorithm>
-#include <charconv>
-#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -168,144 +165,6 @@ struct stream_event
     return nxt::rt::http::iequals(media_type, expected);
 }
 
-class sse_http_parser
-{
-public:
-    [[nodiscard]] std::vector<stream_event>
-    append(std::span<const std::byte> chunk)
-    {
-        bytes_.append(
-            reinterpret_cast<const char *>(chunk.data()), chunk.size());
-
-        auto events = std::vector<stream_event>{};
-        if (!head_) {
-            auto head_end = bytes_.find("\r\n\r\n");
-            if (head_end == std::string::npos)
-                return events;
-
-            auto head_text = std::string_view{bytes_}.substr(0, head_end);
-            head_ = nxt::rt::http::parse_response_head(
-                std::as_bytes(std::span{head_text}));
-            if (!response_status_is_success(*head_))
-                throw nxt::rt::runtime_error{
-                    "OpenAI Responses HTTP error: "
-                    + std::to_string(head_->status) + " " + head_->reason};
-            if (!response_content_type_is(*head_, "text/event-stream"))
-                throw nxt::rt::runtime_error{
-                    "OpenAI Responses expected text/event-stream"};
-
-            chunked_ = nxt::rt::http::is_chunked(*head_);
-            content_length_ = nxt::rt::http::content_length(*head_);
-            body_pos_ = head_end + 4;
-            body_start_ = body_pos_;
-        }
-
-        if (done_)
-            return events;
-
-        if (chunked_)
-            decode_chunked(events);
-        else
-            decode_raw_body(events);
-
-        return events;
-    }
-
-    [[nodiscard]] bool done() const noexcept
-    {
-        return done_;
-    }
-
-private:
-    void feed_sse(std::string_view body, std::vector<stream_event> & events)
-    {
-        for (auto & event : sse_.feed(body)) {
-            if (event.data == "[DONE]") {
-                done_ = true;
-                continue;
-            }
-            auto terminal = event.type == "response.completed"
-                            || event.type == "response.incomplete"
-                            || event.type == "response.failed";
-            events.push_back(
-                stream_event{
-                    .type = std::move(event.type),
-                    .data = std::move(event.data),
-                });
-            if (terminal)
-                done_ = true;
-        }
-    }
-
-    void decode_chunked(std::vector<stream_event> & events)
-    {
-        while (!done_) {
-            auto line_end = bytes_.find("\r\n", body_pos_);
-            if (line_end == std::string::npos)
-                return;
-
-            auto size = nxt::rt::http::parse_chunk_size(
-                std::as_bytes(
-                    std::span{
-                        std::string_view{bytes_}.substr(
-                            body_pos_, line_end - body_pos_)}));
-            auto data_begin = line_end + 2;
-            auto data_end = data_begin + size;
-            if (bytes_.size() < data_end + 2)
-                return;
-            if (bytes_.compare(data_end, 2, "\r\n") != 0)
-                throw nxt::rt::runtime_error{
-                    "chunk data was not followed by CRLF"};
-
-            if (size == 0) {
-                done_ = true;
-                return;
-            }
-
-            feed_sse(
-                std::string_view{bytes_}.substr(data_begin, size), events);
-            body_pos_ = data_end + 2;
-            compact();
-        }
-    }
-
-    void decode_raw_body(std::vector<stream_event> & events)
-    {
-        if (body_pos_ >= bytes_.size())
-            return;
-
-        auto available = bytes_.size() - body_pos_;
-        if (content_length_) {
-            auto consumed = body_pos_ - body_start_;
-            available = std::min(available, *content_length_ - consumed);
-        }
-
-        feed_sse(std::string_view{bytes_}.substr(body_pos_, available), events);
-        body_pos_ += available;
-        if (content_length_ && body_pos_ - body_start_ >= *content_length_)
-            done_ = true;
-        compact();
-    }
-
-    void compact()
-    {
-        if (body_pos_ < 32 * 1024)
-            return;
-        bytes_.erase(0, body_pos_);
-        body_start_ = body_start_ > body_pos_ ? body_start_ - body_pos_ : 0;
-        body_pos_ = 0;
-    }
-
-    std::string bytes_;
-    std::optional<nxt::rt::http::response_head> head_;
-    nxt::http::server_sent_event_parser sse_;
-    std::size_t body_pos_ = 0;
-    std::size_t body_start_ = 0;
-    std::optional<std::size_t> content_length_;
-    bool chunked_ = false;
-    bool done_ = false;
-};
-
 nxt::rt::task<void> stream_openai_response(const llm_request & request)
 {
     auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
@@ -332,23 +191,45 @@ nxt::rt::task<void> stream_openai_response(const llm_request & request)
     auto request_text = nxt::http::serialize(http_request);
     co_await tls.write_all(request_text);
 
-    auto parser = sse_http_parser{};
-    while (!parser.done()) {
-        auto plaintext = co_await tls.read();
-        if (plaintext.inner_type != 23)
-            continue;
+    auto http_storage = std::vector<std::byte>(18 * 1024);
+    auto http_reader =
+        nxt::rt::byte_reader{tls, std::span{http_storage}};
+    auto head = co_await nxt::rt::http::read_response_head(http_reader);
+    if (!response_status_is_success(head))
+        throw nxt::rt::runtime_error{
+            "OpenAI Responses HTTP error: " + std::to_string(head.status)
+            + " " + head.reason};
+    if (!response_content_type_is(head, "text/event-stream"))
+        throw nxt::rt::runtime_error{
+            "OpenAI Responses expected text/event-stream"};
 
-        for (auto const & event : parser.append(plaintext.content)) {
-            if (event.type == "response.output_text.delta") {
-                auto delta =
-                    event.read<nxt::ai::openai::text_delta_event>();
-                std::cout << delta.delta << std::flush;
-            } else if (event.type == "response.failed"
-                       || event.type == "response.incomplete") {
-                throw nxt::rt::runtime_error{
-                    "OpenAI Responses terminal event: " + event.type};
-            }
+    auto body = nxt::rt::http::read_response_body(http_reader, head);
+    auto sse_storage = std::vector<std::byte>(18 * 1024);
+    auto sse_reader = nxt::rt::byte_reader{body, std::span{sse_storage}};
+    while (auto sse = co_await nxt::rt::http::parse_sse_event(sse_reader)) {
+        if (sse->data == "[DONE]")
+            break;
+
+        auto terminal = sse->type == "response.completed"
+                        || sse->type == "response.incomplete"
+                        || sse->type == "response.failed";
+        auto event = stream_event{
+            .type = std::move(sse->type),
+            .data = std::move(sse->data),
+        };
+
+        if (event.type == "response.output_text.delta") {
+            auto delta = event.read<nxt::ai::openai::text_delta_event>();
+            std::cout << delta.delta << std::flush;
+        } else if (
+            event.type == "response.failed"
+            || event.type == "response.incomplete") {
+            throw nxt::rt::runtime_error{
+                "OpenAI Responses terminal event: " + event.type};
         }
+
+        if (terminal)
+            break;
     }
 
     std::cout << '\n';

@@ -5,12 +5,15 @@
 #include "nxt/tls.hpp"
 #include "nxt/tls/cert.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace nxt::rt::tls {
 
@@ -122,6 +125,31 @@ public:
         }
     }
 
+    task<read_result> read_some(std::span<std::byte> dst)
+    {
+        require_handshake();
+        if (dst.empty())
+            co_return read_result{.bytes = 0, .eof = false};
+
+        if (pending_offset_ == pending_.size()) {
+            pending_.clear();
+            pending_offset_ = 0;
+            do {
+                auto plaintext = co_await read();
+                if (plaintext.inner_type == 23) {
+                    pending_ = std::move(plaintext.content);
+                    break;
+                }
+            } while (pending_.empty());
+        }
+
+        auto pending = std::span{pending_}.subspan(pending_offset_);
+        auto n = std::min(dst.size(), pending.size());
+        std::memcpy(dst.data(), pending.data(), n);
+        pending_offset_ += n;
+        co_return read_result{.bytes = n, .eof = false};
+    }
+
 private:
     void require_handshake() const
     {
@@ -132,6 +160,8 @@ private:
     Reader & reader_;
     Writer & writer_;
     nxt::tls::tls13_application_keys application_keys_;
+    std::vector<std::byte> pending_;
+    std::size_t pending_offset_ = 0;
     bool handshaken_ = false;
 };
 

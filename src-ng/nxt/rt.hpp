@@ -11,6 +11,5 @@
 #include "nxt/rt/exceptions.hpp"
 #include "nxt/rt/fs.hpp"
 #include "nxt/rt/http.hpp"
-#include "nxt/rt/pipe.hpp"
 #include "nxt/rt/task.hpp"
 #include "nxt/rt/wish.hpp"

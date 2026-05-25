@@ -1,11 +1,12 @@
 #pragma once
 
 #include "nxt/rt/buffers.hpp"
-#include "nxt/rt/pipe.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
+#include <cstring>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -48,6 +49,14 @@ struct response_head
     int status = 0;
     std::string reason;
     std::vector<header> headers;
+};
+
+struct server_sent_event
+{
+    std::string type = "message";
+    std::string data;
+    std::string id;
+    std::optional<int> retry_ms;
 };
 
 inline char ascii_lower(char c)
@@ -298,65 +307,209 @@ inline std::size_t parse_chunk_size(std::span<const std::byte> line)
 }
 
 template<typename Reader>
-pipe<std::span<const std::byte>>
-read_content_length(Reader & reader, std::size_t length)
+class http_body_reader
 {
-    auto remaining = length;
-    while (remaining > 0) {
-        auto chunk = co_await reader.take_some(remaining);
-        if (!chunk)
-            throw protocol_error{"unexpected end of content-length body"};
-        remaining -= chunk->size();
-        co_yield *chunk;
+public:
+    http_body_reader(Reader & reader, const response_head & head)
+        : reader_(&reader)
+    {
+        if (is_chunked(head)) {
+            mode_ = mode::chunked;
+        } else if (auto length = content_length(head)) {
+            mode_ = mode::content_length;
+            remaining_ = *length;
+            done_ = remaining_ == 0;
+        } else {
+            mode_ = mode::until_eof;
+        }
     }
-}
 
-template<typename Reader>
-pipe<std::span<const std::byte>> read_chunked(Reader & reader)
-{
-    while (true) {
-        auto line = co_await reader.take_until("\r\n");
-        auto size = parse_chunk_size(line);
-        if (size == 0) {
-            auto trailers = co_await reader.take_until("\r\n");
-            if (!trailers.empty())
-                throw protocol_error{"chunk trailers are not supported"};
-            co_return;
+    task<std::optional<std::span<const std::byte>>>
+    next(std::size_t limit = std::numeric_limits<std::size_t>::max())
+    {
+        if (done_)
+            co_return std::nullopt;
+
+        switch (mode_) {
+        case mode::content_length:
+            co_return co_await next_content_length(limit);
+        case mode::chunked:
+            co_return co_await next_chunked(limit);
+        case mode::until_eof:
+            co_return co_await next_until_eof(limit);
         }
 
-        auto body = read_content_length(reader, size);
-        while (auto chunk = co_await body.next())
-            co_yield *chunk;
-
-        auto crlf = co_await reader.take_until("\r\n");
-        if (!crlf.empty())
-            throw protocol_error{"chunk data was not followed by CRLF"};
+        co_return std::nullopt;
     }
+
+    task<read_result> read_some(std::span<std::byte> dst)
+    {
+        if (dst.empty())
+            co_return read_result{.bytes = 0, .eof = done_};
+
+        auto chunk = co_await next(dst.size());
+        if (!chunk)
+            co_return read_result{.bytes = 0, .eof = true};
+
+        std::memcpy(dst.data(), chunk->data(), chunk->size());
+        co_return read_result{
+            .bytes = chunk->size(),
+            .eof = done_ && chunk->empty(),
+        };
+    }
+
+private:
+    enum class mode
+    {
+        content_length,
+        chunked,
+        until_eof,
+    };
+
+    task<std::optional<std::span<const std::byte>>>
+    next_content_length(std::size_t limit)
+    {
+        if (remaining_ == 0) {
+            done_ = true;
+            co_return std::nullopt;
+        }
+
+        auto chunk = co_await reader_->take_some(std::min(limit, remaining_));
+        if (!chunk)
+            throw protocol_error{"unexpected end of content-length body"};
+
+        remaining_ -= chunk->size();
+        if (remaining_ == 0)
+            done_ = true;
+        co_return chunk;
+    }
+
+    task<std::optional<std::span<const std::byte>>>
+    next_chunked(std::size_t limit)
+    {
+        while (true) {
+            if (remaining_ > 0) {
+                auto chunk =
+                    co_await reader_->take_some(std::min(limit, remaining_));
+                if (!chunk)
+                    throw protocol_error{"unexpected end of chunked body"};
+
+                remaining_ -= chunk->size();
+                if (remaining_ == 0 && !chunk->empty()) {
+                    auto crlf = co_await reader_->take_until("\r\n");
+                    if (!crlf.empty())
+                        throw protocol_error{
+                            "chunk data was not followed by CRLF"};
+                }
+                co_return chunk;
+            }
+
+            auto line = co_await reader_->take_until("\r\n");
+            auto size = parse_chunk_size(line);
+            if (size == 0) {
+                auto trailers = co_await reader_->take_until("\r\n");
+                if (!trailers.empty())
+                    throw protocol_error{"chunk trailers are not supported"};
+                done_ = true;
+                co_return std::nullopt;
+            }
+            remaining_ = size;
+        }
+    }
+
+    task<std::optional<std::span<const std::byte>>>
+    next_until_eof(std::size_t limit)
+    {
+        auto chunk = co_await reader_->take_some(limit);
+        if (!chunk)
+            done_ = true;
+        co_return chunk;
+    }
+
+    Reader * reader_;
+    mode mode_ = mode::until_eof;
+    std::size_t remaining_ = 0;
+    bool done_ = false;
+};
+
+template<typename Reader>
+http_body_reader(Reader &, const response_head &) -> http_body_reader<Reader>;
+
+template<typename Reader>
+http_body_reader<Reader>
+read_response_body(Reader & reader, const response_head & head)
+{
+    return http_body_reader<Reader>{reader, head};
 }
 
 template<typename Reader>
-pipe<std::span<const std::byte>>
-read_response_body(Reader & reader, const response_head & head)
+task<std::optional<server_sent_event>>
+parse_sse_event(Reader & reader)
 {
-    if (is_chunked(head)) {
-        auto body = read_chunked(reader);
-        while (auto chunk = co_await body.next())
-            co_yield *chunk;
-        co_return;
-    }
-
-    if (auto length = content_length(head)) {
-        auto body = read_content_length(reader, *length);
-        while (auto chunk = co_await body.next())
-            co_yield *chunk;
-        co_return;
-    }
+    auto event = server_sent_event{};
+    auto have_data = false;
+    auto have_fields = false;
 
     while (true) {
-        auto chunk = co_await reader.take_some();
-        if (!chunk)
-            co_return;
-        co_yield *chunk;
+        auto raw = std::span<const std::byte>{};
+        try {
+            raw = co_await reader.take_until("\n");
+        } catch (const end_of_stream &) {
+            if (have_data) {
+                if (!event.data.empty() && event.data.back() == '\n')
+                    event.data.pop_back();
+                co_return std::move(event);
+            }
+            if (have_fields)
+                throw protocol_error{"unterminated server-sent event"};
+            co_return std::nullopt;
+        }
+
+        if (!raw.empty() && raw.back() == std::byte{'\r'})
+            raw = raw.first(raw.size() - 1);
+
+        if (raw.empty()) {
+            if (have_data) {
+                if (!event.data.empty() && event.data.back() == '\n')
+                    event.data.pop_back();
+                co_return std::move(event);
+            }
+            have_fields = false;
+            continue;
+        }
+
+        have_fields = true;
+
+        auto text = as_string_view(raw);
+        if (text.front() == ':')
+            continue;
+
+        auto colon = text.find(':');
+        auto field = colon == std::string_view::npos ? text
+                                                     : text.substr(0, colon);
+        auto value = colon == std::string_view::npos
+                         ? std::string_view{}
+                         : text.substr(colon + 1);
+        if (!value.empty() && value.front() == ' ')
+            value.remove_prefix(1);
+
+        if (field == "data") {
+            event.data += value;
+            event.data += '\n';
+            have_data = true;
+        } else if (field == "event") {
+            event.type = value.empty() ? "message" : std::string{value};
+        } else if (field == "id") {
+            if (value.find('\0') == std::string_view::npos)
+                event.id = std::string{value};
+        } else if (field == "retry") {
+            auto retry = 0;
+            auto * first = value.data();
+            auto * last = value.data() + value.size();
+            auto [ptr, ec] = std::from_chars(first, last, retry);
+            if (!value.empty() && ec == std::errc{} && ptr == last)
+                event.retry_ms = retry;
+        }
     }
 }
 
