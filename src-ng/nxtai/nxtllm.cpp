@@ -645,8 +645,8 @@ nxt::rt::task<void> print_tls_ready(
     if (!nxt::rt::has_terminal_surface())
         co_return;
 
-    if (trace != nullptr && tls_span)
-        nxt::rt::print(
+    if (trace != nullptr && tls_span) {
+        co_await nxt::rt::print(
             nxt::ai::trace_tui::render_span_waterfall(
                 *trace,
                 tls_span,
@@ -656,8 +656,10 @@ nxt::rt::task<void> print_tls_ready(
                     .subject = "api.openai.com",
                     .accent = nxt::ai::tool_tui::teal_300,
                 }));
-    else
-        nxt::rt::print_block("tls  api.openai.com  TLS 1.3 handshake\n");
+    } else {
+        co_await nxt::rt::print_block(
+            "tls  api.openai.com  TLS 1.3 handshake\n");
+    }
     co_return;
 }
 
@@ -806,7 +808,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             auto summary = std::move(thought);
             thought.clear();
             if (nxt::rt::has_terminal_surface() && !summary.empty())
-                nxt::rt::print(
+                co_await nxt::rt::print(
                     nxt::ai::tool_tui::thought_block(std::move(summary)));
             co_await publisher.publish(true);
         } else if (event.type == "response.output_text.delta") {
@@ -931,14 +933,15 @@ run_tool_phase(
     co_return take_phase_result(std::move(deed));
 }
 
-void print_assistant_if_terminal(std::string & assistant_text)
+nxt::rt::task<void> print_assistant_if_terminal(std::string & assistant_text)
 {
     if (!nxt::rt::has_terminal_surface() || assistant_text.empty())
-        return;
-    nxt::rt::print(
+        co_return;
+    co_await nxt::rt::print(
         nxt::ai::tool_tui::assistant_block(
             std::move(assistant_text)));
     assistant_text.clear();
+    co_return;
 }
 
 template<typename ToolSet>
@@ -968,7 +971,7 @@ nxt::rt::task<void> run_agent_loop(
         auto calls =
             nxt::ai::tools::function_calls_from_items(response.output_items);
         if (calls.empty()) {
-            print_assistant_if_terminal(assistant_text);
+            co_await print_assistant_if_terminal(assistant_text);
             status = "done";
             co_await nxt::rt::draw(
                 agent_layout(

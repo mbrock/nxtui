@@ -141,7 +141,7 @@ public:
             nxt::tui::AnyLayout{std::forward<Layout>(layout)});
     }
 
-    void print_block(std::string text)
+    [[nodiscard]] bool queue_print_block(std::string text)
     {
         auto published = commands_.try_publish(
             terminal_command{
@@ -150,6 +150,12 @@ public:
             });
         if (published)
             signal_damage();
+        return published;
+    }
+
+    void print_block(std::string text)
+    {
+        (void)queue_print_block(std::move(text));
     }
 
     template<nxt::tui::Layout Layout>
@@ -157,6 +163,12 @@ public:
     {
         print_block(
             render_scrollback_layout(std::forward<Layout>(layout)));
+    }
+
+    template<nxt::tui::Layout Layout>
+    [[nodiscard]] std::string render_print_layout(Layout && layout)
+    {
+        return render_scrollback_layout(std::forward<Layout>(layout));
     }
 
     task<void> run_terminal_owner(
@@ -221,9 +233,10 @@ public:
         cleaned_up_ = true;
 
         auto out = std::ostringstream{};
-        flush_output_queue(out);
+        drain_commands();
         if (has_terminal_surface())
             compositor_.set_hud_height(0 * ln, size_.h, out);
+        flush_output_queue(out);
         if (has_terminal_surface()) {
             auto restore = std::string{};
             auto w = nxt::ansi::Writer{restore};
@@ -580,15 +593,46 @@ inline bool has_terminal_surface()
     return require_current_ui_runtime().has_terminal_surface();
 }
 
-inline void print_block(std::string text)
+class print_block_awaiter
 {
-    require_current_ui_runtime().print_block(std::move(text));
+public:
+    explicit print_block_awaiter(std::string text)
+        : text_(std::move(text))
+    {}
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return true;
+    }
+
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+
+    void await_resume()
+    {
+        throw_if_stop_requested();
+        auto & ui = require_current_ui_runtime();
+        if (ui.stop_requested() || !ui.queue_print_block(std::move(text_)))
+            throw operation_cancelled{};
+    }
+
+private:
+    std::string text_;
+};
+
+[[nodiscard]] inline print_block_awaiter print_block(std::string text)
+{
+    throw_if_stop_requested();
+    return print_block_awaiter{std::move(text)};
 }
 
 template<nxt::tui::Layout Layout>
-void print(Layout && layout)
+[[nodiscard]] print_block_awaiter print(Layout && layout)
 {
-    require_current_ui_runtime().print(std::forward<Layout>(layout));
+    throw_if_stop_requested();
+    auto text =
+        require_current_ui_runtime().render_print_layout(
+            std::forward<Layout>(layout));
+    return print_block_awaiter{std::move(text)};
 }
 
 inline void request_ui_shutdown()
