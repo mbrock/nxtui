@@ -1,35 +1,27 @@
 #include <nxt/rt.hpp>
-#include <nxt/rt/cares.hpp>
+#include <nxt/rt/net.hpp>
+#include <nxt/rt/tls.hpp>
 #include <nxt/http.hpp>
-#include <nxt/tls.hpp>
-#include <nxt/tls/cert.hpp>
-#include <nxt/unique-fd.hpp>
 #include <nxtai/openai_types.hpp>
 #include <nxtai/responses_request.hpp>
 
 #include <algorithm>
 #include <charconv>
-#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
-#include <fcntl.h>
 #include <iostream>
 #include <optional>
-#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <sys/socket.h>
-#include <system_error>
 #include <utility>
 #include <vector>
 
 namespace {
 
 using llm_request = nxt::ai::responses::openai_responses_request;
-using bytes = nxt::tls::bytes;
 
 constexpr std::size_t default_max_output_tokens = 128000;
 
@@ -142,45 +134,6 @@ llm_request make_request(const cli_options & options)
                                  : options.reasoning_summary,
         .store = options.store,
     };
-}
-
-void set_close_on_exec(int fd)
-{
-    auto flags = ::fcntl(fd, F_GETFD, 0);
-    if (flags >= 0)
-        (void) ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
-}
-
-nxt::rt::task<nxt::unique_fd>
-connect_address(nxt::rt::resolved_address address)
-{
-    auto fd = nxt::unique_fd{::socket(
-        address.family,
-        address.socktype == 0 ? SOCK_STREAM : address.socktype,
-        address.protocol)};
-    if (fd.get() < 0)
-        throw nxt::rt::runtime_error{
-            "socket: "
-            + std::string{std::generic_category().message(errno)}};
-
-    set_close_on_exec(fd.get());
-    co_await nxt::rt::op::connect::from(
-        fd.get(), address.sockaddr_ptr(), address.address_size);
-    co_return std::move(fd);
-}
-
-nxt::rt::task<nxt::unique_fd>
-connect_tcp(std::string host, std::string port)
-{
-    auto resolver = nxt::rt::cares_resolver{};
-    auto addresses = co_await resolver.getaddrinfo(host, port);
-    if (addresses.empty())
-        throw nxt::rt::runtime_error{"no addresses resolved for " + host};
-
-    co_return co_await nxt::rt::wait_any_range(
-        addresses | std::views::transform([](auto const & address) {
-            return connect_address(address);
-        }));
 }
 
 struct stream_event
@@ -355,7 +308,7 @@ private:
 
 nxt::rt::task<void> stream_openai_response(const llm_request & request)
 {
-    auto socket = co_await connect_tcp("api.openai.com", "443");
+    auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
     auto socket_output = nxt::rt::byte_writer<nxt::rt::socket_sink>{
         nxt::rt::socket_sink{socket.get()},
         4096,
@@ -367,71 +320,8 @@ nxt::rt::task<void> stream_openai_response(const llm_request & request)
         std::span{input_storage},
     };
 
-    auto hello = nxt::tls::make_tls13_client_hello("api.openai.com");
-    co_await socket_output.write_all(hello.record);
-
-    auto record = co_await nxt::tls::read_tls_record(reader);
-    auto server_hello = nxt::tls::parse_tls13_server_hello(record);
-    auto shared_secret = nxt::crypto::x25519_dh(
-        hello.key_pair.secret_key, server_hello.key_share);
-    nxt::tls::require_tls(
-        shared_secret.has_value(), "X25519 shared secret failed");
-
-    auto transcript =
-        nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
-    auto handshake_keys =
-        nxt::tls::derive_tls13_handshake_keys(*shared_secret, transcript);
-
-    auto leaf_public_key = std::optional<bytes>{};
-    auto saw_server_finished = false;
-    while (!saw_server_finished) {
-        record = co_await nxt::tls::read_tls_record(reader);
-        if (record.type == 20)
-            continue;
-
-        auto plaintext =
-            nxt::tls::open_tls13_record(handshake_keys.server, record);
-        if (plaintext.inner_type != 22)
-            continue;
-
-        for (auto const & message :
-             nxt::tls::split_handshake_messages(plaintext.content)) {
-            auto type = std::to_integer<std::uint8_t>(message[0]);
-            if (type == 11) {
-                auto cert = nxt::tls::parse_tls13_certificate(message);
-                leaf_public_key =
-                    nxt::tls::extract_p256_public_key_from_certificate(
-                        cert.leaf_der);
-            } else if (type == 15) {
-                nxt::tls::require_tls(
-                    leaf_public_key.has_value(),
-                    "certificate_verify arrived before certificate");
-                auto cert_verify =
-                    nxt::tls::parse_tls13_certificate_verify(message);
-                auto ok = nxt::tls::verify_certificate_verify(
-                    *leaf_public_key, transcript, cert_verify);
-                nxt::tls::require_tls(
-                    ok, "CertificateVerify signature failed");
-            } else if (type == 20) {
-                auto received = nxt::tls::parse_tls13_finished(message);
-                auto ok = nxt::tls::verify_finished(
-                    handshake_keys.server.traffic_secret,
-                    transcript,
-                    received);
-                nxt::tls::require_tls(ok, "server Finished failed");
-                saw_server_finished = true;
-            }
-            nxt::tls::put_bytes(transcript, message);
-        }
-    }
-
-    auto application_keys = nxt::tls::derive_tls13_application_keys(
-        handshake_keys.secret, transcript);
-    auto client_finished = nxt::tls::make_finished_message(
-        handshake_keys.client.traffic_secret, transcript);
-    co_await socket_output.write_all(
-        nxt::tls::seal_tls13_record(handshake_keys.client, 22, client_finished));
-    nxt::tls::put_bytes(transcript, client_finished);
+    auto tls = nxt::rt::tls::tls13_client_session{reader, socket_output};
+    co_await tls.handshake("api.openai.com");
 
     auto http_request =
         nxt::ai::responses::openai_responses_http_request(request);
@@ -440,19 +330,11 @@ nxt::rt::task<void> stream_openai_response(const llm_request & request)
             header.value = "close";
     }
     auto request_text = nxt::http::serialize(http_request);
-    co_await socket_output.write_all(
-        nxt::tls::seal_tls13_record(
-            application_keys.client,
-            23,
-            nxt::rt::as_bytes(request_text)));
+    co_await tls.write_all(request_text);
 
     auto parser = sse_http_parser{};
     while (!parser.done()) {
-        record = co_await nxt::tls::read_tls_record(reader);
-        auto plaintext =
-            nxt::tls::open_tls13_record(application_keys.server, record);
-        if (plaintext.inner_type == 21)
-            throw nxt::rt::runtime_error{"received TLS alert"};
+        auto plaintext = co_await tls.read();
         if (plaintext.inner_type != 23)
             continue;
 
