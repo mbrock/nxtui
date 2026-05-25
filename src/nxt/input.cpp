@@ -1,4 +1,4 @@
-#include "nxtio/input.hpp"
+#include "nxt/input.hpp"
 
 #include <cerrno>
 #include <cstdlib>

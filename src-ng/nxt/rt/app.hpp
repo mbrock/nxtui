@@ -4,8 +4,8 @@
 #include "nxt/rt/event.hpp"
 #include "nxt/rt/task.hpp"
 
+#include <nxt/input.hpp>
 #include <nxt/units.hpp>
-#include <nxtio/input.hpp>
 
 #if defined(__linux__)
 #include "nxt/rt/uring_wand.hpp"

@@ -15,6 +15,8 @@ zones, and explicit UI/runtime capabilities.
 - `nxt::rt::wand` implementations for platform waiting.
 - `nxt::rt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments that do not require libcoro.
+- Core terminal input types and parsing in `src/nxt/input.hpp`, shared by
+  both the ng runtime and the legacy `nxtio` shim.
 
 The default build now leaves the old application stack out.  That stack
 still depends on libcoro through
@@ -33,6 +35,7 @@ process, signal, and `nxtai` code enters async through those aliases.
 | `scheduler.poll(...)` | `nxt::rt::op::poll*` | Convert call sites once they are inside an `nxt::rt::task`. |
 | `nxt::queue<T>` | `nxt::rt` channel primitive | This is the first missing primitive for UI input, resize, and tool streams. |
 | `nxt::event` | `nxt::rt` event/condition primitive | Needed for damage notifications and small UI coordination points. |
+| `nxtio/input.hpp` | `nxt/input.hpp` | Done. The old header is now only a compatibility include. |
 | `nxt::latch` | zone join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
 | `spawn_detached` | `nxt::rt::fork` in a zone | Detached work should still be owned by a root zone. |
 | `nxt::scope` | `nxt::rt::task_zone` + UI capabilities | Scope currently mixes lifetime, scheduler, and yard state. Split those. |

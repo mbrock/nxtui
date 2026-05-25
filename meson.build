@@ -144,6 +144,7 @@ nxt_core_sources = files(
   'src/nxt/compositor.cpp',
   'src/nxt/crypto.cpp',
   'src/nxt/glyph-table.cpp',
+  'src/nxt/input.cpp',
   'src/nxt/raster.cpp',
 )
 
@@ -250,7 +251,6 @@ if nxt_legacy_runtime_enabled
     'src/nxtio/app.cpp',
     'src/nxtio/arrow.cpp',
     'src/nxtio/http.cpp',
-    'src/nxtio/input.cpp',
     'src/nxtio/net.cpp',
     'src/nxtio/short_id.cpp',
     'src/nxtio/signal-pipe.cpp',
@@ -319,6 +319,7 @@ if get_option('tests')
   endif
 
   nxt_ng_test_sources = files(
+    'test/ng-include-test.cpp',
     'test/ng-runtime-test.cpp',
     'src/nxtio/stacktrace.cpp',
     'test/test-main.cpp',

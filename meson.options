@@ -4,7 +4,7 @@ option('demo', type : 'boolean', value : true,
 option('tests', type : 'boolean', value : true,
   description : 'Build and register tests')
 
-option('llm_tool', type : 'boolean', value : true,
+option('llm_tool', type : 'boolean', value : false,
   description : 'Build nxtllm trace/debug tool, requires nanoarrow IPC')
 
 option('legacy_runtime', type : 'boolean', value : false,

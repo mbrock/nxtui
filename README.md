@@ -98,45 +98,45 @@ auto jobs_view = list(jobs, [](const Job & job) {
 
 ## Running an App
 
-`nxtio` contains the runtime pieces: the terminal compositor, signal handling,
-and coroutine scheduler integration. It is currently implemented on top of
-`libcoro`; the intent is to keep the core layout/raster layer separate from
-that runtime choice.
+New application work should start on `nxt::rt`, the structured coroutine
+runtime in `src-ng`. It owns a `deck`, a platform I/O wand, a root task zone,
+and small app-facing queues for input, resize, and damage notifications.
 
-The high-level runner builds around a `yard`: draw the current layout, spawn
-child work, print scrollback output, and request shutdown from the same
-runtime-backed handle.
+The current smallest TUI entry point is `ng-tui-demo`: it renders a real
+terminal compositor frame from an `nxt::rt::runtime` task and animates with
+runtime sleeps.
 
 ```cpp
 #include <nxt/tui.hpp>
-#include <nxtio/process.hpp>
+#include <nxt/rt/app.hpp>
 
 int main()
 {
     using namespace std::chrono_literals;
     using namespace nxt::tui;
 
-    return nxt::ui::main([](nxt::ui::UIRuntime & runtime) {
-        nxt::ui::run2(runtime, [](nxt::ui::yard & self) -> nxt::task<> {
-            for (int i = 0; i <= 100; ++i) {
-                self.draw(column(
-                    text("working", fg(nxt::Rgba8::cyan()) | bold),
-                    progress_bar(i * nxt::percent)));
-                co_await self.sleep(30ms);
-            }
-
-            self.request_shutdown();
-        });
+    auto runtime = nxt::rt::runtime{};
+    runtime.run([]() -> nxt::rt::task<void> {
+        for (int i = 0; i <= 100; ++i) {
+            // Render a layout through TerminalCompositor here.
+            co_await nxt::rt::op::timeout::after(30ms);
+        }
     });
 }
 ```
 
-The runtime owns terminal state and exposes:
+The legacy `nxtio` runner is still available with `-Dlegacy_runtime=true` while
+the remaining app code migrates. That path builds around a `yard`: draw the
+current layout, spawn child work, print scrollback output, and request shutdown
+from the same runtime-backed handle.
 
-- `signal_damage()` to request a redraw
-- `println()` to write ordinary log lines below the HUD
-- `sleep()` and `scheduler()` for coroutine timing and I/O integration
-- terminal size and shutdown state helpers
+The ng runtime owns:
+
+- `signal_damage()` and `damage_event()` for redraw coordination
+- input and resize channels
+- `sleep()` and root-zone `run()` entry points
+- the platform wand used by lower-level async file, socket, DNS, TLS, and HTTP
+  operations
 
 ## Partial HUD Behavior
 
@@ -171,9 +171,11 @@ integers throughout layout and rendering code.
 ## Structure
 
 - `src/nxt` contains core terminal, raster, units, and layout code.
-- `src/nxtio` contains the runtime and coroutine-facing I/O pieces.
-- `test` contains raster and terminal compositor tests.
-- `subprojects/libcoro` vendors the coroutine/runtime dependency.
+- `src-ng/nxt/rt` contains the new structured coroutine runtime.
+- `src/nxtio` contains the legacy libcoro-backed app runtime.
+- `test` contains raster, terminal compositor, and runtime tests.
+- `subprojects/libcoro` vendors the old runtime dependency for
+  `-Dlegacy_runtime=true` builds.
 - `vendor/mdspan` vendors the header-only mdspan implementation.
 - `vendor/libvterm` is used by the terminal tests.
 
@@ -187,27 +189,30 @@ meson compile -C build
 meson test -C build
 ```
 
-The default build includes the `nxtdemo` UI demo binary, the `nxtllm`
-trace/debug tool, and the test suite. Disable `nxtllm` explicitly if you want a
-smaller local build:
+The default build is the new-runtime lane: it builds core layout/raster code,
+`ng-tests`, and the ng demos without pulling in `libcoro`. Try the small TUI
+demo with:
 
 ```sh
-meson setup build -Dllm_tool=false
+build/demo/ng-tui-demo
 ```
 
-Install `cpptrace` if you want richer crash stack traces in the TUI runtime:
+The legacy app stack remains opt-in while migration is in progress:
 
 ```sh
-brew install cpptrace
+meson setup build-legacy -Dlegacy_runtime=true -Dllm_tool=true
+meson compile -C build-legacy nxtdemo nxtllm nxt-tests
 ```
-
-Meson enables it only after a real compile/link probe, so compilers that find
-an incompatible system package will fall back to the built-in stacktrace shim.
 
 `nxtdemo` bundles all UI demos behind subcommands (`nxtdemo build_sim`,
 `nxtdemo cgroup_browser`, `nxtdemo shell_scope`). When the Arrow C++ Dataset and
 Parquet development packages are installed, `nxtdemo span_browser` is also
 available for browsing a Hive-partitioned span archive.
+
+Install `cpptrace` if you want richer crash stack traces in the legacy TUI
+runtime. Meson enables it only after a real compile/link probe, so compilers
+that find an incompatible system package will fall back to the built-in
+stacktrace shim.
 
 The API is still in motion, but the intended direction is stable: small
 composable layout values, a typed raster underneath, and a runtime that works
