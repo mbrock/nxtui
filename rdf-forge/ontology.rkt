@@ -10,8 +10,10 @@
  define-class
  define-property
  ontology-declared-terms
+ ontology-property
  ontology->turtle
  term-forge-name
+ term-rdf-name
  term-iri)
 
 (struct ontology (prefix base terms) #:transparent)
@@ -30,36 +32,85 @@
              (append (if abstract (list (cons 'abstract #t)) '())
                      (if parent (list (cons 'subclass-of parent)) '()))))
 
-(define (make-property-term ont local #:domain [domain #f] #:range [range #f] #:inverse-of [inverse #f])
+(define (make-property-term ont local
+                            #:domain [domain #f]
+                            #:range [range #f]
+                            #:inverse-of [inverse #f]
+                            #:forge-name [forge-name #f]
+                            #:rdf-name [rdf-name #f])
   (make-term ont local 'property
              (append (if domain (list (cons 'domain domain)) '())
                      (if range (list (cons 'range range)) '())
-                     (if inverse (list (cons 'inverse-of inverse)) '()))))
+                     (if inverse (list (cons 'inverse-of inverse)) '())
+                     (if forge-name (list (cons 'forge-name forge-name)) '())
+                     (if rdf-name (list (cons 'rdf-name rdf-name)) '()))))
+
+(define (overload-forge-name local domain range)
+  (string->symbol
+   (format "~a-for-~a-~a"
+           local
+           (term-local domain)
+           (term-local range))))
+
+(define (make-property-family ont local overloads)
+  (define terms
+    (for/list ([overload (in-list overloads)])
+      (define domain (car overload))
+      (define range (cadr overload))
+      (define forge-name (overload-forge-name local domain range))
+      (make-property-term ont forge-name
+                          #:domain domain
+                          #:range range
+                          #:rdf-name local)))
+  (case (length terms)
+    [(1) (car terms)]
+    [else
+     (lambda (range #:domain [domain #f])
+       (ontology-property ont local #:domain domain #:range range))]))
 
 (define (ontology-declared-terms ont)
   (reverse (unbox (ontology-terms ont))))
 
+(define (option-ref options key [fallback #f])
+  (define found (assoc key options))
+  (if found (cdr found) fallback))
+
+(define (ontology-property ont local #:domain [domain #f] #:range [range #f])
+  (define matches
+    (filter (lambda (value)
+              (and (term? value)
+                   (eq? (term-kind value) 'property)
+                   (eq? (term-rdf-name value) local)
+                   (or (not domain)
+                       (eq? (option-ref (term-options value) 'domain) domain))
+                   (or (not range)
+                       (eq? (option-ref (term-options value) 'range) range))))
+            (ontology-declared-terms ont)))
+  (case (length matches)
+    [(1) (car matches)]
+    [(0) (error 'ontology-property "no property named ~a with requested domain/range" local)]
+    [else (error 'ontology-property "ambiguous property named ~a with requested domain/range" local)]))
+
 (define (term-forge-name value)
-  (symbol->string (term-local value)))
+  (symbol->string (option-ref (term-options value) 'forge-name (term-local value))))
+
+(define (term-rdf-name value)
+  (option-ref (term-options value) 'rdf-name (term-local value)))
 
 (define (term-iri value)
   (string-append (ontology-base (term-ontology value))
-                 (symbol->string (term-local value))))
+                 (symbol->string (term-rdf-name value))))
 
 (define (turtle-name value)
   (format "~a:~a"
           (ontology-prefix (term-ontology value))
-          (term-local value)))
+          (term-rdf-name value)))
 
 (define (turtle-literal value)
   (cond
     [(term? value) (turtle-name value)]
     [(symbol? value) (format "~a" value)]
     [else (format "~s" value)]))
-
-(define (option-ref options key [fallback #f])
-  (define found (assoc key options))
-  (if found (cdr found) fallback))
 
 (define (term->turtle value)
   (define options (term-options value))
@@ -119,6 +170,19 @@
   (syntax-parse stx
     [(_ ont:id name:id)
      #'(define name (make-property-term ont 'name))]
+    [(_ ont:id name:id ((domain:id range:id) ...))
+     #'(define name (make-property-family ont 'name (list (list domain range) ...)))]
+    [(_ ont:id binding:id #:name local:id #:domain domain:id #:range range:id)
+     #'(define binding (make-property-term ont 'local
+                                           #:domain domain
+                                           #:range range
+                                           #:forge-name 'binding))]
+    [(_ ont:id binding:id #:name local:id #:domain domain:id #:range range:id #:inverse-of inverse:id)
+     #'(define binding (make-property-term ont 'local
+                                           #:domain domain
+                                           #:range range
+                                           #:inverse-of inverse
+                                           #:forge-name 'binding))]
     [(_ ont:id name:id #:domain domain:id #:range range:id)
      #'(define name (make-property-term ont 'name #:domain domain #:range range))]
     [(_ ont:id name:id #:domain domain:id #:range range:id #:inverse-of inverse:id)

@@ -4,7 +4,7 @@ This directory is a small experiment in making the `nxt::rt` Forge model a
 pair of Racket modules.
 
 - `ontology.rkt` declares the `nxt` ontology and provides top-level bindings
-  such as `task`, `zone`, `belongs-to-zone`, and `notifies`.
+  such as `task`, `zone`, `belongs-to`, and `notifies`.
 - `model.rkt` imports those bindings, builds a Forge model value, and runs it
   through Forge's functional API without generating `.frg` text.
 
@@ -38,7 +38,7 @@ raw Forge text. For example:
 Use `follow` for outgoing relation paths and `matching` for inverse lookups:
 
 ```racket
-(all ([z zone] [t (matching belongs-to-zone z)])
+(all ([z zone] [t (matching (belongs-to zone) z)])
   (lone ([d (matching happens-in-zone z)])
     (== (follow d records-task) t)))
 ```

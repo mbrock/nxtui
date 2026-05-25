@@ -12,8 +12,7 @@
          waiter
          deed
          waves-wand
-         belongs-to-zone
-         belongs-to-deck
+         belongs-to
          notifies
          continues-as
          wants-wish
@@ -36,8 +35,7 @@
 (define-class nxt deed #:subclass-of resource)
 
 (define-property nxt waves-wand #:domain deck #:range wand)
-(define-property nxt belongs-to-zone #:domain task #:range zone)
-(define-property nxt belongs-to-deck #:domain task #:range deck)
+(define-property nxt belongs-to ((task zone) (task deck)))
 (define-property nxt notifies #:domain task #:range waiter)
 (define-property nxt continues-as #:domain task #:range task)
 (define-property nxt wants-wish #:domain waiter #:range wish)
