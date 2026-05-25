@@ -80,74 +80,22 @@
             width: 100%;
           }
           .model-doc {
-            border-top: 1px solid var(--line);
-            margin: 3rem 0 3.5rem;
-            padding-top: 2rem;
+            margin: 2.25rem 0 3.5rem;
           }
-          .model-doc h2 {
-            margin-top: 0;
-          }
-          .model-doc h3 {
-            font-size: 1rem;
-            margin: 1.6rem 0 0.55rem;
-          }
-          .term-cloud,
-          .relation-list,
-          .signature-list,
-          .run-list,
-          .inline-list {
+          .run-list {
             display: grid;
-            gap: 0.65rem;
+            gap: 1.2rem;
+            margin-top: 2rem;
           }
-          .term-cloud {
-            grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
-          }
-          .term,
-          .relation,
-          .signature,
           .run {
             border-top: 1px solid var(--line);
             padding-top: 0.75rem;
           }
-          .term strong,
-          .relation strong,
-          .signature h3,
           .run h3 {
             margin-top: 0;
           }
-          .term p,
-          .relation p,
-          .signature p,
           .run p {
             margin: 0.25rem 0 0;
-          }
-          .phrase-list {
-            list-style: none;
-            margin: 0.45rem 0 0;
-            padding: 0;
-          }
-          .phrase-list li {
-            margin: 0.2rem 0;
-          }
-          .inline-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.35rem 0.7rem;
-            margin: 0.5rem 0 1rem;
-          }
-          .inline-list code {
-            white-space: nowrap;
-          }
-          .predicate-list {
-            display: grid;
-            gap: 1rem;
-          }
-          .predicate {
-            border-top: 1px solid var(--line);
-            padding-top: 0.75rem;
-          }
-          .predicate h3 {
-            margin-top: 0;
           }
           .dexp {
             align-items: center;
@@ -175,11 +123,29 @@
             font: inherit;
             font-size: 0.95rem;
           }
+          .dexp.string {
+            color: var(--muted);
+            font: inherit;
+            font-size: 0.95rem;
+          }
+          .dexp.string:before { content: "“"; }
+          .dexp.string:after { content: "”"; }
           .dexp.list > .dexp.symbol:first-child {
             color: var(--accent);
             font-weight: 650;
           }
           .dexp.list[data-callee='block'] {
+            align-items: flex-start;
+            border-right-width: 0;
+            flex-direction: column;
+          }
+          .dexp.list[data-callee='runtime-model'],
+          .dexp.list[data-callee='ontology'],
+          .dexp.list[data-callee='classes'],
+          .dexp.list[data-callee='relations'],
+          .dexp.list[data-callee='signatures'],
+          .dexp.list[data-callee='predicates'],
+          .dexp.list[data-callee='checks'] {
             align-items: flex-start;
             border-right-width: 0;
             flex-direction: column;
@@ -216,7 +182,6 @@
             <xsl:apply-templates select="paragraph"/>
           </div>
           <xsl:apply-templates select="forge-graph"/>
-          <xsl:apply-templates select="ontology-section"/>
           <xsl:apply-templates select="model-section"/>
           <xsl:apply-templates select="section"/>
         </main>
@@ -263,87 +228,9 @@
     <forge-doc-graph frg="{@frg}" run="{@run}" title="{@title}"></forge-doc-graph>
   </xsl:template>
 
-  <xsl:template match="ontology-section">
-    <section class="model-doc ontology">
-      <h2><xsl:value-of select="title"/></h2>
-      <p>
-        The runtime domain uses the <code><xsl:value-of select="ontology-prefix"/></code>
-        vocabulary at <span class="source"><xsl:value-of select="ontology-base"/></span>.
-      </p>
-      <h3>Classes</h3>
-      <div class="term-cloud">
-        <xsl:for-each select="classes/class">
-          <div class="term">
-            <strong><code><xsl:value-of select="@name"/></code></strong>
-            <xsl:if test="@parent != ''">
-              <p class="source">a kind of <code><xsl:value-of select="@parent"/></code></p>
-            </xsl:if>
-          </div>
-        </xsl:for-each>
-      </div>
-      <h3>Relations</h3>
-      <div class="relation-list">
-        <xsl:for-each select="properties/property">
-          <div class="relation">
-            <strong><xsl:value-of select="translate(@name, '-', ' ')"/></strong>
-            <p>
-              <code><xsl:value-of select="@domain"/></code>
-              <xsl:text> </xsl:text>
-              <xsl:value-of select="translate(@name, '-', ' ')"/>
-              <xsl:text> </xsl:text>
-              <code><xsl:value-of select="@range"/></code>
-            </p>
-          </div>
-        </xsl:for-each>
-      </div>
-    </section>
-  </xsl:template>
-
   <xsl:template match="model-section">
     <section class="model-doc model">
-      <h2><xsl:value-of select="title"/></h2>
-      <h3>Signatures</h3>
-      <div class="signature-list">
-        <xsl:for-each select="signatures/signature">
-          <section class="signature">
-            <h3><code><xsl:value-of select="@name"/></code></h3>
-            <xsl:choose>
-              <xsl:when test="field">
-                <ul class="phrase-list">
-                  <xsl:for-each select="field">
-                    <li>
-                      <xsl:value-of select="translate(@name, '-', ' ')"/>
-                      <xsl:text> </xsl:text>
-                      <xsl:choose>
-                        <xsl:when test="@multiplicity='one'">exactly one </xsl:when>
-                        <xsl:when test="@multiplicity='lone'">at most one </xsl:when>
-                        <xsl:otherwise>any number of </xsl:otherwise>
-                      </xsl:choose>
-                      <code><xsl:value-of select="@range"/></code>
-                      <xsl:if test="@variable='true'">
-                        <xsl:text>, changing over time</xsl:text>
-                      </xsl:if>
-                    </li>
-                  </xsl:for-each>
-                </ul>
-              </xsl:when>
-              <xsl:otherwise>
-                <p class="source">No fields.</p>
-              </xsl:otherwise>
-            </xsl:choose>
-          </section>
-        </xsl:for-each>
-      </div>
-      <h3>Predicates</h3>
-      <div class="predicate-list">
-        <xsl:for-each select="predicates/predicate">
-          <section class="predicate">
-            <h3><xsl:value-of select="translate(@name, '-', ' ')"/></h3>
-            <xsl:apply-templates select="dexp-list"/>
-          </section>
-        </xsl:for-each>
-      </div>
-      <h3>Witnesses</h3>
+      <xsl:apply-templates select="dexp-list"/>
       <div class="run-list">
         <xsl:for-each select="runs/run">
           <section class="run">
@@ -366,5 +253,9 @@
 
   <xsl:template match="dexp-number">
     <span class="dexp value number"><xsl:value-of select="@value"/></span>
+  </xsl:template>
+
+  <xsl:template match="dexp-string">
+    <span class="dexp value string"><xsl:value-of select="@value"/></span>
   </xsl:template>
 </xsl:stylesheet>

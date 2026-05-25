@@ -206,55 +206,21 @@
 (define (property-term? value)
   (and (term? value) (eq? (term-kind value) 'property)))
 
-(define (class-doc value)
-  `(class (@ (name ,(term-display-name value))
-             (iri ,(term-iri value))
-             (abstract ,(if (term-option-ref value 'abstract) "true" "false"))
-             (parent ,(if (term-option-ref value 'subclass-of)
-                          (term-display-name (term-option-ref value 'subclass-of))
-                          "")))))
+(define (field-relation-term signature-term fld)
+  (with-handlers ([exn:fail? (lambda (_error) #f)])
+    (ontology-property (term-ontology signature-term)
+                       (if (forge-field-ref? (forge-field-term fld))
+                           (forge-field-ref-name (forge-field-term fld))
+                           (term-rdf-name (forge-field-term fld)))
+                       #:domain signature-term
+                       #:range (forge-field-range fld))))
 
-(define (property-doc value)
-  `(property (@ (name ,(term-display-name value))
-                (iri ,(term-iri value))
-                (domain ,(if (term-option-ref value 'domain)
-                             (term-display-name (term-option-ref value 'domain))
-                             ""))
-                (range ,(if (term-option-ref value 'range)
-                            (term-display-name (term-option-ref value 'range))
-                            "")))))
-
-(define (ontology-doc ont)
-  (define terms (ontology-declared-terms ont))
-  `(ontology-section
-    (title "Runtime ontology")
-    (ontology-prefix ,(symbol->string (ontology-prefix ont)))
-    (ontology-base ,(ontology-base ont))
-    (classes
-     ,@(map class-doc (filter class-term? terms)))
-    (properties
-     ,@(map property-doc (filter property-term? terms)))))
-
-(define (field-doc signature-term fld)
+(define (field-name signature-term fld)
   (define relation-term
-    (with-handlers ([exn:fail? (lambda (_error) #f)])
-      (ontology-property (term-ontology signature-term)
-                         (if (forge-field-ref? (forge-field-term fld))
-                             (forge-field-ref-name (forge-field-term fld))
-                             (term-rdf-name (forge-field-term fld)))
-                         #:domain signature-term
-                         #:range (forge-field-range fld))))
-  `(field (@ (name ,(if relation-term
-                        (term-display-name relation-term)
-                        (format "~a" (forge-field-term fld))))
-             (multiplicity ,(symbol->string (forge-field-multiplicity fld)))
-             (range ,(term-display-name (forge-field-range fld)))
-             (variable ,(if (forge-field-variable? fld) "true" "false")))))
-
-(define (signature-doc sig)
-  `(signature (@ (name ,(term-display-name (forge-signature-term sig))))
-              ,@(for/list ([fld (in-list (forge-signature-fields sig))])
-                  (field-doc (forge-signature-term sig) fld))))
+    (field-relation-term signature-term fld))
+  (if relation-term
+      (term-display-name relation-term)
+      (format "~a" (forge-field-term fld))))
 
 (define (dexp-symbol name)
   `(dexp-symbol (@ (name ,(format "~a" name))
@@ -275,9 +241,15 @@
 (define (dexp-number value)
   `(dexp-number (@ (value ,(format "~a" value)))))
 
+(define (dexp-string value)
+  `(dexp-string (@ (value ,value))))
+
 (define (dexp-list #:callee [callee #f] . children)
   `(dexp-list (@ (callee ,(if callee (format "~a" callee) "")))
               ,@children))
+
+(define (call-doc callee . args)
+  (apply dexp-list #:callee callee (cons (dexp-symbol callee) args)))
 
 (define (expr-doc expr)
   (cond
@@ -305,11 +277,62 @@
     [else (dexp-symbol (format "~a" expr))]))
 
 (define (predicate-doc pred)
-  `(predicate (@ (name ,(symbol->string (forge-predicate-name pred))))
-              ,(expr-doc (forge-predicate-body pred))))
+  (call-doc 'predicate
+            (dexp-symbol (forge-predicate-name pred))
+            (expr-doc (forge-predicate-body pred))))
 
 (define (check-doc chk)
-  `(check (@ (name ,(symbol->string (forge-check-name chk))))))
+  (call-doc 'check (dexp-symbol (forge-check-name chk))))
+
+(define (class-dexp value)
+  (apply call-doc
+         'class
+         (append (list (dexp-symbol (term-display-name value)))
+                 (if (term-option-ref value 'abstract)
+                     (list (dexp-symbol '#:abstract))
+                     '())
+                 (if (term-option-ref value 'subclass-of)
+                     (list (call-doc '#:subclass-of
+                                     (dexp-symbol (term-display-name (term-option-ref value 'subclass-of)))))
+                     '()))))
+
+(define (property-dexp value)
+  (call-doc 'property
+            (dexp-symbol (term-display-name value))
+            (dexp-symbol (term-display-name (term-option-ref value 'domain)))
+            (dexp-symbol (term-display-name (term-option-ref value 'range)))))
+
+(define (ontology-dexp ont)
+  (define terms (ontology-declared-terms ont))
+  (call-doc 'ontology
+            (dexp-symbol (ontology-prefix ont))
+            (dexp-string (ontology-base ont))
+            (apply call-doc 'classes (map class-dexp (filter class-term? terms)))
+            (apply call-doc 'relations (map property-dexp (filter property-term? terms)))))
+
+(define (field-dexp signature-term fld)
+  (apply call-doc
+         (string->symbol (field-name signature-term fld))
+         (append (list (dexp-symbol (string->symbol (field-name signature-term fld))))
+                 (if (forge-field-variable? fld)
+                     (list (dexp-symbol 'var))
+                     '())
+                 (list (dexp-symbol (forge-field-multiplicity fld))
+                       (dexp-symbol (term-display-name (forge-field-range fld)))))))
+
+(define (signature-dexp sig)
+  (apply call-doc
+         'signature
+         (cons (dexp-symbol (term-display-name (forge-signature-term sig)))
+               (for/list ([fld (in-list (forge-signature-fields sig))])
+                 (field-dexp (forge-signature-term sig) fld)))))
+
+(define (model-dexp ont frg-path mdl)
+  (call-doc 'runtime-model
+            (ontology-dexp ont)
+            (apply call-doc 'signatures (map signature-dexp (forge-model-signatures mdl)))
+            (apply call-doc 'predicates (map predicate-doc (forge-model-predicates mdl)))
+            (apply call-doc 'checks (map check-doc (forge-model-checks mdl)))))
 
 (define (run-doc frg-path run-command)
   (define run-name (symbol->string (forge-run-name run-command)))
@@ -328,13 +351,7 @@
 (define (model-doc frg-path mdl)
   (define shown-runs '(rich-runtime-shape-witness rich-runtime-trace-witness))
   `(model-section
-    (title "Runtime Forge model")
-    (signatures
-     ,@(map signature-doc (forge-model-signatures mdl)))
-    (predicates
-     ,@(map predicate-doc (forge-model-predicates mdl)))
-    (checks
-     ,@(map check-doc (forge-model-checks mdl)))
+    ,(model-dexp nxt frg-path mdl)
     (runs
      ,@(for/list ([run-command (in-list (filter (lambda (run-command)
                                                   (member (forge-run-name run-command) shown-runs))
@@ -342,8 +359,7 @@
          (run-doc frg-path run-command)))))
 
 (define (runtime-model-doc)
-  (list (ontology-doc nxt)
-        (model-doc "nxtrt/model.rkt" runtime-model)))
+  (list (model-doc "nxtrt/model.rkt" runtime-model)))
 
 (module+ main
   (define input "docs2/out/doxygen/xml/rt_overview.xml")
