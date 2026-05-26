@@ -40,7 +40,7 @@ struct cli_options
 {
     std::cout
         << "usage: nxtllm [options] [prompt...]\n"
-           "  ng migration build: streams one-shot Responses text on nxt::rt\n"
+           "  streams one-shot Responses text on nxt::rt\n"
            "\n"
            "  -m, --model MODEL                 (default: gpt-5.4-mini)\n"
            "  --max-output-tokens N\n"
@@ -162,7 +162,7 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
         std::cerr
             << "nxtllm: OPENAI_API_KEY is not set; streaming is wired through "
                "nxt::rt, but it needs credentials.\n"
-            << "Try --dump-request to inspect the ng Responses payload.\n";
+            << "Try --dump-request to inspect the Responses payload.\n";
         co_return EXIT_FAILURE;
     }
 

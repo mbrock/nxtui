@@ -5,4 +5,4 @@ option('tests', type : 'boolean', value : true,
   description : 'Build and register tests')
 
 option('llm_tool', type : 'boolean', value : true,
-  description : 'Build the ng nxtllm tool')
+  description : 'Build the nxtllm tool')
