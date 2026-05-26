@@ -212,8 +212,8 @@ nxt::rt::task<void> run_agent_loop(
             request, model, status, assistant_text);
         auto response = std::move(stream.response);
         assistant_text += stream.assistant_text;
-        auto calls =
-            nxt::ai::tools::function_calls_from_items(response.output_items);
+        auto calls = co_await nxt::ai::tools::read_function_calls_from_items(
+            std::move(response.output_items));
         if (calls.empty()) {
             co_await print_assistant_if_terminal(assistant_text);
             status = "done";

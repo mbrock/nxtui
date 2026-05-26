@@ -1658,14 +1658,14 @@ static suite ng_runtime_tests{
         "tool batches"_test = [] {
             "parse calls and return function_call_output items in order"_test = [] {
                 auto deck = nxt::rt::deck{};
-                auto calls = std::vector<nxt::ai::tools::function_call>{
-                    *nxt::ai::tools::function_call_from_item(
-                        nxt::ai::openai::raw_json{
-                            R"({"id":"fc_1","type":"function_call","call_id":"call_1","name":"ng_echo","arguments":"{\"text\":\"one\"}"})"}),
-                    *nxt::ai::tools::function_call_from_item(
-                        nxt::ai::openai::raw_json{
-                            R"({"id":"fc_2","type":"function_call","call_id":"call_2","name":"ng_echo","arguments":"{\"text\":\"two\"}"})"}),
-                };
+                auto calls = deck.sync_wait(
+                    nxt::ai::tools::read_function_calls_from_items(
+                        {
+                            nxt::ai::openai::raw_json{
+                                R"({"id":"fc_1","type":"function_call","call_id":"call_1","name":"ng_echo","arguments":"{\"text\":\"one\"}"})"},
+                            nxt::ai::openai::raw_json{
+                                R"({"id":"fc_2","type":"function_call","call_id":"call_2","name":"ng_echo","arguments":"{\"text\":\"two\"}"})"},
+                        }));
                 auto tools = nxt::ai::tools::make_tool_registry({
                     nxt::ai::tools::make_function_tool(ng_echo_tool{}),
                 });

@@ -222,21 +222,14 @@ function_tool_definitions(const tool_registry & tools)
     return out;
 }
 
-[[nodiscard]] inline std::optional<function_call>
-function_call_from_item(const openai::raw_json & raw_item)
-{
-    auto deck = nxt::rt::deck{};
-    return deck.sync_wait(read_function_call_from_item(raw_item));
-}
-
-[[nodiscard]] inline std::vector<function_call> function_calls_from_items(
-    const std::vector<openai::raw_json> & output_items)
+[[nodiscard]] inline nxt::rt::task<std::vector<function_call>>
+read_function_calls_from_items(std::vector<openai::raw_json> output_items)
 {
     auto calls = std::vector<function_call>{};
-    for (const auto & item : output_items)
-        if (auto call = function_call_from_item(item))
+    for (auto & item : output_items)
+        if (auto call = co_await read_function_call_from_item(std::move(item)))
             calls.push_back(std::move(*call));
-    return calls;
+    co_return calls;
 }
 
 [[nodiscard]] inline openai::raw_json
