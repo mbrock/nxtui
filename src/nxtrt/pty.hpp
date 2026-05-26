@@ -1,8 +1,8 @@
 #pragma once
 
-#include "nxt/rt/buffers.hpp"
-#include "nxt/rt/subprocess.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/buffers.hpp"
+#include "nxtrt/subprocess.hpp"
+#include "nxtrt/task.hpp"
 
 #include <nxtui/tui_terminal.hpp>
 #include <nxtui/units.hpp>
@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt::pty {
+namespace nxtrt::pty {
 
 using namespace std::chrono_literals;
 
@@ -50,7 +50,7 @@ class session
 public:
     session() = default;
 
-    explicit session(nxt::rt::pty_child child, nxtui::Size size)
+    explicit session(nxtrt::pty_child child, nxtui::Size size)
         : child_(std::move(child))
         , size_(size)
         , terminal_(
@@ -149,7 +149,7 @@ public:
     }
 
 private:
-    nxt::rt::pty_child child_;
+    nxtrt::pty_child child_;
     nxtui::Size size_{80 * nxtui::ch, 24 * nxtui::ln};
     nxtui::vterm::Terminal terminal_{24, 80};
 };
@@ -199,4 +199,4 @@ inline screen pty_screen(session & pty, nxtui::tui::Style clear_style = {})
     return screen{.pty = &pty, .clear_style = clear_style};
 }
 
-} // namespace nxt::rt::pty
+} // namespace nxtrt::pty

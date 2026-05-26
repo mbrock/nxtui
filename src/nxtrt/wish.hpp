@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/exceptions.hpp"
+#include "nxtrt/exceptions.hpp"
 #include "nxt/unique-fd.hpp"
 
 #include <csignal>
@@ -31,7 +31,7 @@
 #include <linux/time_types.h>
 #endif
 
-namespace nxt::rt {
+namespace nxtrt {
 
 class deck;
 class wand;
@@ -103,7 +103,7 @@ public:
         if (exception_)
             rethrow(exception_);
         if (!value_)
-            throw runtime_error{"nxt::rt waiter result was never set"};
+            throw runtime_error{"nxtrt waiter result was never set"};
         return std::move(*value_);
     }
 
@@ -131,7 +131,7 @@ public:
         if (exception_)
             rethrow(exception_);
         if (!done_)
-            throw runtime_error{"nxt::rt waiter result was never set"};
+            throw runtime_error{"nxtrt waiter result was never set"};
     }
 
 private:
@@ -167,7 +167,7 @@ public:
     T await_resume()
     {
         if (state_ == nullptr)
-            throw runtime_error{"nxt::rt waiter has no result state"};
+            throw runtime_error{"nxtrt waiter has no result state"};
         return state_->take();
     }
 
@@ -192,7 +192,7 @@ template<>
 inline void waiter<void>::await_resume()
 {
     if (state_ == nullptr)
-        throw runtime_error{"nxt::rt waiter has no result state"};
+        throw runtime_error{"nxtrt waiter has no result state"};
     state_->take();
 }
 
@@ -674,4 +674,4 @@ protected:
         detail::prepared_wish wish) = 0;
 };
 
-} // namespace nxt::rt
+} // namespace nxtrt

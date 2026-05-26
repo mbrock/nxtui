@@ -1,26 +1,26 @@
 # Runtime consolidation notes
 
 The application/runtime surface has moved from the old `nxtio` stack onto
-`nxt::rt`. `libcoro` has been removed from the Meson build and from
+`nxtrt`. `libcoro` has been removed from the Meson build and from
 `subprojects`, and the remaining `nxtio` sources have been deleted. The old
-custom task prototype is gone; its useful ideas now belong in `nxt::rt::env`,
+custom task prototype is gone; its useful ideas now belong in `nxtrt::env`,
 task zones, and explicit UI/runtime capabilities.
 
 ## Current Shape
 
 `src` owns the coroutine substrate:
 
-- `nxt::rt::task<T>` for lazy coroutine tasks.
-- `nxt::rt::deck` for pumpable execution.
-- `nxt::rt::wand` implementations for platform waiting.
-- `nxt::rt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
+- `nxtrt::task<T>` for lazy coroutine tasks.
+- `nxtrt::deck` for pumpable execution.
+- `nxtrt::wand` implementations for platform waiting.
+- `nxtrt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments.
 - Linux subprocess wishes for piped children, pty children, pidfd waits, and
   pidfd signals.
 - OpenAI Responses request JSON, streaming, and basic tool-call batches.
 - Core terminal input types and parsing in `src/nxtui/input.hpp`.
 - The default `nxtllm` executable, including one-shot streaming and
-  `read_file`/`rg_search`/`bash` tool execution on `nxt::rt`.
+  `read_file`/`rg_search`/`bash` tool execution on `nxtrt`.
 
 The old application stack is no longer in the tree. The former `src/nxt/ai`
 LLM stack has also been removed; the surviving LLM code lives in
@@ -30,37 +30,37 @@ LLM stack has also been removed; the surviving LLM code lives in
 
 | Old surface | New target | Notes |
 | --- | --- | --- |
-| `nxt::task<T>` | `nxt::rt::task<T>` | Start with leaf code that does not expose scheduler handles. |
-| `nxt::scheduler` | `nxt::rt::deck` + `nxt::rt::wand` | Keep the host pumpable so terminal and Emacs embeddings can own the event loop. |
-| `scheduler.yield_for(d)` | `nxt::rt::op::timeout::after(d)` or `with_timeout` | Keep sleep/yield as runtime methods at the app boundary. |
-| `scheduler.poll(...)` | `nxt::rt::op::poll*` | Convert call sites once they are inside an `nxt::rt::task`. |
-| `nxt::queue<T>` | `nxt::rt::channel<T>` | Done. Used for UI input, resize, and tool streams. |
-| `nxt::event` | `nxt::rt::event` | Done. Used for damage notifications and small UI coordination points. |
-| `nxtio/input.hpp` | `nxt/input.hpp` | Done. The compatibility include has been removed. |
+| `nxt::task<T>` | `nxtrt::task<T>` | Start with leaf code that does not expose scheduler handles. |
+| `nxt::scheduler` | `nxtrt::deck` + `nxtrt::wand` | Keep the host pumpable so terminal and Emacs embeddings can own the event loop. |
+| `scheduler.yield_for(d)` | `nxtrt::op::timeout::after(d)` or `with_timeout` | Keep sleep/yield as runtime methods at the app boundary. |
+| `scheduler.poll(...)` | `nxtrt::op::poll*` | Convert call sites once they are inside an `nxtrt::task`. |
+| `nxt::queue<T>` | `nxtrt::channel<T>` | Done. Used for UI input, resize, and tool streams. |
+| `nxt::event` | `nxtrt::event` | Done. Used for damage notifications and small UI coordination points. |
+| `nxtio/input.hpp` | `nxtui/input.hpp` | Done. The compatibility include has been removed. |
 | `nxt::latch` | zone join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
-| `spawn_detached` | `nxt::rt::fork` in a zone | Detached work should still be owned by a root zone. |
-| `nxt::scope` | `nxt::rt::task_zone` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
+| `spawn_detached` | `nxtrt::fork` in a zone | Detached work should still be owned by a root zone. |
+| `nxt::scope` | `nxtrt::task_zone` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
-| old shell/pty subprocess helpers | `nxt::rt::op::spawn_pty` + `nxt::rt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
+| old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
 | old LLM entry point | `src/nxtai/nxtllm.cpp` | Done. The executable streams one-shot turns and runs tool batches; richer interactive HUD work remains. |
 
 ## Completed Slices
 
-1. Add `nxt::rt` channel and event primitives. Done as deck-local
-   `nxt::rt::channel<T>` and manual-reset `nxt::rt::event`.
+1. Add `nxtrt` channel and event primitives. Done as deck-local
+   `nxtrt::channel<T>` and manual-reset `nxtrt::event`.
 
 2. Introduce a runtime facade beside terminal UI helpers. Done as
-   `nxt::rt::runtime`: it owns a `deck`, platform `wand`, root-zone run
+   `nxtrt::runtime`: it owns a `deck`, platform `wand`, root-zone run
    entrypoint, damage event, input channel, resize channel, and `sleep`.
-   `nxt::rt::terminal_app` and the runtime demos layer terminal/compositor
+   `nxtrt::terminal_app` and the runtime demos layer terminal/compositor
    ownership on top of it.
 
-3. Port buffer and HTTP helpers to `nxt::rt::task`. Done in `src/nxt/rt`.
+3. Port buffer and HTTP helpers to `nxtrt::task`. Done in `src/nxtrt`.
    Keep request/response data structures free of runtime dependencies.
    `src/nxtai/responses_request.hpp` is the model for that split.
 
 4. Make OpenAI streaming use `src` networking. Done for the one-shot
-   `nxtllm` path: it connects over `nxt::rt` TCP/TLS, reads HTTP/SSE, and
+   `nxtllm` path: it connects over `nxtrt` TCP/TLS, reads HTTP/SSE, and
    collects completed output items.
 
 5. Port tool execution after streaming works. Done as
@@ -70,7 +70,7 @@ LLM stack has also been removed; the surviving LLM code lives in
 
 6. Re-enable `nxtllm` on the runtime. Done in
    `src/nxtai/nxtllm.cpp`: the executable builds by default, parses CLI
-   options, enters `nxt::rt::runtime`, streams responses over the `src`
+   options, enters `nxtrt::runtime`, streams responses over the `src`
    HTTP/TLS stack, and can complete a bash tool-call smoke test.
 
 7. Use PTYs for live tool surfaces. Started with `nxt-shell-scope-demo`: the
@@ -81,7 +81,7 @@ LLM stack has also been removed; the surviving LLM code lives in
 ## Compatibility strategy
 
 Do not restore a compatibility alias layer. The old libcoro task and
-`nxt::rt::task` have different ownership and pump semantics, and a dual alias
+`nxtrt::task` have different ownership and pump semantics, and a dual alias
 layer would hide the hard parts. Prefer explicit ports:
 
 - Move dependency-light data types first.

@@ -14,9 +14,9 @@ streaming response, overlay, trace span, and temporary display belongs to
 that command.  If the command returns, fails, or is cancelled with =C-g=,
 the whole tree has a well-defined fate.
 
-This suggests a native Emacs embedding where =nxt::rt::task= coroutines
+This suggests a native Emacs embedding where =nxtrt::task= coroutines
 run cooperatively with Emacs Lisp execution, preserving runtime/editor
-context through =nxt::rt::env= and task zones across =co_await=
+context through =nxtrt::env= and task zones across =co_await=
 suspension points.
 
 ** Brief introduction to nxt UI
@@ -49,7 +49,7 @@ one global screen.
 
 The current =yard= and =scope= system already provides bounded child
 lifetimes, cancellation tokens, live surfaces, output routing, and trace
-span attribution.  The new =nxt::rt= runtime is the intended
+span attribution.  The new =nxtrt= runtime is the intended
 structured-concurrency substrate: coroutine promises carry an ambient
 environment, task zones own child relations, stop propagates through the
 tree, and context is restored across awaits.
@@ -86,8 +86,8 @@ Emacs already has rich notions of place and dynamic extent:
 - child surfaces
 - cancellation scopes
 - trace spans
-- =nxt::rt= task zones
-- ambient =nxt::rt::env= bindings
+- =nxtrt= task zones
+- ambient =nxtrt::env= bindings
 - typed runtime/editor capabilities
 - stop propagation through a frame tree
 
@@ -276,7 +276,7 @@ Possible native API:
 #+begin_src cpp
 class emacs_scheduler {
 public:
-    void spawn(nxt::rt::task<> task);
+    void spawn(nxtrt::task<> task);
     void run_ready(emacs_env *env);
     void request_quit();
     void resume_timer(timer_id id);
@@ -302,7 +302,7 @@ Emacs can pump ready work from:
 - a module callback
 - a wakeup pipe/event fd bridge
 
-The pump resumes ready =nxt::rt::task= coroutines.  Suspension returns control
+The pump resumes ready =nxtrt::task= coroutines.  Suspension returns control
 to Emacs.
 
 ** Awaiting Emacs
@@ -330,7 +330,7 @@ like =save-excursion= restores point after temporary buffer motion.
 ** Context preservation
 
 The useful part of the removed custom task experiment now belongs in
-=nxt::rt=: the promise owns an environment snapshot, task zones describe
+=nxtrt=: the promise owns an environment snapshot, task zones describe
 parent/child lifetime, and await boundaries restore the ambient context
 needed by editor and UI capabilities.
 
@@ -507,7 +507,7 @@ Emacs's existing synchronous execution model.
    (nxt-pump runtime)
    #+end_src
 
-3. Implement an Emacs-hosted =nxt::rt= pump with:
+3. Implement an Emacs-hosted =nxtrt= pump with:
 
    - ready queue
    - timer awaiter
@@ -524,9 +524,9 @@ Emacs's existing synchronous execution model.
 5. Let a C++ coroutine draw a counter into that region:
 
    #+begin_src cpp
-   nxt::rt::task<> counter(yard self)
+   nxtrt::task<> counter(yard self)
    {
-       for (int i = 0; !nxt::rt::stop_requested(); ++i) {
+       for (int i = 0; !nxtrt::stop_requested(); ++i) {
            self.draw(text("tick " + std::to_string(i)));
            co_await emacs_sleep{100ms};
        }

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "nxt/rt/debug.hpp"
-#include "nxt/rt/ids.hpp"
-#include "nxt/rt/env.hpp"
-#include "nxt/rt/trace.hpp"
-#include "nxt/rt/wish.hpp"
+#include "nxtrt/debug.hpp"
+#include "nxtrt/ids.hpp"
+#include "nxtrt/env.hpp"
+#include "nxtrt/trace.hpp"
+#include "nxtrt/wish.hpp"
 
 #include <concepts>
 #include <coroutine>
@@ -15,7 +15,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 template<typename T = void>
 class task;
@@ -190,7 +190,7 @@ private:
     {
         auto * env = current_env();
         if (env != nullptr && env->current_promise != nullptr)
-            throw runtime_error{"nxt::rt deck pump is not reentrant"};
+            throw runtime_error{"nxtrt deck pump is not reentrant"};
 
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
@@ -220,7 +220,7 @@ public:
         start(t);
         while (!t.done()) {
             if (ready_.empty())
-                throw runtime_error{"nxt::rt deck deadlock"};
+                throw runtime_error{"nxtrt deck deadlock"};
             run_ready();
         }
 
@@ -282,4 +282,4 @@ private:
 /// Awaitable that moves the current coroutine to the back of the active deck.
 [[nodiscard]] yield_awaiter yield() noexcept;
 
-} // namespace nxt::rt
+} // namespace nxtrt

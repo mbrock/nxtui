@@ -1,5 +1,5 @@
 name = 'nxt'
-description = 'A small typed raster and terminal UI library for C++.'
+description = 'Coroutine runtime, terminal UI, and LLM tooling for C++.'
 author = 'Mikael Brockman'
 github = 'mbrock/nxtui'
 cpp = 23

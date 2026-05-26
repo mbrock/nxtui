@@ -1,5 +1,5 @@
 #include <nxt/nxt.hpp>
-#include <nxt/rt.hpp>
+#include <nxtrt.hpp>
 
 #include "test.hpp"
 
@@ -15,9 +15,9 @@ static boost::ut::suite public_include_tests{
     };
 
     "runtime umbrella exposes task"_test = [] {
-        auto deck = nxt::rt::deck{};
+        auto deck = nxtrt::deck{};
         boost::ut::expect(
-            deck.sync_wait([]() -> nxt::rt::task<int> { co_return 42; }())
+            deck.sync_wait([]() -> nxtrt::task<int> { co_return 42; }())
             == 42);
     };
 }};

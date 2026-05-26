@@ -11,7 +11,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 struct terminal_app_options
 {
@@ -142,4 +142,4 @@ private:
     nxtui::tui::TerminalCompositor compositor_;
 };
 
-} // namespace nxt::rt
+} // namespace nxtrt

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/ids.hpp"
+#include "nxtrt/ids.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace nxt::rt::debug {
+namespace nxtrt::debug {
 
 using zone_id = std::uint64_t;
 
@@ -176,7 +176,7 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
 {
     auto now = std::chrono::steady_clock::now();
     auto out = std::ostringstream{};
-    out << "[nxt::rt] runtime dump\n";
+    out << "[nxtrt] runtime dump\n";
     out << "  ready tasks: " << ready_tasks.size();
     if (!ready_tasks.empty()) {
         out << " (";
@@ -223,4 +223,4 @@ inline void print_runtime_dump(
     std::cerr << std::flush;
 }
 
-} // namespace nxt::rt::debug
+} // namespace nxtrt::debug

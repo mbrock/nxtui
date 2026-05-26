@@ -1,14 +1,14 @@
 #include <nxt/sparkline.hpp>
 #include <nxtui/tui_text.hpp>
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/channel.hpp>
-#include <nxt/rt/event.hpp>
-#include <nxt/rt/http.hpp>
-#include <nxt/rt/kqueue_wand.hpp>
-#include <nxt/rt/sampling.hpp>
-#include <nxt/rt/task.hpp>
-#include <nxt/rt/terminal_app.hpp>
-#include <nxt/rt/ui_runtime.hpp>
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/channel.hpp>
+#include <nxtrt/event.hpp>
+#include <nxtrt/http.hpp>
+#include <nxtrt/kqueue_wand.hpp>
+#include <nxtrt/sampling.hpp>
+#include <nxtrt/task.hpp>
+#include <nxtrt/terminal_app.hpp>
+#include <nxtrt/ui_runtime.hpp>
 #include <nxtai/tool_batch.hpp>
 
 #include "test.hpp"
@@ -37,10 +37,10 @@ struct ambient_int_key
     static constexpr auto name = "ambient-int";
 };
 
-struct manual_wand final : nxt::rt::wand
+struct manual_wand final : nxtrt::wand
 {
     void
-    suspend(nxt::rt::wait_token token, nxt::rt::parked_task task) override
+    suspend(nxtrt::wait_token token, nxtrt::parked_task task) override
     {
         parked.push_back(
             parked_entry{
@@ -49,17 +49,17 @@ struct manual_wand final : nxt::rt::wand
             });
     }
 
-    void cancel(nxt::rt::wait_token token) override
+    void cancel(nxtrt::wait_token token) override
     {
         cancelled.push_back(token);
     }
 
-    void wave(nxt::rt::deck &) override
+    void wave(nxtrt::deck &) override
     {
         ++waves;
     }
 
-    void fulfill(nxt::rt::deck & deck, nxt::rt::wait_token token)
+    void fulfill(nxtrt::deck & deck, nxtrt::wait_token token)
     {
         for (auto it = parked.begin(); it != parked.end(); ++it) {
             if (it->token != token)
@@ -74,19 +74,19 @@ struct manual_wand final : nxt::rt::wand
     }
 
 protected:
-    nxt::rt::wait_token prepare_wish(
-        nxt::rt::deck &,
-        nxt::rt::detail::promise_base &,
-        nxt::rt::detail::prepared_wish packet) override
+    nxtrt::wait_token prepare_wish(
+        nxtrt::deck &,
+        nxtrt::detail::promise_base &,
+        nxtrt::detail::prepared_wish packet) override
     {
-        auto * wish = std::get_if<nxt::rt::op::manual>(&packet.wish);
+        auto * wish = std::get_if<nxtrt::op::manual>(&packet.wish);
         if (wish == nullptr)
             throw std::runtime_error{
                 "manual_wand only implements manual wishes"};
 
         prepared.push_back(wish->token);
         states.push_back(
-            std::static_pointer_cast<nxt::rt::wait_state<void>>(
+            std::static_pointer_cast<nxtrt::wait_state<void>>(
                 packet.state));
         return wish->token;
     }
@@ -94,32 +94,32 @@ protected:
 public:
     struct parked_entry
     {
-        nxt::rt::wait_token token = 0;
-        nxt::rt::parked_task task;
+        nxtrt::wait_token token = 0;
+        nxtrt::parked_task task;
     };
 
-    std::vector<nxt::rt::wait_token> prepared;
-    std::vector<nxt::rt::wait_token> cancelled;
+    std::vector<nxtrt::wait_token> prepared;
+    std::vector<nxtrt::wait_token> cancelled;
     std::vector<parked_entry> parked;
-    std::vector<std::shared_ptr<nxt::rt::wait_state<void>>> states;
+    std::vector<std::shared_ptr<nxtrt::wait_state<void>>> states;
     int waves = 0;
 };
 
-struct empty_then_string_source final : nxt::rt::byte_source
+struct empty_then_string_source final : nxtrt::byte_source
 {
-    nxt::rt::task<nxt::rt::read_result>
+    nxtrt::task<nxtrt::read_result>
     read_some(std::span<std::byte> dst) override
     {
         if (!returned_empty) {
             returned_empty = true;
-            co_return nxt::rt::read_result{
+            co_return nxtrt::read_result{
                 .bytes = 0,
                 .eof = false,
             };
         }
 
         if (offset == text.size())
-            co_return nxt::rt::read_result{
+            co_return nxtrt::read_result{
                 .bytes = 0,
                 .eof = true,
             };
@@ -128,7 +128,7 @@ struct empty_then_string_source final : nxt::rt::byte_source
         auto n = std::min(dst.size(), rest.size());
         std::memcpy(dst.data(), rest.data(), n);
         offset += n;
-        co_return nxt::rt::read_result{
+        co_return nxtrt::read_result{
             .bytes = n,
             .eof = offset == text.size(),
         };
@@ -139,17 +139,17 @@ struct empty_then_string_source final : nxt::rt::byte_source
     bool returned_empty = false;
 };
 
-struct chunking_string_sink final : nxt::rt::byte_sink
+struct chunking_string_sink final : nxtrt::byte_sink
 {
     explicit chunking_string_sink(std::size_t limit)
         : limit(limit)
     {}
 
-    nxt::rt::task<std::size_t>
+    nxtrt::task<std::size_t>
     write_some(std::span<const std::byte> src) override
     {
         auto n = std::min(limit, src.size());
-        text += nxt::rt::as_string_view(src.first(n));
+        text += nxtrt::as_string_view(src.first(n));
         co_return n;
     }
 
@@ -157,7 +157,7 @@ struct chunking_string_sink final : nxt::rt::byte_sink
     std::size_t limit = 1;
 };
 
-struct shared_string_sink final : nxt::rt::byte_sink
+struct shared_string_sink final : nxtrt::byte_sink
 {
     explicit shared_string_sink(
         std::shared_ptr<std::string> text,
@@ -166,11 +166,11 @@ struct shared_string_sink final : nxt::rt::byte_sink
         , limit(limit)
     {}
 
-    nxt::rt::task<std::size_t>
+    nxtrt::task<std::size_t>
     write_some(std::span<const std::byte> src) override
     {
         auto n = std::min(limit, src.size());
-        *text += nxt::rt::as_string_view(src.first(n));
+        *text += nxtrt::as_string_view(src.first(n));
         co_return n;
     }
 
@@ -200,9 +200,9 @@ struct echo_tool
         return parameters{.text = std::move(*text)};
     }
 
-    nxt::rt::task<nxtai::tools::tool_result> run(parameters args) const
+    nxtrt::task<nxtai::tools::tool_result> run(parameters args) const
     {
-        co_await nxt::rt::yield();
+        co_await nxtrt::yield();
         co_return nxtai::tools::tool_result{
             .output = std::move(args.text),
             .observed = std::nullopt,
@@ -210,27 +210,27 @@ struct echo_tool
     }
 };
 
-nxt::rt::task<int> read_ambient_int_after_yield()
+nxtrt::task<int> read_ambient_int_after_yield()
 {
-    co_await nxt::rt::yield();
-    co_return nxt::rt::env_require<ambient_int_key>();
+    co_await nxtrt::yield();
+    co_return nxtrt::env_require<ambient_int_key>();
 }
 
-nxt::rt::task<int> read_ambient_int()
+nxtrt::task<int> read_ambient_int()
 {
-    co_return nxt::rt::env_require<ambient_int_key>();
+    co_return nxtrt::env_require<ambient_int_key>();
 }
 
-nxt::rt::task<void> record_after_yield(std::vector<int> & events, int value)
+nxtrt::task<void> record_after_yield(std::vector<int> & events, int value)
 {
     events.push_back(value * 10 + 1);
-    co_await nxt::rt::yield();
+    co_await nxtrt::yield();
     events.push_back(value * 10 + 2);
 }
 
-nxt::rt::task<void>
+nxtrt::task<void>
 record_next_channel_value(
-    nxt::rt::channel<int> & events,
+    nxtrt::channel<int> & events,
     std::vector<int> & out)
 {
     auto value = co_await events.next();
@@ -238,17 +238,17 @@ record_next_channel_value(
         out.push_back(*value);
 }
 
-nxt::rt::task<void>
-record_closed_channel(nxt::rt::channel<int> & events, bool & finished)
+nxtrt::task<void>
+record_closed_channel(nxtrt::channel<int> & events, bool & finished)
 {
     auto value = co_await events.next();
     expect(!value);
     finished = true;
 }
 
-nxt::rt::task<void>
+nxtrt::task<void>
 record_after_event(
-    nxt::rt::event & ready,
+    nxtrt::event & ready,
     std::vector<int> & out,
     int value)
 {
@@ -256,186 +256,186 @@ record_after_event(
     out.push_back(value);
 }
 
-nxt::rt::task<void> record_current_zone(
-    std::vector<nxt::rt::task_zone *> & zones)
+nxtrt::task<void> record_current_zone(
+    std::vector<nxtrt::task_zone *> & zones)
 {
-    co_await nxt::rt::yield();
-    zones.push_back(nxt::rt::current_zone());
+    co_await nxtrt::yield();
+    zones.push_back(nxtrt::current_zone());
 }
 
-nxt::rt::task<bool> read_task_stop_after_yield()
+nxtrt::task<bool> read_task_stop_after_yield()
 {
-    co_await nxt::rt::yield();
-    co_return nxt::rt::task_stop_requested();
+    co_await nxtrt::yield();
+    co_return nxtrt::task_stop_requested();
 }
 
-nxt::rt::task<bool> shielded_child_stop_state()
+nxtrt::task<bool> shielded_child_stop_state()
 {
-    co_return co_await nxt::rt::shield(read_task_stop_after_yield());
+    co_return co_await nxtrt::shield(read_task_stop_after_yield());
 }
 
-nxt::rt::task<void> await_manual_token(nxt::rt::wait_token token)
+nxtrt::task<void> await_manual_token(nxtrt::wait_token token)
 {
-    co_await nxt::rt::op::manual{.token = token};
+    co_await nxtrt::op::manual{.token = token};
 }
 
-nxt::rt::task<void> shielded_manual_token(nxt::rt::wait_token token)
+nxtrt::task<void> shielded_manual_token(nxtrt::wait_token token)
 {
-    co_await nxt::rt::shield(await_manual_token(token));
+    co_await nxtrt::shield(await_manual_token(token));
 }
 
-nxt::rt::task<void> throw_after_yield(std::vector<int> & events, int value)
+nxtrt::task<void> throw_after_yield(std::vector<int> & events, int value)
 {
     events.push_back(value * 10 + 1);
-    co_await nxt::rt::yield();
-    throw nxt::rt::runtime_error{"zone child boom"};
+    co_await nxtrt::yield();
+    throw nxtrt::runtime_error{"zone child boom"};
 }
 
-nxt::rt::task<int> value_after_yield(int value)
+nxtrt::task<int> value_after_yield(int value)
 {
-    co_await nxt::rt::yield();
+    co_await nxtrt::yield();
     co_return value;
 }
 
-nxt::rt::task<std::string> string_after_yield(std::string value)
+nxtrt::task<std::string> string_after_yield(std::string value)
 {
-    co_await nxt::rt::yield();
+    co_await nxtrt::yield();
     co_return value;
 }
 
-nxt::rt::task<int> value_after_two_yields_or_stop(
+nxtrt::task<int> value_after_two_yields_or_stop(
     std::vector<int> & events,
     int value)
 {
-    co_await nxt::rt::yield();
-    co_await nxt::rt::yield();
-    if (nxt::rt::stop_requested()) {
+    co_await nxtrt::yield();
+    co_await nxtrt::yield();
+    if (nxtrt::stop_requested()) {
         events.push_back(value);
-        throw nxt::rt::operation_cancelled{};
+        throw nxtrt::operation_cancelled{};
     }
     co_return -value;
 }
 
-nxt::rt::task<int> throw_int_after_yield()
+nxtrt::task<int> throw_int_after_yield()
 {
-    co_await nxt::rt::yield();
-    throw nxt::rt::runtime_error{"zone child int boom"};
+    co_await nxtrt::yield();
+    throw nxtrt::runtime_error{"zone child int boom"};
 }
 
-nxt::rt::task<void> record_stop_state_after_yield(
+nxtrt::task<void> record_stop_state_after_yield(
     std::vector<int> & events,
     int value)
 {
-    co_await nxt::rt::yield();
-    events.push_back(nxt::rt::stop_requested() ? value : -value);
+    co_await nxtrt::yield();
+    events.push_back(nxtrt::stop_requested() ? value : -value);
 }
 
-nxt::rt::task<void> record_stop_state_after_two_yields(
+nxtrt::task<void> record_stop_state_after_two_yields(
     std::vector<int> & events,
     int value)
 {
-    co_await nxt::rt::yield();
-    co_await nxt::rt::yield();
-    events.push_back(nxt::rt::stop_requested() ? value : -value);
+    co_await nxtrt::yield();
+    co_await nxtrt::yield();
+    events.push_back(nxtrt::stop_requested() ? value : -value);
 }
 
-nxt::rt::task<void> record_task_stop_state_after_yield(
+nxtrt::task<void> record_task_stop_state_after_yield(
     std::vector<int> & events,
     int value)
 {
-    co_await nxt::rt::yield();
-    events.push_back(nxt::rt::task_stop_requested() ? value : -value);
+    co_await nxtrt::yield();
+    events.push_back(nxtrt::task_stop_requested() ? value : -value);
 }
 
-nxt::rt::task<void> draw_busy_and_mark(bool & ran)
+nxtrt::task<void> draw_busy_and_mark(bool & ran)
 {
-    co_await nxt::rt::draw(nxtui::tui::text("busy"));
+    co_await nxtrt::draw(nxtui::tui::text("busy"));
     ran = true;
     co_return;
 }
 
-nxt::rt::task<void> spawn_widget_and_capture(
-    nxt::rt::widget_slot & captured,
+nxtrt::task<void> spawn_widget_and_capture(
+    nxtrt::widget_slot & captured,
     bool & ran)
 {
-    auto child = nxt::rt::spawn_widget(
+    auto child = nxtrt::spawn_widget(
         [&ran] {
             return draw_busy_and_mark(ran);
         });
     captured = child.surface();
-    co_await nxt::rt::draw(captured);
+    co_await nxtrt::draw(captured);
     co_return;
 }
 
-nxt::rt::task<void> run_spawned_widget_clear_test(
-    nxt::rt::ui_runtime & runtime,
-    nxt::rt::widget_slot root,
-    nxt::rt::widget_slot & captured,
+nxtrt::task<void> run_spawned_widget_clear_test(
+    nxtrt::ui_runtime & runtime,
+    nxtrt::widget_slot root,
+    nxtrt::widget_slot & captured,
     bool & ran)
 {
     auto body = [&] {
-        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
             &runtime,
             [&] {
-                return nxt::rt::with_widget_slot(
+                return nxtrt::with_widget_slot(
                     root,
                     [&] {
                         return spawn_widget_and_capture(captured, ran);
                     });
             });
     };
-    co_await nxt::rt::with_zone(body);
+    co_await nxtrt::with_zone(body);
 }
 
-nxt::rt::task<int> draw_work_measure_and_stop(
-    nxt::rt::widget_slot root,
+nxtrt::task<int> draw_work_measure_and_stop(
+    nxtrt::widget_slot root,
     nxtui::height_t & composed_height)
 {
-    co_await nxt::rt::draw(nxtui::tui::text("work"));
-    co_await nxt::rt::yield();
+    co_await nxtrt::draw(nxtui::tui::text("work"));
+    co_await nxtrt::yield();
     composed_height = root.height_hint().min;
-    nxt::rt::require_current_zone().stop();
+    nxtrt::require_current_zone().stop();
     co_return 7;
 }
 
-nxt::rt::task<void> draw_rate_until_stopped(bool & companion_stopped)
+nxtrt::task<void> draw_rate_until_stopped(bool & companion_stopped)
 {
-    co_await nxt::rt::draw(nxtui::tui::text("rate"));
-    while (!nxt::rt::stop_requested())
-        co_await nxt::rt::yield();
+    co_await nxtrt::draw(nxtui::tui::text("rate"));
+    while (!nxtrt::stop_requested())
+        co_await nxtrt::yield();
     companion_stopped = true;
 }
 
-nxt::rt::task<nxt::rt::catching_deed<int>> spawn_sibling_widgets(
-    nxt::rt::widget_slot root,
+nxtrt::task<nxtrt::catching_deed<int>> spawn_sibling_widgets(
+    nxtrt::widget_slot root,
     bool & companion_stopped,
     nxtui::height_t & composed_height)
 {
-    auto worker = nxt::rt::spawn_widget(
+    auto worker = nxtrt::spawn_widget(
         [root, &composed_height] {
             return draw_work_measure_and_stop(root, composed_height);
         });
-    auto companion = nxt::rt::spawn_widget(
+    auto companion = nxtrt::spawn_widget(
         [&companion_stopped] {
             return draw_rate_until_stopped(companion_stopped);
         });
-    co_await nxt::rt::draw(
+    co_await nxtrt::draw(
         nxtui::tui::column(worker.surface(), companion.surface()));
     co_return std::move(worker).cope();
 }
 
-nxt::rt::task<nxt::rt::catching_deed<int>>
+nxtrt::task<nxtrt::catching_deed<int>>
 run_sibling_widget_compose_test(
-    nxt::rt::ui_runtime & runtime,
-    nxt::rt::widget_slot root,
+    nxtrt::ui_runtime & runtime,
+    nxtrt::widget_slot root,
     bool & companion_stopped,
     nxtui::height_t & composed_height)
 {
     auto body = [&] {
-        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
             &runtime,
             [&] {
-                return nxt::rt::with_widget_slot(
+                return nxtrt::with_widget_slot(
                     root,
                     [&] {
                         return spawn_sibling_widgets(
@@ -445,65 +445,65 @@ run_sibling_widget_compose_test(
                     });
             });
     };
-    co_return co_await nxt::rt::with_zone(body);
+    co_return co_await nxtrt::with_zone(body);
 }
 
-nxt::rt::task<bool> draw_after_stopping_current_zone()
+nxtrt::task<bool> draw_after_stopping_current_zone()
 {
-    nxt::rt::require_current_zone().stop();
+    nxtrt::require_current_zone().stop();
     try {
-        co_await nxt::rt::draw(nxtui::tui::text("after-stop"));
-    } catch (const nxt::rt::operation_cancelled &) {
+        co_await nxtrt::draw(nxtui::tui::text("after-stop"));
+    } catch (const nxtrt::operation_cancelled &) {
         co_return true;
     }
     co_return false;
 }
 
-nxt::rt::task<bool> print_after_stopping_current_zone()
+nxtrt::task<bool> print_after_stopping_current_zone()
 {
-    nxt::rt::require_current_zone().stop();
+    nxtrt::require_current_zone().stop();
     try {
-        co_await nxt::rt::print_block("after-stop\n");
-    } catch (const nxt::rt::operation_cancelled &) {
+        co_await nxtrt::print_block("after-stop\n");
+    } catch (const nxtrt::operation_cancelled &) {
         co_return true;
     }
     co_return false;
 }
 
-nxt::rt::task<bool> run_draw_after_stop_check(
-    nxt::rt::ui_runtime & runtime,
-    nxt::rt::widget_slot root)
+nxtrt::task<bool> run_draw_after_stop_check(
+    nxtrt::ui_runtime & runtime,
+    nxtrt::widget_slot root)
 {
     auto body = [&] {
-        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
             &runtime,
             [&] {
-                return nxt::rt::with_widget_slot(
+                return nxtrt::with_widget_slot(
                     root,
                     [] {
                         return draw_after_stopping_current_zone();
                     });
             });
     };
-    co_return co_await nxt::rt::with_zone(body);
+    co_return co_await nxtrt::with_zone(body);
 }
 
-nxt::rt::task<bool> run_print_after_stop_check(
-    nxt::rt::ui_runtime & runtime,
-    nxt::rt::widget_slot root)
+nxtrt::task<bool> run_print_after_stop_check(
+    nxtrt::ui_runtime & runtime,
+    nxtrt::widget_slot root)
 {
     auto body = [&] {
-        return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
+        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
             &runtime,
             [&] {
-                return nxt::rt::with_widget_slot(
+                return nxtrt::with_widget_slot(
                     root,
                     [] {
                         return print_after_stopping_current_zone();
                     });
             });
     };
-    co_return co_await nxt::rt::with_zone(body);
+    co_return co_await nxtrt::with_zone(body);
 }
 
 static suite runtime_tests{
@@ -606,27 +606,27 @@ static suite runtime_tests{
 
         "deck"_test = [] {
             "sync_wait returns completed root task values"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
-                expect(deck.sync_wait([]() -> nxt::rt::task<int> {
+                expect(deck.sync_wait([]() -> nxtrt::task<int> {
                     co_return 7;
                 }) == 7_i);
             };
 
             "resumes tasks awaiting children"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto child_body = [&events]() -> nxt::rt::task<int> {
+                auto child_body = [&events]() -> nxtrt::task<int> {
                     events.push_back(2);
-                    co_await nxt::rt::yield();
+                    co_await nxtrt::yield();
                     events.push_back(3);
                     co_return 4;
                 };
 
                 expect(
                     deck.sync_wait(
-                        [&events, child_body]() -> nxt::rt::task<int> {
+                        [&events, child_body]() -> nxtrt::task<int> {
                             events.push_back(1);
                             auto child = child_body();
                             auto child_id = child.id();
@@ -644,16 +644,16 @@ static suite runtime_tests{
             };
 
             "re-enters yielded tasks through the pump"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto out = std::vector<int>{};
 
-                auto child_body = [&out](int tag) -> nxt::rt::task<void> {
+                auto child_body = [&out](int tag) -> nxtrt::task<void> {
                     out.push_back(tag * 10 + 1);
-                    co_await nxt::rt::yield();
+                    co_await nxtrt::yield();
                     out.push_back(tag * 10 + 2);
                 };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                deck.sync_wait([&]() -> nxtrt::task<void> {
                     auto first = child_body(1);
                     auto second = child_body(2);
 
@@ -666,7 +666,7 @@ static suite runtime_tests{
             };
 
             "run_ready only plays the initially ready round"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 // Pass state as a coroutine parameter instead of capturing
@@ -674,9 +674,9 @@ static suite runtime_tests{
                 // lambda object, while parameters live in the coroutine
                 // frame.
                 auto task_body =
-                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    [](std::vector<int> & events) -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::yield();
+                    co_await nxtrt::yield();
                     events.push_back(2);
                 };
 
@@ -698,15 +698,15 @@ static suite runtime_tests{
             };
 
             "run_until_idle plays rounds until quiescence"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 // Same lifetime rule as above: coroutine parameters are
                 // frame state.
                 auto task_body =
-                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    [](std::vector<int> & events) -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::yield();
+                    co_await nxtrt::yield();
                     events.push_back(2);
                 };
 
@@ -721,12 +721,12 @@ static suite runtime_tests{
             };
 
             "propagates exceptions through sync_wait"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto threw = false;
                 try {
-                    deck.sync_wait([]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::yield();
+                    deck.sync_wait([]() -> nxtrt::task<void> {
+                        co_await nxtrt::yield();
                         throw std::runtime_error{"boom"};
                     });
                 } catch (const std::exception &) {
@@ -736,9 +736,9 @@ static suite runtime_tests{
             };
 
             "rejects reentrant pump calls"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
-                expect(deck.sync_wait([&deck]() -> nxt::rt::task<bool> {
+                expect(deck.sync_wait([&deck]() -> nxtrt::task<bool> {
                     try {
                         deck.run_ready();
                     } catch (const std::exception &) {
@@ -749,10 +749,10 @@ static suite runtime_tests{
             };
 
             "tasks observe their own stop request"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
-                auto task = []() -> nxt::rt::task<bool> {
-                    co_return nxt::rt::task_stop_requested();
+                auto task = []() -> nxtrt::task<bool> {
+                    co_return nxtrt::task_stop_requested();
                 }();
                 task.request_stop();
 
@@ -760,10 +760,10 @@ static suite runtime_tests{
             };
 
             "then transforms task values"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto result = deck.sync_wait(
-                    nxt::rt::then(value_after_yield(20), [](int value) {
+                    nxtrt::then(value_after_yield(20), [](int value) {
                         return value + 1;
                     }));
 
@@ -771,10 +771,10 @@ static suite runtime_tests{
             };
 
             "let_value chains task values"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto result = deck.sync_wait(
-                    nxt::rt::let_value(value_after_yield(20), [](int value) {
+                    nxtrt::let_value(value_after_yield(20), [](int value) {
                         return value_after_yield(value + 2);
                     }));
 
@@ -782,10 +782,10 @@ static suite runtime_tests{
             };
 
             "finally runs shielded cleanup before returning values"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait(nxt::rt::finally(
+                auto result = deck.sync_wait(nxtrt::finally(
                     value_after_yield(7),
                     [&]() {
                         return record_after_yield(events, 9);
@@ -796,12 +796,12 @@ static suite runtime_tests{
             };
 
             "finally runs cleanup after body failure"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
-                    (void)deck.sync_wait(nxt::rt::finally(
+                    (void)deck.sync_wait(nxtrt::finally(
                         throw_int_after_yield(),
                         [&]() {
                             return record_after_yield(events, 8);
@@ -815,17 +815,17 @@ static suite runtime_tests{
             };
 
             "finally groups body and cleanup failures"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto grouped = false;
 
                 try {
-                    (void)deck.sync_wait(nxt::rt::finally(
+                    (void)deck.sync_wait(nxtrt::finally(
                         throw_int_after_yield(),
-                        []() -> nxt::rt::task<void> {
-                            co_await nxt::rt::yield();
-                            throw nxt::rt::runtime_error{"cleanup boom"};
+                        []() -> nxtrt::task<void> {
+                            co_await nxtrt::yield();
+                            throw nxtrt::runtime_error{"cleanup boom"};
                         }));
-                } catch (const nxt::rt::exception_group & group) {
+                } catch (const nxtrt::exception_group & group) {
                     grouped = true;
                     expect(group.exceptions().size() == std::size_t{2});
                 }
@@ -834,18 +834,18 @@ static suite runtime_tests{
             };
 
             "task adaptors flow through then and let_value"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 auto result = deck.sync_wait(
                     value_after_yield(10)
-                    | nxt::rt::then([](int value) {
+                    | nxtrt::then([](int value) {
                         return value * 2;
                     })
-                    | nxt::rt::let_value([](int value) {
+                    | nxtrt::let_value([](int value) {
                         return value_after_yield(value + 5);
                     })
-                    | nxt::rt::finally([&]() {
+                    | nxtrt::finally([&]() {
                         return record_after_yield(events, 6);
                     }));
 
@@ -854,12 +854,12 @@ static suite runtime_tests{
             };
 
             "for_each_task awaits lazy ranges of tasks"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto values = std::array{1, 2, 3};
                 auto events = std::vector<int>{};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::for_each_task(
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::for_each_task(
                         values | std::views::transform(
                             [&](int value) {
                                 return record_after_yield(events, value);
@@ -870,11 +870,11 @@ static suite runtime_tests{
             };
 
             "when_all_range awaits lazy ranges concurrently"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto values = std::array{1, 2, 3};
 
-                auto result = deck.sync_wait([&]() -> nxt::rt::task<std::vector<int>> {
-                    co_return co_await nxt::rt::when_all_range(
+                auto result = deck.sync_wait([&]() -> nxtrt::task<std::vector<int>> {
+                    co_return co_await nxtrt::when_all_range(
                         values | std::views::transform(
                             [](int value) {
                                 return value_after_yield(value * 10);
@@ -885,12 +885,12 @@ static suite runtime_tests{
             };
 
             "wait_any_range awaits lazy ranges concurrently"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto values = std::array{5, 6};
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait([&]() -> nxt::rt::task<int> {
-                    co_return co_await nxt::rt::wait_any_range(
+                auto result = deck.sync_wait([&]() -> nxtrt::task<int> {
+                    co_return co_await nxtrt::wait_any_range(
                         values | std::views::transform(
                             [&](int value) {
                                 if (value == 5)
@@ -907,11 +907,11 @@ static suite runtime_tests{
         };
 
         "environment"_test = [] {
-            auto deck = nxt::rt::deck{};
+            auto deck = nxtrt::deck{};
 
             "survives nested task awaits"_test = [&] {
-                auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
-                    co_return co_await nxt::rt::with_env<ambient_int_key>(
+                auto result = deck.sync_wait([]() -> nxtrt::task<int> {
+                    co_return co_await nxtrt::with_env<ambient_int_key>(
                         41, [] { return read_ambient_int_after_yield(); });
                 });
 
@@ -919,11 +919,11 @@ static suite runtime_tests{
             };
 
             "restores outer bindings"_test = [&] {
-                auto result = deck.sync_wait([]() -> nxt::rt::task<int> {
-                    co_return co_await nxt::rt::with_env<ambient_int_key>(
-                        10, []() -> nxt::rt::task<int> {
+                auto result = deck.sync_wait([]() -> nxtrt::task<int> {
+                    co_return co_await nxtrt::with_env<ambient_int_key>(
+                        10, []() -> nxtrt::task<int> {
                             auto before = co_await read_ambient_int();
-                            auto inside = co_await nxt::rt::with_env<
+                            auto inside = co_await nxtrt::with_env<
                                 ambient_int_key>(20, [] {
                                 return read_ambient_int_after_yield();
                             });
@@ -936,29 +936,29 @@ static suite runtime_tests{
             };
 
             "trace context is inherited by forked tasks"_test = [&] {
-                auto trace = std::make_shared<nxt::rt::trace_context>();
+                auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
 
                 auto traced_child =
-                    [](std::string name) -> nxt::rt::task<void> {
-                    auto trace = nxt::rt::current_trace_context();
+                    [](std::string name) -> nxtrt::task<void> {
+                    auto trace = nxtrt::current_trace_context();
                     auto span = trace->start_span(
                         std::move(name),
-                        nxt::rt::current_trace_span_id());
-                    co_await nxt::rt::yield();
+                        nxtrt::current_trace_span_id());
+                    co_await nxtrt::yield();
                     span.finish("ok");
                 };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_env<nxt::rt::trace_context_key>(
-                        trace, [&]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::with_env<
-                            nxt::rt::trace_current_span_key>(
-                            root.span_id(), [&]() -> nxt::rt::task<void> {
-                            co_await nxt::rt::with_zone(
-                                [&]() -> nxt::rt::task<void> {
-                                nxt::rt::fork(traced_child("child-a"));
-                                nxt::rt::fork(traced_child("child-b"));
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_env<nxtrt::trace_context_key>(
+                        trace, [&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_env<
+                            nxtrt::trace_current_span_key>(
+                            root.span_id(), [&]() -> nxtrt::task<void> {
+                            co_await nxtrt::with_zone(
+                                [&]() -> nxtrt::task<void> {
+                                nxtrt::fork(traced_child("child-a"));
+                                nxtrt::fork(traced_child("child-b"));
                                 co_return;
                             });
                         });
@@ -975,20 +975,20 @@ static suite runtime_tests{
             };
 
             "with trace span scopes task bodies"_test = [&] {
-                auto trace = std::make_shared<nxt::rt::trace_context>();
+                auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
 
-                auto result = deck.sync_wait([&]() -> nxt::rt::task<int> {
-                    co_return co_await nxt::rt::with_env<
-                        nxt::rt::trace_context_key>(
-                        trace, [&]() -> nxt::rt::task<int> {
-                        co_return co_await nxt::rt::with_env<
-                            nxt::rt::trace_current_span_key>(
-                            root.span_id(), [&]() -> nxt::rt::task<int> {
-                            co_return co_await nxt::rt::with_trace_span(
+                auto result = deck.sync_wait([&]() -> nxtrt::task<int> {
+                    co_return co_await nxtrt::with_env<
+                        nxtrt::trace_context_key>(
+                        trace, [&]() -> nxtrt::task<int> {
+                        co_return co_await nxtrt::with_env<
+                            nxtrt::trace_current_span_key>(
+                            root.span_id(), [&]() -> nxtrt::task<int> {
+                            co_return co_await nxtrt::with_trace_span(
                                 "child",
-                                []() -> nxt::rt::task<int> {
-                                co_await nxt::rt::yield();
+                                []() -> nxtrt::task<int> {
+                                co_await nxtrt::yield();
                                 co_return 42;
                             });
                         });
@@ -1006,14 +1006,14 @@ static suite runtime_tests{
 
         "terminal app"_test = [] {
             "keeps the alternate screen opt-in"_test = [] {
-                auto options = nxt::rt::terminal_app_options{};
+                auto options = nxtrt::terminal_app_options{};
                 expect(!options.alternate_screen);
             };
         };
 
         "widget slots"_test = [] {
             "child slots expose independently drawable surfaces"_test = [] {
-                auto runtime = nxt::rt::ui_runtime{
+                auto runtime = nxtrt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
@@ -1029,14 +1029,14 @@ static suite runtime_tests{
             };
 
             "spawned child widgets clear their slot on exit"_test = [] {
-                auto runtime = nxt::rt::ui_runtime{
+                auto runtime = nxtrt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
                 auto captured =
                     nxtui::tui::Slot<nxtui::tui::AnyLayout>{nxtui::tui::AnyLayout{}};
                 auto ran = false;
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 deck.sync_wait(
                     run_spawned_widget_clear_test(
@@ -1050,11 +1050,11 @@ static suite runtime_tests{
             };
 
             "ambient child widgets compose as siblings"_test = [] {
-                auto runtime = nxt::rt::ui_runtime{
+                auto runtime = nxtrt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto companion_stopped = false;
                 auto composed_height = 0 * nxtui::ln;
 
@@ -1073,11 +1073,11 @@ static suite runtime_tests{
             };
 
             "draw observes zone stop before publishing"_test = [] {
-                auto runtime = nxt::rt::ui_runtime{
+                auto runtime = nxtrt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto cancelled = deck.sync_wait(
                     run_draw_after_stop_check(runtime, root));
@@ -1087,11 +1087,11 @@ static suite runtime_tests{
             };
 
             "print observes zone stop before enqueueing"_test = [] {
-                auto runtime = nxt::rt::ui_runtime{
+                auto runtime = nxtrt::ui_runtime{
                     {.render = false,
                      .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto cancelled = deck.sync_wait(
                     run_print_after_stop_check(runtime, root));
@@ -1102,14 +1102,14 @@ static suite runtime_tests{
 
         "zones"_test = [] {
             "bind the current zone while the body runs"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
-                auto seen = deck.sync_wait([]() -> nxt::rt::task<bool> {
-                    co_return co_await nxt::rt::with_zone(
-                        []() -> nxt::rt::task<bool> {
-                            auto * before = nxt::rt::current_zone();
-                            co_await nxt::rt::yield();
-                            auto * after = nxt::rt::current_zone();
+                auto seen = deck.sync_wait([]() -> nxtrt::task<bool> {
+                    co_return co_await nxtrt::with_zone(
+                        []() -> nxtrt::task<bool> {
+                            auto * before = nxtrt::current_zone();
+                            co_await nxtrt::yield();
+                            auto * after = nxtrt::current_zone();
                             co_return before != nullptr && before == after;
                         });
                 });
@@ -1118,12 +1118,12 @@ static suite runtime_tests{
             };
 
             "join forked tasks before the zone exits"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::fork(record_after_yield(events, 1));
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::fork(record_after_yield(events, 1));
                         events.push_back(2);
                         co_return;
                     });
@@ -1135,38 +1135,38 @@ static suite runtime_tests{
             };
 
             "let forked tasks inherit the current zone"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto zones = std::vector<nxt::rt::task_zone *>{};
-                auto expected = static_cast<nxt::rt::task_zone *>(nullptr);
+                auto deck = nxtrt::deck{};
+                auto zones = std::vector<nxtrt::task_zone *>{};
+                auto expected = static_cast<nxtrt::task_zone *>(nullptr);
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        expected = nxt::rt::current_zone();
-                        nxt::rt::fork(record_current_zone(zones));
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        expected = nxtrt::current_zone();
+                        nxtrt::fork(record_current_zone(zones));
                         co_return;
                     });
                     co_return;
                 });
 
                 expect(expected != nullptr);
-                expect(zones == std::vector<nxt::rt::task_zone *>{expected});
+                expect(zones == std::vector<nxtrt::task_zone *>{expected});
             };
 
             "allow children to fork more work into the same zone"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto parent = [&events]() -> nxt::rt::task<void> {
+                auto parent = [&events]() -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::yield();
-                    nxt::rt::fork(record_after_yield(events, 2));
+                    co_await nxtrt::yield();
+                    nxtrt::fork(record_after_yield(events, 2));
                     events.push_back(3);
                     co_return;
                 };
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::fork(parent());
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::fork(parent());
                         co_return;
                     });
                     events.push_back(4);
@@ -1177,11 +1177,11 @@ static suite runtime_tests{
             };
 
             "reject fork outside a zone"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
-                auto rejected = deck.sync_wait([]() -> nxt::rt::task<bool> {
+                auto rejected = deck.sync_wait([]() -> nxtrt::task<bool> {
                     try {
-                        nxt::rt::fork([]() -> nxt::rt::task<void> {
+                        nxtrt::fork([]() -> nxtrt::task<void> {
                             co_return;
                         }());
                     } catch (const std::exception &) {
@@ -1194,16 +1194,16 @@ static suite runtime_tests{
             };
 
             "propagate child exceptions after joining siblings"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
-                    deck.sync_wait([&]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::with_zone(
-                            [&]() -> nxt::rt::task<void> {
-                                nxt::rt::fork(throw_after_yield(events, 0));
-                                nxt::rt::fork(record_after_yield(events, 2));
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_zone(
+                            [&]() -> nxtrt::task<void> {
+                                nxtrt::fork(throw_after_yield(events, 0));
+                                nxtrt::fork(record_after_yield(events, 2));
                                 co_return;
                             });
                         co_return;
@@ -1217,22 +1217,22 @@ static suite runtime_tests{
             };
 
             "group multiple child exceptions"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto grouped = false;
 
                 try {
-                    deck.sync_wait([&]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::with_zone(
-                            [&]() -> nxt::rt::task<void> {
-                                nxt::rt::fork(throw_after_yield(events, 1));
-                                nxt::rt::fork(throw_after_yield(events, 2));
-                                nxt::rt::fork(record_after_yield(events, 3));
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_zone(
+                            [&]() -> nxtrt::task<void> {
+                                nxtrt::fork(throw_after_yield(events, 1));
+                                nxtrt::fork(throw_after_yield(events, 2));
+                                nxtrt::fork(record_after_yield(events, 3));
                                 co_return;
                             });
                         co_return;
                     });
-                } catch (const nxt::rt::exception_group & group) {
+                } catch (const nxtrt::exception_group & group) {
                     grouped = true;
                     expect(group.exceptions().size() == std::size_t{2});
                 }
@@ -1242,15 +1242,15 @@ static suite runtime_tests{
             };
 
             "return forked task results after joining"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::deed<int>> {
-                        co_return co_await nxt::rt::with_zone(
-                            []() -> nxt::rt::task<nxt::rt::deed<int>> {
+                        -> nxtrt::task<nxtrt::deed<int>> {
+                        co_return co_await nxtrt::with_zone(
+                            []() -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
-                                    nxt::rt::fork(value_after_yield(42));
+                                    nxtrt::fork(value_after_yield(42));
                                 co_return std::move(child);
                             });
                     });
@@ -1259,19 +1259,19 @@ static suite runtime_tests{
             };
 
             "return several forked task results"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 using children_type = std::tuple<
-                    nxt::rt::deed<int>,
-                    nxt::rt::deed<int>>;
+                    nxtrt::deed<int>,
+                    nxtrt::deed<int>>;
 
                 auto children =
-                    deck.sync_wait([]() -> nxt::rt::task<children_type> {
-                        co_return co_await nxt::rt::with_zone(
-                            []() -> nxt::rt::task<children_type> {
+                    deck.sync_wait([]() -> nxtrt::task<children_type> {
+                        co_return co_await nxtrt::with_zone(
+                            []() -> nxtrt::task<children_type> {
                                 auto first =
-                                    nxt::rt::fork(value_after_yield(10));
+                                    nxtrt::fork(value_after_yield(10));
                                 auto second =
-                                    nxt::rt::fork(value_after_yield(20));
+                                    nxtrt::fork(value_after_yield(20));
                                 co_return children_type{
                                     std::move(first),
                                     std::move(second)};
@@ -1284,15 +1284,15 @@ static suite runtime_tests{
             };
 
             "return failed deeds for caller observation"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::deed<int>> {
-                        co_return co_await nxt::rt::with_zone(
-                            []() -> nxt::rt::task<nxt::rt::deed<int>> {
+                        -> nxtrt::task<nxtrt::deed<int>> {
+                        co_return co_await nxtrt::with_zone(
+                            []() -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
-                                    nxt::rt::fork(throw_int_after_yield());
+                                    nxtrt::fork(throw_int_after_yield());
                                 co_return std::move(child);
                             });
                     });
@@ -1308,15 +1308,15 @@ static suite runtime_tests{
             };
 
             "allow observed deed failures inside the zone"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto observed = false;
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
                         auto child =
-                            nxt::rt::fork(throw_int_after_yield());
-                        co_await nxt::rt::yield();
-                        co_await nxt::rt::yield();
+                            nxtrt::fork(throw_int_after_yield());
+                        co_await nxtrt::yield();
+                        co_await nxtrt::yield();
                         observed = child.exception() != nullptr;
                         co_return;
                     });
@@ -1326,17 +1326,17 @@ static suite runtime_tests{
             };
 
             "let coped deeds report failure as expected"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::catching_deed<int>> {
-                        co_return co_await nxt::rt::with_zone(
+                        -> nxtrt::task<nxtrt::catching_deed<int>> {
+                        co_return co_await nxtrt::with_zone(
                             []()
-                                -> nxt::rt::task<
-                                    nxt::rt::catching_deed<int>> {
+                                -> nxtrt::task<
+                                    nxtrt::catching_deed<int>> {
                                 auto child =
-                                    nxt::rt::fork(throw_int_after_yield())
+                                    nxtrt::fork(throw_int_after_yield())
                                         .cope();
                                 co_return std::move(child);
                             });
@@ -1347,17 +1347,17 @@ static suite runtime_tests{
             };
 
             "let coped deeds report success as expected"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto child =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<nxt::rt::catching_deed<int>> {
-                        co_return co_await nxt::rt::with_zone(
+                        -> nxtrt::task<nxtrt::catching_deed<int>> {
+                        co_return co_await nxtrt::with_zone(
                             []()
-                                -> nxt::rt::task<
-                                    nxt::rt::catching_deed<int>> {
+                                -> nxtrt::task<
+                                    nxtrt::catching_deed<int>> {
                                 auto child =
-                                    nxt::rt::fork(value_after_yield(99))
+                                    nxtrt::fork(value_after_yield(99))
                                         .cope();
                                 co_return std::move(child);
                             });
@@ -1369,14 +1369,14 @@ static suite runtime_tests{
             };
 
             "share a stop token with forked children"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::fork(
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::fork(
                             record_stop_state_after_yield(events, 1));
-                        nxt::rt::require_current_zone().stop();
+                        nxtrt::require_current_zone().stop();
                         co_return;
                     });
                 });
@@ -1385,14 +1385,14 @@ static suite runtime_tests{
             };
 
             "reject fork after zone stop"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto rejected = false;
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::require_current_zone().stop();
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::require_current_zone().stop();
                         try {
-                            nxt::rt::fork(value_after_yield(1));
+                            nxtrt::fork(value_after_yield(1));
                         } catch (const std::exception &) {
                             rejected = true;
                         }
@@ -1404,17 +1404,17 @@ static suite runtime_tests{
             };
 
             "request child stop when the zone body fails"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
-                    deck.sync_wait([&]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::with_zone(
-                            [&]() -> nxt::rt::task<void> {
-                                nxt::rt::fork(
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_zone(
+                            [&]() -> nxtrt::task<void> {
+                                nxtrt::fork(
                                     record_stop_state_after_yield(events, 2));
-                                throw nxt::rt::runtime_error{
+                                throw nxtrt::runtime_error{
                                     "zone body boom"};
                             });
                     });
@@ -1427,14 +1427,14 @@ static suite runtime_tests{
             };
 
             "request task stop on forked children when the zone stops"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::fork(
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::fork(
                             record_task_stop_state_after_yield(events, 3));
-                        nxt::rt::require_current_zone().stop();
+                        nxtrt::require_current_zone().stop();
                         co_return;
                     });
                 });
@@ -1443,15 +1443,15 @@ static suite runtime_tests{
             };
 
             "child cancellation is not a zone failure after stop"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::fork(
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::fork(
                             value_after_two_yields_or_stop(events, 4));
-                        co_await nxt::rt::yield();
-                        nxt::rt::require_current_zone().stop();
+                        co_await nxtrt::yield();
+                        nxtrt::require_current_zone().stop();
                     });
                 });
 
@@ -1459,21 +1459,21 @@ static suite runtime_tests{
             };
 
             "child cancellation remains failure before zone stop"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto threw = false;
 
                 try {
-                    deck.sync_wait([&]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::with_zone(
-                            []() -> nxt::rt::task<void> {
-                                nxt::rt::fork(
-                                    []() -> nxt::rt::task<void> {
-                                        throw nxt::rt::operation_cancelled{};
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_zone(
+                            []() -> nxtrt::task<void> {
+                                nxtrt::fork(
+                                    []() -> nxtrt::task<void> {
+                                        throw nxtrt::operation_cancelled{};
                                     }());
                                 co_return;
                             });
                     });
-                } catch (const nxt::rt::operation_cancelled &) {
+                } catch (const nxtrt::operation_cancelled &) {
                     threw = true;
                 }
 
@@ -1481,7 +1481,7 @@ static suite runtime_tests{
             };
 
             "shielded child tasks do not inherit parent stop"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto task = shielded_child_stop_state();
 
                 deck.start(task);
@@ -1494,14 +1494,14 @@ static suite runtime_tests{
 
             "shielded child wishes are not cancelled by parent stop"_test = [] {
                 auto wand = manual_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto deck = nxtrt::deck{&wand};
                 auto task = shielded_manual_token(99);
 
                 deck.start(task);
                 task.request_stop();
                 deck.run_until_idle();
 
-                expect(wand.prepared == std::vector<nxt::rt::wait_token>{99});
+                expect(wand.prepared == std::vector<nxtrt::wait_token>{99});
                 expect(wand.cancelled.empty());
                 expect(wand.parked.size() == std::size_t{1});
 
@@ -1513,15 +1513,15 @@ static suite runtime_tests{
             };
 
             "stop a hosted zone when its parent task is stopped"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto task = [&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-                        nxt::rt::fork(
+                auto task = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                        nxtrt::fork(
                             record_stop_state_after_yield(events, 4));
                         events.push_back(100);
-                        co_await nxt::rt::yield();
+                        co_await nxtrt::yield();
                         co_return;
                     });
                 }();
@@ -1538,15 +1538,15 @@ static suite runtime_tests{
             };
 
             "stop-on-failure fork policy stops siblings"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
-                    deck.sync_wait([&]() -> nxt::rt::task<void> {
-                        co_await nxt::rt::with_zone(
-                            nxt::rt::stop_on_failure{},
-                            [&](auto & policy) -> nxt::rt::task<void> {
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_zone(
+                            nxtrt::stop_on_failure{},
+                            [&](auto & policy) -> nxtrt::task<void> {
                                 policy.fork(throw_after_yield(events, 1));
                                 policy.fork(
                                     record_stop_state_after_two_yields(
@@ -1564,16 +1564,16 @@ static suite runtime_tests{
             };
 
             "stop-on-success fork policy stops siblings"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 auto child =
                     deck.sync_wait([&]()
-                        -> nxt::rt::task<nxt::rt::deed<int>> {
-                        co_return co_await nxt::rt::with_zone(
-                            nxt::rt::stop_on_success{},
+                        -> nxtrt::task<nxtrt::deed<int>> {
+                        co_return co_await nxtrt::with_zone(
+                            nxtrt::stop_on_success{},
                             [&](auto & policy)
-                                -> nxt::rt::task<nxt::rt::deed<int>> {
+                                -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
                                     policy.fork(value_after_yield(123));
                                 policy.fork(
@@ -1589,12 +1589,12 @@ static suite runtime_tests{
             };
 
             "wait_any returns the first successful task"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 auto result =
-                    deck.sync_wait([&]() -> nxt::rt::task<int> {
-                        co_return co_await nxt::rt::wait_any(
+                    deck.sync_wait([&]() -> nxtrt::task<int> {
+                        co_return co_await nxtrt::wait_any(
                             value_after_yield(5),
                             value_after_two_yields_or_stop(events, 6));
                     });
@@ -1604,16 +1604,16 @@ static suite runtime_tests{
             };
 
             "wait_any groups failures when all tasks fail"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto grouped = false;
 
                 try {
-                    (void)deck.sync_wait([]() -> nxt::rt::task<int> {
-                        co_return co_await nxt::rt::wait_any(
+                    (void)deck.sync_wait([]() -> nxtrt::task<int> {
+                        co_return co_await nxtrt::wait_any(
                             throw_int_after_yield(),
                             throw_int_after_yield());
                     });
-                } catch (const nxt::rt::exception_group & group) {
+                } catch (const nxtrt::exception_group & group) {
                     grouped = true;
                     expect(group.exceptions().size() == std::size_t{2});
                 }
@@ -1622,12 +1622,12 @@ static suite runtime_tests{
             };
 
             "when_all returns a tuple of task results"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
 
                 auto values =
                     deck.sync_wait([]()
-                        -> nxt::rt::task<std::tuple<int, std::string>> {
-                        co_return co_await nxt::rt::when_all(
+                        -> nxtrt::task<std::tuple<int, std::string>> {
+                        co_return co_await nxtrt::when_all(
                             value_after_yield(7),
                             string_after_yield("seven"));
                     });
@@ -1637,14 +1637,14 @@ static suite runtime_tests{
             };
 
             "when_all stops siblings after a failure"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
-                    (void)deck.sync_wait([&]() -> nxt::rt::task<
+                    (void)deck.sync_wait([&]() -> nxtrt::task<
                         std::tuple<int, int>> {
-                        co_return co_await nxt::rt::when_all(
+                        co_return co_await nxtrt::when_all(
                             throw_int_after_yield(),
                             value_after_two_yields_or_stop(events, 8));
                     });
@@ -1659,7 +1659,7 @@ static suite runtime_tests{
 
         "tool batches"_test = [] {
             "parse calls and return function_call_output items in order"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto calls = deck.sync_wait(
                     nxtai::tools::read_function_calls_from_items(
                         {
@@ -1692,7 +1692,7 @@ static suite runtime_tests{
             };
 
             "unknown tools become failed batch results"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto tools = nxtai::tools::make_tool_registry({
                     nxtai::tools::make_function_tool(echo_tool{}),
                 });
@@ -1718,13 +1718,13 @@ static suite runtime_tests{
         "wishes"_test = [] {
             "typed waiters are prepared and parked"_test = [] {
                 auto wand = manual_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto deck = nxtrt::deck{&wand};
                 auto events = std::vector<int>{};
 
                 auto task_body =
-                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    [](std::vector<int> & events) -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::op::manual{.token = 42};
+                    co_await nxtrt::op::manual{.token = 42};
                     events.push_back(2);
                 };
 
@@ -1737,7 +1737,7 @@ static suite runtime_tests{
                 expect(deck.empty())
                     << "manual wish should not requeue itself";
                 expect(
-                    wand.prepared == std::vector<nxt::rt::wait_token>{42})
+                    wand.prepared == std::vector<nxtrt::wait_token>{42})
                     << "wand should synchronously prepare the wish";
                 expect(wand.parked.size() == std::size_t{1})
                     << "waiter should park the suspended coroutine";
@@ -1752,13 +1752,13 @@ static suite runtime_tests{
 
             "the wand is waved after staged preparation"_test = [] {
                 auto wand = manual_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto deck = nxtrt::deck{&wand};
                 auto events = std::vector<int>{};
 
                 auto task_body =
-                    [](std::vector<int> & events) -> nxt::rt::task<void> {
+                    [](std::vector<int> & events) -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxt::rt::op::manual{.token = 7};
+                    co_await nxtrt::op::manual{.token = 7};
                     events.push_back(2);
                 };
 
@@ -1768,7 +1768,7 @@ static suite runtime_tests{
 
                 expect(events == std::vector<int>{1});
                 expect(
-                    wand.prepared == std::vector<nxt::rt::wait_token>{7});
+                    wand.prepared == std::vector<nxtrt::wait_token>{7});
                 expect(wand.parked.size() == std::size_t{1});
                 expect(wand.waves == 1_i)
                     << "run_ready should wave the deck wand after the pump round";
@@ -1784,23 +1784,23 @@ static suite runtime_tests{
 
             "stopped tasks request cancellation of parked wishes"_test = [] {
                 auto wand = manual_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto deck = nxtrt::deck{&wand};
 
-                auto task = []() -> nxt::rt::task<void> {
-                    co_await nxt::rt::op::manual{.token = 99};
+                auto task = []() -> nxtrt::task<void> {
+                    co_await nxtrt::op::manual{.token = 99};
                 }();
 
                 deck.start(task);
                 deck.run_ready();
                 task.request_stop();
 
-                expect(wand.cancelled == std::vector<nxt::rt::wait_token>{99});
+                expect(wand.cancelled == std::vector<nxtrt::wait_token>{99});
             };
         };
 
         "buffers"_test = [] {
             "ema rate smooths byte deltas over time"_test = [] {
-                auto rate = nxt::rt::ema_rate{std::chrono::seconds{1}};
+                auto rate = nxtrt::ema_rate{std::chrono::seconds{1}};
 
                 auto first =
                     rate.sample(std::size_t{1000}, std::chrono::seconds{1});
@@ -1814,20 +1814,20 @@ static suite runtime_tests{
             };
 
             "chunks are visited through reused storage"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 3>{};
                 auto visited = std::vector<std::string>{};
 
                 auto total =
-                    deck.sync_wait([&]() -> nxt::rt::task<std::size_t> {
-                        co_return co_await nxt::rt::for_each_chunk(
+                    deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
+                        co_return co_await nxtrt::for_each_chunk(
                             source,
                             std::span{storage},
                             [&visited](std::span<const std::byte> chunk) {
                                 visited.emplace_back(
-                                    nxt::rt::as_string_view(chunk));
+                                    nxtrt::as_string_view(chunk));
                             });
                     });
 
@@ -1837,24 +1837,24 @@ static suite runtime_tests{
             };
 
             "protocol leftovers remain buffered"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abc--def--ghi"sv};
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 16>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
                 auto parts = deck.sync_wait(
-                    [&]() -> nxt::rt::task<std::vector<std::string>> {
+                    [&]() -> nxtrt::task<std::vector<std::string>> {
                         auto out = std::vector<std::string>{};
                         out.emplace_back(
-                            nxt::rt::as_string_view(
+                            nxtrt::as_string_view(
                                 co_await reader.take_until("--")));
                         out.emplace_back(
-                            nxt::rt::as_string_view(
+                            nxtrt::as_string_view(
                                 co_await reader.take_until("--")));
                         out.emplace_back(
-                            nxt::rt::as_string_view(reader.buffered()));
+                            nxtrt::as_string_view(reader.buffered()));
                         co_return out;
                     });
 
@@ -1863,18 +1863,18 @@ static suite runtime_tests{
             };
 
             "empty reads are distinguished from EOF"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto source = empty_then_string_source{};
                 auto storage = std::array<std::byte, 8>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
                 auto parts = deck.sync_wait(
-                    [&]() -> nxt::rt::task<std::vector<std::string>> {
+                    [&]() -> nxtrt::task<std::vector<std::string>> {
                         auto out = std::vector<std::string>{};
                         while (auto chunk = co_await reader.take_some())
                             out.emplace_back(
-                                nxt::rt::as_string_view(*chunk));
+                                nxtrt::as_string_view(*chunk));
                         co_return out;
                     });
 
@@ -1882,11 +1882,11 @@ static suite runtime_tests{
             };
 
             "write_all drains borrowed bytes into sinks"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto sink = chunking_string_sink{2};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
-                    co_await nxt::rt::write_all(
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::write_all(
                         sink,
                         std::string{"abcdef"});
                 });
@@ -1896,24 +1896,24 @@ static suite runtime_tests{
 
             "task_byte_source reads through a task callable"_test = [] {
                 "from read results"_test = [] {
-                    auto deck = nxt::rt::deck{};
+                    auto deck = nxtrt::deck{};
                     auto read = [](std::span<std::byte> dst)
-                        -> nxt::rt::task<nxt::rt::read_result> {
+                        -> nxtrt::task<nxtrt::read_result> {
                         auto text = std::string_view{"xy"};
                         std::memcpy(dst.data(), text.data(), text.size());
-                        co_return nxt::rt::read_result{
+                        co_return nxtrt::read_result{
                             .bytes = text.size(),
                             .eof = true,
                         };
                     };
-                    auto source = nxt::rt::task_byte_source{read};
+                    auto source = nxtrt::task_byte_source{read};
                     auto storage = std::array<std::byte, 4>{};
 
                     auto result = deck.sync_wait(
-                        [&]() -> nxt::rt::task<std::string> {
+                        [&]() -> nxtrt::task<std::string> {
                         auto read = co_await source.read_some(storage);
                         co_return std::string{
-                            nxt::rt::as_string_view(
+                            nxtrt::as_string_view(
                                 std::span{storage}.first(read.bytes))};
                     });
 
@@ -1921,18 +1921,18 @@ static suite runtime_tests{
                 };
 
                 "from byte counts"_test = [] {
-                    auto deck = nxt::rt::deck{};
+                    auto deck = nxtrt::deck{};
                     auto read = [](std::span<std::byte> dst)
-                        -> nxt::rt::task<std::size_t> {
+                        -> nxtrt::task<std::size_t> {
                         auto text = std::string_view{"xy"};
                         std::memcpy(dst.data(), text.data(), text.size());
                         co_return text.size();
                     };
-                    auto source = nxt::rt::task_byte_source{read};
+                    auto source = nxtrt::task_byte_source{read};
                     auto storage = std::array<std::byte, 4>{};
 
                     auto result = deck.sync_wait(
-                        [&]() -> nxt::rt::task<nxt::rt::read_result> {
+                        [&]() -> nxtrt::task<nxtrt::read_result> {
                         co_return co_await source.read_some(storage);
                     });
 
@@ -1948,14 +1948,14 @@ static suite runtime_tests{
                     unsigned char b = 0;
                 };
 
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abcd"sv};
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 4>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                deck.sync_wait([&]() -> nxtrt::task<void> {
                     auto first = co_await reader.peek_struct<pair>();
                     expect(first.a == static_cast<unsigned char>('a'));
                     expect(first.b == static_cast<unsigned char>('b'));
@@ -1976,15 +1976,15 @@ static suite runtime_tests{
                     unsigned char b = 0;
                 };
 
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{""sv};
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 4>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
                 auto result = deck.sync_wait(
-                    [&]() -> nxt::rt::task<std::optional<pair>> {
+                    [&]() -> nxtrt::task<std::optional<pair>> {
                     co_return co_await reader.take_struct<pair>();
                 });
 
@@ -1998,14 +1998,14 @@ static suite runtime_tests{
                     unsigned char b = 0;
                 };
 
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto source = empty_then_string_source{};
                 auto storage = std::array<std::byte, 8>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
                 auto result = deck.sync_wait(
-                    [&]() -> nxt::rt::task<std::optional<pair>> {
+                    [&]() -> nxtrt::task<std::optional<pair>> {
                     co_return co_await reader.take_struct<pair>();
                 });
 
@@ -2015,14 +2015,14 @@ static suite runtime_tests{
             };
 
             "byte_reader takes borrowed string views"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abcd"sv};
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 4>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
-                auto result = deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                auto result = deck.sync_wait([&]() -> nxtrt::task<std::string> {
                     auto view = co_await reader.take_string_view(3);
                     co_return std::string{view};
                 });
@@ -2034,13 +2034,13 @@ static suite runtime_tests{
             "BYTE WRITER"_test = [] {
                 "with borrowed storage"_test = [] {
                     "buffers bytes until flush"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto storage = std::array<std::byte, 4>{};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::span{storage}};
+                            nxtrt::byte_writer{sink, std::span{storage}};
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(std::string{"ab"});
                             expect(sink.text.empty());
                             co_await writer.write(std::string{"cd"});
@@ -2056,12 +2056,12 @@ static suite runtime_tests{
 
                 "with owned storage"_test = [] {
                     "buffers bytes until flush"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::size_t{4}};
+                            nxtrt::byte_writer{sink, std::size_t{4}};
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(std::string{"ab"});
                             expect(sink.text.empty());
                             co_await writer.write(std::string{"cd"});
@@ -2073,14 +2073,14 @@ static suite runtime_tests{
                     };
 
                     "writes ranges of text chunks"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::size_t{4}};
+                            nxtrt::byte_writer{sink, std::size_t{4}};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(chunks);
                             expect(sink.text == "abcd");
                             co_await writer.flush();
@@ -2090,14 +2090,14 @@ static suite runtime_tests{
                     };
 
                     "writes and flushes text chunks"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::size_t{8}};
+                            nxtrt::byte_writer{sink, std::size_t{8}};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write_all(chunks);
                         });
 
@@ -2106,17 +2106,17 @@ static suite runtime_tests{
                     };
 
                     "writes lazy ranges of text chunks"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::size_t{8}};
+                            nxtrt::byte_writer{sink, std::size_t{8}};
                         auto numbers = std::views::iota(1, 4);
                         auto chunks = numbers
                             | std::views::transform([](int n) {
                                 return std::to_string(n);
                             });
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(chunks);
                             co_await writer.flush();
                         });
@@ -2125,17 +2125,17 @@ static suite runtime_tests{
                     };
 
                     "writes ranges of byte spans"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::size_t{4}};
+                            nxtrt::byte_writer{sink, std::size_t{4}};
                         auto chunks = std::array{
-                            nxt::rt::as_bytes("ab"sv),
-                            nxt::rt::as_bytes("cd"sv),
-                            nxt::rt::as_bytes("ef"sv),
+                            nxtrt::as_bytes("ab"sv),
+                            nxtrt::as_bytes("cd"sv),
+                            nxtrt::as_bytes("ef"sv),
                         };
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(chunks);
                             co_await writer.flush();
                         });
@@ -2144,17 +2144,17 @@ static suite runtime_tests{
                     };
 
                     "writes and flushes byte spans"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto writer =
-                            nxt::rt::byte_writer{sink, std::size_t{8}};
+                            nxtrt::byte_writer{sink, std::size_t{8}};
                         auto chunks = std::array{
-                            nxt::rt::as_bytes("ab"sv),
-                            nxt::rt::as_bytes("cd"sv),
-                            nxt::rt::as_bytes("ef"sv),
+                            nxtrt::as_bytes("ab"sv),
+                            nxtrt::as_bytes("cd"sv),
+                            nxtrt::as_bytes("ef"sv),
                         };
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write_all(chunks);
                         });
 
@@ -2163,13 +2163,13 @@ static suite runtime_tests{
                     };
 
                     "free write_all borrows lvalue sinks"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto sink = chunking_string_sink{64};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
-                            co_await nxt::rt::write_all(
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await nxtrt::write_all(
                                 sink,
                                 chunks,
                                 std::size_t{4});
@@ -2179,14 +2179,14 @@ static suite runtime_tests{
                     };
 
                     "free write_all uses explicitly owned sinks"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto text = std::make_shared<std::string>();
                         auto sink = shared_string_sink{text};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
-                            co_await nxt::rt::write_all(
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await nxtrt::write_all(
                                 sink,
                                 chunks,
                                 std::size_t{4});
@@ -2198,15 +2198,15 @@ static suite runtime_tests{
 
                 "with borrowed sink and owned storage"_test = [] {
                     "buffers bytes until flush"_test = [] {
-                        auto deck = nxt::rt::deck{};
+                        auto deck = nxtrt::deck{};
                         auto text = std::make_shared<std::string>();
                         auto sink = shared_string_sink{text};
-                        auto writer = nxt::rt::byte_writer{
+                        auto writer = nxtrt::byte_writer{
                             sink,
                             std::size_t{4},
                         };
 
-                        deck.sync_wait([&]() -> nxt::rt::task<void> {
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(std::string{"abc"});
                             expect(text->empty());
                             co_await writer.write(std::string{"de"});
@@ -2222,13 +2222,13 @@ static suite runtime_tests{
 
         "channels"_test = [] {
             "buffer values until consumed"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto events = nxt::rt::channel<int>{};
+                auto deck = nxtrt::deck{};
+                auto events = nxtrt::channel<int>{};
 
                 expect(deck.sync_wait(events.publish(1)));
                 expect(deck.sync_wait(events.publish(2)));
 
-                auto values = deck.sync_wait([&]() -> nxt::rt::task<
+                auto values = deck.sync_wait([&]() -> nxtrt::task<
                     std::vector<int>> {
                     auto out = std::vector<int>{};
                     out.push_back(*(co_await events.next()));
@@ -2240,8 +2240,8 @@ static suite runtime_tests{
             };
 
             "resumes a waiting consumer when a value is published"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto events = nxt::rt::channel<int>{};
+                auto deck = nxtrt::deck{};
+                auto events = nxtrt::channel<int>{};
                 auto seen = std::vector<int>{};
 
                 auto consumer = record_next_channel_value(events, seen);
@@ -2260,18 +2260,18 @@ static suite runtime_tests{
             };
 
             "close rejects publishers and drains consumers"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto events = nxt::rt::channel<int>{};
+                auto deck = nxtrt::deck{};
+                auto events = nxtrt::channel<int>{};
 
                 expect(deck.sync_wait(events.publish(1)));
                 events.close();
 
                 auto first = deck.sync_wait(
-                    [&]() -> nxt::rt::task<std::optional<int>> {
+                    [&]() -> nxtrt::task<std::optional<int>> {
                     co_return co_await events.next();
                 });
                 auto second = deck.sync_wait(
-                    [&]() -> nxt::rt::task<std::optional<int>> {
+                    [&]() -> nxtrt::task<std::optional<int>> {
                     co_return co_await events.next();
                 });
 
@@ -2281,8 +2281,8 @@ static suite runtime_tests{
             };
 
             "cancel requests stop and wakes pending consumers"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto events = nxt::rt::channel<int>{};
+                auto deck = nxtrt::deck{};
+                auto events = nxtrt::channel<int>{};
                 auto finished = false;
 
                 auto consumer = record_closed_channel(events, finished);
@@ -2300,8 +2300,8 @@ static suite runtime_tests{
             };
 
             "try_pop drains buffered values without awaiting"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto events = nxt::rt::channel<int>{};
+                auto deck = nxtrt::deck{};
+                auto events = nxtrt::channel<int>{};
 
                 expect(deck.sync_wait(events.push(3)));
                 auto value = events.try_pop();
@@ -2312,8 +2312,8 @@ static suite runtime_tests{
 
         "events"_test = [] {
             "set wakes all waiting tasks"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto ready = nxt::rt::event{};
+                auto deck = nxtrt::deck{};
+                auto ready = nxtrt::event{};
                 auto values = std::vector<int>{};
 
                 auto first = record_after_event(ready, values, 1);
@@ -2333,12 +2333,12 @@ static suite runtime_tests{
             };
 
             "reset makes future awaits suspend again"_test = [] {
-                auto deck = nxt::rt::deck{};
-                auto ready = nxt::rt::event{};
+                auto deck = nxtrt::deck{};
+                auto ready = nxtrt::event{};
                 auto values = std::vector<int>{};
 
                 ready.set();
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                deck.sync_wait([&]() -> nxtrt::task<void> {
                     co_await ready;
                     values.push_back(1);
                 });
@@ -2363,20 +2363,20 @@ static suite runtime_tests{
 
         "HTTP requests"_test = [] {
             "parse simple URLs"_test = [] {
-                auto url = nxt::rt::http::parse_url(
+                auto url = nxtrt::http::parse_url(
                     "http://example.test:8080/path?q=1");
 
                 expect(!url.tls);
                 expect(url.host == "example.test");
                 expect(url.port == "8080");
                 expect(url.target == "/path?q=1");
-                expect(nxt::rt::http::host_header(url)
+                expect(nxtrt::http::host_header(url)
                        == "example.test:8080");
             };
 
             "serialize HTTP/1.1 requests"_test = [] {
-                auto wire = nxt::rt::http::serialize(
-                    nxt::rt::http::request{
+                auto wire = nxtrt::http::serialize(
+                    nxtrt::http::request{
                         .method = "GET",
                         .target = "/hello",
                         .host = "example.test",
@@ -2395,37 +2395,37 @@ static suite runtime_tests{
 
         "HTTP bodies"_test = [] {
             "the next response remains buffered after chunked bodies"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{
                     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
                     "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
                     "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"sv,
                 };
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 256>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{storage}};
+                    nxtrt::byte_reader{source, std::span{storage}};
 
                 auto result =
-                    deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                    deck.sync_wait([&]() -> nxtrt::task<std::string> {
                         auto first =
-                            co_await nxt::rt::http::read_response_head(
+                            co_await nxtrt::http::read_response_head(
                                 reader);
                         expect(first.status == 200_i);
-                        expect(nxt::rt::http::is_chunked(first));
+                        expect(nxtrt::http::is_chunked(first));
 
-                        auto body = nxt::rt::http::read_response_body(
+                        auto body = nxtrt::http::read_response_body(
                             reader, first);
                         auto text = std::string{};
                         while (auto chunk = co_await body.next())
-                            text += nxt::rt::as_string_view(*chunk);
+                            text += nxtrt::as_string_view(*chunk);
 
                         auto second =
-                            co_await nxt::rt::http::read_response_head(
+                            co_await nxtrt::http::read_response_head(
                                 reader);
                         expect(second.status == 204_i);
                         expect(
-                            nxt::rt::http::content_length(second)
+                            nxtrt::http::content_length(second)
                             == std::size_t{0});
                         co_return text;
                     });
@@ -2435,31 +2435,31 @@ static suite runtime_tests{
 
             "the next response remains buffered after content-length bodies"_test =
                 [] {
-                    auto deck = nxt::rt::deck{};
+                    auto deck = nxtrt::deck{};
                     auto chunks = std::array{
                         "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
                         "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"sv,
                     };
-                    auto source = nxt::rt::string_source{std::span{chunks}};
+                    auto source = nxtrt::string_source{std::span{chunks}};
                     auto storage = std::array<std::byte, 128>{};
                     auto reader =
-                        nxt::rt::byte_reader{source, std::span{storage}};
+                        nxtrt::byte_reader{source, std::span{storage}};
 
                     auto result =
-                        deck.sync_wait([&]() -> nxt::rt::task<std::string> {
+                        deck.sync_wait([&]() -> nxtrt::task<std::string> {
                             auto first =
-                                co_await nxt::rt::http::read_response_head(
+                                co_await nxtrt::http::read_response_head(
                                     reader);
                             expect(first.status == 200_i);
 
-                            auto body = nxt::rt::http::read_response_body(
+                            auto body = nxtrt::http::read_response_body(
                                 reader, first);
                             auto text = std::string{};
                             while (auto chunk = co_await body.next())
-                                text += nxt::rt::as_string_view(*chunk);
+                                text += nxtrt::as_string_view(*chunk);
 
                             auto second =
-                                co_await nxt::rt::http::read_response_head(
+                                co_await nxtrt::http::read_response_head(
                                     reader);
                             expect(second.status == 201_i);
                             co_return text;
@@ -2469,7 +2469,7 @@ static suite runtime_tests{
                 };
 
             "server-sent events parse through response body readers"_test = [] {
-                auto deck = nxt::rt::deck{};
+                auto deck = nxtrt::deck{};
                 auto chunks = std::array{
                     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
                     "38\r\n"
@@ -2479,28 +2479,28 @@ static suite runtime_tests{
                     "\r\n"
                     "0\r\n\r\n"sv,
                 };
-                auto source = nxt::rt::string_source{std::span{chunks}};
+                auto source = nxtrt::string_source{std::span{chunks}};
                 auto head_storage = std::array<std::byte, 256>{};
                 auto reader =
-                    nxt::rt::byte_reader{source, std::span{head_storage}};
+                    nxtrt::byte_reader{source, std::span{head_storage}};
 
-                deck.sync_wait([&]() -> nxt::rt::task<void> {
+                deck.sync_wait([&]() -> nxtrt::task<void> {
                     auto head =
-                        co_await nxt::rt::http::read_response_head(reader);
+                        co_await nxtrt::http::read_response_head(reader);
                     auto body =
-                        nxt::rt::http::read_response_body(reader, head);
+                        nxtrt::http::read_response_body(reader, head);
                     auto body_storage = std::array<std::byte, 256>{};
                     auto body_reader =
-                        nxt::rt::byte_reader{body, std::span{body_storage}};
+                        nxtrt::byte_reader{body, std::span{body_storage}};
 
                     auto event =
-                        co_await nxt::rt::http::parse_sse_event(body_reader);
+                        co_await nxtrt::http::parse_sse_event(body_reader);
                     expect(event.has_value());
                     expect(event->type == "response.output_text.delta");
                     expect(event->data == "{\"delta\":\"hi\"}");
 
                     auto end =
-                        co_await nxt::rt::http::parse_sse_event(body_reader);
+                        co_await nxtrt::http::parse_sse_event(body_reader);
                     expect(!end);
                 });
             };

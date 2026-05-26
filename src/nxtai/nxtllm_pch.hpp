@@ -17,9 +17,9 @@
 
 #include <nxt/json.hpp>
 #include <nxtai/common.hpp>
-#include <nxt/rt/app.hpp>
-#include <nxt/rt/task.hpp>
-#include <nxt/rt/trace.hpp>
-#include <nxt/rt/ui_runtime.hpp>
+#include <nxtrt/app.hpp>
+#include <nxtrt/task.hpp>
+#include <nxtrt/trace.hpp>
+#include <nxtrt/ui_runtime.hpp>
 #include <nxtai/responses_request.hpp>
 #include <nxtai/tool_tui.hpp>

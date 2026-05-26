@@ -1,17 +1,17 @@
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 #include <nxt/http.hpp>
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/cares.hpp>
-#include <nxt/rt/http.hpp>
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/cares.hpp>
+#include <nxtrt/http.hpp>
 #include <nxt/tls.hpp>
 #include <nxt/tls/cert.hpp>
 #include <nxt/unique-fd.hpp>
 #include <nxtai/responses_request.hpp>
 
 #if defined(__linux__)
-#  include <nxt/rt/uring_wand.hpp>
+#  include <nxtrt/uring_wand.hpp>
 #else
-#  include <nxt/rt/kqueue_wand.hpp>
+#  include <nxtrt/kqueue_wand.hpp>
 #endif
 
 #include <cerrno>
@@ -41,39 +41,39 @@ void set_close_on_exec(int fd)
         (void) ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 }
 
-nxt::rt::task<nxt::unique_fd>
-connect_address(nxt::rt::resolved_address address)
+nxtrt::task<nxt::unique_fd>
+connect_address(nxtrt::resolved_address address)
 {
     auto fd = nxt::unique_fd{::socket(
         address.family,
         address.socktype == 0 ? SOCK_STREAM : address.socktype,
         address.protocol)};
     if (fd.get() < 0)
-        throw nxt::rt::runtime_error{
+        throw nxtrt::runtime_error{
             "socket: "
             + std::string{std::generic_category().message(errno)}};
 
     set_close_on_exec(fd.get());
-    co_await nxt::rt::op::connect::from(
+    co_await nxtrt::op::connect::from(
         fd.get(), address.sockaddr_ptr(), address.address_size);
     co_return std::move(fd);
 }
 
-nxt::rt::task<nxt::unique_fd>
+nxtrt::task<nxt::unique_fd>
 connect_tcp(std::string host, std::string port)
 {
-    auto resolver = nxt::rt::cares_resolver{};
+    auto resolver = nxtrt::cares_resolver{};
     auto addresses = co_await resolver.getaddrinfo(host, port);
     if (addresses.empty())
-        throw nxt::rt::runtime_error{"no addresses resolved for " + host};
+        throw nxtrt::runtime_error{"no addresses resolved for " + host};
 
-    co_return co_await nxt::rt::wait_any_range(
+    co_return co_await nxtrt::wait_any_range(
         addresses | std::views::transform([](auto const & address) {
             return connect_address(address);
         }));
 }
 
-std::string make_https_request(nxt::rt::http::url const & url)
+std::string make_https_request(nxtrt::http::url const & url)
 {
     if (url.host == "api.openai.com") {
         auto * api_key = std::getenv("OPENAI_API_KEY");
@@ -99,10 +99,10 @@ std::string make_https_request(nxt::rt::http::url const & url)
         return nxt::http::serialize(http_request);
     }
 
-    auto request = nxt::rt::http::request{
+    auto request = nxtrt::http::request{
         .method = "GET",
         .target = url.target,
-        .host = nxt::rt::http::host_header(url),
+        .host = nxtrt::http::host_header(url),
         .headers =
             {
                 {"User-Agent", "nxt-tls-demo/0"},
@@ -110,7 +110,7 @@ std::string make_https_request(nxt::rt::http::url const & url)
             },
         .body = {},
     };
-    return nxt::rt::http::serialize(request);
+    return nxtrt::http::serialize(request);
 }
 
 struct http_response_progress
@@ -131,11 +131,11 @@ struct http_response_progress
                 return false;
 
             auto head_text = std::string_view{bytes}.substr(0, head_end);
-            auto head = nxt::rt::http::parse_response_head(
+            auto head = nxtrt::http::parse_response_head(
                 std::as_bytes(std::span{head_text}));
             body_offset = head_end + 4;
-            content_length = nxt::rt::http::content_length(head);
-            chunked = nxt::rt::http::is_chunked(head);
+            content_length = nxtrt::http::content_length(head);
+            chunked = nxtrt::http::is_chunked(head);
         }
 
         if (chunked)
@@ -149,20 +149,20 @@ struct http_response_progress
     }
 };
 
-nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
+nxtrt::task<void> probe_tls13(nxtrt::http::url url)
 {
     auto socket = co_await connect_tcp(url.host, url.port);
     auto hello = nxt::tls::make_tls13_client_hello(url.host);
 
     std::cerr << "sending TLS 1.3 ClientHello (" << hello.record.size()
               << " bytes)\n";
-    auto sink = nxt::rt::socket_sink{socket.get()};
-    auto socket_output = nxt::rt::byte_writer{sink, 4096};
+    auto sink = nxtrt::socket_sink{socket.get()};
+    auto socket_output = nxtrt::byte_writer{sink, 4096};
     co_await socket_output.write_all(hello.record);
 
-    auto source = nxt::rt::socket_source{socket.get()};
+    auto source = nxtrt::socket_source{socket.get()};
     auto input_storage = std::vector<std::byte>(18 * 1024);
-    auto reader = nxt::rt::byte_reader{
+    auto reader = nxtrt::byte_reader{
         source,
         std::span{input_storage},
     };
@@ -272,7 +272,7 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
 
     auto request_text = make_https_request(url);
     auto encrypted_request = nxt::tls::seal_tls13_record(
-        application_keys.client, 23, nxt::rt::as_bytes(request_text));
+        application_keys.client, 23, nxtrt::as_bytes(request_text));
     co_await socket_output.write_all(encrypted_request);
     std::cerr << "sent encrypted HTTP request\n";
 
@@ -287,8 +287,8 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
                   << " type=" << unsigned{plaintext.inner_type}
                   << " length=" << plaintext.content.size() << '\n';
         if (plaintext.inner_type == 23) {
-            auto stdout_sink = nxt::rt::standard_output();
-            co_await nxt::rt::write_all(stdout_sink, plaintext.content);
+            auto stdout_sink = nxtrt::standard_output();
+            co_await nxtrt::write_all(stdout_sink, plaintext.content);
             if (http_response.append(plaintext.content)) {
                 std::cerr << "read complete HTTP response body\n";
                 break;
@@ -301,16 +301,16 @@ nxt::rt::task<void> probe_tls13(nxt::rt::http::url url)
     }
 }
 
-nxt::rt::task<void> fetch(nxt::rt::http::url url)
+nxtrt::task<void> fetch(nxtrt::http::url url)
 {
     if (url.tls)
         co_return co_await probe_tls13(std::move(url));
 
     auto socket = co_await connect_tcp(url.host, url.port);
-    auto request = nxt::rt::http::request{
+    auto request = nxtrt::http::request{
         .method = "GET",
         .target = url.target,
-        .host = nxt::rt::http::host_header(url),
+        .host = nxtrt::http::host_header(url),
         .headers =
             {
                 {"User-Agent", "nxt-http-demo/0"},
@@ -319,26 +319,26 @@ nxt::rt::task<void> fetch(nxt::rt::http::url url)
         .body = {},
     };
 
-    auto sink = nxt::rt::socket_sink{socket.get()};
-    auto socket_output = nxt::rt::byte_writer{sink, 4096};
-    co_await socket_output.write_all(nxt::rt::http::serialize(request));
+    auto sink = nxtrt::socket_sink{socket.get()};
+    auto socket_output = nxtrt::byte_writer{sink, 4096};
+    co_await socket_output.write_all(nxtrt::http::serialize(request));
 
-    auto source = nxt::rt::socket_source{socket.get()};
+    auto source = nxtrt::socket_source{socket.get()};
     auto input_storage = std::vector<std::byte>(64 * 1024);
-    auto reader = nxt::rt::byte_reader{
+    auto reader = nxtrt::byte_reader{
         source,
         std::span{input_storage},
     };
 
-    auto head = co_await nxt::rt::http::read_response_head(reader);
+    auto head = co_await nxtrt::http::read_response_head(reader);
     std::cerr << head.version << ' ' << head.status << ' ' << head.reason
               << "\n";
     for (auto const & header : head.headers)
         std::cerr << header.name << ": " << header.value << "\n";
     std::cerr << "\n";
 
-    auto stdout_writer = nxt::rt::standard_output_writer(64 * 1024);
-    auto body = nxt::rt::http::read_response_body(reader, head);
+    auto stdout_writer = nxtrt::standard_output_writer(64 * 1024);
+    auto body = nxtrt::http::read_response_body(reader, head);
     while (auto chunk = co_await body.next())
         co_await stdout_writer.write(*chunk);
     co_await stdout_writer.flush();
@@ -348,15 +348,15 @@ nxt::rt::task<void> fetch(nxt::rt::http::url url)
 
 int main(int argc, char ** argv)
 try {
-    auto url = nxt::rt::http::parse_url(
+    auto url = nxtrt::http::parse_url(
         argc > 1 ? std::string_view{argv[1]}
                  : std::string_view{"https://less.rest/"});
 
 #if defined(__linux__)
-    nxt::rt::run(
+    nxtrt::run(
         [url = std::move(url)]() mutable { return fetch(std::move(url)); });
 #elif NXT_RT_HAS_KQUEUE
-    nxt::rt::run_with_kqueue(
+    nxtrt::run_with_kqueue(
         [url = std::move(url)]() mutable { return fetch(std::move(url)); });
 #else
     static_assert(NXT_RT_HAS_KQUEUE, "http demo needs a runtime wand");

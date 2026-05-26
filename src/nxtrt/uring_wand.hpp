@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #if __has_include(<liburing.h>)
 #define NXT_RT_HAS_LIBURING 1
@@ -39,7 +39,7 @@
 
 extern "C" char ** environ;
 
-namespace nxt::rt {
+namespace nxtrt {
 
 inline constexpr bool has_liburing_wand = NXT_RT_HAS_LIBURING != 0;
 
@@ -182,7 +182,7 @@ public:
                     continue;
                 }
                 if (!has_submitted_completions())
-                    throw runtime_error{"nxt::rt uring wand deadlock"};
+                    throw runtime_error{"nxtrt uring wand deadlock"};
                 wait(d);
             }
         }
@@ -1091,4 +1091,4 @@ inline bool op::poll_until::stage_uring(uring_submission & submission)
 
 #endif
 
-} // namespace nxt::rt
+} // namespace nxtrt

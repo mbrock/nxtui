@@ -1,6 +1,6 @@
-# nxt::rt runtime overview {#rt_overview}
+# nxtrt runtime overview {#rt_overview}
 
-`nxt::rt` is the experimental async runtime used by `src`. It is a small
+`nxtrt` is the experimental async runtime used by `src`. It is a small
 coroutine runtime with explicit scheduling, structured child tasks, and a
 backend boundary for platform I/O.
 
@@ -12,11 +12,11 @@ remain the exact reference for the corresponding C++ declarations.
 
 ## Execution model {#rt_execution_model}
 
-The core value is @ref nxt::rt::task "task<T>": a lazy coroutine frame that
+The core value is @ref nxtrt::task "task<T>": a lazy coroutine frame that
 uniquely owns its state until it is moved into another task, awaited by a
 parent task, forked into a zone, or driven by a deck.
 
-Tasks do not run on construction. They run when a @ref nxt::rt::deck "deck"
+Tasks do not run on construction. They run when a @ref nxtrt::deck "deck"
 puts their coroutine handle on its ready queue and later resumes that handle.
 Completion also returns to the deck: a task that finishes wakes its continuation
 by enqueueing it, rather than by resuming it inline.
@@ -37,8 +37,8 @@ paired with a @ref rt_wand "wand" so tasks can await external I/O.
 
 Concrete API:
 
-- @ref nxt::rt::deck "nxt::rt::deck"
-- @ref nxt::rt::yield "nxt::rt::yield()"
+- @ref nxtrt::deck "nxtrt::deck"
+- @ref nxtrt::yield "nxtrt::yield()"
 
 ## Tasks {#rt_task}
 
@@ -52,8 +52,8 @@ reaches final suspend, the parent is requeued for a future pump step.
 
 Concrete API:
 
-- @ref nxt::rt::task "nxt::rt::task<T>"
-- @ref nxt::rt::task_id "nxt::rt::task_id"
+- @ref nxtrt::task "nxtrt::task<T>"
+- @ref nxtrt::task_id "nxtrt::task_id"
 
 ## Zones {#rt_zone}
 
@@ -71,7 +71,7 @@ composition patterns over the same task and deck machinery.
 
 Concrete API:
 
-- @ref nxt::rt::task_zone "nxt::rt::task_zone"
+- @ref nxtrt::task_zone "nxtrt::task_zone"
 
 ## Deeds {#rt_deed}
 
@@ -86,8 +86,8 @@ deciding what to return or throw.
 
 Concrete API:
 
-- @ref nxt::rt::deed "nxt::rt::deed<T>"
-- @ref nxt::rt::catching_deed "nxt::rt::catching_deed<T>"
+- @ref nxtrt::deed "nxtrt::deed<T>"
+- @ref nxtrt::catching_deed "nxtrt::catching_deed<T>"
 
 ## Wishes {#rt_wish}
 
@@ -104,9 +104,9 @@ wand decides how to stage and complete that work on a particular platform.
 
 Concrete API:
 
-- @ref nxt::rt::op "nxt::rt::op"
-- @ref nxt::rt::waiter "nxt::rt::waiter<T>"
-- @ref nxt::rt::parked_task "nxt::rt::parked_task"
+- @ref nxtrt::op "nxtrt::op"
+- @ref nxtrt::waiter "nxtrt::waiter<T>"
+- @ref nxtrt::parked_task "nxtrt::parked_task"
 
 ## Wands {#rt_wand}
 
@@ -120,26 +120,25 @@ batch or in whatever order the backend needs.
 
 Current concrete wands live at the implementation edge:
 
-- @ref nxt::rt::wand "nxt::rt::wand"
+- @ref nxtrt::wand "nxtrt::wand"
 - `uring_wand`
 - `kqueue_wand`
 
 ## Byte streams and protocol helpers {#rt_io}
 
 The runtime also contains reusable async I/O utilities. Byte sources and sinks
-are the runtime-polymorphic boundary. Readers, writers, and pipes are
-composition tools built on top of tasks.
+are the runtime-polymorphic boundary. Readers and writers are composition tools
+built on top of tasks.
 
-Protocol helpers such as `nxt::rt::fs` and `nxt::rt::http` sit above the wish
+Protocol helpers such as `nxtrt::fs` and `nxtrt::http` sit above the wish
 and byte-stream layers: they use runtime I/O, but they are not scheduler
 primitives.
 
 Concrete API:
 
-- @ref nxt::rt::byte_source "nxt::rt::byte_source"
-- @ref nxt::rt::byte_sink "nxt::rt::byte_sink"
-- @ref nxt::rt::byte_reader "nxt::rt::byte_reader"
-- @ref nxt::rt::byte_writer "nxt::rt::byte_writer"
-- @ref nxt::rt::pipe "nxt::rt::pipe<T>"
-- @ref nxt::rt::fs "nxt::rt::fs"
-- @ref nxt::rt::http "nxt::rt::http"
+- @ref nxtrt::byte_source "nxtrt::byte_source"
+- @ref nxtrt::byte_sink "nxtrt::byte_sink"
+- @ref nxtrt::byte_reader "nxtrt::byte_reader"
+- @ref nxtrt::byte_writer "nxtrt::byte_writer"
+- @ref nxtrt::fs "nxtrt::fs"
+- @ref nxtrt::http "nxtrt::http"

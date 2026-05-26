@@ -1,11 +1,11 @@
-#include "nxt/rt/task.hpp"
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/fs.hpp>
+#include "nxtrt/task.hpp"
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/fs.hpp>
 
 #if defined(__linux__)
-#include <nxt/rt/uring_wand.hpp>
+#include <nxtrt/uring_wand.hpp>
 #else
-#include <nxt/rt/kqueue_wand.hpp>
+#include <nxtrt/kqueue_wand.hpp>
 #endif
 
 #include <array>
@@ -18,9 +18,9 @@
 
 namespace {
 
-char kind_char(nxt::rt::fs::file_kind kind)
+char kind_char(nxtrt::fs::file_kind kind)
 {
-    using enum nxt::rt::fs::file_kind;
+    using enum nxtrt::fs::file_kind;
     switch (kind) {
     case directory:
         return 'd';
@@ -39,7 +39,7 @@ char kind_char(nxt::rt::fs::file_kind kind)
     }
 }
 
-std::string mode_string(nxt::rt::fs::file_status const & status)
+std::string mode_string(nxtrt::fs::file_status const & status)
 {
     auto result = std::string{"----------"};
     result[0] = kind_char(status.kind);
@@ -81,12 +81,12 @@ int main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
-    auto body = [path = std::move(path)]() mutable -> nxt::rt::task<void> {
-        auto out = nxt::rt::standard_output_writer();
+    auto body = [path = std::move(path)]() mutable -> nxtrt::task<void> {
+        auto out = nxtrt::standard_output_writer();
         co_await out.write_all(
-            (co_await nxt::rt::fs::list_path(std::move(path)))
+            (co_await nxtrt::fs::list_path(std::move(path)))
                 | std::views::transform(
-                    [](nxt::rt::fs::directory_entry const & entry) {
+                    [](nxtrt::fs::directory_entry const & entry) {
                         return std::format(
                             "{} {:>8} {}\n",
                             mode_string(entry.status),
@@ -96,9 +96,9 @@ try {
     };
 
 #if defined(__linux__)
-    nxt::rt::run(std::move(body));
+    nxtrt::run(std::move(body));
 #elif NXT_RT_HAS_KQUEUE
-    nxt::rt::run_with_kqueue(std::move(body));
+    nxtrt::run_with_kqueue(std::move(body));
 #else
     static_assert(NXT_RT_HAS_KQUEUE, "ls demo needs a runtime wand");
 #endif

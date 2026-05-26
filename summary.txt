@@ -1,0 +1,8 @@
+--- SUMMARY ---
+host: swa
+pid: $
+artifacts:
+  - artifact/build
+  - artifact/test
+  - artifact/lint
+  - artifact/deploy

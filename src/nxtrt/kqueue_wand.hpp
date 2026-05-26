@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) \
@@ -39,7 +39,7 @@
 #endif
 #endif
 
-namespace nxt::rt {
+namespace nxtrt {
 
 inline constexpr bool has_kqueue_wand = NXT_RT_HAS_KQUEUE != 0;
 
@@ -113,7 +113,7 @@ public:
                     continue;
                 }
                 if (!has_submitted_completions())
-                    throw runtime_error{"nxt::rt kqueue wand deadlock"};
+                    throw runtime_error{"nxtrt kqueue wand deadlock"};
                 wait(d);
             }
         }
@@ -1115,4 +1115,4 @@ run_with_kqueue(Fn && fn)
 
 #endif
 
-} // namespace nxt::rt
+} // namespace nxtrt

@@ -17,7 +17,7 @@
 #  include <cpptrace/formatting.hpp>
 #endif
 
-namespace nxt::rt {
+namespace nxtrt {
 
 inline std::string stdout_trace_path()
 {
@@ -108,4 +108,4 @@ inline void trace_stdout_write(
     out << "\n";
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

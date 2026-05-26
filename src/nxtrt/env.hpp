@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/exceptions.hpp"
+#include "nxtrt/exceptions.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -8,7 +8,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 class deck;
 class wand;
@@ -116,7 +116,7 @@ inline runtime_env & require_current_env()
 {
     auto * env = current_env();
     if (env == nullptr)
-        throw runtime_error{"nxt::rt operation used without runtime env"};
+        throw runtime_error{"nxtrt operation used without runtime env"};
     return *env;
 }
 
@@ -135,4 +135,4 @@ typename Key::value_type & env_require()
     return require_current_env().require<Key>();
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

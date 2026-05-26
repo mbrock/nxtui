@@ -1,17 +1,17 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <chrono>
 #include <csignal>
 #include <utility>
 #include <vector>
 
-namespace nxt::rt::subprocess {
+namespace nxtrt::subprocess {
 
 using result = child_result;
-using piped_child = nxt::rt::piped_child;
-using pty_child = nxt::rt::pty_child;
+using piped_child = nxtrt::piped_child;
+using pty_child = nxtrt::pty_child;
 
 using namespace std::chrono_literals;
 
@@ -83,4 +83,4 @@ inline task<result> terminate_and_wait(
     co_return co_await shield(detail::terminate_and_wait_impl(child, grace));
 }
 
-} // namespace nxt::rt::subprocess
+} // namespace nxtrt::subprocess

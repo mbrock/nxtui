@@ -1,8 +1,8 @@
 #pragma once
 
-#include "nxt/rt/cgroup.hpp"
-#include "nxt/rt/subprocess.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/cgroup.hpp"
+#include "nxtrt/subprocess.hpp"
+#include "nxtrt/task.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt::scoped_process {
+namespace nxtrt::scoped_process {
 
 using namespace std::chrono_literals;
 
@@ -140,4 +140,4 @@ inline task<void> monitor_until_done(
             co_await cgroup::read_sample(observed.cgroup_path));
 }
 
-} // namespace nxt::rt::scoped_process
+} // namespace nxtrt::scoped_process

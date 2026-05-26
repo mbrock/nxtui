@@ -1,7 +1,7 @@
 #include <nxtai/common.hpp>
 
-#include <nxt/rt/task.hpp>
-#include <nxt/rt/ui_runtime.hpp>
+#include <nxtrt/task.hpp>
+#include <nxtrt/ui_runtime.hpp>
 #include <nxtui/tui.hpp>
 #include <nxtai/tool_tui.hpp>
 
@@ -117,16 +117,16 @@ nxtui::tui::AnyLayout agent_layout(
 }
 
 template<typename T>
-T take_phase_result(nxt::rt::catching_deed<T> deed)
+T take_phase_result(nxtrt::catching_deed<T> deed)
 {
     auto result = std::move(deed).get();
     if (result)
         return std::move(*result);
-    nxt::rt::rethrow(result.error());
+    nxtrt::rethrow(result.error());
 }
 
 
-nxt::rt::task<nxt::rt::catching_deed<std::vector<function_call_result>>>
+nxtrt::task<nxtrt::catching_deed<std::vector<function_call_result>>>
 spawn_tool_phase_child(
     const tool_registry & tools,
     std::vector<function_call> calls,
@@ -135,7 +135,7 @@ spawn_tool_phase_child(
     std::string_view assistant_text,
     std::chrono::milliseconds settle_delay)
 {
-    auto child = nxt::rt::spawn_widget(
+    auto child = nxtrt::spawn_widget(
         [&tools,
          calls = std::move(calls),
          settle_delay]() mutable {
@@ -144,7 +144,7 @@ spawn_tool_phase_child(
                 std::move(calls),
                 settle_delay);
         });
-    co_await nxt::rt::draw(
+    co_await nxtrt::draw(
         agent_layout(
             model, status, assistant_text, child.surface()));
     co_return std::move(child).cope();
@@ -152,7 +152,7 @@ spawn_tool_phase_child(
 
 } // namespace
 
-nxt::rt::task<std::vector<nxtai::tools::function_call_result>>
+nxtrt::task<std::vector<nxtai::tools::function_call_result>>
 run_tool_phase(
     const tool_registry & tools,
     std::vector<nxtai::tools::function_call> calls,
@@ -161,7 +161,7 @@ run_tool_phase(
     std::string_view assistant_text,
     std::chrono::milliseconds settle_delay)
 {
-    auto deed = co_await nxt::rt::with_zone(
+    auto deed = co_await nxtrt::with_zone(
         [&]() mutable {
             return spawn_tool_phase_child(
                 tools,
@@ -176,11 +176,11 @@ run_tool_phase(
 
 namespace {
 
-nxt::rt::task<void> print_assistant_if_terminal(std::string & assistant_text)
+nxtrt::task<void> print_assistant_if_terminal(std::string & assistant_text)
 {
-    if (!nxt::rt::has_terminal_surface() || assistant_text.empty())
+    if (!nxtrt::has_terminal_surface() || assistant_text.empty())
         co_return;
-    co_await nxt::rt::print(
+    co_await nxtrt::print(
         nxtai::tool_tui::assistant_block(
             std::move(assistant_text)));
     assistant_text.clear();
@@ -189,7 +189,7 @@ nxt::rt::task<void> print_assistant_if_terminal(std::string & assistant_text)
 
 } // namespace
 
-nxt::rt::task<void> run_agent_loop(
+nxtrt::task<void> run_agent_loop(
     llm_request request,
     tool_registry tools,
     std::size_t max_steps)
@@ -199,11 +199,11 @@ nxt::rt::task<void> run_agent_loop(
     auto assistant_text = std::string{};
     auto status = std::string{"starting"};
     auto model = request.model;
-    auto settle_delay = nxt::rt::has_terminal_surface()
+    auto settle_delay = nxtrt::has_terminal_surface()
         ? std::chrono::milliseconds{900}
         : std::chrono::milliseconds{0};
     prepare_tool_request(request, tools);
-    co_await nxt::rt::draw(
+    co_await nxtrt::draw(
         agent_layout(model, status, assistant_text, nxtui::tui::empty()));
 
     for (std::size_t step = 0; step < max_steps; ++step) {
@@ -217,14 +217,14 @@ nxt::rt::task<void> run_agent_loop(
         if (calls.empty()) {
             co_await print_assistant_if_terminal(assistant_text);
             status = "done";
-            co_await nxt::rt::draw(
+            co_await nxtrt::draw(
                 agent_layout(
                     model, status, assistant_text, nxtui::tui::empty()));
             co_return;
         }
 
         if (request.store && !response.response_id)
-            throw nxt::rt::runtime_error{
+            throw nxtrt::runtime_error{
                 "tool call response had no response id"};
 
         auto started = std::chrono::steady_clock::now();
@@ -243,7 +243,7 @@ nxt::rt::task<void> run_agent_loop(
                 .count();
         status = std::format(
             "{} tool call(s) in {}ms", results.size(), elapsed);
-        co_await nxt::rt::draw(
+        co_await nxtrt::draw(
             agent_layout(model, status, assistant_text, nxtui::tui::empty()));
 
         auto outputs = nxtai::tools::output_items_from_results(results);
@@ -265,10 +265,10 @@ nxt::rt::task<void> run_agent_loop(
         prepare_tool_request(request, tools);
     }
 
-    throw nxt::rt::runtime_error{"too many tool call turns"};
+    throw nxtrt::runtime_error{"too many tool call turns"};
 }
 
-nxt::rt::task<void> run_agent_ui_zone(
+nxtrt::task<void> run_agent_ui_zone(
     llm_request request,
     tool_registry tools)
 {
@@ -276,9 +276,9 @@ nxt::rt::task<void> run_agent_ui_zone(
         co_await run_agent_loop(
             std::move(request),
             std::move(tools));
-        nxt::rt::request_ui_shutdown();
+        nxtrt::request_ui_shutdown();
     } catch (...) {
-        nxt::rt::request_ui_shutdown();
+        nxtrt::request_ui_shutdown();
         throw;
     }
 }

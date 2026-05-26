@@ -1,7 +1,7 @@
 #pragma once
 
-#include "nxt/rt/buffers.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/buffers.hpp"
+#include "nxtrt/task.hpp"
 #include "nxt/tls.hpp"
 #include "nxt/tls/cert.hpp"
 
@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt::tls {
+namespace nxtrt::tls {
 
 enum class handshake_progress_kind
 {
@@ -88,7 +88,7 @@ public:
         auto notify = [&progress](handshake_progress step) -> task<> {
             using result_type =
                 std::invoke_result_t<Progress &, const handshake_progress &>;
-            if constexpr (nxt::rt::is_task_v<result_type>) {
+            if constexpr (nxtrt::is_task_v<result_type>) {
                 co_await std::invoke(progress, step);
             } else {
                 std::invoke(progress, step);
@@ -224,7 +224,7 @@ public:
 
     task<> write_all(std::string_view text)
     {
-        co_await write_all(nxt::rt::as_bytes(text));
+        co_await write_all(nxtrt::as_bytes(text));
     }
 
     task<nxt::tls::tls13_plaintext> read()
@@ -280,4 +280,4 @@ private:
     bool handshaken_ = false;
 };
 
-} // namespace nxt::rt::tls
+} // namespace nxtrt::tls

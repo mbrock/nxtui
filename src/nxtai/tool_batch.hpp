@@ -1,8 +1,8 @@
 #pragma once
 
 #include <nxt/json.hpp>
-#include <nxt/rt/scoped_process.hpp>
-#include <nxt/rt/task.hpp>
+#include <nxtrt/scoped_process.hpp>
+#include <nxtrt/task.hpp>
 #include <nxtai/openai_types.hpp>
 #include <nxtai/tool_json.hpp>
 
@@ -24,7 +24,7 @@ struct tool_result
 {
     bool failed = false;
     std::string output;
-    std::optional<nxt::rt::scoped_process::observation> observed;
+    std::optional<nxtrt::scoped_process::observation> observed;
 };
 
 template<typename Tool>
@@ -36,7 +36,7 @@ concept function_tool = requires(
     { Tool::description } -> std::convertible_to<std::string_view>;
     { Tool::strict } -> std::convertible_to<bool>;
     { tool.run(std::move(parameters)) }
-        -> std::same_as<nxt::rt::task<tool_result>>;
+        -> std::same_as<nxtrt::task<tool_result>>;
 };
 
 template<typename Tool>
@@ -52,7 +52,7 @@ concept explicit_tool_parameter_parser = requires(std::string_view json)
         -> std::same_as<std::optional<typename Tool::parameters>>;
 };
 
-inline nxt::rt::task<bool> take_json_token(
+inline nxtrt::task<bool> take_json_token(
     nxt::json::string_reader & in,
     nxt::json::token_kind kind)
 {
@@ -60,7 +60,7 @@ inline nxt::rt::task<bool> take_json_token(
     co_return token && token->kind == kind;
 }
 
-inline nxt::rt::task<bool> skip_json_value(
+inline nxtrt::task<bool> skip_json_value(
     nxt::json::string_reader & in,
     nxt::json::token first)
 {
@@ -87,7 +87,7 @@ inline nxt::rt::task<bool> skip_json_value(
     co_return true;
 }
 
-inline nxt::rt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
+inline nxtrt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
 {
     auto token = co_await nxt::json::read_token(in);
     if (!token)
@@ -95,7 +95,7 @@ inline nxt::rt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
     co_return co_await skip_json_value(in, std::move(*token));
 }
 
-inline nxt::rt::task<std::optional<std::string>>
+inline nxtrt::task<std::optional<std::string>>
 read_json_string_token(nxt::json::string_reader & in)
 {
     auto token = co_await nxt::json::read_token(in);
@@ -113,7 +113,7 @@ struct function_call
     openai::raw_json item = {};
 };
 
-inline nxt::rt::task<std::optional<function_call>>
+inline nxtrt::task<std::optional<function_call>>
 read_function_call_from_item(openai::raw_json raw_item)
 {
     if (raw_item.str.empty())
@@ -175,7 +175,7 @@ struct function_tool_entry
     std::string description;
     openai::raw_json parameters;
     bool strict = true;
-    std::function<nxt::rt::task<tool_result>(std::string_view)> run;
+    std::function<nxtrt::task<tool_result>(std::string_view)> run;
 };
 
 struct tool_registry
@@ -222,7 +222,7 @@ function_tool_definitions(const tool_registry & tools)
     return out;
 }
 
-[[nodiscard]] inline nxt::rt::task<std::vector<function_call>>
+[[nodiscard]] inline nxtrt::task<std::vector<function_call>>
 read_function_calls_from_items(std::vector<openai::raw_json> output_items)
 {
     auto calls = std::vector<function_call>{};
@@ -263,7 +263,7 @@ function_call_output(std::string call_id, std::string output)
 }
 
 template<function_tool Tool>
-nxt::rt::task<tool_result> run_one_function_tool(
+nxtrt::task<tool_result> run_one_function_tool(
     const Tool & tool,
     std::string_view arguments_json)
 {
@@ -323,7 +323,7 @@ template<function_tool Tool>
     return tool_registry{.entries = std::move(entries)};
 }
 
-inline nxt::rt::task<tool_result> run_function_tool(
+inline nxtrt::task<tool_result> run_function_tool(
     const tool_registry & tools,
     const function_call & call)
 {
@@ -345,7 +345,7 @@ struct function_call_result
     openai::raw_json output_item;
 };
 
-inline nxt::rt::task<function_call_result> run_one_call_for_batch(
+inline nxtrt::task<function_call_result> run_one_call_for_batch(
     const tool_registry & tools,
     function_call call)
 {
@@ -359,19 +359,19 @@ inline nxt::rt::task<function_call_result> run_one_call_for_batch(
     };
 }
 
-inline nxt::rt::task<std::vector<function_call_result>> run_function_tool_batch(
+inline nxtrt::task<std::vector<function_call_result>> run_function_tool_batch(
     const tool_registry & tools,
     std::vector<function_call> calls)
 {
-    auto deeds = co_await nxt::rt::with_zone(
-        [&]() -> nxt::rt::task<
-            std::vector<nxt::rt::catching_deed<function_call_result>>> {
+    auto deeds = co_await nxtrt::with_zone(
+        [&]() -> nxtrt::task<
+            std::vector<nxtrt::catching_deed<function_call_result>>> {
             auto out =
-                std::vector<nxt::rt::catching_deed<function_call_result>>{};
+                std::vector<nxtrt::catching_deed<function_call_result>>{};
             out.reserve(calls.size());
             for (auto & call : calls)
                 out.push_back(
-                    nxt::rt::fork(
+                    nxtrt::fork(
                         run_one_call_for_batch(tools, std::move(call)))
                         .cope());
             co_return out;
@@ -384,7 +384,7 @@ inline nxt::rt::task<std::vector<function_call_result>> run_function_tool_batch(
         if (result) {
             out.push_back(std::move(*result));
         } else {
-            nxt::rt::rethrow(result.error());
+            nxtrt::rethrow(result.error());
         }
     }
     co_return out;

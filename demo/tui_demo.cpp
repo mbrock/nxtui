@@ -1,7 +1,7 @@
 #include <nxtui/ansi.hpp>
 #include <nxtui/compositor.hpp>
 #include <nxtui/glyph-table.hpp>
-#include <nxt/rt/app.hpp>
+#include <nxtrt/app.hpp>
 #include <nxtui/tui.hpp>
 
 #include <algorithm>
@@ -56,7 +56,7 @@ auto frame_layout(int tick, nxtui::Size size)
 
     return nxtui::tui::column(
         nxtui::tui::row(
-            nxtui::tui::text(" nxt::rt TUI demo ", nxtui::tui::bold),
+            nxtui::tui::text(" nxtrt TUI demo ", nxtui::tui::bold),
             nxtui::tui::flex_fill(nxtui::Rgba8::bright_black())),
         nxtui::tui::hrule(),
         nxtui::tui::text(
@@ -72,7 +72,7 @@ auto frame_layout(int tick, nxtui::Size size)
             nxtui::Rgba8::bright_black()),
         nxtui::tui::text(pulse, nxtui::tui::fg(nxtui::Rgba8::bright_magenta())),
         nxtui::tui::hrule(),
-        nxtui::tui::text("this is the tiny first TUI island on nxt::rt"));
+        nxtui::tui::text("this is the tiny first TUI island on nxtrt"));
 }
 
 void render_frame(
@@ -89,7 +89,7 @@ void render_frame(
     compositor.present_frame(std::cout);
 }
 
-nxt::rt::task<void> run_demo()
+nxtrt::task<void> run_demo()
 {
     nxtui::ansi::init();
     nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
@@ -108,7 +108,7 @@ nxt::rt::task<void> run_demo()
             }
 
             render_frame(compositor, tick, size);
-            co_await nxt::rt::op::timeout::after(50ms);
+            co_await nxtrt::op::timeout::after(50ms);
         }
     } catch (...) {
         std::cout << "\x1b[?25h\x1b[0m" << std::flush;
@@ -122,7 +122,7 @@ nxt::rt::task<void> run_demo()
 
 int main()
 try {
-    auto rt = nxt::rt::runtime{};
+    auto rt = nxtrt::runtime{};
     rt.run(run_demo());
     return 0;
 } catch (std::exception const & error) {

@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <compare>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 /// Stable, opaque identity for a coroutine task.
 ///
@@ -39,4 +39,4 @@ private:
     std::atomic_uint64_t next_{1};
 };
 
-} // namespace nxt::rt
+} // namespace nxtrt

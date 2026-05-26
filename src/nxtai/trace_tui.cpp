@@ -8,9 +8,9 @@ namespace nxtai::trace_tui {
 using namespace nxtui;
 
 nxtui::tui::AnyLayout waterfall_bar(
-    nxt::rt::trace_clock::duration offset,
-    nxt::rt::trace_clock::duration duration,
-    nxt::rt::trace_clock::duration total,
+    nxtrt::trace_clock::duration offset,
+    nxtrt::trace_clock::duration duration,
+    nxtrt::trace_clock::duration total,
     Rgba8 accent)
 {
     auto total_us =
@@ -66,7 +66,7 @@ nxtui::tui::AnyLayout waterfall_header(
 
 nxtui::tui::AnyLayout waterfall_row_layout(
     const waterfall_row & row,
-    nxt::rt::trace_clock::duration total,
+    nxtrt::trace_clock::duration total,
     Rgba8 accent)
 {
     namespace tt = tool_tui;
@@ -120,8 +120,8 @@ nxtui::tui::AnyLayout render_waterfall(
 }
 
 nxtui::tui::AnyLayout render_span_waterfall(
-    const nxt::rt::trace_context & trace,
-    const nxt::rt::trace_span & span,
+    const nxtrt::trace_context & trace,
+    const nxtrt::trace_span & span,
     waterfall_options options)
 {
     auto subject = options.subject;

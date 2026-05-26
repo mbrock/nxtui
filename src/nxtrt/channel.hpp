@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <coroutine>
 #include <deque>
@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 /// Buffered deck-local channel.
 ///
@@ -137,7 +137,7 @@ public:
                 current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || running == nullptr)
                 throw runtime_error{
-                    "nxt::rt channel awaited without a running deck"};
+                    "nxtrt channel awaited without a running deck"};
 
             if (owner_->closed_ || owner_->stop_.stop_requested()) {
                 active_deck->enqueue(awaiting, running);
@@ -211,4 +211,4 @@ private:
     bool closed_ = false;
 };
 
-} // namespace nxt::rt
+} // namespace nxtrt

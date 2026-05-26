@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/buffers.hpp"
+#include "nxtrt/buffers.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -13,7 +13,7 @@
 #include <string_view>
 #include <vector>
 
-namespace nxt::rt::http {
+namespace nxtrt::http {
 
 struct protocol_error : runtime_error
 {
@@ -506,4 +506,4 @@ parse_sse_event(byte_reader & reader)
     }
 }
 
-} // namespace nxt::rt::http
+} // namespace nxtrt::http

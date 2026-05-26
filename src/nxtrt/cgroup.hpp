@@ -1,7 +1,7 @@
 #pragma once
 
-#include "nxt/rt/buffers.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/buffers.hpp"
+#include "nxtrt/task.hpp"
 
 #include <nxt/unique-fd.hpp>
 
@@ -21,7 +21,7 @@
 #include <system_error>
 #include <unordered_map>
 
-namespace nxt::rt::cgroup {
+namespace nxtrt::cgroup {
 
 namespace detail {
 
@@ -246,4 +246,4 @@ inline task<std::optional<std::filesystem::path>> find_unit_scope(
     co_return std::nullopt;
 }
 
-} // namespace nxt::rt::cgroup
+} // namespace nxtrt::cgroup

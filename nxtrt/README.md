@@ -1,6 +1,6 @@
 # nxtrt Racket ontology/model prototype
 
-This directory is a small experiment in making the `nxt::rt` domain a
+This directory is a small experiment in making the `nxtrt` domain a
 single `#lang rdf-forge` source file.
 
 - `runtime.rkt` declares the ontology and model together.

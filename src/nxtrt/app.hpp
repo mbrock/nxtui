@@ -1,16 +1,16 @@
 #pragma once
 
-#include "nxt/rt/channel.hpp"
-#include "nxt/rt/event.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/channel.hpp"
+#include "nxtrt/event.hpp"
+#include "nxtrt/task.hpp"
 
 #include <nxtui/input.hpp>
 #include <nxtui/units.hpp>
 
 #if defined(__linux__)
-#include "nxt/rt/uring_wand.hpp"
+#include "nxtrt/uring_wand.hpp"
 #else
-#include "nxt/rt/kqueue_wand.hpp"
+#include "nxtrt/kqueue_wand.hpp"
 #endif
 
 #include <chrono>
@@ -18,7 +18,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 #if defined(__linux__) && NXT_RT_HAS_LIBURING
 using platform_wand = uring_wand;
@@ -179,4 +179,4 @@ private:
 };
 #endif
 
-} // namespace nxt::rt
+} // namespace nxtrt

@@ -1,0 +1,1 @@
+build/nxtllm -m gpt-5.4-nano "please use the shell tool with some short sleeps maybe different times along with some stdout and stuff i am testing my harness"

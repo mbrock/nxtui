@@ -1,7 +1,7 @@
 #pragma once
 
-#include "nxt/rt/cares.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/cares.hpp"
+#include "nxtrt/task.hpp"
 #include "nxt/unique-fd.hpp"
 
 #include <cerrno>
@@ -12,7 +12,7 @@
 #include <system_error>
 #include <utility>
 
-namespace nxt::rt::net {
+namespace nxtrt::net {
 
 inline void set_close_on_exec(int fd)
 {
@@ -53,4 +53,4 @@ inline task<nxt::unique_fd> connect_tcp(
         }));
 }
 
-} // namespace nxt::rt::net
+} // namespace nxtrt::net

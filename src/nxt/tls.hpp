@@ -1,9 +1,9 @@
 #pragma once
 
 #include <nxt/crypto.hpp>
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/exceptions.hpp>
-#include <nxt/rt/task.hpp>
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/exceptions.hpp>
+#include <nxtrt/task.hpp>
 
 #include <algorithm>
 #include <array>
@@ -234,7 +234,7 @@ public:
     std::span<const std::byte> take(std::size_t n)
     {
         if (n > input_.size())
-            throw nxt::rt::runtime_error{"truncated TLS message"};
+            throw nxtrt::runtime_error{"truncated TLS message"};
         auto out = input_.first(n);
         input_ = input_.subspan(n);
         return out;
@@ -245,20 +245,20 @@ private:
 };
 
 template<typename Reader>
-inline nxt::rt::task<std::uint8_t> read_u8(Reader & reader)
+inline nxtrt::task<std::uint8_t> read_u8(Reader & reader)
 {
     auto bytes = co_await reader.take(1);
     co_return std::to_integer<std::uint8_t>(bytes[0]);
 }
 
 template<typename Reader>
-inline nxt::rt::task<std::uint16_t> read_u16(Reader & reader)
+inline nxtrt::task<std::uint16_t> read_u16(Reader & reader)
 {
     co_return parse_u16(co_await reader.take(2));
 }
 
 template<typename Reader>
-inline nxt::rt::task<std::uint32_t> read_u24(Reader & reader)
+inline nxtrt::task<std::uint32_t> read_u24(Reader & reader)
 {
     co_return parse_u24(co_await reader.take(3));
 }
@@ -316,7 +316,7 @@ struct tls13_server_hello
 };
 
 template<typename Reader>
-inline nxt::rt::task<tls_record> read_tls_record(Reader & reader)
+inline nxtrt::task<tls_record> read_tls_record(Reader & reader)
 {
     auto type = co_await read_u8(reader);
     auto version = co_await read_u16(reader);
@@ -332,7 +332,7 @@ inline nxt::rt::task<tls_record> read_tls_record(Reader & reader)
 inline void require_tls(bool ok, const char * message)
 {
     if (!ok)
-        throw nxt::rt::runtime_error{message};
+        throw nxtrt::runtime_error{message};
 }
 
 inline tls13_server_hello

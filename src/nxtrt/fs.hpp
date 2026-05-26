@@ -1,7 +1,7 @@
 #pragma once
 
-#include "nxt/rt/buffers.hpp"
-#include "nxt/rt/task.hpp"
+#include "nxtrt/buffers.hpp"
+#include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
 #include <algorithm>
@@ -26,7 +26,7 @@
 #include <sys/vnode.h>
 #endif
 
-namespace nxt::rt::fs {
+namespace nxtrt::fs {
 
 enum class file_kind
 {
@@ -415,4 +415,4 @@ inline task<std::vector<directory_entry>> list_path(std::string path)
 
 #endif
 
-} // namespace nxt::rt::fs
+} // namespace nxtrt::fs

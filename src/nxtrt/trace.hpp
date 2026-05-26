@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/env.hpp"
+#include "nxtrt/env.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 inline bool trace_env_enabled() noexcept
 {
@@ -34,7 +34,7 @@ inline bool trace_enabled = trace_env_enabled();
 inline void trace(std::string_view message)
 {
     if (trace_enabled)
-        std::cerr << "[nxt::rt] " << message << '\n';
+        std::cerr << "[nxtrt] " << message << '\n';
 }
 
 using trace_clock = std::chrono::steady_clock;
@@ -325,4 +325,4 @@ inline std::string current_trace_span_id()
     return {};
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

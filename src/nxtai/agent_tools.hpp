@@ -31,7 +31,7 @@ inline std::string read_file_to_string(
 inline tools::tool_result process_result_to_tool_result(
     tool_process::result captured)
 {
-    auto observed = std::optional<nxt::rt::scoped_process::observation>{};
+    auto observed = std::optional<nxtrt::scoped_process::observation>{};
     if (captured.observed.active())
         observed = std::move(captured.observed);
 
@@ -82,7 +82,7 @@ struct bash_tool
         return parameters{.command = std::move(*command)};
     }
 
-    nxt::rt::task<tools::tool_result> run(parameters args) const
+    nxtrt::task<tools::tool_result> run(parameters args) const
     {
         if (args.command.empty())
             co_return tools::tool_result{
@@ -98,9 +98,9 @@ struct bash_tool
         auto captured = co_await tool_process::capture(
             std::move(argv),
             tool_process::capture_options{
-                .scope = nxt::rt::scoped_process::options{
+                .scope = nxtrt::scoped_process::options{
                     .systemd_user_scope = true,
-                    .unit_name = nxt::rt::scoped_process::make_unit_name(
+                    .unit_name = nxtrt::scoped_process::make_unit_name(
                         "bash"),
                 },
             });
@@ -134,7 +134,7 @@ struct rg_search_tool
         return parameters{.pattern = std::move(*pattern), .path = std::move(path)};
     }
 
-    nxt::rt::task<tools::tool_result> run(parameters args) const
+    nxtrt::task<tools::tool_result> run(parameters args) const
     {
         if (args.pattern.empty())
             co_return tools::tool_result{
@@ -185,7 +185,7 @@ struct read_file_tool
         return parameters{.path = std::move(*path)};
     }
 
-    nxt::rt::task<tools::tool_result> run(parameters args) const
+    nxtrt::task<tools::tool_result> run(parameters args) const
     {
         auto path = std::move(args.path);
         if (path.empty())

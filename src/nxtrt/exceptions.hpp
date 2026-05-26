@@ -11,7 +11,7 @@
 #  include <cpptrace/from_current.hpp>
 #endif
 
-namespace nxt::rt {
+namespace nxtrt {
 
 #ifdef NXT_HAVE_CPPTRACE
 using exception = cpptrace::exception;
@@ -65,7 +65,7 @@ class operation_cancelled : public runtime_error
 {
 public:
     operation_cancelled()
-        : runtime_error{"nxt::rt operation cancelled"}
+        : runtime_error{"nxtrt operation cancelled"}
     {}
 };
 
@@ -73,7 +73,7 @@ class timeout_error : public runtime_error
 {
 public:
     timeout_error()
-        : runtime_error{"nxt::rt operation timed out"}
+        : runtime_error{"nxtrt operation timed out"}
     {}
 };
 
@@ -113,10 +113,10 @@ public:
     std::vector<std::exception_ptr> exceptions)
 {
     if (exceptions.empty())
-        throw logic_error{"nxt::rt throw_exceptions called without exceptions"};
+        throw logic_error{"nxtrt throw_exceptions called without exceptions"};
     if (exceptions.size() == 1)
         rethrow(std::move(exceptions.front()));
     throw exception_group{std::move(message), std::move(exceptions)};
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

@@ -1,179 +1,118 @@
 # nxt
 
-`nxt` is a small terminal UI library extracted from `nixb`.
+`nxt` is a set of C++ libraries for coroutine-driven command-line software. It
+combines a structured async runtime, terminal rendering primitives, and an
+LLM/tooling layer that can share the same runtime.
 
-The goal is a library that is pleasant to use from C++, compositional enough for
-real interfaces, and fast enough for frequently updated terminal displays. It is
-not trying to be a full widget toolkit. The current shape is closer to a typed
-raster plus a small declarative layout layer and a coroutine-friendly runtime.
+The public surface is organized around three root namespaces:
 
-One important use case is a partial terminal HUD: a live interface at the top of
-the terminal while ordinary log output continues below it. This is useful for
-build monitors and other tools where the UI should summarize what is happening
-without swallowing the primary scrollback.
+- [`nxtrt`][nxtrt] is the coroutine runtime for tasks, scheduling, structured
+  child work, async I/O, subprocesses, and terminal app loops.
+- [`nxtui`][nxtui] is the terminal/raster/layout toolkit for typed screen
+  geometry, styled text, composable layout values, and terminal compositing.
+- [`nxtai`][nxtai] is the OpenAI/LLM client and tool execution layer used by
+  the `nxtllm` executable.
 
-## Layout Model
+## nxtrt
 
-Layouts are ordinary C++ values. A layout reports:
+[`nxtrt`][nxtrt] is the base runtime. It provides lazy coroutine
+[`task<T>`][nxtrt-task] values, an explicit cooperative [`deck`][nxtrt-deck],
+platform [`wand`][nxtrt-wand] backends, structured [`task_zone`][nxtrt-zone]
+ownership, [`deed<T>`][nxtrt-deed] handles, [`channel<T>`][nxtrt-channel],
+[`event`][nxtrt-event], and low-level awaitable operations under
+[`nxtrt::op`][nxtrt-op].
 
-- a minimum width and height
-- whether it wants flexible extra space
-- how to render itself into a `RasterView`
+Above the scheduler core, `nxtrt` also contains byte streams and protocol or
+process helpers:
 
-Most UI is built by composing small values from `nxtui::tui`:
+- [`nxtrt::fs`][nxtrt-fs] for async file helpers
+- [`nxtrt::http`][nxtrt-http] and [`nxtrt::tls`][nxtrt-tls] for the HTTP/TLS
+  client stack
+- [`nxtrt::subprocess`][nxtrt-subprocess] and [`nxtrt::pty`][nxtrt-pty] for
+  child process work
+- [`nxtrt::ui_runtime`][nxtrt-ui-runtime] and
+  [`nxtrt::terminal_app`][nxtrt-terminal-app] for terminal guest applications
+
+Start with the [runtime overview][rt-overview] for the conceptual model.
+
+```cpp
+#include <nxtrt/app.hpp>
+
+#include <chrono>
+
+using namespace std::chrono_literals;
+
+nxtrt::task<void> main_task()
+{
+    co_await nxtrt::op::timeout::after(30ms);
+}
+
+int main()
+{
+    auto rt = nxtrt::runtime{};
+    rt.run(main_task());
+}
+```
+
+## nxtui
+
+[`nxtui`][nxtui] is the terminal UI and rendering library. Its values are useful
+on their own: the UI layer defines the data model and rendering primitives,
+while live terminal applications can use `nxtrt` to drive input, refresh, and
+process output.
+
+The core pieces are typed terminal geometry such as [`Size`][nxtui-size] and
+[`Pos`][nxtui-pos], color and style types such as [`Rgba8`][nxtui-rgba],
+[`Raster`][nxtui-raster] and [`RasterView`][nxtui-raster-view], the
+[`GlyphTable`][nxtui-glyph-table], ANSI and input helpers, and composable layout
+values under [`nxtui::tui`][nxtui-tui]. A
+[`TerminalCompositor`][nxtui-terminal-compositor] renders those layout values
+into terminal output.
 
 ```cpp
 #include <nxtui/tui.hpp>
 
 using namespace nxtui::tui;
 
-auto view = row(
-    text("llvm", fg(nxtui::Rgba8::blue()) | bold),
-    progress_bar(42.0 * nxtui::percent),
-    text(" 42%", fg(nxtui::Rgba8::white()))
-);
+auto view = column(
+    text("build", fg(nxtui::Rgba8::cyan()) | bold),
+    row(
+        text("compile"),
+        progress_bar(64.0 * nxtui::percent),
+        text(" 64%")));
 ```
 
-The layout functions return concrete values, so composition is type checked and
-does not require an object hierarchy.
+A common use is a partial terminal HUD: a fixed-height layout can live at the
+bottom of a terminal while ordinary process output continues in the scrollback
+above it.
 
-## Basic Primitives
+## nxtai
 
-Text:
+[`nxtai`][nxtai] is the LLM/OpenAI layer. It builds OpenAI Responses requests,
+streams server-sent events over the `nxtrt` HTTP/TLS stack, runs tool-call
+batches, and provides the `nxtllm` executable.
 
-```cpp
-text("hello")
-text("warning", fg(nxtui::Rgba8::yellow()) | bold)
-styled_text(
-    span("build ", fg(nxtui::Rgba8::white())),
-    span("failed", fg(nxtui::Rgba8::red()) | bold)
-)
+Useful entry points include
+[`nxtai::responses::openai_responses_request`][nxtai-request],
+[`nxtai::response_stream_result`][nxtai-stream-result],
+[`nxtai::tools::tool_registry`][nxtai-tool-registry], the OpenAI event/data
+types under [`nxtai::openai`][nxtai-openai], and built-in tools under
+[`nxtai::agent_tools`][nxtai-agent-tools].
+
+```sh
+build/nxtllm --dump-request "hello from nxtrt"
 ```
 
-Rules, fills, and progress:
+## Repository Map
 
-```cpp
-hrule()
-fill(nxtui::Rgba8(24, 24, 24))
-progress_bar(73.0 * nxtui::percent)
-progress_bar(73.0 * nxtui::percent, nxtui::Rgba8::green())
-```
-
-Horizontal and vertical composition:
-
-```cpp
-row(
-    text("fetch"),
-    progress_bar(18.0 * nxtui::percent),
-    text(" 18%")
-)
-
-column(
-    text("building nixpkgs#hello", fg(nxtui::Rgba8::cyan()) | bold),
-    hrule(),
-    row(text("compile"), progress_bar(64.0 * nxtui::percent))
-)
-```
-
-Dynamic lists:
-
-```cpp
-struct Job {
-    std::string name;
-    nxtui::percent_t progress;
-};
-
-std::vector<Job> jobs = /* ... */;
-
-auto jobs_view = list(jobs, [](const Job & job) {
-    return row(
-        text(fmt::format("{:<24}", job.name)),
-        progress_bar(job.progress),
-        text(fmt::format(
-            " {:>3.0f}%",
-            job.progress.value()))
-    );
-});
-```
-
-## Running an App
-
-Application work should start on `nxt::rt`, the structured coroutine runtime in
-`src`. It owns a `deck`, a platform I/O wand, a root task zone, and small
-app-facing queues for input, resize, and damage notifications.
-
-The current smallest TUI entry point is `nxt-tui-demo`: it renders a real
-terminal compositor frame from an `nxt::rt::runtime` task and animates with
-runtime sleeps.
-
-```cpp
-#include <nxtui/tui.hpp>
-#include <nxt/rt/app.hpp>
-
-int main()
-{
-    using namespace std::chrono_literals;
-    using namespace nxtui::tui;
-
-    auto runtime = nxt::rt::runtime{};
-    runtime.run([]() -> nxt::rt::task<void> {
-        for (int i = 0; i <= 100; ++i) {
-            // Render a layout through TerminalCompositor here.
-            co_await nxt::rt::op::timeout::after(30ms);
-        }
-    });
-}
-```
-
-The old `nxtio` runner sources have been removed; the Meson build no longer
-vendors or builds `libcoro`.
-
-The runtime owns:
-
-- `signal_damage()` and `damage_event()` for redraw coordination
-- input and resize channels
-- `sleep()` and root-zone `run()` entry points
-- the platform wand used by lower-level async file, socket, DNS, TLS, and HTTP
-  operations
-
-## Partial HUD Behavior
-
-The compositor renders the layout into a reserved region at the top of the
-terminal. If the layout has a fixed height, `nxt` treats it as a HUD and leaves
-space below for normal output:
-
-```cpp
-runtime.println("downloaded narinfo");
-runtime.println("building /nix/store/...");
-```
-
-Those lines remain in the terminal scrollback while the HUD is redrawn above
-them. If a layout asks to grow vertically, the runtime treats it as a full-screen
-view.
-
-This distinction is deliberate: many command-line tools need both a structured
-summary and the raw stream of details.
-
-## Typed Coordinates
-
-The raster layer uses small typed terminal units:
-
-```cpp
-auto size = nxtui::Size{80 * nxtui::ch, 24 * nxtui::ln};
-auto pos = nxtui::Pos::at(2 * nxtui::ch, 1 * nxtui::ln);
-```
-
-This keeps columns, rows, sizes, and percentages from collapsing into anonymous
-integers throughout layout and rendering code.
-
-## Structure
-
-- `src/nxt` contains core terminal, raster, units, and layout code.
-- `src/nxt/rt` contains the structured coroutine runtime.
-- `src/nxtai` contains the runtime `nxtllm` entry point.
-- `test` contains raster, terminal compositor, and runtime tests.
-- `vendor/mdspan` vendors the header-only mdspan implementation.
-- `vendor/libvterm` is used by the terminal tests.
+- `src/nxtrt` contains the structured coroutine runtime.
+- `src/nxtui` contains terminal, raster, compositor, input, and layout code.
+- `src/nxtai` contains the LLM/OpenAI client code and `nxtllm`.
+- `src/nxt` contains shared protocol and utility code that is not tied to one
+  root namespace.
+- `demo` contains small runtime, terminal, HTTP, and shell demos.
+- `test` contains the nested `_test` suites.
+- `docs` contains the generated API documentation source.
 
 ## Building
 
@@ -185,27 +124,48 @@ meson compile -C build
 build/nxt-tests
 ```
 
-The default build is the runtime lane: it builds core layout/raster code,
-`nxt-tests`, `nxtllm`, and the runtime demos without pulling in `libcoro`. Try the
-small TUI demo with:
+The default build produces `nxt-tests`, `nxtllm`, `libnxt-core.a`, and the demo
+programs. Try the small TUI demo with:
 
 ```sh
 build/demo/nxt-tui-demo
 ```
 
-`nxtllm` is also a target. It parses the familiar CLI, constructs OpenAI
-Responses requests on `nxt::rt`, streams one-shot turns over the runtime
-HTTP/TLS stack, and can run basic tool-call batches. The richer interactive HUD
-is still being ported:
+Regenerate local API docs with:
 
 ```sh
-build/nxtllm --dump-request "hello from nxt::rt"
+make docs
 ```
 
-Install `cpptrace` if you want richer crash stack traces in tests. Meson enables
-it only after a real compile/link probe, so compilers that find an incompatible
-system package will fall back to the built-in stacktrace shim.
-
-The API is still in motion, but the intended direction is stable: small
-composable layout values, a typed raster underneath, and a runtime that works
-well for both full-screen TUIs and partial HUD-style displays.
+[nxtrt]: https://swa.sh/nxt/namespacenxtrt.html
+[nxtrt-task]: https://swa.sh/nxt/classnxtrt_1_1task.html
+[nxtrt-deck]: https://swa.sh/nxt/classnxtrt_1_1deck.html
+[nxtrt-wand]: https://swa.sh/nxt/classnxtrt_1_1wand.html
+[nxtrt-zone]: https://swa.sh/nxt/classnxtrt_1_1task__zone.html
+[nxtrt-deed]: https://swa.sh/nxt/classnxtrt_1_1deed.html
+[nxtrt-channel]: https://swa.sh/nxt/classnxtrt_1_1channel.html
+[nxtrt-event]: https://swa.sh/nxt/classnxtrt_1_1event.html
+[nxtrt-op]: https://swa.sh/nxt/namespacenxtrt_1_1op.html
+[nxtrt-fs]: https://swa.sh/nxt/namespacenxtrt_1_1fs.html
+[nxtrt-http]: https://swa.sh/nxt/namespacenxtrt_1_1http.html
+[nxtrt-tls]: https://swa.sh/nxt/namespacenxtrt_1_1tls.html
+[nxtrt-subprocess]: https://swa.sh/nxt/namespacenxtrt_1_1subprocess.html
+[nxtrt-pty]: https://swa.sh/nxt/namespacenxtrt_1_1pty.html
+[nxtrt-ui-runtime]: https://swa.sh/nxt/classnxtrt_1_1ui__runtime.html
+[nxtrt-terminal-app]: https://swa.sh/nxt/classnxtrt_1_1terminal__app.html
+[rt-overview]: https://swa.sh/nxt/rt_overview.html
+[nxtui]: https://swa.sh/nxt/namespacenxtui.html
+[nxtui-size]: https://swa.sh/nxt/structnxtui_1_1_size.html
+[nxtui-pos]: https://swa.sh/nxt/structnxtui_1_1_pos.html
+[nxtui-rgba]: https://swa.sh/nxt/structnxtui_1_1_rgba8.html
+[nxtui-raster]: https://swa.sh/nxt/classnxtui_1_1_raster.html
+[nxtui-raster-view]: https://swa.sh/nxt/classnxtui_1_1_raster_view.html
+[nxtui-glyph-table]: https://swa.sh/nxt/classnxtui_1_1_glyph_table.html
+[nxtui-tui]: https://swa.sh/nxt/namespacenxtui_1_1tui.html
+[nxtui-terminal-compositor]: https://swa.sh/nxt/classnxtui_1_1tui_1_1_terminal_compositor.html
+[nxtai]: https://swa.sh/nxt/namespacenxtai.html
+[nxtai-request]: https://swa.sh/nxt/structnxtai_1_1responses_1_1openai__responses__request.html
+[nxtai-stream-result]: https://swa.sh/nxt/structnxtai_1_1response__stream__result.html
+[nxtai-tool-registry]: https://swa.sh/nxt/structnxtai_1_1tools_1_1tool__registry.html
+[nxtai-openai]: https://swa.sh/nxt/namespacenxtai_1_1openai.html
+[nxtai-agent-tools]: https://swa.sh/nxt/namespacenxtai_1_1agent__tools.html

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <ares.h>
 
@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 #if defined(__GNUC__) || defined(__clang__)
 #define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN \
@@ -251,4 +251,4 @@ private:
 #undef NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
 #undef NXT_RT_CARES_IGNORE_DEPRECATED_END
 
-} // namespace nxt::rt
+} // namespace nxtrt

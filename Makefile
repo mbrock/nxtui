@@ -25,7 +25,9 @@ docs:
 	chmod -R a+rX docs/html
 
 docs-publish: docs
-	rsync -a --delete docs/html/ /var/www/nxtui/
+	@if [ "$$(readlink /var/www/nxt 2>/dev/null)" != "$(CURDIR)/docs/html" ]; then \
+		sudo ln -sfnT $(CURDIR)/docs/html /var/www/nxt; \
+	fi
 
 clean:
 	rm -rf build

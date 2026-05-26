@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <functional>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 class ema_rate
 {
@@ -84,4 +84,4 @@ task<void> sample_ema_rate(
     }
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

@@ -2,11 +2,11 @@
 #include <nxtui/any_layout.hpp>
 #include <nxtui/compositor.hpp>
 #include <nxtui/glyph-table.hpp>
-#include <nxt/rt/app.hpp>
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/cgroup.hpp>
-#include <nxt/rt/pty.hpp>
-#include <nxt/rt/terminal_app.hpp>
+#include <nxtrt/app.hpp>
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/cgroup.hpp>
+#include <nxtrt/pty.hpp>
+#include <nxtrt/terminal_app.hpp>
 #include <nxtui/tui.hpp>
 #include <nxtui/tui_sparkline.hpp>
 
@@ -41,9 +41,9 @@ constexpr auto cgroup_sparkline_samples = std::size_t{160};
 constexpr auto memory_chart_floor_bytes = std::uint64_t{
     128ull * 1024ull * 1024ull};
 
-using sample = nxt::rt::cgroup::sample;
-using bytes_t = nxt::rt::cgroup::bytes_t;
-using usec_t = nxt::rt::cgroup::usec_t;
+using sample = nxtrt::cgroup::sample;
+using bytes_t = nxtrt::cgroup::bytes_t;
+using usec_t = nxtrt::cgroup::usec_t;
 
 struct session_state
 {
@@ -53,7 +53,7 @@ struct session_state
     std::vector<double> memory_points;
     std::vector<double> cpu_points;
     std::optional<sample> last_sparkline_sample;
-    nxt::rt::child_result status;
+    nxtrt::child_result status;
     bool process_done = false;
 
     session_state()
@@ -179,19 +179,19 @@ auto metrics_layout(const session_state & state)
 
 auto frame_layout(
     const session_state & state,
-    nxt::rt::pty::session & pty)
+    nxtrt::pty::session & pty)
 {
     return nxtui::tui::column(
         metrics_layout(state),
-        nxt::rt::pty::pty_screen(
+        nxtrt::pty::pty_screen(
             pty,
             nxtui::tui::bg(nxtui::Rgba8{12, 14, 18})));
 }
 
 void render_frame(
-    nxt::rt::terminal_app & terminal,
+    nxtrt::terminal_app & terminal,
     const session_state & state,
-    nxt::rt::pty::session & pty)
+    nxtrt::pty::session & pty)
 {
     auto & compositor = terminal.compositor();
     auto & buffer = compositor.back_buffer();
@@ -202,7 +202,7 @@ void render_frame(
     compositor.present_frame(std::cout);
 }
 
-nxt::rt::task<void> sample_cgroup_until_done(session_state & state)
+nxtrt::task<void> sample_cgroup_until_done(session_state & state)
 {
     auto next_sample =
         std::chrono::steady_clock::now() + cgroup_sample_interval;
@@ -211,7 +211,7 @@ nxt::rt::task<void> sample_cgroup_until_done(session_state & state)
     while (!state.process_done) {
         if (state.cgroup_path.empty()) {
             if (auto found =
-                    co_await nxt::rt::cgroup::find_unit_scope(
+                    co_await nxtrt::cgroup::find_unit_scope(
                         state.unit_name))
                 state.cgroup_path = std::move(*found);
         }
@@ -223,13 +223,13 @@ nxt::rt::task<void> sample_cgroup_until_done(session_state & state)
                 while (next_sparkline_sample <= now)
                     next_sparkline_sample += cgroup_sparkline_interval;
             state.push_sample(
-                co_await nxt::rt::cgroup::read_sample(state.cgroup_path),
+                co_await nxtrt::cgroup::read_sample(state.cgroup_path),
                 include_sparkline);
         }
 
         now = std::chrono::steady_clock::now();
         if (now < next_sample)
-            co_await nxt::rt::op::timeout::after(next_sample - now);
+            co_await nxtrt::op::timeout::after(next_sample - now);
         next_sample += cgroup_sample_interval;
         if (next_sample < now)
             next_sample = now + cgroup_sample_interval;
@@ -238,14 +238,14 @@ nxt::rt::task<void> sample_cgroup_until_done(session_state & state)
     if (!state.cgroup_path.empty()
         && std::filesystem::exists(state.cgroup_path))
         state.push_sample(
-            co_await nxt::rt::cgroup::read_sample(state.cgroup_path),
+            co_await nxtrt::cgroup::read_sample(state.cgroup_path),
             true);
 }
 
-nxt::rt::task<void> render_until_done(
-    nxt::rt::terminal_app & terminal,
+nxtrt::task<void> render_until_done(
+    nxtrt::terminal_app & terminal,
     const session_state & state,
-    nxt::rt::pty::session & pty)
+    nxtrt::pty::session & pty)
 {
     auto next_frame = std::chrono::steady_clock::now() + frame_interval;
 
@@ -255,7 +255,7 @@ nxt::rt::task<void> render_until_done(
 
         auto now = std::chrono::steady_clock::now();
         if (now < next_frame)
-            co_await nxt::rt::op::timeout::after(next_frame - now);
+            co_await nxtrt::op::timeout::after(next_frame - now);
         next_frame += frame_interval;
         if (next_frame < now)
             next_frame = now + frame_interval;
@@ -265,22 +265,22 @@ nxt::rt::task<void> render_until_done(
     render_frame(terminal, state, pty);
 }
 
-nxt::rt::task<void> read_pty_until_done(
-    nxt::rt::pty::session & pty,
+nxtrt::task<void> read_pty_until_done(
+    nxtrt::pty::session & pty,
     session_state & state)
 {
     state.status = co_await pty.read_loop();
     state.process_done = true;
 }
 
-nxt::rt::task<void> pump_stdin_to_pty(
-    nxt::rt::pty::session & pty,
+nxtrt::task<void> pump_stdin_to_pty(
+    nxtrt::pty::session & pty,
     const session_state & state)
 {
     auto storage = std::array<std::byte, 4096>{};
 
     while (!state.process_done) {
-        auto ready = co_await nxt::rt::op::poll_until::after(
+        auto ready = co_await nxtrt::op::poll_until::after(
             STDIN_FILENO,
             POLLIN,
             80ms);
@@ -291,7 +291,7 @@ nxt::rt::task<void> pump_stdin_to_pty(
         if ((ready.events & POLLIN) == 0)
             continue;
 
-        auto n = co_await nxt::rt::op::read_some{
+        auto n = co_await nxtrt::op::read_some{
             .fd = STDIN_FILENO,
             .buffer = std::span{storage},
         };
@@ -299,7 +299,7 @@ nxt::rt::task<void> pump_stdin_to_pty(
             co_return;
 
         co_await pty.write_all(
-            std::string{nxt::rt::as_string_view(std::span{storage}.first(n))});
+            std::string{nxtrt::as_string_view(std::span{storage}.first(n))});
     }
 }
 
@@ -325,7 +325,7 @@ std::vector<std::string> scoped_shell_argv(
     return argv;
 }
 
-nxt::rt::task<void> run_scoped_command(std::string command = {})
+nxtrt::task<void> run_scoped_command(std::string command = {})
 {
     nxtui::ansi::init();
     nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
@@ -334,28 +334,28 @@ nxt::rt::task<void> run_scoped_command(std::string command = {})
     state.unit_name = make_unit_name();
     auto argv = scoped_shell_argv(state.unit_name, command);
 
-    auto size = nxt::rt::current_terminal_size();
-    auto pty = co_await nxt::rt::pty::spawn(nxt::rt::pty::spawn_options{
+    auto size = nxtrt::current_terminal_size();
+    auto pty = co_await nxtrt::pty::spawn(nxtrt::pty::spawn_options{
         .argv = std::move(argv),
         .size = size,
     });
-    auto terminal = nxt::rt::terminal_app{};
+    auto terminal = nxtrt::terminal_app{};
 
     auto failure = std::exception_ptr{};
-    auto reader = nxt::rt::catching_deed<void>{};
-    auto input = nxt::rt::catching_deed<void>{};
-    auto sampler = nxt::rt::catching_deed<void>{};
-    auto renderer = nxt::rt::catching_deed<void>{};
+    auto reader = nxtrt::catching_deed<void>{};
+    auto input = nxtrt::catching_deed<void>{};
+    auto sampler = nxtrt::catching_deed<void>{};
+    auto renderer = nxtrt::catching_deed<void>{};
     try {
-        co_await nxt::rt::with_zone([&]() -> nxt::rt::task<void> {
-            reader = nxt::rt::fork(read_pty_until_done(pty, state)).cope();
-            input = nxt::rt::fork(pump_stdin_to_pty(pty, state)).cope();
-            sampler = nxt::rt::fork(sample_cgroup_until_done(state)).cope();
+        co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+            reader = nxtrt::fork(read_pty_until_done(pty, state)).cope();
+            input = nxtrt::fork(pump_stdin_to_pty(pty, state)).cope();
+            sampler = nxtrt::fork(sample_cgroup_until_done(state)).cope();
             renderer =
-                nxt::rt::fork(render_until_done(terminal, state, pty)).cope();
+                nxtrt::fork(render_until_done(terminal, state, pty)).cope();
 
             while (!state.process_done)
-                co_await nxt::rt::op::timeout::after(frame_interval);
+                co_await nxtrt::op::timeout::after(frame_interval);
         });
     } catch (...) {
         failure = std::current_exception();
@@ -364,21 +364,21 @@ nxt::rt::task<void> run_scoped_command(std::string command = {})
     if (failure) {
         if (!state.process_done)
             co_await pty.terminate_and_wait();
-        nxt::rt::rethrow(failure);
+        nxtrt::rethrow(failure);
     }
 
     auto reader_done = std::move(reader).get();
     if (!reader_done)
-        nxt::rt::rethrow(reader_done.error());
+        nxtrt::rethrow(reader_done.error());
     auto input_done = std::move(input).get();
     if (!input_done)
-        nxt::rt::rethrow(input_done.error());
+        nxtrt::rethrow(input_done.error());
     auto sampler_done = std::move(sampler).get();
     if (!sampler_done)
-        nxt::rt::rethrow(sampler_done.error());
+        nxtrt::rethrow(sampler_done.error());
     auto renderer_done = std::move(renderer).get();
     if (!renderer_done)
-        nxt::rt::rethrow(renderer_done.error());
+        nxtrt::rethrow(renderer_done.error());
 }
 
 } // namespace
@@ -394,7 +394,7 @@ try {
         }
     }
 
-    auto rt = nxt::rt::runtime{};
+    auto rt = nxtrt::runtime{};
     rt.run(run_scoped_command(std::move(command)));
     return 0;
 } catch (std::exception const & error) {

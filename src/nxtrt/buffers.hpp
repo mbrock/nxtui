@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 struct buffer_error : runtime_error
 {
@@ -477,7 +477,7 @@ public:
 
     task<void> flush()
     {
-        co_await nxt::rt::write_all(*sink_, buffered());
+        co_await nxtrt::write_all(*sink_, buffered());
         end_ = 0;
     }
 
@@ -487,7 +487,7 @@ public:
         while (!remaining.empty()) {
             if (remaining.size() >= buffer_.size()) {
                 co_await flush();
-                co_await nxt::rt::write_all(*sink_, remaining);
+                co_await nxtrt::write_all(*sink_, remaining);
                 co_return;
             }
 
@@ -761,4 +761,4 @@ task<std::size_t> for_each_chunk(
     }
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

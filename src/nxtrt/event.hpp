@@ -1,11 +1,11 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <coroutine>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 /// Manual-reset event for deck-local coordination.
 ///
@@ -63,7 +63,7 @@ public:
                 current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || running == nullptr)
                 throw runtime_error{
-                    "nxt::rt event awaited without a running deck"};
+                    "nxtrt event awaited without a running deck"};
 
             owner_->waiters_.push_back(
                 waiter{
@@ -106,4 +106,4 @@ private:
     std::vector<waiter> waiters_;
 };
 
-} // namespace nxt::rt
+} // namespace nxtrt

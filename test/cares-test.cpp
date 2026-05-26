@@ -1,5 +1,5 @@
-#include <nxt/rt/cares.hpp>
-#include <nxt/rt/uring_wand.hpp>
+#include <nxtrt/cares.hpp>
+#include <nxtrt/uring_wand.hpp>
 
 #include "test.hpp"
 
@@ -14,17 +14,17 @@ using namespace boost::ut;
 
 template<typename T>
 T pump_until_done(
-    nxt::rt::deck & deck,
-    nxt::rt::uring_wand & wand,
-    nxt::rt::task<T> & task)
+    nxtrt::deck & deck,
+    nxtrt::uring_wand & wand,
+    nxtrt::task<T> & task)
 {
     wand.run_until_done(deck, task);
     return std::move(task).result();
 }
 
-nxt::rt::task<std::vector<nxt::rt::resolved_address>> resolve_localhost()
+nxtrt::task<std::vector<nxtrt::resolved_address>> resolve_localhost()
 {
-    auto resolver = nxt::rt::cares_resolver{};
+    auto resolver = nxtrt::cares_resolver{};
     co_return co_await resolver.getaddrinfo("localhost", "80");
 }
 
@@ -32,8 +32,8 @@ static suite cares_tests{
     "c-ares", [] {
         "resolver"_test = [] {
             "localhost resolves to IPv4 loopback"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = resolve_localhost();
 
                 deck.start(task);

@@ -1,5 +1,5 @@
 #include <nxt/json.hpp>
-#include <nxt/rt.hpp>
+#include <nxtrt.hpp>
 
 #include "test.hpp"
 
@@ -12,8 +12,8 @@ using namespace boost::ut;
 
 std::vector<nxt::json::token> read_all_json_tokens(std::string_view input)
 {
-    auto deck = nxt::rt::deck{};
-    return deck.sync_wait([input]() -> nxt::rt::task<std::vector<nxt::json::token>> {
+    auto deck = nxtrt::deck{};
+    return deck.sync_wait([input]() -> nxtrt::task<std::vector<nxt::json::token>> {
         auto reader = nxt::json::string_reader{.input = input};
         auto out = std::vector<nxt::json::token>{};
         while (auto token = co_await nxt::json::read_token(reader))

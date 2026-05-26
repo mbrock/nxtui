@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/task.hpp"
+#include "nxtrt/task.hpp"
 
 #include <charconv>
 #include <cstddef>
@@ -13,9 +13,9 @@
 
 namespace nxt::json {
 
-struct parse_error : rt::runtime_error
+struct parse_error : nxtrt::runtime_error
 {
-    using rt::runtime_error::runtime_error;
+    using nxtrt::runtime_error::runtime_error;
 };
 
 struct string_reader
@@ -23,14 +23,14 @@ struct string_reader
     std::string_view input;
     std::size_t offset = 0;
 
-    rt::task<std::optional<char>> peek()
+    nxtrt::task<std::optional<char>> peek()
     {
         if (offset >= input.size())
             co_return std::nullopt;
         co_return input[offset];
     }
 
-    rt::task<std::optional<char>> take()
+    nxtrt::task<std::optional<char>> take()
     {
         if (offset >= input.size())
             co_return std::nullopt;
@@ -164,7 +164,7 @@ inline std::optional<unsigned> hex_value(char c)
 }
 
 template<typename Reader>
-rt::task<void> skip_ws(Reader & in)
+nxtrt::task<void> skip_ws(Reader & in)
 {
     while (auto ch = co_await in.peek()) {
         if (*ch != ' ' && *ch != '\n' && *ch != '\r' && *ch != '\t')
@@ -174,7 +174,7 @@ rt::task<void> skip_ws(Reader & in)
 }
 
 template<typename Reader>
-rt::task<char> require_char(Reader & in, std::string_view context)
+nxtrt::task<char> require_char(Reader & in, std::string_view context)
 {
     auto ch = co_await in.take();
     if (!ch)
@@ -183,7 +183,7 @@ rt::task<char> require_char(Reader & in, std::string_view context)
 }
 
 template<typename Reader>
-rt::task<std::uint32_t> read_u16_escape(Reader & in)
+nxtrt::task<std::uint32_t> read_u16_escape(Reader & in)
 {
     auto value = std::uint32_t{};
     for (auto i = 0; i < 4; ++i) {
@@ -197,7 +197,7 @@ rt::task<std::uint32_t> read_u16_escape(Reader & in)
 }
 
 template<typename Reader>
-rt::task<std::string> read_string_body(Reader & in)
+nxtrt::task<std::string> read_string_body(Reader & in)
 {
     auto out = std::string{};
     while (true) {
@@ -244,7 +244,7 @@ rt::task<std::string> read_string_body(Reader & in)
 }
 
 template<typename Reader>
-rt::task<std::string> read_string(Reader & in)
+nxtrt::task<std::string> read_string(Reader & in)
 {
     co_await skip_ws(in);
     if (co_await require_char(in, "string") != '"')
@@ -253,7 +253,7 @@ rt::task<std::string> read_string(Reader & in)
 }
 
 template<typename Reader>
-rt::task<std::string> read_number_text(Reader & in, char first)
+nxtrt::task<std::string> read_number_text(Reader & in, char first)
 {
     auto out = std::string{first};
     while (auto ch = co_await in.peek()) {
@@ -268,7 +268,7 @@ rt::task<std::string> read_number_text(Reader & in, char first)
 }
 
 template<typename Reader>
-rt::task<bool> read_literal_tail(Reader & in, std::string_view tail)
+nxtrt::task<bool> read_literal_tail(Reader & in, std::string_view tail)
 {
     for (auto expected : tail) {
         auto ch = co_await in.take();
@@ -279,7 +279,7 @@ rt::task<bool> read_literal_tail(Reader & in, std::string_view tail)
 }
 
 template<typename Reader>
-rt::task<std::optional<token>> read_token(Reader & in)
+nxtrt::task<std::optional<token>> read_token(Reader & in)
 {
     co_await skip_ws(in);
     auto ch = co_await in.take();

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "nxt/rt/app.hpp"
-#include "nxt/rt/buffers.hpp"
-#include "nxt/rt/stdout_trace.hpp"
-#include "nxt/rt/terminal_app.hpp"
+#include "nxtrt/app.hpp"
+#include "nxtrt/buffers.hpp"
+#include "nxtrt/stdout_trace.hpp"
+#include "nxtrt/terminal_app.hpp"
 
 #include <nxtui/ansi.hpp>
 #include <nxtui/any_layout.hpp>
@@ -32,7 +32,7 @@
 #include <vector>
 #include <unistd.h>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 using namespace nxtui;
 
@@ -94,7 +94,7 @@ struct ui_runtime_options
 
 /// New-runtime UI owner for terminal-guest applications.
 ///
-/// This is the `nxt::rt` successor to the useful part of the old
+/// This is the `nxtrt` successor to the useful part of the old
 /// `nxtui::tui::UIRuntime`: a live layout surface, a bottom HUD rendered through
 /// `TerminalCompositor`, and durable scrollback blocks written above it.
 class ui_runtime
@@ -657,7 +657,7 @@ inline ui_runtime & require_current_ui_runtime()
 {
     auto * ui = current_ui_runtime();
     if (ui == nullptr)
-        throw runtime_error{"nxt::rt ui operation used without ui runtime"};
+        throw runtime_error{"nxtrt ui operation used without ui runtime"};
     return *ui;
 }
 
@@ -670,7 +670,7 @@ inline const widget_slot & require_current_widget_slot()
 {
     auto * slot = current_widget_slot();
     if (slot == nullptr)
-        throw runtime_error{"nxt::rt draw used without widget slot"};
+        throw runtime_error{"nxtrt draw used without widget slot"};
     return *slot;
 }
 
@@ -880,7 +880,7 @@ template<typename Body>
 
     auto child_slot = make_widget_slot();
     auto child_deed =
-        nxt::rt::fork(
+        nxtrt::fork(
             detail::run_widget_child(child_slot, std::move(body)));
     return widget_child<result_t>{
         std::move(child_slot),
@@ -914,7 +914,7 @@ task<void> run_ui_zone_children(
     owner = fork(ui.run_terminal_owner(frame_time)).cope();
     auto * deck = current_deck();
     if (deck == nullptr)
-        throw runtime_error{"nxt::rt ui input used without a deck"};
+        throw runtime_error{"nxtrt ui input used without a deck"};
     input = fork(ui.run_input_owner(*deck)).cope();
     worker = fork(
         detail::stop_zone_on_completion(
@@ -962,4 +962,4 @@ task<void> with_ui_zone(
         rethrow(input_done.error());
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

@@ -1,7 +1,7 @@
-#include <nxt/rt/app.hpp>
-#include <nxt/rt/task.hpp>
-#include <nxt/rt/trace.hpp>
-#include <nxt/rt/ui_runtime.hpp>
+#include <nxtrt/app.hpp>
+#include <nxtrt/task.hpp>
+#include <nxtrt/trace.hpp>
+#include <nxtrt/ui_runtime.hpp>
 #include <nxtai/common.hpp>
 #include <nxtai/agent_tools.hpp>
 
@@ -40,7 +40,7 @@ struct cli_options
 {
     std::cout
         << "usage: nxtllm [options] [prompt...]\n"
-           "  streams one-shot Responses text on nxt::rt\n"
+           "  streams one-shot Responses text on nxtrt\n"
            "\n"
            "  -m, --model MODEL                 (default: gpt-5.4-mini)\n"
            "  --max-output-tokens N\n"
@@ -136,14 +136,14 @@ llm_request make_request(const cli_options & options)
     };
 }
 
-nxt::rt::task<int> run_nxtllm(cli_options options)
+nxtrt::task<int> run_nxtllm(cli_options options)
 {
     auto request = make_request(options);
     auto tools = nxtai::agent_tools::for_agent();
 
     if (!options.oneshot_prompt) {
         std::cout
-            << "nxtllm is now on nxt::rt; the interactive HUD is still being "
+            << "nxtllm is now on nxtrt; the interactive HUD is still being "
                "ported.\n"
             << "Pass a prompt for one-shot request construction, or use "
                "--dump-request to inspect the JSON envelope.\n";
@@ -161,25 +161,25 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
     if (request.api_key.empty()) {
         std::cerr
             << "nxtllm: OPENAI_API_KEY is not set; streaming is wired through "
-               "nxt::rt, but it needs credentials.\n"
+               "nxtrt, but it needs credentials.\n"
             << "Try --dump-request to inspect the Responses payload.\n";
         co_return EXIT_FAILURE;
     }
 
-    auto trace = std::make_shared<nxt::rt::trace_context>();
+    auto trace = std::make_shared<nxtrt::trace_context>();
     auto root_span = trace->start_span(
         "nxtllm.request",
         {},
         {{"model", request.model}});
 
     try {
-        co_await nxt::rt::with_env<nxt::rt::trace_context_key>(
+        co_await nxtrt::with_env<nxtrt::trace_context_key>(
             trace,
             [&]() mutable {
-                return nxt::rt::with_env<nxt::rt::trace_current_span_key>(
+                return nxtrt::with_env<nxtrt::trace_current_span_key>(
                     root_span.span_id(),
                     [&]() mutable {
-                        return nxt::rt::with_ui_zone(
+                        return nxtrt::with_ui_zone(
                             [request = std::move(request),
                              tools = std::move(tools)]() mutable {
                                 return nxtai::run_agent_ui_zone(
@@ -203,7 +203,7 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
 
 int main(int argc, char ** argv)
 try {
-    auto rt = nxt::rt::runtime{};
+    auto rt = nxtrt::runtime{};
     return rt.run(run_nxtllm(parse_args(argc, argv)));
 } catch (std::exception const & error) {
     std::cerr << "nxtllm: " << error.what() << '\n';

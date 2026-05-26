@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxt/rt/deck.hpp"
+#include "nxtrt/deck.hpp"
 
 #include <coroutine>
 #include <exception>
@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-namespace nxt::rt {
+namespace nxtrt {
 
 template<typename T>
 class deed;
@@ -165,7 +165,7 @@ struct promise_base
     {
         auto * current = detail::current_env;
         if (current == nullptr || current->current_deck == nullptr)
-            throw runtime_error{"nxt::rt task enqueued without a deck"};
+            throw runtime_error{"nxtrt task enqueued without a deck"};
         current->current_deck->enqueue(handle, this);
     }
 
@@ -223,7 +223,7 @@ struct promise final : promise_base
             return std::get<stored_type>(storage_);
         if (std::holds_alternative<std::exception_ptr>(storage_))
             rethrow(std::get<std::exception_ptr>(storage_));
-        throw runtime_error{"nxt::rt task result was never set"};
+        throw runtime_error{"nxtrt task result was never set"};
     }
 
     /// Move the completed result out of the promise.
@@ -233,7 +233,7 @@ struct promise final : promise_base
             return std::move(std::get<stored_type>(storage_));
         if (std::holds_alternative<std::exception_ptr>(storage_))
             rethrow(std::get<std::exception_ptr>(storage_));
-        throw runtime_error{"nxt::rt task result was never set"};
+        throw runtime_error{"nxtrt task result was never set"};
     }
 
 private:
@@ -312,7 +312,7 @@ public:
                 current == nullptr ? nullptr : current->current_promise;
             if (active_deck == nullptr || awaiting_promise == nullptr)
                 throw runtime_error{
-                    "nxt::rt task awaited without a running deck"};
+                    "nxtrt task awaited without a running deck"};
 
             auto & promise = coroutine_.promise();
             promise.env.bindings = current->bindings;
@@ -460,7 +460,7 @@ with_env_bound(typename Key::value_type value, Fn fn)
     auto * promise = current == nullptr ? nullptr : current->current_promise;
     if (current == nullptr || promise == nullptr)
         throw runtime_error{
-            "nxt::rt env binding used without runtime env"};
+            "nxtrt env binding used without runtime env"};
 
     struct binding_guard
     {
@@ -577,7 +577,7 @@ public:
             current == nullptr ? nullptr : current->current_promise;
         if (awaiting_promise == nullptr || promise_ == nullptr)
             throw runtime_error{
-                "nxt::rt zone join used without a running task"};
+                "nxtrt zone join used without a running task"};
 
         promise_->set_continuation(awaiting, awaiting_promise);
     }
@@ -655,7 +655,7 @@ struct child_record final : child_record_base
     {
         ensure_done();
         if (result_taken)
-            throw runtime_error{"nxt::rt deed result already taken"};
+            throw runtime_error{"nxtrt deed result already taken"};
         observed = true;
         result_taken = true;
         return std::move(handle.promise()).result();
@@ -665,7 +665,7 @@ struct child_record final : child_record_base
     {
         if (!done())
             throw runtime_error{
-                "nxt::rt deed result read before zone join"};
+                "nxtrt deed result read before zone join"};
     }
 
     handle_type handle;
@@ -721,7 +721,7 @@ struct child_record<void> final : child_record_base
     {
         ensure_done();
         if (result_taken)
-            throw runtime_error{"nxt::rt deed result already taken"};
+            throw runtime_error{"nxtrt deed result already taken"};
         observed = true;
         result_taken = true;
         handle.promise().result();
@@ -731,7 +731,7 @@ struct child_record<void> final : child_record_base
     {
         if (!done())
             throw runtime_error{
-                "nxt::rt deed result read before zone join"};
+                "nxtrt deed result read before zone join"};
     }
 
     handle_type handle;
@@ -776,7 +776,7 @@ private:
     [[nodiscard]] detail::child_record<T> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty deed handle"};
+            throw runtime_error{"nxtrt empty deed handle"};
         return *record_;
     }
 
@@ -819,7 +819,7 @@ private:
     [[nodiscard]] detail::child_record<void> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty deed handle"};
+            throw runtime_error{"nxtrt empty deed handle"};
         return *record_;
     }
 
@@ -858,7 +858,7 @@ private:
     [[nodiscard]] detail::child_record<T> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty catching_deed handle"};
+            throw runtime_error{"nxtrt empty catching_deed handle"};
         return *record_;
     }
 
@@ -898,7 +898,7 @@ private:
     [[nodiscard]] detail::child_record<void> & record() const
     {
         if (!record_)
-            throw runtime_error{"nxt::rt empty catching_deed handle"};
+            throw runtime_error{"nxtrt empty catching_deed handle"};
         return *record_;
     }
 
@@ -910,7 +910,7 @@ inline catching_deed<T> deed<T>::cope() &&
 {
     auto child = std::move(record_);
     if (!child)
-        throw runtime_error{"nxt::rt empty deed handle"};
+        throw runtime_error{"nxtrt empty deed handle"};
     child->contained = true;
     return catching_deed<T>{std::move(child)};
 }
@@ -919,7 +919,7 @@ inline catching_deed<void> deed<void>::cope() &&
 {
     auto child = std::move(record_);
     if (!child)
-        throw runtime_error{"nxt::rt empty deed handle"};
+        throw runtime_error{"nxtrt empty deed handle"};
     child->contained = true;
     return catching_deed<void>{std::move(child)};
 }
@@ -981,13 +981,13 @@ public:
             current == nullptr ? nullptr : current->current_deck;
         if (current == nullptr || active_deck == nullptr)
             throw runtime_error{
-                "nxt::rt zone fork used without a running deck"};
+                "nxtrt zone fork used without a running deck"};
         if (stopping_)
-            throw runtime_error{"nxt::rt zone fork used after stop"};
+            throw runtime_error{"nxtrt zone fork used after stop"};
 
         auto handle = child.release();
         if (!handle || handle.done())
-            throw runtime_error{"nxt::rt zone fork used with empty task"};
+            throw runtime_error{"nxtrt zone fork used with empty task"};
 
         handle.promise().env.bindings = current->bindings;
         auto record = std::shared_ptr<detail::child_record<T>>{};
@@ -1054,7 +1054,7 @@ inline task_zone & require_current_zone()
 {
     auto * zone = current_zone();
     if (zone == nullptr)
-        throw runtime_error{"nxt::rt operation used without task zone"};
+        throw runtime_error{"nxtrt operation used without task zone"};
     return *zone;
 }
 
@@ -1349,7 +1349,7 @@ public:
     template<typename T>
     deed<T> fork(task<T> child)
     {
-        return nxt::rt::fork(wrap(state_, std::move(child)));
+        return nxtrt::fork(wrap(state_, std::move(child)));
     }
 
     [[nodiscard]] std::exception_ptr first_failure() const noexcept
@@ -1395,7 +1395,7 @@ public:
     template<typename T>
     deed<T> fork(task<T> child)
     {
-        return nxt::rt::fork(wrap(state_, std::move(child)));
+        return nxtrt::fork(wrap(state_, std::move(child)));
     }
 
     [[nodiscard]] bool succeeded() const noexcept
@@ -1712,7 +1712,7 @@ template<typename T>
     if constexpr (std::is_void_v<T>) {
         co_return;
     } else {
-        throw logic_error{"nxt::rt with_timeout returned without result"};
+        throw logic_error{"nxtrt with_timeout returned without result"};
     }
 }
 
@@ -1958,7 +1958,7 @@ inline void waiter<T>::await_suspend(
     auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_wand == nullptr || running == nullptr)
         throw runtime_error{
-            "nxt::rt waiter awaited without a prepared wand"};
+            "nxtrt waiter awaited without a prepared wand"};
 
     trace("waiter suspend token=" + std::to_string(token_));
     debug::park_task(running->id, token_, description_);
@@ -1978,7 +1978,7 @@ inline waiter<void> op::manual::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt manual wish awaited without a running wand"};
+            "nxtrt manual wish awaited without a running wand"};
 
     trace("wish manual prepare token=" + std::to_string(token));
     return context.active_wand->prepare(
@@ -1994,7 +1994,7 @@ inline waiter<int> op::openat::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt openat wish awaited without a running wand"};
+            "nxtrt openat wish awaited without a running wand"};
 
     trace("wish openat prepare path=" + path);
     return context.active_wand->prepare(
@@ -2011,7 +2011,7 @@ inline waiter<statx_result> op::statx::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt statx wish awaited without a running wand"};
+            "nxtrt statx wish awaited without a running wand"};
 
     trace("wish statx prepare path=" + path);
     return context.active_wand->prepare(
@@ -2027,7 +2027,7 @@ inline waiter<std::size_t> op::getdents64::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt getdents64 wish awaited without a running wand"};
+            "nxtrt getdents64 wish awaited without a running wand"};
 
     trace("wish getdents64 prepare fd=" + std::to_string(fd)
         + " bytes=" + std::to_string(buffer.size()));
@@ -2044,7 +2044,7 @@ inline waiter<piped_child> op::spawn_piped::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt spawn-piped wish awaited without a running wand"};
+            "nxtrt spawn-piped wish awaited without a running wand"};
 
     trace("wish spawn-piped prepare argv=" + std::to_string(argv.size()));
     return context.active_wand->prepare(
@@ -2060,7 +2060,7 @@ inline waiter<pty_child> op::spawn_pty::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt spawn-pty wish awaited without a running wand"};
+            "nxtrt spawn-pty wish awaited without a running wand"};
 
     trace("wish spawn-pty prepare argv=" + std::to_string(argv.size()));
     return context.active_wand->prepare(
@@ -2076,7 +2076,7 @@ inline waiter<child_result> op::wait_child::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt wait-child wish awaited without a running wand"};
+            "nxtrt wait-child wish awaited without a running wand"};
 
     trace("wish wait-child prepare pidfd=" + std::to_string(pidfd));
     return context.active_wand->prepare(
@@ -2092,7 +2092,7 @@ inline waiter<void> op::signal_child::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt signal-child wish awaited without a running wand"};
+            "nxtrt signal-child wish awaited without a running wand"};
 
     trace("wish signal-child prepare pidfd=" + std::to_string(pidfd)
         + " signal=" + std::to_string(signal));
@@ -2110,7 +2110,7 @@ inline waiter<std::size_t> op::read_some::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt read wish awaited without a running wand"};
+            "nxtrt read wish awaited without a running wand"};
 
     trace("wish read prepare fd=" + std::to_string(fd)
         + " bytes=" + std::to_string(buffer.size()));
@@ -2127,7 +2127,7 @@ inline waiter<std::size_t> op::write_some::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt write wish awaited without a running wand"};
+            "nxtrt write wish awaited without a running wand"};
 
     trace("wish write prepare fd=" + std::to_string(fd)
         + " bytes=" + std::to_string(buffer.size()));
@@ -2144,7 +2144,7 @@ inline waiter<std::size_t> op::recv_some::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt recv wish awaited without a running wand"};
+            "nxtrt recv wish awaited without a running wand"};
 
     trace("wish recv prepare fd=" + std::to_string(fd)
         + " bytes=" + std::to_string(buffer.size()));
@@ -2161,7 +2161,7 @@ inline waiter<std::size_t> op::send_some::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt send wish awaited without a running wand"};
+            "nxtrt send wish awaited without a running wand"};
 
     trace("wish send prepare fd=" + std::to_string(fd)
         + " bytes=" + std::to_string(buffer.size()));
@@ -2178,7 +2178,7 @@ inline waiter<void> op::connect::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt connect wish awaited without a running wand"};
+            "nxtrt connect wish awaited without a running wand"};
 
     trace("wish connect prepare fd=" + std::to_string(fd));
     return context.active_wand->prepare(
@@ -2194,7 +2194,7 @@ inline waiter<int> op::poll::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt poll wish awaited without a running wand"};
+            "nxtrt poll wish awaited without a running wand"};
 
     trace("wish poll prepare fd=" + std::to_string(fd)
         + " events=" + std::to_string(events));
@@ -2211,7 +2211,7 @@ inline waiter<void> op::timeout::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt timeout wish awaited without a running wand"};
+            "nxtrt timeout wish awaited without a running wand"};
 
     trace("wish timeout prepare");
     return context.active_wand->prepare(
@@ -2227,7 +2227,7 @@ inline waiter<poll_until_result> op::poll_until::operator co_await() const
         || context.active_wand == nullptr
         || context.running == nullptr)
         throw runtime_error{
-            "nxt::rt poll-until wish awaited without a running wand"};
+            "nxtrt poll-until wish awaited without a running wand"};
 
     trace("wish poll-until prepare fd=" + std::to_string(fd)
         + " events=" + std::to_string(events));
@@ -2254,11 +2254,11 @@ struct yield_awaiter
         auto * running = current == nullptr ? nullptr : current->current_promise;
         if (active_deck == nullptr || running == nullptr)
             throw runtime_error{
-                "nxt::rt yield awaited without a running deck"};
+                "nxtrt yield awaited without a running deck"};
         active_deck->enqueue(awaiting, running);
     }
 
-    /// No value is produced by `co_await nxt::rt::yield()`.
+    /// No value is produced by `co_await nxtrt::yield()`.
     void await_resume() const noexcept {}
 };
 
@@ -2276,4 +2276,4 @@ inline void deck::start(task<T> & t)
     enqueue(handle, &handle.promise());
 }
 
-} // namespace nxt::rt
+} // namespace nxtrt

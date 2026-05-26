@@ -1,11 +1,11 @@
 #include <nxtai/common.hpp>
 
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/http.hpp>
-#include <nxt/rt/net.hpp>
-#include <nxt/rt/sampling.hpp>
-#include <nxt/rt/tls.hpp>
-#include <nxt/rt/ui_runtime.hpp>
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/http.hpp>
+#include <nxtrt/net.hpp>
+#include <nxtrt/sampling.hpp>
+#include <nxtrt/tls.hpp>
+#include <nxtrt/ui_runtime.hpp>
 #include <nxtui/tui.hpp>
 #include <nxt/http.hpp>
 #include <nxt/json.hpp>
@@ -70,20 +70,20 @@ struct live_tool_added
     std::string arguments;
 };
 
-nxt::rt::task<std::optional<nxt::json::token>>
+nxtrt::task<std::optional<nxt::json::token>>
 next_json_token(nxt::json::string_reader & in)
 {
     co_return co_await nxt::json::read_token(in);
 }
 
-nxt::rt::task<bool>
+nxtrt::task<bool>
 take_json_token(nxt::json::string_reader & in, nxt::json::token_kind kind)
 {
     auto token = co_await next_json_token(in);
     co_return token && token->kind == kind;
 }
 
-nxt::rt::task<bool> skip_json_value(
+nxtrt::task<bool> skip_json_value(
     nxt::json::string_reader & in,
     nxt::json::token first)
 {
@@ -110,7 +110,7 @@ nxt::rt::task<bool> skip_json_value(
     co_return true;
 }
 
-nxt::rt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
+nxtrt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
 {
     auto token = co_await next_json_token(in);
     if (!token)
@@ -118,7 +118,7 @@ nxt::rt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
     co_return co_await skip_json_value(in, std::move(*token));
 }
 
-nxt::rt::task<std::optional<std::string>>
+nxtrt::task<std::optional<std::string>>
 read_json_string_token(nxt::json::string_reader & in)
 {
     auto token = co_await next_json_token(in);
@@ -127,7 +127,7 @@ read_json_string_token(nxt::json::string_reader & in)
     co_return std::move(token->text);
 }
 
-nxt::rt::task<std::optional<int>> read_json_int_token(nxt::json::string_reader & in)
+nxtrt::task<std::optional<int>> read_json_int_token(nxt::json::string_reader & in)
 {
     auto token = co_await next_json_token(in);
     if (!token || token->kind != nxt::json::token_kind::number)
@@ -140,7 +140,7 @@ nxt::rt::task<std::optional<int>> read_json_int_token(nxt::json::string_reader &
     co_return value;
 }
 
-nxt::rt::task<std::optional<std::string>>
+nxtrt::task<std::optional<std::string>>
 read_response_created_id(std::string_view data)
 {
     auto in = nxt::json::string_reader{.input = data};
@@ -200,7 +200,7 @@ read_response_created_id(std::string_view data)
     }
 }
 
-nxt::rt::task<std::optional<nxtai::openai::raw_json>>
+nxtrt::task<std::optional<nxtai::openai::raw_json>>
 read_output_item_done_item(std::string_view data)
 {
     auto in = nxt::json::string_reader{.input = data};
@@ -288,7 +288,7 @@ live_tool_call & ensure_live_tool_call(
     return calls.back();
 }
 
-nxt::rt::task<bool> read_live_tool_item(
+nxtrt::task<bool> read_live_tool_item(
     nxt::json::string_reader & in,
     live_tool_added & out)
 {
@@ -334,7 +334,7 @@ nxt::rt::task<bool> read_live_tool_item(
     }
 }
 
-nxt::rt::task<std::optional<live_tool_added>>
+nxtrt::task<std::optional<live_tool_added>>
 read_live_tool_added(std::string_view data)
 {
     auto in = nxt::json::string_reader{.input = data};
@@ -377,7 +377,7 @@ read_live_tool_added(std::string_view data)
     }
 }
 
-nxt::rt::task<std::optional<live_tool_delta>>
+nxtrt::task<std::optional<live_tool_delta>>
 read_live_tool_delta(std::string_view data)
 {
     auto in = nxt::json::string_reader{.input = data};
@@ -429,7 +429,7 @@ read_live_tool_delta(std::string_view data)
     }
 }
 
-nxt::rt::task<bool> update_live_tool_call_from_added(
+nxtrt::task<bool> update_live_tool_call_from_added(
     std::vector<live_tool_call> & calls,
     std::string_view data)
 {
@@ -447,7 +447,7 @@ nxt::rt::task<bool> update_live_tool_call_from_added(
     co_return true;
 }
 
-nxt::rt::task<bool> update_live_tool_call_from_delta(
+nxtrt::task<bool> update_live_tool_call_from_delta(
     std::vector<live_tool_call> & calls,
     std::string_view data)
 {
@@ -467,21 +467,21 @@ nxt::rt::task<bool> update_live_tool_call_from_delta(
 }
 
 [[nodiscard]] bool response_status_is_success(
-    const nxt::rt::http::response_head & head)
+    const nxtrt::http::response_head & head)
 {
     return head.status >= 200 && head.status < 300;
 }
 
 [[nodiscard]] bool response_content_type_is(
-    const nxt::rt::http::response_head & head,
+    const nxtrt::http::response_head & head,
     std::string_view expected)
 {
-    auto value = nxt::rt::http::header_value(head, "content-type");
+    auto value = nxtrt::http::header_value(head, "content-type");
     if (!value)
         return false;
     auto semicolon = value->find(';');
-    auto media_type = nxt::rt::http::trim_ascii(value->substr(0, semicolon));
-    return nxt::rt::http::iequals(media_type, expected);
+    auto media_type = nxtrt::http::trim_ascii(value->substr(0, semicolon));
+    return nxtrt::http::iequals(media_type, expected);
 }
 
 std::vector<std::string> last_lines(std::string_view text, std::size_t max)
@@ -761,20 +761,20 @@ nxtui::tui::AnyLayout stream_layout(
         nxtui::tui::column(std::move(children)));
 }
 
-nxt::rt::task<void> publish_stream_view(
+nxtrt::task<void> publish_stream_view(
     std::string_view thought,
     std::string_view assistant_text,
     const std::vector<live_tool_call> & live_calls,
     network_hud_state & network,
-    nxt::rt::ema_rate & rx_rate,
-    nxt::rt::ema_rate & tx_rate,
+    nxtrt::ema_rate & rx_rate,
+    nxtrt::ema_rate & tx_rate,
     std::size_t & last_rx,
     std::size_t & last_tx,
     std::chrono::steady_clock::time_point & last_sample,
     std::chrono::steady_clock::time_point & last_publish,
     bool force = false)
 {
-    if (!nxt::rt::has_terminal_surface())
+    if (!nxtrt::has_terminal_surface())
         co_return;
 
     auto now = std::chrono::steady_clock::now();
@@ -795,7 +795,7 @@ nxt::rt::task<void> publish_stream_view(
     last_tx = next_tx;
     last_sample = now;
     last_publish = now;
-    co_await nxt::rt::draw(
+    co_await nxtrt::draw(
         stream_layout(thought, assistant_text, live_calls, network));
 }
 
@@ -805,8 +805,8 @@ struct stream_view_publisher
     std::string & assistant_text;
     std::vector<live_tool_call> & live_calls;
     network_hud_state & network;
-    nxt::rt::ema_rate & rx_rate;
-    nxt::rt::ema_rate & tx_rate;
+    nxtrt::ema_rate & rx_rate;
+    nxtrt::ema_rate & tx_rate;
     std::size_t last_rx;
     std::size_t last_tx;
     std::chrono::steady_clock::time_point last_sample;
@@ -820,7 +820,7 @@ struct stream_view_publisher
         force_pending = force_pending || force;
     }
 
-    nxt::rt::task<void> publish(bool force = false)
+    nxtrt::task<void> publish(bool force = false)
     {
         pending = false;
         force_pending = false;
@@ -838,7 +838,7 @@ struct stream_view_publisher
             force);
     }
 
-    nxt::rt::task<void> flush()
+    nxtrt::task<void> flush()
     {
         if (!pending)
             co_return;
@@ -865,8 +865,8 @@ stream_view_publisher make_stream_view_publisher(
     std::string & assistant_text,
     std::vector<live_tool_call> & live_calls,
     network_hud_state & network,
-    nxt::rt::ema_rate & rx_rate,
-    nxt::rt::ema_rate & tx_rate)
+    nxtrt::ema_rate & rx_rate,
+    nxtrt::ema_rate & tx_rate)
 {
     return stream_view_publisher{
         .thought = thought,
@@ -882,13 +882,13 @@ stream_view_publisher make_stream_view_publisher(
 }
 
 void note_tls_progress(
-    const nxt::rt::tls::handshake_progress & progress,
-    const std::shared_ptr<nxt::rt::trace_context> & trace,
-    const nxt::rt::trace_span & tls_span,
-    std::vector<nxt::rt::trace_span> & active_tls_spans,
+    const nxtrt::tls::handshake_progress & progress,
+    const std::shared_ptr<nxtrt::trace_context> & trace,
+    const nxtrt::trace_span & tls_span,
+    std::vector<nxtrt::trace_span> & active_tls_spans,
     network_hud_state & network)
 {
-    if (progress.kind == nxt::rt::tls::handshake_progress_kind::begin) {
+    if (progress.kind == nxtrt::tls::handshake_progress_kind::begin) {
         network.phase = std::format(
             "TLS {}",
             nxtai::trace_tui::display_name(progress.name));
@@ -900,7 +900,7 @@ void note_tls_progress(
         return;
     }
 
-    if (progress.kind == nxt::rt::tls::handshake_progress_kind::end) {
+    if (progress.kind == nxtrt::tls::handshake_progress_kind::end) {
         for (auto it = active_tls_spans.rbegin();
              it != active_tls_spans.rend();
              ++it) {
@@ -920,15 +920,15 @@ void note_tls_progress(
         nxtai::trace_tui::display_name(progress.name));
 }
 
-nxt::rt::task<void> print_tls_ready(
-    const std::shared_ptr<nxt::rt::trace_context> & trace,
-    const nxt::rt::trace_span & tls_span)
+nxtrt::task<void> print_tls_ready(
+    const std::shared_ptr<nxtrt::trace_context> & trace,
+    const nxtrt::trace_span & tls_span)
 {
-    if (!nxt::rt::has_terminal_surface())
+    if (!nxtrt::has_terminal_surface())
         co_return;
 
     if (trace != nullptr && tls_span) {
-        co_await nxt::rt::print(
+        co_await nxtrt::print(
             nxtai::trace_tui::render_span_waterfall(
                 *trace,
                 tls_span,
@@ -939,7 +939,7 @@ nxt::rt::task<void> print_tls_ready(
                     .accent = nxtai::tool_tui::teal_300,
                 }));
     } else {
-        co_await nxt::rt::print_block(
+        co_await nxtrt::print_block(
             "tls  api.openai.com  TLS 1.3 handshake\n");
     }
     co_return;
@@ -947,62 +947,62 @@ nxt::rt::task<void> print_tls_ready(
 
 } // namespace
 
-nxt::rt::task<stream_phase_result> stream_openai_response(
+nxtrt::task<stream_phase_result> stream_openai_response(
     const llm_request & request)
 {
     auto thought = std::string{};
     auto assistant_text = std::string{};
     auto live_calls = std::vector<live_tool_call>{};
     auto network = network_hud_state{.phase = "connecting"};
-    auto rx_rate = nxt::rt::ema_rate{std::chrono::milliseconds{700}};
-    auto tx_rate = nxt::rt::ema_rate{std::chrono::milliseconds{700}};
+    auto rx_rate = nxtrt::ema_rate{std::chrono::milliseconds{700}};
+    auto tx_rate = nxtrt::ema_rate{std::chrono::milliseconds{700}};
     auto publisher = make_stream_view_publisher(
         thought, assistant_text, live_calls, network, rx_rate, tx_rate);
     co_await publisher.publish(true);
 
-    auto socket = co_await nxt::rt::net::connect_tcp("api.openai.com", "443");
+    auto socket = co_await nxtrt::net::connect_tcp("api.openai.com", "443");
     network.phase = "tcp connected";
     co_await publisher.publish(true);
-    auto socket_sink = nxt::rt::socket_sink{socket.get()};
-    auto metered_sink = nxt::rt::meter_sink(
+    auto socket_sink = nxtrt::socket_sink{socket.get()};
+    auto metered_sink = nxtrt::meter_sink(
         socket_sink,
         [&](std::size_t bytes) {
             network.socket_tx += bytes;
             publisher.request();
         });
-    auto socket_output = nxt::rt::byte_writer{metered_sink, 4096};
+    auto socket_output = nxtrt::byte_writer{metered_sink, 4096};
 
-    auto socket_source = nxt::rt::socket_source{socket.get()};
-    auto source = nxt::rt::meter_source(
+    auto socket_source = nxtrt::socket_source{socket.get()};
+    auto source = nxtrt::meter_source(
         socket_source,
         [&](std::size_t bytes) {
             network.socket_rx += bytes;
             publisher.request();
         });
     auto input_storage = std::vector<std::byte>(18 * 1024);
-    auto reader = nxt::rt::byte_reader{
+    auto reader = nxtrt::byte_reader{
         source,
         std::span{input_storage},
     };
 
-    auto tls = nxt::rt::tls::tls13_client_session{reader, socket_output};
+    auto tls = nxtrt::tls::tls13_client_session{reader, socket_output};
     network.phase = "TLS handshake";
     co_await publisher.publish(true);
-    auto trace = nxt::rt::current_trace_context();
-    auto tls_span = nxt::rt::trace_span{};
+    auto trace = nxtrt::current_trace_context();
+    auto tls_span = nxtrt::trace_span{};
     if (trace != nullptr) {
         tls_span = trace->start_span(
             "tls.handshake",
-            nxt::rt::current_trace_span_id(),
+            nxtrt::current_trace_span_id(),
             {
                 {"net.peer.name", "api.openai.com"},
                 {"tls.version", "1.3"},
             });
     }
-    auto active_tls_spans = std::vector<nxt::rt::trace_span>{};
+    auto active_tls_spans = std::vector<nxtrt::trace_span>{};
     try {
         auto progress = [&](
-            const nxt::rt::tls::handshake_progress & step) {
+            const nxtrt::tls::handshake_progress & step) {
             note_tls_progress(
                 step, trace, tls_span, active_tls_spans, network);
             publisher.request(true);
@@ -1036,26 +1036,26 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
 
     auto http_storage = std::vector<std::byte>(18 * 1024);
     auto http_reader =
-        nxt::rt::byte_reader{tls, std::span{http_storage}};
+        nxtrt::byte_reader{tls, std::span{http_storage}};
     network.phase = "http response";
     co_await publisher.publish(true);
-    auto head = co_await nxt::rt::http::read_response_head(http_reader);
+    auto head = co_await nxtrt::http::read_response_head(http_reader);
     co_await publisher.flush();
     if (!response_status_is_success(head))
-        throw nxt::rt::runtime_error{
+        throw nxtrt::runtime_error{
             "OpenAI Responses HTTP error: " + std::to_string(head.status)
             + " " + head.reason};
     if (!response_content_type_is(head, "text/event-stream"))
-        throw nxt::rt::runtime_error{
+        throw nxtrt::runtime_error{
             "OpenAI Responses expected text/event-stream"};
 
-    auto body = nxt::rt::http::read_response_body(http_reader, head);
+    auto body = nxtrt::http::read_response_body(http_reader, head);
     auto sse_storage = std::vector<std::byte>(18 * 1024);
-    auto sse_reader = nxt::rt::byte_reader{body, std::span{sse_storage}};
+    auto sse_reader = nxtrt::byte_reader{body, std::span{sse_storage}};
     auto result = response_stream_result{};
     network.phase = "streaming SSE";
     co_await publisher.publish(true);
-    while (auto sse = co_await nxt::rt::http::parse_sse_event(sse_reader)) {
+    while (auto sse = co_await nxtrt::http::parse_sse_event(sse_reader)) {
         co_await publisher.flush();
         if (sse->data == "[DONE]")
             break;
@@ -1100,8 +1100,8 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
                 thought = std::move(*text);
             auto summary = std::move(thought);
             thought.clear();
-            if (nxt::rt::has_terminal_surface() && !summary.empty())
-                co_await nxt::rt::print(
+            if (nxtrt::has_terminal_surface() && !summary.empty())
+                co_await nxtrt::print(
                     nxtai::tool_tui::thought_block(std::move(summary)));
             co_await publisher.publish(true);
         } else if (event.type == "response.output_text.delta") {
@@ -1109,15 +1109,15 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             auto text = event_string_field(event.data, "delta")
                             .value_or(std::string{});
             assistant_text += text;
-            if (nxt::rt::has_terminal_surface()) {
+            if (nxtrt::has_terminal_surface()) {
                 co_await publisher.publish(first_stream_delta);
             } else {
-                co_await nxt::rt::write_stdout_all(std::move(text));
+                co_await nxtrt::write_stdout_all(std::move(text));
             }
         } else if (
             event.type == "response.failed"
             || event.type == "response.incomplete") {
-            throw nxt::rt::runtime_error{
+            throw nxtrt::runtime_error{
                 "OpenAI Responses terminal event: " + event.type};
         }
 
@@ -1127,8 +1127,8 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             break;
     }
 
-    if (!nxt::rt::has_terminal_surface())
-        co_await nxt::rt::write_stdout_all("\n");
+    if (!nxtrt::has_terminal_surface())
+        co_await nxtrt::write_stdout_all("\n");
     co_return stream_phase_result{
         .response = std::move(result),
         .assistant_text = std::move(assistant_text),
@@ -1136,38 +1136,38 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
 }
 
 template<typename T>
-T take_phase_result(nxt::rt::catching_deed<T> deed)
+T take_phase_result(nxtrt::catching_deed<T> deed)
 {
     auto result = std::move(deed).get();
     if (result)
         return std::move(*result);
-    nxt::rt::rethrow(result.error());
+    nxtrt::rethrow(result.error());
 }
 
-nxt::rt::task<nxt::rt::catching_deed<stream_phase_result>>
+nxtrt::task<nxtrt::catching_deed<stream_phase_result>>
 spawn_stream_phase_child(
     const llm_request & request,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text)
 {
-    auto child = nxt::rt::spawn_widget(
+    auto child = nxtrt::spawn_widget(
         [&request] {
             return stream_openai_response(request);
         });
-    co_await nxt::rt::draw(
+    co_await nxtrt::draw(
         agent_layout(
             model, status, assistant_text, child.surface()));
     co_return std::move(child).cope();
 }
 
-nxt::rt::task<stream_phase_result> run_stream_phase(
+nxtrt::task<stream_phase_result> run_stream_phase(
     const llm_request & request,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text)
 {
-    auto deed = co_await nxt::rt::with_zone(
+    auto deed = co_await nxtrt::with_zone(
         [&] {
             return spawn_stream_phase_child(
                 request,

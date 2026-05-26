@@ -1,0 +1,4 @@
+artifact/build
+artifact/test
+artifact/lint
+artifact/deploy

@@ -1,9 +1,9 @@
-#include <nxt/rt/buffers.hpp>
-#include <nxt/rt/app.hpp>
-#include <nxt/rt/fs.hpp>
-#include <nxt/rt/scoped_process.hpp>
-#include <nxt/rt/subprocess.hpp>
-#include <nxt/rt/uring_wand.hpp>
+#include <nxtrt/buffers.hpp>
+#include <nxtrt/app.hpp>
+#include <nxtrt/fs.hpp>
+#include <nxtrt/scoped_process.hpp>
+#include <nxtrt/subprocess.hpp>
+#include <nxtrt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
 #include <nxtai/tool_process.hpp>
 
@@ -36,31 +36,31 @@ using namespace nxtui;
 
 using namespace boost::ut;
 
-nxt::rt::task<std::string> echo_over_socketpair(int tx, int rx)
+nxtrt::task<std::string> echo_over_socketpair(int tx, int rx)
 {
     auto message = std::string_view{"socket wish smoke"};
-    auto sent = co_await nxt::rt::send_some(tx, nxt::rt::as_bytes(message));
+    auto sent = co_await nxtrt::send_some(tx, nxtrt::as_bytes(message));
     if (sent != message.size())
         throw std::runtime_error{"short socket send"};
 
     auto storage = std::array<std::byte, 64>{};
-    auto source = nxt::rt::socket_source{rx};
-    auto reader = nxt::rt::byte_reader{source, std::span{storage}};
+    auto source = nxtrt::socket_source{rx};
+    auto reader = nxtrt::byte_reader{source, std::span{storage}};
     auto chunk = co_await reader.take_some();
     if (!chunk)
         throw std::runtime_error{"socket recv reached eof"};
 
-    co_return std::string{nxt::rt::as_string_view(*chunk)};
+    co_return std::string{nxtrt::as_string_view(*chunk)};
 }
 
-nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
+nxtrt::task<void> poll_after_socket_send(int tx, int rx)
 {
     auto message = std::string_view{"x"};
-    auto sent = co_await nxt::rt::send_some(tx, nxt::rt::as_bytes(message));
+    auto sent = co_await nxtrt::send_some(tx, nxtrt::as_bytes(message));
     if (sent != message.size())
         throw std::runtime_error{"short poll smoke send"};
 
-    auto revents = co_await nxt::rt::op::poll{
+    auto revents = co_await nxtrt::op::poll{
         .fd = rx,
         .events = POLLIN,
     };
@@ -68,24 +68,24 @@ nxt::rt::task<void> poll_after_socket_send(int tx, int rx)
         throw std::runtime_error{"poll did not report readable socket"};
 }
 
-nxt::rt::task<void> timeout_once()
+nxtrt::task<void> timeout_once()
 {
-    co_await nxt::rt::op::timeout::after(1ms);
+    co_await nxtrt::op::timeout::after(1ms);
 }
 
-nxt::rt::task<int> timeout_value(int value)
+nxtrt::task<int> timeout_value(int value)
 {
-    co_await nxt::rt::op::timeout::after(1ms);
+    co_await nxtrt::op::timeout::after(1ms);
     co_return value;
 }
 
-nxt::rt::task<std::vector<int>> many_short_timeouts()
+nxtrt::task<std::vector<int>> many_short_timeouts()
 {
-    auto deeds = co_await nxt::rt::with_zone(
-        nxt::rt::stop_on_failure{},
+    auto deeds = co_await nxtrt::with_zone(
+        nxtrt::stop_on_failure{},
         [](auto & policy)
-            -> nxt::rt::task<std::vector<nxt::rt::catching_deed<int>>> {
-            auto out = std::vector<nxt::rt::catching_deed<int>>{};
+            -> nxtrt::task<std::vector<nxtrt::catching_deed<int>>> {
+            auto out = std::vector<nxtrt::catching_deed<int>>{};
             out.reserve(32);
             for (auto i = 0; i != 32; ++i)
                 out.push_back(policy.fork(timeout_value(i)).cope());
@@ -97,80 +97,80 @@ nxt::rt::task<std::vector<int>> many_short_timeouts()
     for (auto & deed : deeds) {
         auto result = std::move(deed).get();
         if (!result)
-            nxt::rt::rethrow(result.error());
+            nxtrt::rethrow(result.error());
         values.push_back(*result);
     }
     co_return values;
 }
 
-nxt::rt::task<int> app_child_value(int value)
+nxtrt::task<int> app_child_value(int value)
 {
-    co_await nxt::rt::yield();
+    co_await nxtrt::yield();
     co_return value;
 }
 
-nxt::rt::task<void> poll_until_after_socket_send(int tx, int rx)
+nxtrt::task<void> poll_until_after_socket_send(int tx, int rx)
 {
     auto message = std::string_view{"y"};
-    auto sent = co_await nxt::rt::send_some(tx, nxt::rt::as_bytes(message));
+    auto sent = co_await nxtrt::send_some(tx, nxtrt::as_bytes(message));
     if (sent != message.size())
         throw std::runtime_error{"short poll-until smoke send"};
 
-    auto result = co_await nxt::rt::op::poll_until::after(rx, POLLIN, 1s);
+    auto result = co_await nxtrt::op::poll_until::after(rx, POLLIN, 1s);
     if (result.timed_out || (result.events & POLLIN) == 0)
         throw std::runtime_error{"poll-until did not report readable socket"};
 }
 
-nxt::rt::task<void> poll_until_timeout(int rx)
+nxtrt::task<void> poll_until_timeout(int rx)
 {
-    auto result = co_await nxt::rt::op::poll_until::after(rx, POLLIN, 1ms);
+    auto result = co_await nxtrt::op::poll_until::after(rx, POLLIN, 1ms);
     if (!result.timed_out)
         throw std::runtime_error{"poll-until did not time out"};
 }
 
-nxt::rt::task<void> poll_forever(int rx)
+nxtrt::task<void> poll_forever(int rx)
 {
-    (void)co_await nxt::rt::op::poll{
+    (void)co_await nxtrt::op::poll{
         .fd = rx,
         .events = POLLIN,
     };
 }
 
-nxt::rt::task<void> poll_with_timeout(int rx)
+nxtrt::task<void> poll_with_timeout(int rx)
 {
-    co_await nxt::rt::with_timeout(1ms, poll_forever(rx));
+    co_await nxtrt::with_timeout(1ms, poll_forever(rx));
 }
 
-nxt::rt::task<void> poll_after_send_with_timeout(int tx, int rx)
+nxtrt::task<void> poll_after_send_with_timeout(int tx, int rx)
 {
-    co_await nxt::rt::with_timeout(1s, poll_after_socket_send(tx, rx));
+    co_await nxtrt::with_timeout(1s, poll_after_socket_send(tx, rx));
 }
 
-nxt::rt::task<void> poll_until_stopped(int rx)
+nxtrt::task<void> poll_until_stopped(int rx)
 {
     try {
-        (void)co_await nxt::rt::op::poll{
+        (void)co_await nxtrt::op::poll{
             .fd = rx,
             .events = POLLIN,
         };
-    } catch (const nxt::rt::operation_cancelled &) {
+    } catch (const nxtrt::operation_cancelled &) {
         co_return;
     }
 
     throw std::runtime_error{"poll completed instead of being cancelled"};
 }
 
-nxt::rt::task<void> connect_to(int fd, sockaddr_in address)
+nxtrt::task<void> connect_to(int fd, sockaddr_in address)
 {
-    co_await nxt::rt::op::connect::from(
+    co_await nxtrt::op::connect::from(
         fd,
         reinterpret_cast<sockaddr const *>(&address),
         sizeof(address));
 }
 
-nxt::rt::task<struct statx> stat_current_directory()
+nxtrt::task<struct statx> stat_current_directory()
 {
-    co_return co_await nxt::rt::op::statx{
+    co_return co_await nxtrt::op::statx{
         .path = ".",
         .mask = STATX_TYPE,
     };
@@ -185,16 +185,16 @@ struct linux_dirent64
     char d_name[];
 };
 
-nxt::rt::task<std::vector<std::string>> read_current_directory_names()
+nxtrt::task<std::vector<std::string>> read_current_directory_names()
 {
-    auto fd = co_await nxt::rt::op::openat{
+    auto fd = co_await nxtrt::op::openat{
         .path = ".",
         .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
     };
     auto dir = nxt::unique_fd{fd};
 
     auto storage = std::array<std::byte, 4096>{};
-    auto bytes = co_await nxt::rt::op::getdents64{
+    auto bytes = co_await nxtrt::op::getdents64{
         .fd = dir.get(),
         .buffer = storage,
     };
@@ -212,17 +212,17 @@ nxt::rt::task<std::vector<std::string>> read_current_directory_names()
     co_return names;
 }
 
-nxt::rt::task<void> write_to_fd(int fd, std::string_view text)
+nxtrt::task<void> write_to_fd(int fd, std::string_view text)
 {
-    auto written = co_await nxt::rt::op::write_some{
+    auto written = co_await nxtrt::op::write_some{
         .fd = fd,
-        .buffer = nxt::rt::as_bytes(text),
+        .buffer = nxtrt::as_bytes(text),
     };
     if (written != text.size())
         throw std::runtime_error{"short write wish"};
 }
 
-nxt::rt::task<nxtai::tool_process::result> capture_shell(
+nxtrt::task<nxtai::tool_process::result> capture_shell(
     std::string command,
     std::size_t cap_bytes = 64 * 1024)
 {
@@ -234,24 +234,24 @@ nxt::rt::task<nxtai::tool_process::result> capture_shell(
         std::move(argv), cap_bytes);
 }
 
-nxt::rt::task<nxt::rt::child_result> terminate_sleeping_shell()
+nxtrt::task<nxtrt::child_result> terminate_sleeping_shell()
 {
     auto argv = std::vector<std::string>{};
     argv.emplace_back("/bin/sh");
     argv.emplace_back("-c");
     argv.emplace_back("sleep 10");
-    auto child = co_await nxt::rt::op::spawn_piped{.argv = std::move(argv)};
+    auto child = co_await nxtrt::op::spawn_piped{.argv = std::move(argv)};
 
-    co_await nxt::rt::op::signal_child{
+    co_await nxtrt::op::signal_child{
         .pidfd = child.pid_fd(),
         .signal = SIGTERM,
     };
-    co_return co_await nxt::rt::op::wait_child{.pidfd = child.pid_fd()};
+    co_return co_await nxtrt::op::wait_child{.pidfd = child.pid_fd()};
 }
 
-nxt::rt::task<nxt::rt::child_result> run_shell_in_pty()
+nxtrt::task<nxtrt::child_result> run_shell_in_pty()
 {
-    auto child = co_await nxt::rt::op::spawn_pty{
+    auto child = co_await nxtrt::op::spawn_pty{
         .argv = {"/bin/sh", "-c", "printf pty-ok"},
         .columns = 40,
         .rows = 8,
@@ -261,14 +261,14 @@ nxt::rt::task<nxt::rt::child_result> run_shell_in_pty()
     auto output = std::string{};
     while (true) {
         try {
-            auto n = co_await nxt::rt::op::read_some{
+            auto n = co_await nxtrt::op::read_some{
                 .fd = child.master_fd(),
                 .buffer = std::span{storage},
             };
             if (n == 0)
                 break;
-            output += nxt::rt::as_string_view(std::span{storage}.first(n));
-        } catch (const nxt::rt::runtime_error &) {
+            output += nxtrt::as_string_view(std::span{storage}.first(n));
+        } catch (const nxtrt::runtime_error &) {
             break;
         }
     }
@@ -276,45 +276,45 @@ nxt::rt::task<nxt::rt::child_result> run_shell_in_pty()
     if (output.find("pty-ok") == std::string::npos)
         throw std::runtime_error{"pty did not carry child output"};
 
-    co_return co_await nxt::rt::subprocess::wait_child(child);
+    co_return co_await nxtrt::subprocess::wait_child(child);
 }
 
-nxt::rt::task<nxt::rt::child_result> cleanup_sleeping_shell_after_cancel(
+nxtrt::task<nxtrt::child_result> cleanup_sleeping_shell_after_cancel(
     bool & spawned)
 {
     auto argv = std::vector<std::string>{};
     argv.emplace_back("/bin/sh");
     argv.emplace_back("-c");
     argv.emplace_back("sleep 10");
-    auto child = co_await nxt::rt::subprocess::spawn_piped(std::move(argv));
+    auto child = co_await nxtrt::subprocess::spawn_piped(std::move(argv));
     spawned = true;
 
     auto cancelled = false;
     try {
-        co_await nxt::rt::op::timeout::after(10s);
-    } catch (const nxt::rt::operation_cancelled &) {
+        co_await nxtrt::op::timeout::after(10s);
+    } catch (const nxtrt::operation_cancelled &) {
         cancelled = true;
     }
 
     if (!cancelled)
         throw std::runtime_error{"sleeping shell cleanup was not cancelled"};
-    co_return co_await nxt::rt::subprocess::terminate_and_wait(child, 100ms);
+    co_return co_await nxtrt::subprocess::terminate_and_wait(child, 100ms);
 }
 
 template<typename T>
 T pump_until_done(
-    nxt::rt::deck & deck,
-    nxt::rt::uring_wand & wand,
-    nxt::rt::task<T> & task)
+    nxtrt::deck & deck,
+    nxtrt::uring_wand & wand,
+    nxtrt::task<T> & task)
 {
     wand.run_until_done(deck, task);
     return std::move(task).result();
 }
 
 void pump_until_done(
-    nxt::rt::deck & deck,
-    nxt::rt::uring_wand & wand,
-    nxt::rt::task<void> & task)
+    nxtrt::deck & deck,
+    nxtrt::uring_wand & wand,
+    nxtrt::task<void> & task)
 {
     wand.run_until_done(deck, task);
     std::move(task).result();
@@ -349,8 +349,8 @@ static suite uring_wand_tests{
     "uring wand", [] {
         "runner"_test = [] {
             "runs task factories"_test = [] {
-                auto value = nxt::rt::run([]() -> nxt::rt::task<int> {
-                    co_await nxt::rt::op::manual{};
+                auto value = nxtrt::run([]() -> nxtrt::task<int> {
+                    co_await nxtrt::op::manual{};
                     co_return 42;
                 });
 
@@ -358,11 +358,11 @@ static suite uring_wand_tests{
             };
 
             "runtime owns a root zone and app channels"_test = [] {
-                auto rt = nxt::rt::runtime{};
+                auto rt = nxtrt::runtime{};
 
-                auto child = rt.run([]() -> nxt::rt::task<nxt::rt::deed<int>> {
-                    expect(nxt::rt::current_zone() != nullptr);
-                    co_return nxt::rt::fork(app_child_value(41));
+                auto child = rt.run([]() -> nxtrt::task<nxtrt::deed<int>> {
+                    expect(nxtrt::current_zone() != nullptr);
+                    co_return nxtrt::fork(app_child_value(41));
                 });
 
                 expect(std::move(child).get() == 41_i);
@@ -373,7 +373,7 @@ static suite uring_wand_tests{
 
                 auto input_text = rt.run(
                     [&rt, key = std::move(key)]() mutable
-                        -> nxt::rt::task<std::string> {
+                        -> nxtrt::task<std::string> {
                         expect(co_await rt.publish_input_event(
                             std::move(key)));
                         auto event = co_await rt.next_input();
@@ -392,9 +392,9 @@ static suite uring_wand_tests{
             };
 
             "runtime sleeps on its platform wand"_test = [] {
-                auto rt = nxt::rt::runtime{};
+                auto rt = nxtrt::runtime{};
 
-                rt.run([&rt]() -> nxt::rt::task<void> {
+                rt.run([&rt]() -> nxtrt::task<void> {
                     co_await rt.sleep(1ms);
                 });
             };
@@ -409,8 +409,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = echo_over_socketpair(first.get(), second.get());
 
                 deck.start(task);
@@ -427,8 +427,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = poll_after_socket_send(first.get(), second.get());
 
                 deck.start(task);
@@ -447,8 +447,8 @@ static suite uring_wand_tests{
                 if (client.get() < 0)
                     throw std::runtime_error{"client socket failed"};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = connect_to(client.get(), address);
 
                 deck.start(task);
@@ -462,8 +462,8 @@ static suite uring_wand_tests{
 
         "file I/O"_test = [] {
             "statx wishes return file metadata"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = stat_current_directory();
 
                 deck.start(task);
@@ -474,8 +474,8 @@ static suite uring_wand_tests{
             };
 
             "getdents64 wishes return directory entries"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = read_current_directory_names();
 
                 deck.start(task);
@@ -486,9 +486,9 @@ static suite uring_wand_tests{
             };
 
             "fs lists portable directory entries"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
-                auto task = nxt::rt::fs::list_path(".");
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto task = nxtrt::fs::list_path(".");
 
                 deck.start(task);
                 auto entries = pump_until_done(deck, wand, task);
@@ -496,9 +496,9 @@ static suite uring_wand_tests{
                 auto dot = std::ranges::find(
                     entries,
                     ".",
-                    &nxt::rt::fs::directory_entry::name);
+                    &nxtrt::fs::directory_entry::name);
                 expect(dot != entries.end());
-                expect(dot->status.kind == nxt::rt::fs::file_kind::directory);
+                expect(dot->status.kind == nxtrt::fs::file_kind::directory);
             };
         };
 
@@ -511,8 +511,8 @@ static suite uring_wand_tests{
                 auto rx = nxt::unique_fd{fds[0]};
                 auto tx = nxt::unique_fd{fds[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = write_to_fd(tx.get(), "wishful stdout");
 
                 deck.start(task);
@@ -528,8 +528,8 @@ static suite uring_wand_tests{
             };
 
             "subprocess capture drains stdout and stderr"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = capture_shell(
                     "printf 'out'; printf 'err' >&2");
 
@@ -544,8 +544,8 @@ static suite uring_wand_tests{
             };
 
             "subprocess capture records nonzero exits"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = capture_shell("printf 'nope'; exit 7");
 
                 deck.start(task);
@@ -558,8 +558,8 @@ static suite uring_wand_tests{
             };
 
             "subprocess capture does not inherit runtime stdin"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = capture_shell(
                     "if read line; then printf 'stdin:%s' \"$line\"; "
                     "else printf 'stdin-eof'; fi");
@@ -574,8 +574,8 @@ static suite uring_wand_tests{
             };
 
             "subprocess capture fails oversized output after draining"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = capture_shell("printf 'abcdefgh'; exit 7", 5);
 
                 deck.start(task);
@@ -596,7 +596,7 @@ static suite uring_wand_tests{
                     "-c",
                     "printf hi",
                 };
-                auto wrapped = nxt::rt::scoped_process::systemd_scope_argv(
+                auto wrapped = nxtrt::scoped_process::systemd_scope_argv(
                     "nxt-test.scope",
                     std::move(argv));
 
@@ -610,8 +610,8 @@ static suite uring_wand_tests{
             };
 
             "subprocess children are signalled through pidfds"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = terminate_sleeping_shell();
 
                 deck.start(task);
@@ -622,8 +622,8 @@ static suite uring_wand_tests{
             };
 
             "pty subprocesses run and wait through pidfds"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = run_shell_in_pty();
 
                 deck.start(task);
@@ -634,8 +634,8 @@ static suite uring_wand_tests{
             };
 
             "subprocess cleanup is shielded after task cancellation"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto spawned = false;
                 auto task = cleanup_sleeping_shell_after_cancel(spawned);
 
@@ -658,8 +658,8 @@ static suite uring_wand_tests{
 
         "timers and polling"_test = [] {
             "timeout wishes complete"_test = [] {
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = timeout_once();
 
                 deck.start(task);
@@ -669,8 +669,8 @@ static suite uring_wand_tests{
             };
 
             "pending wishes wait for submission queue capacity"_test = [] {
-                auto wand = nxt::rt::uring_wand{4};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{4};
+                auto deck = nxtrt::deck{&wand};
                 auto task = many_short_timeouts();
 
                 deck.start(task);
@@ -688,8 +688,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task =
                     poll_until_after_socket_send(first.get(), second.get());
 
@@ -707,8 +707,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = poll_until_timeout(second.get());
 
                 deck.start(task);
@@ -725,8 +725,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = poll_until_stopped(second.get());
 
                 deck.start(task);
@@ -746,8 +746,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task =
                     poll_after_send_with_timeout(first.get(), second.get());
 
@@ -765,8 +765,8 @@ static suite uring_wand_tests{
                 auto first = nxt::unique_fd{sockets[0]};
                 auto second = nxt::unique_fd{sockets[1]};
 
-                auto wand = nxt::rt::uring_wand{};
-                auto deck = nxt::rt::deck{&wand};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
                 auto task = poll_with_timeout(second.get());
 
                 deck.start(task);
@@ -774,7 +774,7 @@ static suite uring_wand_tests{
                 auto timed_out = false;
                 try {
                     pump_until_done(deck, wand, task);
-                } catch (const nxt::rt::timeout_error &) {
+                } catch (const nxtrt::timeout_error &) {
                     timed_out = true;
                 }
 

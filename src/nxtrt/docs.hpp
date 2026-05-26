@@ -1,7 +1,7 @@
 #pragma once
 
 /**
-@namespace nxt::rt
+@namespace nxtrt
 
 Experimental async runtime primitives for `src`.
 
