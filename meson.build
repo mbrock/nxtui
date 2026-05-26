@@ -25,9 +25,6 @@ nxt_awslc_project = cmake.subproject(
 )
 nxt_awslc_dep = nxt_awslc_project.dependency('crypto')
 
-glaze_dep = declare_dependency(
-  include_directories : include_directories('vendor/glaze/include'),
-)
 utf8proc_dep = dependency(
   'libutf8proc',
   fallback : ['utf8proc', 'utf8proc_dep'],
@@ -168,7 +165,7 @@ if get_option('llm_tool')
     nxt_llm_liburing_dep = disabler()
   endif
 
-  nxtllm_dependencies = [nxt_core_dep, glaze_dep]
+  nxtllm_dependencies = [nxt_core_dep]
   nxtllm_dependencies += nxt_stacktrace_deps
   if host_machine.system() == 'linux' and nxt_llm_liburing_dep.found()
     nxtllm_dependencies += nxt_llm_liburing_dep
@@ -181,9 +178,15 @@ if get_option('llm_tool')
 
   executable('nxtllm',
     'src-ng/nxtai/nxtllm.cpp',
+    'src-ng/nxtai/trace_tui.cpp',
+    'src-ng/nxtai/tool_tui.cpp',
+    'src-ng/nxt/llm/agent.cpp',
+    'src-ng/nxt/llm/stream.cpp',
+    'src-ng/nxt/llm/tool_ui.cpp',
     include_directories : [nxt_inc, nxt_ng_inc],
     dependencies : nxtllm_dependencies,
     cpp_args : nxt_stacktrace_cpp_args,
+    cpp_pch : 'src-ng/nxtai/nxtllm_pch.hpp',
   )
 endif
 
@@ -191,8 +194,9 @@ if get_option('tests')
   nxt_test_inc = include_directories('test')
 
   nxt_ng_test_sources = files(
-    'test/input-test.cpp',
-    'test/ng-include-test.cpp',
+	    'test/input-test.cpp',
+	    'test/json-test.cpp',
+	    'test/ng-include-test.cpp',
     'test/ng-runtime-test.cpp',
     'test/terminal-test.cpp',
     'src/nxtio/stacktrace.cpp',
@@ -200,7 +204,6 @@ if get_option('tests')
   )
   nxt_ng_test_deps = []
   nxt_ng_test_deps += nxt_core_dep
-  nxt_ng_test_deps += glaze_dep
   nxt_ng_test_deps += utf8proc_dep
   nxt_ng_test_deps += nxt_stacktrace_deps
 

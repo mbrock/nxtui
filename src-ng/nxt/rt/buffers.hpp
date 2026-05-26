@@ -8,7 +8,6 @@
 #include <cstring>
 #include <functional>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -285,12 +284,13 @@ private:
     int flags_ = 0;
 };
 
-template<typename Inner, typename Progress>
 class metered_byte_source final : public byte_source
 {
 public:
-    metered_byte_source(Inner inner, Progress progress)
-        : inner_(std::move(inner))
+    metered_byte_source(
+        byte_source & inner,
+        std::function<void(std::size_t)> progress)
+        : inner_(inner)
         , progress_(std::move(progress))
     {
     }
@@ -299,28 +299,29 @@ public:
     {
         auto result = co_await inner_.read_some(dst);
         if (result.bytes > 0)
-            std::invoke(progress_, result.bytes);
+            progress_(result.bytes);
         co_return result;
     }
 
 private:
-    Inner inner_;
-    Progress progress_;
+    byte_source & inner_;
+    std::function<void(std::size_t)> progress_;
 };
 
-template<typename Inner, typename Progress>
-auto meter_source(Inner inner, Progress progress)
+inline metered_byte_source meter_source(
+    byte_source & inner,
+    std::function<void(std::size_t)> progress)
 {
-    return metered_byte_source<Inner, Progress>{
-        std::move(inner), std::move(progress)};
+    return metered_byte_source{inner, std::move(progress)};
 }
 
-template<typename Inner, typename Progress>
 class metered_byte_sink final : public byte_sink
 {
 public:
-    metered_byte_sink(Inner inner, Progress progress)
-        : inner_(std::move(inner))
+    metered_byte_sink(
+        byte_sink & inner,
+        std::function<void(std::size_t)> progress)
+        : inner_(inner)
         , progress_(std::move(progress))
     {
     }
@@ -329,20 +330,20 @@ public:
     {
         auto written = co_await inner_.write_some(src);
         if (written > 0)
-            std::invoke(progress_, written);
+            progress_(written);
         co_return written;
     }
 
 private:
-    Inner inner_;
-    Progress progress_;
+    byte_sink & inner_;
+    std::function<void(std::size_t)> progress_;
 };
 
-template<typename Inner, typename Progress>
-auto meter_sink(Inner inner, Progress progress)
+inline metered_byte_sink meter_sink(
+    byte_sink & inner,
+    std::function<void(std::size_t)> progress)
 {
-    return metered_byte_sink<Inner, Progress>{
-        std::move(inner), std::move(progress)};
+    return metered_byte_sink{inner, std::move(progress)};
 }
 
 inline task<std::size_t> send_some(
@@ -406,11 +407,10 @@ concept byte_writer_chunk_range =
 } // namespace detail
 
 /// Buffered asynchronous writer over a byte sink.
-template<typename Sink = byte_sink>
 class byte_writer
 {
 public:
-    byte_writer(Sink & sink, std::span<std::byte> buffer)
+    byte_writer(byte_sink & sink, std::span<std::byte> buffer)
         : sink_(&sink)
         , buffer_(buffer)
     {
@@ -418,19 +418,9 @@ public:
             throw buffer_error{"writer buffer is empty"};
     }
 
-    byte_writer(Sink & sink, std::size_t buffer_size)
+    byte_writer(byte_sink & sink, std::size_t buffer_size)
         : owned_buffer_(buffer_size)
         , sink_(&sink)
-        , buffer_(owned_buffer_)
-    {
-        if (owned_buffer_.empty())
-            throw buffer_error{"writer buffer is empty"};
-    }
-
-    byte_writer(Sink && sink, std::size_t buffer_size)
-        : owned_sink_(std::make_unique<Sink>(std::move(sink)))
-        , owned_buffer_(buffer_size)
-        , sink_(owned_sink_.get())
         , buffer_(owned_buffer_)
     {
         if (owned_buffer_.empty())
@@ -441,9 +431,8 @@ public:
     byte_writer & operator=(const byte_writer &) = delete;
 
     byte_writer(byte_writer && other) noexcept
-        : owned_sink_(std::move(other.owned_sink_))
-        , owned_buffer_(std::move(other.owned_buffer_))
-        , sink_(owned_sink_ ? owned_sink_.get() : other.sink_)
+        : owned_buffer_(std::move(other.owned_buffer_))
+        , sink_(other.sink_)
         , buffer_(owned_buffer_.empty()
             ? other.buffer_
             : std::span<std::byte>{owned_buffer_})
@@ -457,9 +446,8 @@ public:
     byte_writer & operator=(byte_writer && other) noexcept
     {
         if (this != &other) {
-            owned_sink_ = std::move(other.owned_sink_);
             owned_buffer_ = std::move(other.owned_buffer_);
-            sink_ = owned_sink_ ? owned_sink_.get() : other.sink_;
+            sink_ = other.sink_;
             buffer_ = owned_buffer_.empty()
                 ? other.buffer_
                 : std::span<std::byte>{owned_buffer_};
@@ -540,40 +528,35 @@ public:
     }
 
 private:
-    std::unique_ptr<Sink> owned_sink_;
     std::vector<std::byte> owned_buffer_;
-    Sink * sink_;
+    byte_sink * sink_;
     std::span<std::byte> buffer_;
     std::size_t end_ = 0;
 };
 
-inline byte_writer<fd_sink> standard_output_writer(
-    std::size_t buffer_size = 4096)
+inline byte_writer standard_output_writer(std::size_t buffer_size = 4096)
 {
-    return byte_writer<fd_sink>{standard_output(), buffer_size};
+    static auto out = fd_sink{STDOUT_FILENO};
+    return byte_writer{out, buffer_size};
 }
 
-template<typename Sink, typename Chunks>
+template<typename Chunks>
     requires detail::byte_writer_chunk<Chunks>
         || detail::byte_writer_chunk_range<Chunks>
 inline task<void> write_all(
-    Sink && sink,
+    byte_sink & sink,
     Chunks && chunks,
     std::size_t buffer_size = 4096)
 {
-    auto writer = byte_writer<std::remove_reference_t<Sink>>{
-        std::forward<Sink>(sink),
-        buffer_size,
-    };
+    auto writer = byte_writer{sink, buffer_size};
     co_await writer.write_all(std::forward<Chunks>(chunks));
 }
 
 /// Buffered asynchronous reader over a byte source.
-template<typename Source = byte_source>
 class byte_reader
 {
 public:
-    byte_reader(Source & source, std::span<std::byte> buffer)
+    byte_reader(byte_source & source, std::span<std::byte> buffer)
         : source_(&source)
         , buffer_(buffer)
     {}
@@ -750,7 +733,7 @@ private:
         co_return read;
     }
 
-    Source * source_;
+    byte_source * source_;
     std::span<std::byte> buffer_;
     std::size_t seek_ = 0;
     std::size_t end_ = 0;

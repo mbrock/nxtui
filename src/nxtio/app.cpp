@@ -32,8 +32,6 @@
 #  include <cpptrace/cpptrace.hpp>
 #endif
 
-#include <glaze/glaze_exceptions.hpp>
-
 #ifdef NXT_HAVE_PNG
 #  include "nxt/png.hpp"
 #endif
@@ -92,6 +90,85 @@ struct SpanEndPayload
 };
 
 namespace {
+
+std::string json_string(std::string_view value)
+{
+    auto out = std::string{"\""};
+    for (auto ch : value) {
+        switch (ch) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(ch) < 0x20)
+                out += std::format("\\u{:04x}", static_cast<unsigned char>(ch));
+            else
+                out.push_back(ch);
+            break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+std::string frame_snapshot_payload_json(const FrameSnapshotPayload & payload)
+{
+    return std::format(
+        "{{\"cols\":{},\"rows\":{},\"hash\":{},\"bytes\":{}}}",
+        payload.cols,
+        payload.rows,
+        payload.hash,
+        payload.bytes);
+}
+
+std::string tty_init_payload_json(const TtyInitPayload & payload)
+{
+    return std::format(
+        "{{\"cols\":{},\"rows\":{},\"surface\":{}}}",
+        payload.cols,
+        payload.rows,
+        payload.surface ? "true" : "false");
+}
+
+std::string tty_resize_payload_json(const TtyResizePayload & payload)
+{
+    return std::format(
+        "{{\"cols\":{},\"rows\":{}}}",
+        payload.cols,
+        payload.rows);
+}
+
+std::string input_mods_payload_json(const InputModsPayload & mods)
+{
+    return std::format(
+        "{{\"shift\":{},\"alt\":{},\"ctrl\":{},\"super\":{},\"hyper\":{},\"meta\":{}}}",
+        mods.shift ? "true" : "false",
+        mods.alt ? "true" : "false",
+        mods.ctrl ? "true" : "false",
+        mods.super ? "true" : "false",
+        mods.hyper ? "true" : "false",
+        mods.meta ? "true" : "false");
+}
+
+std::string input_event_payload_json(const InputEventPayload & payload)
+{
+    return std::format(
+        "{{\"key\":{},\"type\":{},\"codepoint\":{},\"mods\":{},\"text\":{}}}",
+        payload.key,
+        payload.type,
+        payload.codepoint,
+        input_mods_payload_json(payload.mods),
+        json_string(payload.text));
+}
+
+std::string span_end_payload_json(const SpanEndPayload & payload)
+{
+    return std::format("{{\"status\":{}}}", json_string(payload.status));
+}
 
 #ifdef NXT_HAVE_PNG
 struct ScreenshotMilestone
@@ -533,7 +610,7 @@ void UIRuntime::record_frame_snapshot()
     row.event_type = "screen";
     row.data = std::format(
         "{}x{} bytes={} hash={:016x}", cols, rows, bytes.size(), hash);
-    row.payload_json = glz::ex::write_json(payload);
+    row.payload_json = frame_snapshot_payload_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     row.frame_seq = next_frame_seq_++;
@@ -559,7 +636,7 @@ void UIRuntime::record_tty_init()
     row.phase = "tty";
     row.event_type = "init";
     row.data = std::format("{}x{}", cols, rows);
-    row.payload_json = glz::ex::write_json(payload);
+    row.payload_json = tty_init_payload_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     trace_.add(std::move(row));
@@ -579,7 +656,7 @@ void UIRuntime::record_tty_resize()
     row.phase = "tty";
     row.event_type = "resize";
     row.data = std::format("{}x{}", cols, rows);
-    row.payload_json = glz::ex::write_json(payload);
+    row.payload_json = tty_resize_payload_json(payload);
     row.span_id = root_span_id_;
     row.span_name = "runtime";
     trace_.add(std::move(row));
@@ -625,7 +702,7 @@ void UIRuntime::record_input_event(const nxt::input::KeyEvent & event)
             },
         .text = event.text,
     };
-    auto dumped = glz::ex::write_json(payload);
+    auto dumped = input_event_payload_json(payload);
     nxt::io::arrow::trace_row row;
     row.phase = "input";
     row.event_type = "key";
@@ -650,7 +727,7 @@ void UIRuntime::emit_span_end(
     row.data = std::string{status};
     if (!status.empty())
         row.payload_json =
-            glz::ex::write_json(SpanEndPayload{.status = std::string{status}});
+            span_end_payload_json(SpanEndPayload{.status = std::string{status}});
     row.span_id = std::string{span_id};
     row.parent_span_id = std::string{parent_span_id};
     row.span_name = std::string{name};

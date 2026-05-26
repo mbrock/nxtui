@@ -68,11 +68,10 @@ task<std::decay_t<T>> ready_task(T value)
     co_return std::move(value);
 }
 
-template<typename Reader, typename Writer>
-class tls13_client_session
+class tls13_client_session final : public byte_source
 {
 public:
-    tls13_client_session(Reader & reader, Writer & writer)
+    tls13_client_session(byte_reader & reader, byte_writer & writer)
         : reader_(reader)
         , writer_(writer)
     {
@@ -241,7 +240,7 @@ public:
         }
     }
 
-    task<read_result> read_some(std::span<std::byte> dst)
+    task<read_result> read_some(std::span<std::byte> dst) override
     {
         require_handshake();
         if (dst.empty())
@@ -273,15 +272,12 @@ private:
             throw runtime_error{"TLS session has not completed handshake"};
     }
 
-    Reader & reader_;
-    Writer & writer_;
+    byte_reader & reader_;
+    byte_writer & writer_;
     nxt::tls::tls13_application_keys application_keys_;
     std::vector<std::byte> pending_;
     std::size_t pending_offset_ = 0;
     bool handshaken_ = false;
 };
-
-template<typename Reader, typename Writer>
-tls13_client_session(Reader &, Writer &) -> tls13_client_session<Reader, Writer>;
 
 } // namespace nxt::rt::tls

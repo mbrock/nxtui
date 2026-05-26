@@ -185,12 +185,18 @@ struct ng_echo_tool
     struct parameters
     {
         std::string text;
-
-        struct glaze_json_schema
-        {
-            glz::schema text{.description = "Text to echo."};
-        };
     };
+
+    static constexpr std::string_view parameters_schema_json =
+        R"json({"type":"object","properties":{"text":{"type":"string","description":"Text to echo."}},"additionalProperties":false,"required":["text"]})json";
+
+    static std::optional<parameters> parse_parameters(std::string_view json)
+    {
+        auto text = nxt::ai::tools::json_string_member(json, "text");
+        if (!text)
+            return std::nullopt;
+        return parameters{.text = std::move(*text)};
+    }
 
     nxt::rt::task<nxt::ai::tools::tool_result> run(parameters args) const
     {
@@ -1660,7 +1666,9 @@ static suite ng_runtime_tests{
                         nxt::ai::openai::raw_json{
                             R"({"id":"fc_2","type":"function_call","call_id":"call_2","name":"ng_echo","arguments":"{\"text\":\"two\"}"})"}),
                 };
-                auto tools = nxt::ai::tools::tool_set{ng_echo_tool{}};
+                auto tools = nxt::ai::tools::make_tool_registry({
+                    nxt::ai::tools::make_function_tool(ng_echo_tool{}),
+                });
 
                 auto results = deck.sync_wait(
                     nxt::ai::tools::run_function_tool_batch(
@@ -1683,7 +1691,9 @@ static suite ng_runtime_tests{
 
             "unknown tools become failed batch results"_test = [] {
                 auto deck = nxt::rt::deck{};
-                auto tools = nxt::ai::tools::tool_set{ng_echo_tool{}};
+                auto tools = nxt::ai::tools::make_tool_registry({
+                    nxt::ai::tools::make_function_tool(ng_echo_tool{}),
+                });
                 auto calls = std::vector<nxt::ai::tools::function_call>{
                     nxt::ai::tools::function_call{
                         .call_id = "call_missing",
@@ -2166,15 +2176,16 @@ static suite ng_runtime_tests{
                         expect(sink.text == "abcde");
                     };
 
-                    "free write_all owns rvalue sinks"_test = [] {
+                    "free write_all uses explicitly owned sinks"_test = [] {
                         auto deck = nxt::rt::deck{};
                         auto text = std::make_shared<std::string>();
+                        auto sink = shared_string_sink{text};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
                         deck.sync_wait([&]() -> nxt::rt::task<void> {
                             co_await nxt::rt::write_all(
-                                shared_string_sink{text},
+                                sink,
                                 chunks,
                                 std::size_t{4});
                         });
@@ -2183,12 +2194,13 @@ static suite ng_runtime_tests{
                     };
                 };
 
-                "with owned sink and storage"_test = [] {
+                "with borrowed sink and owned storage"_test = [] {
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxt::rt::deck{};
                         auto text = std::make_shared<std::string>();
+                        auto sink = shared_string_sink{text};
                         auto writer = nxt::rt::byte_writer{
-                            shared_string_sink{text},
+                            sink,
                             std::size_t{4},
                         };
 

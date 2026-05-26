@@ -69,14 +69,18 @@ struct bash_tool
     struct parameters
     {
         std::string command;
-
-        struct glaze_json_schema
-        {
-            glz::schema command{
-                .description =
-                    "Full shell command line. Will be passed to /bin/bash -c."};
-        };
     };
+
+    static constexpr std::string_view parameters_schema_json =
+        R"json({"type":"object","properties":{"command":{"type":"string","description":"Full shell command line. Will be passed to /bin/bash -c."}},"additionalProperties":false,"required":["command"]})json";
+
+    static std::optional<parameters> parse_parameters(std::string_view json)
+    {
+        auto command = tools::json_string_member(json, "command");
+        if (!command)
+            return std::nullopt;
+        return parameters{.command = std::move(*command)};
+    }
 
     nxt::rt::task<tools::tool_result> run(parameters args) const
     {
@@ -116,16 +120,19 @@ struct rg_search_tool
     {
         std::string pattern;
         std::string path = ".";
-
-        struct glaze_json_schema
-        {
-            glz::schema pattern{
-                .description = "Regex pattern to search for (rg-style)"};
-            glz::schema path{
-                .description =
-                    "Directory or file to search; use \".\" for the current directory"};
-        };
     };
+
+    static constexpr std::string_view parameters_schema_json =
+        R"json({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern to search for (rg-style)"},"path":{"type":"string","description":"Directory or file to search; use \".\" for the current directory"}},"additionalProperties":false,"required":["pattern","path"]})json";
+
+    static std::optional<parameters> parse_parameters(std::string_view json)
+    {
+        auto pattern = tools::json_string_member(json, "pattern");
+        if (!pattern)
+            return std::nullopt;
+        auto path = tools::json_string_member(json, "path").value_or(".");
+        return parameters{.pattern = std::move(*pattern), .path = std::move(path)};
+    }
 
     nxt::rt::task<tools::tool_result> run(parameters args) const
     {
@@ -165,13 +172,18 @@ struct read_file_tool
     struct parameters
     {
         std::string path;
-
-        struct glaze_json_schema
-        {
-            glz::schema path{
-                .description = "Absolute or relative path to the file"};
-        };
     };
+
+    static constexpr std::string_view parameters_schema_json =
+        R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file"}},"additionalProperties":false,"required":["path"]})json";
+
+    static std::optional<parameters> parse_parameters(std::string_view json)
+    {
+        auto path = tools::json_string_member(json, "path");
+        if (!path)
+            return std::nullopt;
+        return parameters{.path = std::move(*path)};
+    }
 
     nxt::rt::task<tools::tool_result> run(parameters args) const
     {
@@ -200,11 +212,11 @@ struct read_file_tool
 
 [[nodiscard]] inline auto for_agent()
 {
-    return tools::tool_set{
-        read_file_tool{},
-        rg_search_tool{},
-        bash_tool{},
-    };
+    return tools::make_tool_registry({
+        tools::make_function_tool(read_file_tool{}),
+        tools::make_function_tool(rg_search_tool{}),
+        tools::make_function_tool(bash_tool{}),
+    });
 }
 
 } // namespace nxt::ai::agent_tools

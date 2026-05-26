@@ -21,8 +21,6 @@
 #include <arrow/dataset/plan.h>
 #include <arrow/filesystem/api.h>
 
-#include <glaze/json/generic.hpp>
-
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -339,7 +337,7 @@ inline std::string format_duration(std::int64_t us)
 // repetitive or jargony span pattern in a real trace.
 // ============================================================================
 
-using Attrs = glz::generic_u64;
+using Attrs = std::unordered_map<std::string, std::string>;
 
 struct DisplayRule
 {
@@ -455,27 +453,64 @@ inline std::string short_uri(const std::string & uri)
 
 inline Attrs empty_attrs()
 {
-    return Attrs{Attrs::object_t{}};
+    return {};
 }
 
-inline std::string attr_value_string(const Attrs & value, bool compact_uri)
+inline void skip_json_ws(std::string_view input, std::size_t & offset)
 {
-    if (value.is_string()) {
-        auto out = value.get_string();
-        if (compact_uri && out.find("://") != std::string::npos)
-            return short_uri(out);
-        return out;
+    while (offset < input.size()) {
+        auto ch = input[offset];
+        if (ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t')
+            return;
+        ++offset;
     }
-    if (value.is_boolean())
-        return value.get_boolean() ? "true" : "false";
-    if (value.is_uint64())
-        return std::to_string(value.get<std::uint64_t>());
-    if (value.is_int64())
-        return std::to_string(value.get<std::int64_t>());
-    if (value.is_double())
-        return std::format("{:.2f}", value.get<double>());
-    auto dumped = value.dump();
-    return dumped ? *dumped : std::string{};
+}
+
+inline std::optional<std::string>
+read_json_string(std::string_view input, std::size_t & offset)
+{
+    if (offset >= input.size() || input[offset++] != '"')
+        return std::nullopt;
+    auto out = std::string{};
+    while (offset < input.size()) {
+        auto ch = input[offset++];
+        if (ch == '"')
+            return out;
+        if (ch != '\\') {
+            out.push_back(ch);
+            continue;
+        }
+        if (offset >= input.size())
+            return std::nullopt;
+        switch (input[offset++]) {
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        case '/': out.push_back('/'); break;
+        case 'b': out.push_back('\b'); break;
+        case 'f': out.push_back('\f'); break;
+        case 'n': out.push_back('\n'); break;
+        case 'r': out.push_back('\r'); break;
+        case 't': out.push_back('\t'); break;
+        default: return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+inline std::optional<std::string>
+read_json_atom(std::string_view input, std::size_t & offset)
+{
+    auto begin = offset;
+    while (offset < input.size() && input[offset] != ',' && input[offset] != '}')
+        ++offset;
+    auto end = offset;
+    while (end > begin
+           && (input[end - 1] == ' ' || input[end - 1] == '\n'
+               || input[end - 1] == '\r' || input[end - 1] == '\t'))
+        --end;
+    if (begin == end)
+        return std::nullopt;
+    return std::string{input.substr(begin, end - begin)};
 }
 
 inline std::optional<std::string>
@@ -484,11 +519,12 @@ attr_value(
     std::string_view key,
     bool compact_uri = false)
 {
-    if (!attrs.is_object())
+    auto it = attrs.find(std::string{key});
+    if (it == attrs.end())
         return std::nullopt;
-    if (!attrs.contains(key))
-        return std::nullopt;
-    return attr_value_string(attrs[key], compact_uri);
+    if (compact_uri && it->second.find("://") != std::string::npos)
+        return short_uri(it->second);
+    return it->second;
 }
 
 inline std::string
@@ -523,10 +559,40 @@ inline Attrs parse_attrs(const Span & s)
     if (s.attributes_json.empty()
         || s.attributes_json == "null")
         return empty_attrs();
-    auto attrs = glz::read_json<Attrs>(s.attributes_json);
-    if (!attrs || !attrs->is_object())
+
+    auto offset = std::size_t{};
+    skip_json_ws(s.attributes_json, offset);
+    if (offset >= s.attributes_json.size() || s.attributes_json[offset++] != '{')
         return empty_attrs();
-    return std::move(*attrs);
+
+    auto attrs = Attrs{};
+    while (true) {
+        skip_json_ws(s.attributes_json, offset);
+        if (offset >= s.attributes_json.size())
+            return empty_attrs();
+        if (s.attributes_json[offset] == '}')
+            return attrs;
+        auto key = read_json_string(s.attributes_json, offset);
+        if (!key)
+            return empty_attrs();
+        skip_json_ws(s.attributes_json, offset);
+        if (offset >= s.attributes_json.size() || s.attributes_json[offset++] != ':')
+            return empty_attrs();
+        skip_json_ws(s.attributes_json, offset);
+        auto value = offset < s.attributes_json.size() && s.attributes_json[offset] == '"'
+                         ? read_json_string(s.attributes_json, offset)
+                         : read_json_atom(s.attributes_json, offset);
+        if (!value)
+            return empty_attrs();
+        attrs.emplace(std::move(*key), std::move(*value));
+        skip_json_ws(s.attributes_json, offset);
+        if (offset >= s.attributes_json.size())
+            return empty_attrs();
+        if (s.attributes_json[offset] == '}')
+            return attrs;
+        if (s.attributes_json[offset++] != ',')
+            return empty_attrs();
+    }
 }
 
 inline std::string display_label_for(

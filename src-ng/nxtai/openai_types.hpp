@@ -1,16 +1,14 @@
 #pragma once
 
-#include <glaze/glaze.hpp>
-
 #include <string>
 #include <vector>
 
 namespace nxt::ai::openai {
 
-using raw_json = glz::raw_json;
-
-inline constexpr auto json_read_opts =
-    glz::opts{.error_on_unknown_keys = false};
+struct raw_json
+{
+    std::string str;
+};
 
 struct response_ref
 {

@@ -12,7 +12,6 @@
 #include <nxt/input.hpp>
 #include <nxt/regional-tty.hpp>
 #include <nxt/slot.hpp>
-#include <nxt/tui.hpp>
 #include <nxt/units.hpp>
 
 #include <algorithm>
@@ -36,6 +35,44 @@
 namespace nxt::rt {
 
 using widget_slot = nxt::tui::Slot<nxt::tui::AnyLayout>;
+
+struct widget_slots_column_layout
+{
+    std::span<const widget_slot> slots;
+
+    nxt::tui::WidthHint width_hint() const
+    {
+        auto max_min = 0 * ch;
+        for (const auto & slot : slots)
+            max_min = std::max(max_min, slot.width_hint().min);
+        return {max_min, 1.0 * one};
+    }
+
+    nxt::tui::HeightHint height_hint() const
+    {
+        auto total_min = 0 * ln;
+        for (const auto & slot : slots)
+            total_min += slot.height_hint().min;
+        return nxt::tui::HeightHint::fixed(total_min);
+    }
+
+    void render(RasterView & raster, Size size) const
+    {
+        auto cursor = Pos::origin();
+        for (const auto & slot : slots) {
+            auto h = slot.height_hint().min;
+            if (h.count() == 0)
+                continue;
+            if ((cursor.y - Pos::origin().y) + h > size.h)
+                break;
+
+            auto child_size = Size{size.w, h};
+            auto sub = raster.subraster(cursor, child_size);
+            slot.render(sub, child_size);
+            cursor = cursor + h;
+        }
+    }
+};
 
 [[nodiscard]] inline task<void> write_stdout_all(
     std::string bytes,
@@ -134,11 +171,15 @@ public:
         return stopping_;
     }
 
+    void draw(nxt::tui::AnyLayout layout) const
+    {
+        surface_.publish(std::move(layout));
+    }
+
     template<nxt::tui::Layout Layout>
     void draw(Layout && layout) const
     {
-        surface_.publish(
-            nxt::tui::AnyLayout{std::forward<Layout>(layout)});
+        draw(nxt::tui::AnyLayout{std::forward<Layout>(layout)});
     }
 
     [[nodiscard]] bool queue_print_block(std::string text)
@@ -660,12 +701,16 @@ private:
     nxt::tui::AnyLayout layout_;
 };
 
+[[nodiscard]] inline draw_awaiter draw(nxt::tui::AnyLayout layout)
+{
+    throw_if_stop_requested();
+    return draw_awaiter{std::move(layout)};
+}
+
 template<nxt::tui::Layout Layout>
 [[nodiscard]] draw_awaiter draw(Layout && layout)
 {
-    throw_if_stop_requested();
-    return draw_awaiter{
-        nxt::tui::AnyLayout{std::forward<Layout>(layout)}};
+    return draw(nxt::tui::AnyLayout{std::forward<Layout>(layout)});
 }
 
 inline void clear_widget()
@@ -842,11 +887,7 @@ template<typename Body>
 
 inline auto child_slots_column(std::span<const widget_slot> slots)
 {
-    return nxt::tui::each(
-        slots,
-        [](const widget_slot & slot) {
-            return slot;
-        });
+    return widget_slots_column_layout{slots};
 }
 
 inline auto child_slots_column(const std::vector<widget_slot> & slots)

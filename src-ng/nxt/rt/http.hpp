@@ -233,8 +233,7 @@ inline response_head parse_response_head(std::span<const std::byte> bytes)
     return head;
 }
 
-template<typename Reader>
-task<response_head> read_response_head(Reader & reader)
+inline task<response_head> read_response_head(byte_reader & reader)
 {
     co_return parse_response_head(co_await reader.take_until("\r\n\r\n"));
 }
@@ -306,11 +305,10 @@ inline std::size_t parse_chunk_size(std::span<const std::byte> line)
     return size;
 }
 
-template<typename Reader>
-class http_body_reader
+class http_body_reader final : public byte_source
 {
 public:
-    http_body_reader(Reader & reader, const response_head & head)
+    http_body_reader(byte_reader & reader, const response_head & head)
         : reader_(&reader)
     {
         if (is_chunked(head)) {
@@ -342,7 +340,7 @@ public:
         co_return std::nullopt;
     }
 
-    task<read_result> read_some(std::span<std::byte> dst)
+    task<read_result> read_some(std::span<std::byte> dst) override
     {
         if (dst.empty())
             co_return read_result{.bytes = 0, .eof = done_};
@@ -426,25 +424,20 @@ private:
         co_return chunk;
     }
 
-    Reader * reader_;
+    byte_reader * reader_;
     mode mode_ = mode::until_eof;
     std::size_t remaining_ = 0;
     bool done_ = false;
 };
 
-template<typename Reader>
-http_body_reader(Reader &, const response_head &) -> http_body_reader<Reader>;
-
-template<typename Reader>
-http_body_reader<Reader>
-read_response_body(Reader & reader, const response_head & head)
+inline http_body_reader
+read_response_body(byte_reader & reader, const response_head & head)
 {
-    return http_body_reader<Reader>{reader, head};
+    return http_body_reader{reader, head};
 }
 
-template<typename Reader>
-task<std::optional<server_sent_event>>
-parse_sse_event(Reader & reader)
+inline task<std::optional<server_sent_event>>
+parse_sse_event(byte_reader & reader)
 {
     auto event = server_sent_event{};
     auto have_data = false;

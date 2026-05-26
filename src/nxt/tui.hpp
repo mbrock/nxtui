@@ -1,7 +1,9 @@
 #pragma once
 
+#include "nxt/any_layout.hpp"
 #include "nxt/raster.hpp"
 #include "nxt/chart.hpp"
+#include "nxt/layout.hpp"
 #include "nxt/units.hpp"
 #include "nxt/utf8.hpp"
 
@@ -16,59 +18,6 @@
 #include <vector>
 
 namespace nxt::tui {
-
-/// Maps a logical size unit to its strongly typed extent.
-template<auto Unit>
-struct hint_extent;
-
-template<>
-struct hint_extent<ch>
-{
-    using type = width_t;
-};
-
-template<>
-struct hint_extent<ln>
-{
-    using type = height_t;
-};
-
-template<auto Unit>
-using hint_extent_t = typename hint_extent<Unit>::type;
-
-/// Minimum size plus flex-grow factor for one layout axis.
-template<auto Unit>
-struct SizeHint
-{
-    hint_extent_t<Unit> min{0 * Unit}; // Minimum size needed
-    ratio_t flex{0.0 * one};           // Flex grow factor (0 = don't grow)
-
-    /// Require exactly `n` minimum cells/lines and no growth.
-    static constexpr SizeHint fixed(hint_extent_t<Unit> n)
-    {
-        return {n, 0.0 * one};
-    }
-
-    /// Ask to share remaining space using `factor` as the flex weight.
-    static constexpr SizeHint grow(ratio_t factor = 1.0 * one)
-    {
-        return {0 * Unit, factor};
-    }
-};
-
-/// Width hint measured in terminal cells.
-using WidthHint = SizeHint<ch>;
-/// Height hint measured in terminal lines.
-using HeightHint = SizeHint<ln>;
-
-/// Concept implemented by values that can report size hints and render.
-template<typename L>
-concept Layout =
-    requires(const L & layout, RasterView & raster, Size size) {
-        { layout.width_hint() } -> std::convertible_to<WidthHint>;
-        { layout.height_hint() } -> std::convertible_to<HeightHint>;
-        { layout.render(raster, size) } -> std::same_as<void>;
-    };
 
 /// Leaf layout backed by a render callback.
 template<typename RenderFn>
@@ -113,63 +62,25 @@ inline auto empty()
     return leaf(WidthHint{}, HeightHint{}, [](RasterView &, Size) {});
 }
 
-/// Conditional layout that delegates to one of two child layouts.
-template<Layout FalseLayout, Layout TrueLayout>
-struct Either
-{
-    /// Render `true_layout` when set, otherwise `false_layout`.
-    bool choose_true = false;
-    /// Layout used when `choose_true` is false.
-    FalseLayout false_layout;
-    /// Layout used when `choose_true` is true.
-    TrueLayout true_layout;
-
-    /// Width hint of the selected child.
-    constexpr WidthHint width_hint() const
-    {
-        return choose_true ? true_layout.width_hint()
-                           : false_layout.width_hint();
-    }
-
-    /// Height hint of the selected child.
-    constexpr HeightHint height_hint() const
-    {
-        return choose_true ? true_layout.height_hint()
-                           : false_layout.height_hint();
-    }
-
-    /// Render the selected child.
-    void render(RasterView & raster, Size size) const
-    {
-        if (choose_true)
-            true_layout.render(raster, size);
-        else
-            false_layout.render(raster, size);
-    }
-};
-
 /// Create a conditional layout from two alternatives.
 template<Layout FalseLayout, Layout TrueLayout>
-auto either(
+AnyLayout either(
     bool choose_true,
     FalseLayout && false_layout,
     TrueLayout && true_layout)
 {
-    return Either<std::decay_t<FalseLayout>, std::decay_t<TrueLayout>>{
-        choose_true,
-        std::forward<FalseLayout>(false_layout),
-        std::forward<TrueLayout>(true_layout),
-    };
+    if (choose_true)
+        return AnyLayout{std::forward<TrueLayout>(true_layout)};
+    return AnyLayout{std::forward<FalseLayout>(false_layout)};
 }
 
 /// Conditional layout that renders a child only when `condition` is true.
 template<Layout Child>
-auto when(bool condition, Child && child)
+AnyLayout when(bool condition, Child && child)
 {
-    return either(
-        condition,
-        empty(),
-        std::forward<Child>(child));
+    if (condition)
+        return AnyLayout{std::forward<Child>(child)};
+    return AnyLayout{empty()};
 }
 
 /// Write UTF-8 text into a raster.
@@ -264,22 +175,21 @@ inline Span span(std::string text, Style s = {})
 }
 
 /// Layout decorator that clears its raster before rendering a child.
-template<Layout Child>
-struct Surface
+struct SurfaceLayout
 {
     /// Style used for every cell in the clear pass.
     Style style{};
     /// Child rendered after the clear pass.
-    Child child;
+    AnyLayout child;
 
     /// Forward the child's width hint.
-    constexpr WidthHint width_hint() const
+    WidthHint width_hint() const
     {
         return child.width_hint();
     }
 
     /// Forward the child's height hint.
-    constexpr HeightHint height_hint() const
+    HeightHint height_hint() const
     {
         return child.height_hint();
     }
@@ -297,28 +207,30 @@ struct Surface
 
 /// Create a clearing surface around a child layout.
 template<Layout Child>
-auto surface(Style style, Child && child)
+AnyLayout surface(Style style, Child && child)
 {
-    return Surface<std::decay_t<Child>>{style, std::forward<Child>(child)};
+    return AnyLayout{SurfaceLayout{
+        style,
+        AnyLayout{std::forward<Child>(child)},
+    }};
 }
 
 /// Layout decorator that forces a fixed height hint.
-template<Layout Child>
-struct FixedHeight
+struct FixedHeightLayout
 {
     /// Height reported to parent columns and HUD sizing.
     height_t height{0 * ln};
     /// Child rendered with whatever size the parent assigns.
-    Child child;
+    AnyLayout child;
 
     /// Forward the child's width hint.
-    constexpr WidthHint width_hint() const
+    WidthHint width_hint() const
     {
         return child.width_hint();
     }
 
     /// Return the fixed height hint.
-    constexpr HeightHint height_hint() const
+    HeightHint height_hint() const
     {
         return HeightHint::fixed(height);
     }
@@ -332,29 +244,30 @@ struct FixedHeight
 
 /// Create a layout wrapper that reports a fixed height.
 template<Layout Child>
-auto fixed_height(height_t height, Child && child)
+AnyLayout fixed_height(height_t height, Child && child)
 {
-    return FixedHeight<std::decay_t<Child>>{
-        height, std::forward<Child>(child)};
+    return AnyLayout{FixedHeightLayout{
+        height,
+        AnyLayout{std::forward<Child>(child)},
+    }};
 }
 
 /// Layout decorator that forces a fixed width hint.
-template<Layout Child>
-struct FixedWidth
+struct FixedWidthLayout
 {
     /// Width reported to parent rows and HUD sizing.
     width_t width{0 * ch};
     /// Child rendered with whatever size the parent assigns.
-    Child child;
+    AnyLayout child;
 
     /// Return the fixed width hint.
-    constexpr WidthHint width_hint() const
+    WidthHint width_hint() const
     {
         return WidthHint::fixed(width);
     }
 
     /// Forward the child's height hint.
-    constexpr HeightHint height_hint() const
+    HeightHint height_hint() const
     {
         return child.height_hint();
     }
@@ -368,27 +281,28 @@ struct FixedWidth
 
 /// Create a layout wrapper that reports a fixed width.
 template<Layout Child>
-auto fixed_width(width_t width, Child && child)
+AnyLayout fixed_width(width_t width, Child && child)
 {
-    return FixedWidth<std::decay_t<Child>>{
-        width, std::forward<Child>(child)};
+    return AnyLayout{FixedWidthLayout{
+        width,
+        AnyLayout{std::forward<Child>(child)},
+    }};
 }
 
 /// Layout decorator that lets a child claim remaining row width.
-template<Layout Child>
-struct GrowWidth
+struct GrowWidthLayout
 {
-    Child child;
+    AnyLayout child;
     ratio_t factor{1.0 * one};
 
-    constexpr WidthHint width_hint() const
+    WidthHint width_hint() const
     {
         auto hint = child.width_hint();
         hint.flex = std::max(hint.flex, factor);
         return hint;
     }
 
-    constexpr HeightHint height_hint() const
+    HeightHint height_hint() const
     {
         return child.height_hint();
     }
@@ -401,10 +315,12 @@ struct GrowWidth
 
 /// Keep the child's minimum width but make it participate in row flex.
 template<Layout Child>
-auto grow_width(Child && child, ratio_t factor = 1.0 * one)
+AnyLayout grow_width(Child && child, ratio_t factor = 1.0 * one)
 {
-    return GrowWidth<std::decay_t<Child>>{
-        std::forward<Child>(child), factor};
+    return AnyLayout{GrowWidthLayout{
+        AnyLayout{std::forward<Child>(child)},
+        factor,
+    }};
 }
 
 /// Render one styled span and return the column after the written text.
@@ -745,36 +661,30 @@ inline auto range_progress_bar(
 }
 
 /// Horizontal flex container.
-template<Layout... Children>
-struct Row
+struct RowLayout
 {
     /// Child layouts arranged left to right.
-    std::tuple<Children...> children;
+    std::vector<AnyLayout> children;
 
     /// Sum child minimum widths and flex factors.
-    constexpr WidthHint width_hint() const
+    WidthHint width_hint() const
     {
         width_t total_min = 0 * ch;
         ratio_t total_flex = 0.0 * one;
-        std::apply(
-            [&](const auto &... c) {
-                ((total_min += c.width_hint().min,
-                  total_flex += c.width_hint().flex),
-                 ...);
-            },
-            children);
+        for (const auto & child : children) {
+            auto hint = child.width_hint();
+            total_min += hint.min;
+            total_flex += hint.flex;
+        }
         return {total_min, total_flex};
     }
 
     /// Use the tallest child minimum height.
-    constexpr HeightHint height_hint() const
+    HeightHint height_hint() const
     {
         height_t max_min = 0 * ln;
-        std::apply(
-            [&](const auto &... c) {
-                ((max_min = std::max(max_min, c.height_hint().min)), ...);
-            },
-            children);
+        for (const auto & child : children)
+            max_min = std::max(max_min, child.height_hint().min);
         return HeightHint::fixed(
             max_min.count() > 0 ? max_min : height_t{1 * ln});
     }
@@ -782,50 +692,36 @@ struct Row
     /// Divide width among children and render them left to right.
     void render(RasterView & raster, Size size) const
     {
-        constexpr std::size_t N = sizeof...(Children);
-        if constexpr (N == 0)
+        if (children.empty())
             return;
 
-        std::array<WidthHint, N> hints;
-        std::size_t i = 0;
-        std::apply(
-            [&](const auto &... c) {
-                ((hints[i++] = c.width_hint()), ...);
-            },
-            children);
+        auto hints = std::vector<WidthHint>{};
+        hints.reserve(children.size());
+        for (const auto & child : children)
+            hints.push_back(child.width_hint());
 
         auto widths = flex_distribute(size.w, hints);
 
         Pos cursor = Pos::origin();
-        i = 0;
-        std::apply(
-            [&](const auto &... c) {
-                (
-                    [&] {
-                        auto child_size = Size{widths[i], size.h};
-                        if (widths[i].count() > 0) {
-                            auto sub =
-                                subraster(raster, cursor, child_size);
-                            c.render(sub, child_size);
-                            cursor += widths[i];
-                        }
-                        ++i;
-                    }(),
-                    ...);
-            },
-            children);
+        for (std::size_t i = 0; i < children.size(); ++i) {
+            auto child_size = Size{widths[i], size.h};
+            if (widths[i].count() > 0) {
+                auto sub = subraster(raster, cursor, child_size);
+                children[i].render(sub, child_size);
+                cursor += widths[i];
+            }
+        }
     }
 
 private:
-    template<std::size_t N>
-    static std::array<width_t, N>
-    flex_distribute(width_t total, const std::array<WidthHint, N> & hints)
+    static std::vector<width_t>
+    flex_distribute(width_t total, const std::vector<WidthHint> & hints)
     {
-        std::array<width_t, N> result{};
+        auto result = std::vector<width_t>(hints.size());
 
         width_t used = 0 * ch;
         ratio_t total_flex = 0.0 * one;
-        for (std::size_t i = 0; i < N; ++i) {
+        for (std::size_t i = 0; i < hints.size(); ++i) {
             result[i] = hints[i].min;
             used += hints[i].min;
             total_flex += hints[i].flex;
@@ -833,7 +729,7 @@ private:
 
         if (total_flex > 0 && total > used) {
             auto remaining = total - used;
-            for (std::size_t i = 0; i < N; ++i) {
+            for (std::size_t i = 0; i < hints.size(); ++i) {
                 auto flex_val = hints[i].flex;
                 auto total_flex_val = total_flex;
                 if (flex_val > 0)
@@ -847,95 +743,82 @@ private:
     }
 };
 
+inline RowLayout row(std::vector<AnyLayout> children)
+{
+    return RowLayout{std::move(children)};
+}
+
 /// Create a horizontal flex row.
 template<Layout... Children>
-Row<std::decay_t<Children>...> row(Children &&... children)
+RowLayout row(Children &&... children)
 {
-    return {std::tuple{std::forward<Children>(children)...}};
+    auto layouts = std::vector<AnyLayout>{};
+    layouts.reserve(sizeof...(Children));
+    (layouts.emplace_back(std::forward<Children>(children)), ...);
+    return row(std::move(layouts));
 }
 
 /// Vertical flex container.
-template<Layout... Children>
-struct Column
+struct ColumnLayout
 {
     /// Child layouts arranged top to bottom.
-    std::tuple<Children...> children;
+    std::vector<AnyLayout> children;
 
     /// Use the widest child minimum width and grow horizontally.
-    constexpr WidthHint width_hint() const
+    WidthHint width_hint() const
     {
         width_t max_min = 0 * ch;
-        std::apply(
-            [&](const auto &... c) {
-                ((max_min = std::max(max_min, c.width_hint().min)), ...);
-            },
-            children);
+        for (const auto & child : children)
+            max_min = std::max(max_min, child.width_hint().min);
         return {max_min, 1.0 * one};
     }
 
     /// Sum child minimum heights and flex factors.
-    constexpr HeightHint height_hint() const
+    HeightHint height_hint() const
     {
         height_t total_min = 0 * ln;
         ratio_t total_flex = 0.0 * one;
-        std::apply(
-            [&](const auto &... c) {
-                ((total_min += c.height_hint().min,
-                  total_flex += c.height_hint().flex),
-                 ...);
-            },
-            children);
+        for (const auto & child : children) {
+            auto hint = child.height_hint();
+            total_min += hint.min;
+            total_flex += hint.flex;
+        }
         return {total_min, total_flex};
     }
 
     /// Divide height among children and render them top to bottom.
     void render(RasterView & raster, Size size) const
     {
-        constexpr std::size_t N = sizeof...(Children);
-        if constexpr (N == 0)
+        if (children.empty())
             return;
 
-        std::array<HeightHint, N> hints;
-        std::size_t i = 0;
-        std::apply(
-            [&](const auto &... c) {
-                ((hints[i++] = c.height_hint()), ...);
-            },
-            children);
+        auto hints = std::vector<HeightHint>{};
+        hints.reserve(children.size());
+        for (const auto & child : children)
+            hints.push_back(child.height_hint());
 
         auto heights = flex_distribute(size.h, hints);
 
         Pos cursor = Pos::origin();
-        i = 0;
-        std::apply(
-            [&](const auto &... c) {
-                (
-                    [&] {
-                        auto child_size = Size{size.w, heights[i]};
-                        if (heights[i].count() > 0) {
-                            auto sub =
-                                subraster(raster, cursor, child_size);
-                            c.render(sub, child_size);
-                            cursor = cursor
-                                     + heights[i]; // point + vector = point
-                        }
-                        ++i;
-                    }(),
-                    ...);
-            },
-            children);
+        for (std::size_t i = 0; i < children.size(); ++i) {
+            auto child_size = Size{size.w, heights[i]};
+            if (heights[i].count() > 0) {
+                auto sub = subraster(raster, cursor, child_size);
+                children[i].render(sub, child_size);
+                cursor = cursor + heights[i];
+            }
+        }
     }
 
 private:
-    template<std::size_t N>
-    static std::array<height_t, N>
-    flex_distribute(height_t total, const std::array<HeightHint, N> & hints)
+    static std::vector<height_t>
+    flex_distribute(height_t total, const std::vector<HeightHint> & hints)
     {
-        std::array<height_t, N> result{};
+        auto result = std::vector<height_t>(hints.size());
 
         height_t used = 0 * ln;
         ratio_t total_flex = 0.0 * one;
-        for (std::size_t i = 0; i < N; ++i) {
+        for (std::size_t i = 0; i < hints.size(); ++i) {
             result[i] = hints[i].min;
             used += hints[i].min;
             total_flex += hints[i].flex;
@@ -943,7 +826,7 @@ private:
 
         if (total_flex > 0 && total > used) {
             auto remaining = total - used;
-            for (std::size_t i = 0; i < N; ++i) {
+            for (std::size_t i = 0; i < hints.size(); ++i) {
                 auto flex_val = hints[i].flex;
                 auto total_flex_val = total_flex;
                 if (flex_val > 0)
@@ -957,116 +840,53 @@ private:
     }
 };
 
+inline ColumnLayout column(std::vector<AnyLayout> children)
+{
+    return ColumnLayout{std::move(children)};
+}
+
 /// Create a vertical flex column.
 template<Layout... Children>
-Column<std::decay_t<Children>...> column(Children &&... children)
+ColumnLayout column(Children &&... children)
 {
-    return {std::tuple{std::forward<Children>(children)...}};
+    auto layouts = std::vector<AnyLayout>{};
+    layouts.reserve(sizeof...(Children));
+    (layouts.emplace_back(std::forward<Children>(children)), ...);
+    return column(std::move(layouts));
 }
 
 /// Dynamic horizontal flex container for a runtime-sized vector of
-/// children that all have the same concrete layout type.
+/// children. Kept as a compatibility alias for callers that already
+/// materialize same-typed children.
 template<Layout Child>
-struct DynRow
+RowLayout dyn_row(std::vector<Child> children)
 {
-    std::vector<Child> children;
-
-    WidthHint width_hint() const
-    {
-        width_t total_min = 0 * ch;
-        ratio_t total_flex = 0.0 * one;
-        for (const auto & c : children) {
-            total_min += c.width_hint().min;
-            total_flex += c.width_hint().flex;
-        }
-        return {total_min, total_flex};
+    if constexpr (std::same_as<Child, AnyLayout>) {
+        return row(std::move(children));
+    } else {
+        auto layouts = std::vector<AnyLayout>{};
+        layouts.reserve(children.size());
+        for (auto & child : children)
+            layouts.emplace_back(std::move(child));
+        return row(std::move(layouts));
     }
-
-    HeightHint height_hint() const
-    {
-        height_t max_min = 0 * ln;
-        for (const auto & c : children)
-            max_min = std::max(max_min, c.height_hint().min);
-        return HeightHint::fixed(
-            max_min.count() > 0 ? max_min : height_t{1 * ln});
-    }
-
-    void render(RasterView & raster, Size size) const
-    {
-        width_t used = 0 * ch;
-        ratio_t total_flex = 0.0 * one;
-        for (const auto & c : children) {
-            used += c.width_hint().min;
-            total_flex += c.width_hint().flex;
-        }
-
-        Pos cursor = Pos::origin();
-        for (const auto & c : children) {
-            auto h = c.width_hint();
-            auto w = h.min;
-            if (h.flex > 0.0 * one && size.w > used)
-                w += (size.w - used)
-                     * (h.flex.value() / total_flex.value());
-            if (w.count() > 0) {
-                auto child_size = Size{w, size.h};
-                auto sub = subraster(raster, cursor, child_size);
-                c.render(sub, child_size);
-                cursor += w;
-            }
-        }
-    }
-};
-
-template<Layout Child>
-auto dyn_row(std::vector<Child> children)
-{
-    return DynRow<Child>{std::move(children)};
 }
 
 /// Dynamic vertical flex container for a runtime-sized vector of
-/// children that all have the same concrete layout type.
+/// children. Kept as a compatibility alias for callers that already
+/// materialize same-typed children.
 template<Layout Child>
-struct DynColumn
+ColumnLayout dyn_column(std::vector<Child> children)
 {
-    std::vector<Child> children;
-
-    WidthHint width_hint() const
-    {
-        width_t max_min = 0 * ch;
-        for (const auto & c : children)
-            max_min = std::max(max_min, c.width_hint().min);
-        return {max_min, 1.0 * one};
+    if constexpr (std::same_as<Child, AnyLayout>) {
+        return column(std::move(children));
+    } else {
+        auto layouts = std::vector<AnyLayout>{};
+        layouts.reserve(children.size());
+        for (auto & child : children)
+            layouts.emplace_back(std::move(child));
+        return column(std::move(layouts));
     }
-
-    HeightHint height_hint() const
-    {
-        height_t total_min = 0 * ln;
-        for (const auto & c : children)
-            total_min += c.height_hint().min;
-        return HeightHint::fixed(total_min);
-    }
-
-    void render(RasterView & raster, Size size) const
-    {
-        Pos cursor = Pos::origin();
-        for (const auto & c : children) {
-            auto h = c.height_hint().min;
-            if (h.count() == 0)
-                continue;
-            if ((cursor.y - Pos::origin().y) + h > size.h)
-                break;
-            auto child_size = Size{size.w, h};
-            auto sub = subraster(raster, cursor, child_size);
-            c.render(sub, child_size);
-            cursor = cursor + h;
-        }
-    }
-};
-
-template<Layout Child>
-auto dyn_column(std::vector<Child> children)
-{
-    return DynColumn<Child>{std::move(children)};
 }
 
 /// Dynamic vertical container for a borrowed runtime-sized span of data.

@@ -1,7 +1,6 @@
 #pragma once
 
-#include "nxt/raster.hpp"
-#include "nxt/tui.hpp"
+#include "nxt/layout.hpp"
 
 #include <atomic>
 #include <functional>
@@ -33,8 +32,7 @@ public:
         : cell_(std::make_shared<Cell>())
     {
         cell_->on_publish = std::move(on_publish);
-        std::atomic_store_explicit(
-            &cell_->current,
+        cell_->current.store(
             std::make_shared<const L>(std::move(initial)),
             std::memory_order_release);
     }
@@ -42,8 +40,7 @@ public:
     /// Replace the current layout. Thread-safe.
     void publish(L layout) const
     {
-        std::atomic_store_explicit(
-            &cell_->current,
+        cell_->current.store(
             std::make_shared<const L>(std::move(layout)),
             std::memory_order_release);
         if (cell_->on_publish)
@@ -75,14 +72,13 @@ public:
 private:
     struct Cell
     {
-        std::shared_ptr<const L> current;
+        std::atomic<std::shared_ptr<const L>> current;
         std::function<void()> on_publish;
     };
 
     std::shared_ptr<const L> load() const
     {
-        return std::atomic_load_explicit(
-            &cell_->current, std::memory_order_acquire);
+        return cell_->current.load(std::memory_order_acquire);
     }
 
     std::shared_ptr<Cell> cell_;

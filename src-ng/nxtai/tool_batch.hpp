@@ -1,21 +1,19 @@
 #pragma once
 
+#include <nxt/json.hpp>
 #include <nxt/rt/scoped_process.hpp>
 #include <nxt/rt/task.hpp>
 #include <nxtai/openai_types.hpp>
-
-#include <glaze/glaze_exceptions.hpp>
-#include <glaze/json/generic.hpp>
-#include <glaze/json/schema.hpp>
+#include <nxtai/tool_json.hpp>
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
+#include <functional>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -41,18 +39,69 @@ concept function_tool = requires(
         -> std::same_as<nxt::rt::task<tool_result>>;
 };
 
-inline constexpr auto tool_schema_opts =
-    glz::opts{.error_on_missing_keys = true};
-
-template<typename Parameters>
-[[nodiscard]] inline openai::raw_json parameters_schema()
+template<typename Tool>
+concept explicit_tool_schema = requires
 {
-    auto schema = glz::ex::read_json<glz::generic>(
-        glz::ex::write_json_schema<Parameters, tool_schema_opts>());
-    schema.get_object().erase("title");
-    if (schema.contains("properties") && !schema.contains("required"))
-        schema["required"] = glz::generic::array_t{};
-    return openai::raw_json{glz::ex::write_json(schema)};
+    { Tool::parameters_schema_json } -> std::convertible_to<std::string_view>;
+};
+
+template<typename Tool>
+concept explicit_tool_parameter_parser = requires(std::string_view json)
+{
+    { Tool::parse_parameters(json) }
+        -> std::same_as<std::optional<typename Tool::parameters>>;
+};
+
+inline nxt::rt::task<bool> take_json_token(
+    nxt::json::string_reader & in,
+    nxt::json::token_kind kind)
+{
+    auto token = co_await nxt::json::read_token(in);
+    co_return token && token->kind == kind;
+}
+
+inline nxt::rt::task<bool> skip_json_value(
+    nxt::json::string_reader & in,
+    nxt::json::token first)
+{
+    auto depth = 0;
+    if (first.kind == nxt::json::token_kind::object_begin
+        || first.kind == nxt::json::token_kind::array_begin) {
+        depth = 1;
+    } else {
+        co_return true;
+    }
+
+    while (depth > 0) {
+        auto token = co_await nxt::json::read_token(in);
+        if (!token)
+            co_return false;
+        if (token->kind == nxt::json::token_kind::object_begin
+            || token->kind == nxt::json::token_kind::array_begin)
+            ++depth;
+        else if (
+            token->kind == nxt::json::token_kind::object_end
+            || token->kind == nxt::json::token_kind::array_end)
+            --depth;
+    }
+    co_return true;
+}
+
+inline nxt::rt::task<bool> skip_next_json_value(nxt::json::string_reader & in)
+{
+    auto token = co_await nxt::json::read_token(in);
+    if (!token)
+        co_return false;
+    co_return co_await skip_json_value(in, std::move(*token));
+}
+
+inline nxt::rt::task<std::optional<std::string>>
+read_json_string_token(nxt::json::string_reader & in)
+{
+    auto token = co_await nxt::json::read_token(in);
+    if (!token || token->kind != nxt::json::token_kind::string)
+        co_return std::nullopt;
+    co_return std::move(token->text);
 }
 
 struct function_call
@@ -64,76 +113,120 @@ struct function_call
     openai::raw_json item = {};
 };
 
-template<function_tool... Tools>
-struct tool_set
+inline nxt::rt::task<std::optional<function_call>>
+read_function_call_from_item(openai::raw_json raw_item)
 {
-    std::tuple<Tools...> items;
+    if (raw_item.str.empty())
+        co_return std::nullopt;
 
-    explicit tool_set(Tools... tools)
-        : items(std::move(tools)...)
-    {}
+    auto in = nxt::json::string_reader{.input = raw_item.str};
+    if (!(co_await take_json_token(in, nxt::json::token_kind::object_begin)))
+        co_return std::nullopt;
+
+    auto out = function_call{.item = raw_item};
+    auto type = std::string{};
+    while (true) {
+        auto token = co_await nxt::json::read_token(in);
+        if (!token)
+            co_return std::nullopt;
+        if (token->kind == nxt::json::token_kind::object_end)
+            break;
+        if (token->kind != nxt::json::token_kind::string)
+            co_return std::nullopt;
+
+        auto key = std::move(token->text);
+        if (!(co_await take_json_token(in, nxt::json::token_kind::colon)))
+            co_return std::nullopt;
+
+        if (key == "id") {
+            out.id = (co_await read_json_string_token(in)).value_or(std::string{});
+        } else if (key == "type") {
+            type = (co_await read_json_string_token(in)).value_or(std::string{});
+        } else if (key == "call_id") {
+            out.call_id =
+                (co_await read_json_string_token(in)).value_or(std::string{});
+        } else if (key == "name") {
+            out.name =
+                (co_await read_json_string_token(in)).value_or(std::string{});
+        } else if (key == "arguments") {
+            out.arguments =
+                (co_await read_json_string_token(in)).value_or(std::string{});
+        } else if (!(co_await skip_next_json_value(in))) {
+            co_return std::nullopt;
+        }
+
+        token = co_await nxt::json::read_token(in);
+        if (!token)
+            co_return std::nullopt;
+        if (token->kind == nxt::json::token_kind::object_end)
+            break;
+        if (token->kind != nxt::json::token_kind::comma)
+            co_return std::nullopt;
+    }
+
+    if (type != "function_call" || out.call_id.empty() || out.name.empty())
+        co_return std::nullopt;
+    co_return out;
+}
+
+struct function_tool_entry
+{
+    std::string name;
+    std::string description;
+    openai::raw_json parameters;
+    bool strict = true;
+    std::function<nxt::rt::task<tool_result>(std::string_view)> run;
 };
 
-template<function_tool... Tools>
-tool_set(Tools...) -> tool_set<Tools...>;
-
-template<function_tool... Tools>
-[[nodiscard]] constexpr bool empty(const tool_set<Tools...> &) noexcept
+struct tool_registry
 {
-    return sizeof...(Tools) == 0;
+    std::vector<function_tool_entry> entries;
+};
+
+[[nodiscard]] inline bool empty(const tool_registry & tools) noexcept
+{
+    return tools.entries.empty();
 }
 
 template<function_tool Tool>
-[[nodiscard]] inline openai::function_tool_definition
-function_tool_definition(const Tool &)
+[[nodiscard]] inline openai::raw_json tool_parameters_schema()
 {
     using tool_t = std::remove_cvref_t<Tool>;
+    if constexpr (explicit_tool_schema<tool_t>) {
+        return openai::raw_json{std::string{tool_t::parameters_schema_json}};
+    } else {
+        static_assert(
+            explicit_tool_schema<tool_t>,
+            "tool needs parameters_schema_json");
+    }
+}
+
+[[nodiscard]] inline openai::function_tool_definition
+function_tool_definition(const function_tool_entry & tool)
+{
     return openai::function_tool_definition{
-        .name = std::string{tool_t::name},
-        .description = std::string{tool_t::description},
-        .parameters = parameters_schema<typename tool_t::parameters>(),
-        .strict = tool_t::strict,
+        .name = std::string{tool.name},
+        .description = std::string{tool.description},
+        .parameters = openai::raw_json{tool.parameters.str},
+        .strict = tool.strict,
     };
 }
 
-template<function_tool... Tools>
 [[nodiscard]] inline std::vector<openai::function_tool_definition>
-function_tool_definitions(const tool_set<Tools...> & tools)
+function_tool_definitions(const tool_registry & tools)
 {
     auto out = std::vector<openai::function_tool_definition>{};
-    out.reserve(sizeof...(Tools));
-    std::apply(
-        [&](const auto &... tool) {
-            (out.emplace_back(function_tool_definition(tool)), ...);
-        },
-        tools.items);
+    out.reserve(tools.entries.size());
+    for (const auto & tool : tools.entries)
+        out.emplace_back(function_tool_definition(tool));
     return out;
 }
 
 [[nodiscard]] inline std::optional<function_call>
 function_call_from_item(const openai::raw_json & raw_item)
 {
-    if (raw_item.str.empty())
-        return std::nullopt;
-
-    auto item = openai::function_call_item{};
-    if (auto ec = glz::read<openai::json_read_opts>(item, raw_item.str))
-        throw std::runtime_error{glz::format_error(ec, raw_item.str)};
-    if (item.type != "function_call")
-        return std::nullopt;
-
-    auto call_id = std::move(item.call_id);
-    auto name = std::move(item.name);
-    if (call_id.empty() || name.empty())
-        return std::nullopt;
-
-    return function_call{
-        .id = std::move(item.id),
-        .call_id = std::move(call_id),
-        .name = std::move(name),
-        .arguments = std::move(item.arguments),
-        .item = raw_item,
-    };
+    auto deck = nxt::rt::deck{};
+    return deck.sync_wait(read_function_call_from_item(raw_item));
 }
 
 [[nodiscard]] inline std::vector<function_call> function_calls_from_items(
@@ -146,54 +239,56 @@ function_call_from_item(const openai::raw_json & raw_item)
     return calls;
 }
 
-struct function_call_output_item
-{
-    std::string type = "function_call_output";
-    std::string call_id;
-    std::string output;
-};
-
 [[nodiscard]] inline openai::raw_json
 function_call_output(std::string call_id, std::string output)
 {
-    auto item = function_call_output_item{
-        .call_id = std::move(call_id),
-        .output = std::move(output),
-    };
-    return openai::raw_json{glz::ex::write_json(item)};
+    auto json = nxt::json::writer{};
+    json.character('{');
+    json.key("type");
+    json.string("function_call_output");
+    json.character(',');
+    json.key("call_id");
+    json.string(call_id);
+    json.character(',');
+    json.key("output");
+    json.string(output);
+    json.character('}');
+    return openai::raw_json{std::move(json.out)};
 }
 
 [[nodiscard]] inline std::string tool_result_json(const tool_result & result)
 {
-    struct serialized_tool_result
-    {
-        bool failed = false;
-        std::string output;
-    };
-
-    return glz::ex::write_json(
-        serialized_tool_result{
-            .failed = result.failed,
-            .output = result.output,
-        });
+    auto json = nxt::json::writer{};
+    json.character('{');
+    json.key("failed");
+    json.boolean(result.failed);
+    json.character(',');
+    json.key("output");
+    json.string(result.output);
+    json.character('}');
+    return std::move(json.out);
 }
 
 template<function_tool Tool>
 nxt::rt::task<tool_result> run_one_function_tool(
     const Tool & tool,
-    const function_call & call)
+    std::string_view arguments_json)
 {
-    using parameters_t = typename std::remove_cvref_t<Tool>::parameters;
-    auto arguments = parameters_t{};
-    if (!call.arguments.empty()) {
-        if (auto ec =
-                glz::read<openai::json_read_opts>(arguments, call.arguments))
+    using tool_t = std::remove_cvref_t<Tool>;
+    static_assert(
+        explicit_tool_parameter_parser<tool_t>,
+        "tool needs parse_parameters(std::string_view)");
+
+    auto arguments = typename std::remove_cvref_t<Tool>::parameters{};
+    if (!arguments_json.empty()) {
+        auto parsed = tool_t::parse_parameters(arguments_json);
+        if (!parsed)
             co_return tool_result{
                 .failed = true,
-                .output = std::string{"invalid tool arguments json: "}
-                    + glz::format_error(ec, call.arguments),
+                .output = "invalid tool arguments json",
                 .observed = std::nullopt,
             };
+        arguments = std::move(*parsed);
     }
 
     try {
@@ -213,24 +308,41 @@ nxt::rt::task<tool_result> run_one_function_tool(
     }
 }
 
-template<std::size_t I = 0, function_tool... Tools>
-nxt::rt::task<tool_result> run_function_tool(
-    const tool_set<Tools...> & tools,
+template<function_tool Tool>
+[[nodiscard]] inline function_tool_entry make_function_tool(Tool tool)
+{
+    using tool_t = std::remove_cvref_t<Tool>;
+    return function_tool_entry{
+        .name = std::string{tool_t::name},
+        .description = std::string{tool_t::description},
+        .parameters = tool_parameters_schema<tool_t>(),
+        .strict = tool_t::strict,
+        .run =
+            [tool = std::move(tool)](std::string_view arguments) {
+                return run_one_function_tool(tool, arguments);
+            },
+    };
+}
+
+[[nodiscard]] inline tool_registry make_tool_registry(
+    std::vector<function_tool_entry> entries)
+{
+    return tool_registry{.entries = std::move(entries)};
+}
+
+inline nxt::rt::task<tool_result> run_function_tool(
+    const tool_registry & tools,
     const function_call & call)
 {
-    if constexpr (I == sizeof...(Tools)) {
-        co_return tool_result{
-            .failed = true,
-            .output = "unknown tool",
-            .observed = std::nullopt,
-        };
-    } else {
-        const auto & tool = std::get<I>(tools.items);
-        using tool_t = std::remove_cvref_t<decltype(tool)>;
-        if (call.name == tool_t::name)
-            co_return co_await run_one_function_tool(tool, call);
-        co_return co_await run_function_tool<I + 1>(tools, call);
+    for (const auto & tool : tools.entries) {
+        if (call.name == tool.name)
+            co_return co_await tool.run(call.arguments);
     }
+    co_return tool_result{
+        .failed = true,
+        .output = "unknown tool",
+        .observed = std::nullopt,
+    };
 }
 
 struct function_call_result
@@ -240,9 +352,8 @@ struct function_call_result
     openai::raw_json output_item;
 };
 
-template<function_tool... Tools>
-nxt::rt::task<function_call_result> run_one_call_for_batch(
-    const tool_set<Tools...> & tools,
+inline nxt::rt::task<function_call_result> run_one_call_for_batch(
+    const tool_registry & tools,
     function_call call)
 {
     auto result = co_await run_function_tool(tools, call);
@@ -255,9 +366,8 @@ nxt::rt::task<function_call_result> run_one_call_for_batch(
     };
 }
 
-template<function_tool... Tools>
-nxt::rt::task<std::vector<function_call_result>> run_function_tool_batch(
-    const tool_set<Tools...> & tools,
+inline nxt::rt::task<std::vector<function_call_result>> run_function_tool_batch(
+    const tool_registry & tools,
     std::vector<function_call> calls)
 {
     auto deeds = co_await nxt::rt::with_zone(

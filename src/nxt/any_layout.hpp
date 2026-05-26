@@ -1,12 +1,10 @@
 #pragma once
 
-#include "nxt/raster.hpp"
-#include "nxt/tui.hpp"
+#include "nxt/layout.hpp"
 
 #include <memory>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace nxt::tui {
 
@@ -85,19 +83,5 @@ private:
 
     std::shared_ptr<const Concept> impl_;
 };
-
-/// Overload of `column(...)` that accepts a runtime-sized vector of
-/// type-erased children.
-inline auto column(std::vector<AnyLayout> children)
-{
-    return dyn_column(std::move(children));
-}
-
-/// Overload of `row(...)` that accepts a runtime-sized vector of
-/// type-erased children.
-inline auto row(std::vector<AnyLayout> children)
-{
-    return dyn_row(std::move(children));
-}
 
 } // namespace nxt::tui

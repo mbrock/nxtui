@@ -46,7 +46,6 @@ if ng_ls_demo_available and nxt_cares_dep.found()
   ng_http_client_demo_available = true
   ng_http_client_demo_dependencies = ng_ls_demo_dependencies + [
     nxt_core_dep,
-    glaze_dep,
     nxt_cares_dep,
   ]
 endif
