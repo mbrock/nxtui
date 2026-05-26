@@ -1,1 +1,0 @@
-strace: invalid system call 'tcgetattr'

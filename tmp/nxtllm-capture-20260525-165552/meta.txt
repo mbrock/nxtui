@@ -1,4 +1,0 @@
-nxtllm-capture-20260525-165552
-/home/mbrock/nxtui/tmp/nxtllm-capture-20260525-165552
-/home/mbrock/nxtui/tmp/nxtllm-capture-20260525-165552/pane.raw
-cd /home/mbrock/nxtui; set -a; . ./.env; set +a; TERM=xterm-256color ./build/nxtllm -m gpt-5.4-nano "please use the shell tool with short sleeps and stdout; keep it brief, this is a terminal capture test"; rc=$?; printf "\n@@NXT_DONE:%s\n" "$rc"; stty echo; exec bash --noprofile --norc
