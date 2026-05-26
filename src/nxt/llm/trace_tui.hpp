@@ -12,6 +12,8 @@
 
 namespace nxt::llm::trace_tui {
 
+using namespace nxtui;
+
 struct waterfall_row
 {
     std::string name;
@@ -120,26 +122,26 @@ inline waterfall_view collect_waterfall(
     return view;
 }
 
-nxt::tui::AnyLayout waterfall_bar(
+nxtui::tui::AnyLayout waterfall_bar(
     nxt::rt::trace_clock::duration offset,
     nxt::rt::trace_clock::duration duration,
     nxt::rt::trace_clock::duration total,
     Rgba8 accent = tool_tui::sky_300);
 
-nxt::tui::AnyLayout waterfall_header(
+nxtui::tui::AnyLayout waterfall_header(
     const waterfall_view & view,
     const waterfall_options & options);
 
-nxt::tui::AnyLayout waterfall_row_layout(
+nxtui::tui::AnyLayout waterfall_row_layout(
     const waterfall_row & row,
     nxt::rt::trace_clock::duration total,
     Rgba8 accent);
 
-nxt::tui::AnyLayout render_waterfall(
+nxtui::tui::AnyLayout render_waterfall(
     waterfall_view view,
     waterfall_options options = {});
 
-nxt::tui::AnyLayout render_span_waterfall(
+nxtui::tui::AnyLayout render_span_waterfall(
     const nxt::rt::trace_context & trace,
     const nxt::rt::trace_span & span,
     waterfall_options options = {});

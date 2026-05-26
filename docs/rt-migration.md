@@ -18,7 +18,7 @@ task zones, and explicit UI/runtime capabilities.
 - Linux subprocess wishes for piped children, pty children, pidfd waits, and
   pidfd signals.
 - OpenAI Responses request JSON, streaming, and basic tool-call batches.
-- Core terminal input types and parsing in `src/nxt/input.hpp`.
+- Core terminal input types and parsing in `src/nxtui/input.hpp`.
 - The default `nxtllm` executable, including one-shot streaming and
   `read_file`/`rg_search`/`bash` tool execution on `nxt::rt`.
 

@@ -15,9 +15,9 @@
 #include <filesystem>
 #include <string>
 
-#include "nxt/baltics.hpp"
-#include "nxt/raster.hpp"
-#include "nxt/tui.hpp"
+#include "nxtui/baltics.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/tui.hpp"
 
 namespace nxt::png {
 

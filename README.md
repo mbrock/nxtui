@@ -20,17 +20,17 @@ Layouts are ordinary C++ values. A layout reports:
 - whether it wants flexible extra space
 - how to render itself into a `RasterView`
 
-Most UI is built by composing small values from `nxt::tui`:
+Most UI is built by composing small values from `nxtui::tui`:
 
 ```cpp
-#include <nxt/tui.hpp>
+#include <nxtui/tui.hpp>
 
-using namespace nxt::tui;
+using namespace nxtui::tui;
 
 auto view = row(
-    text("llvm", fg(nxt::Rgba8::blue()) | bold),
-    progress_bar(42.0 * nxt::percent),
-    text(" 42%", fg(nxt::Rgba8::white()))
+    text("llvm", fg(nxtui::Rgba8::blue()) | bold),
+    progress_bar(42.0 * nxtui::percent),
+    text(" 42%", fg(nxtui::Rgba8::white()))
 );
 ```
 
@@ -43,10 +43,10 @@ Text:
 
 ```cpp
 text("hello")
-text("warning", fg(nxt::Rgba8::yellow()) | bold)
+text("warning", fg(nxtui::Rgba8::yellow()) | bold)
 styled_text(
-    span("build ", fg(nxt::Rgba8::white())),
-    span("failed", fg(nxt::Rgba8::red()) | bold)
+    span("build ", fg(nxtui::Rgba8::white())),
+    span("failed", fg(nxtui::Rgba8::red()) | bold)
 )
 ```
 
@@ -54,9 +54,9 @@ Rules, fills, and progress:
 
 ```cpp
 hrule()
-fill(nxt::Rgba8(24, 24, 24))
-progress_bar(73.0 * nxt::percent)
-progress_bar(73.0 * nxt::percent, nxt::Rgba8::green())
+fill(nxtui::Rgba8(24, 24, 24))
+progress_bar(73.0 * nxtui::percent)
+progress_bar(73.0 * nxtui::percent, nxtui::Rgba8::green())
 ```
 
 Horizontal and vertical composition:
@@ -64,14 +64,14 @@ Horizontal and vertical composition:
 ```cpp
 row(
     text("fetch"),
-    progress_bar(18.0 * nxt::percent),
+    progress_bar(18.0 * nxtui::percent),
     text(" 18%")
 )
 
 column(
-    text("building nixpkgs#hello", fg(nxt::Rgba8::cyan()) | bold),
+    text("building nixpkgs#hello", fg(nxtui::Rgba8::cyan()) | bold),
     hrule(),
-    row(text("compile"), progress_bar(64.0 * nxt::percent))
+    row(text("compile"), progress_bar(64.0 * nxtui::percent))
 )
 ```
 
@@ -80,7 +80,7 @@ Dynamic lists:
 ```cpp
 struct Job {
     std::string name;
-    nxt::percent_t progress;
+    nxtui::percent_t progress;
 };
 
 std::vector<Job> jobs = /* ... */;
@@ -107,13 +107,13 @@ terminal compositor frame from an `nxt::rt::runtime` task and animates with
 runtime sleeps.
 
 ```cpp
-#include <nxt/tui.hpp>
+#include <nxtui/tui.hpp>
 #include <nxt/rt/app.hpp>
 
 int main()
 {
     using namespace std::chrono_literals;
-    using namespace nxt::tui;
+    using namespace nxtui::tui;
 
     auto runtime = nxt::rt::runtime{};
     runtime.run([]() -> nxt::rt::task<void> {
@@ -159,8 +159,8 @@ summary and the raw stream of details.
 The raster layer uses small typed terminal units:
 
 ```cpp
-auto size = nxt::Size{80 * nxt::ch, 24 * nxt::ln};
-auto pos = nxt::Pos::at(2 * nxt::ch, 1 * nxt::ln);
+auto size = nxtui::Size{80 * nxtui::ch, 24 * nxtui::ln};
+auto pos = nxtui::Pos::at(2 * nxtui::ch, 1 * nxtui::ln);
 ```
 
 This keeps columns, rows, sizes, and percentages from collapsing into anonymous

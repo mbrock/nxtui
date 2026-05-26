@@ -100,7 +100,7 @@ try {
 #elif NXT_RT_HAS_KQUEUE
     nxt::rt::run_with_kqueue(std::move(body));
 #else
-    static_assert(NXT_RT_HAS_KQUEUE, "ng ls demo needs a runtime wand");
+    static_assert(NXT_RT_HAS_KQUEUE, "ls demo needs a runtime wand");
 #endif
 
     return 0;

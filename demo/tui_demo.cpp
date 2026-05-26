@@ -1,8 +1,8 @@
-#include <nxt/ansi.hpp>
-#include <nxt/compositor.hpp>
-#include <nxt/glyph-table.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/compositor.hpp>
+#include <nxtui/glyph-table.hpp>
 #include <nxt/rt/app.hpp>
-#include <nxt/tui.hpp>
+#include <nxtui/tui.hpp>
 
 #include <algorithm>
 #include <array>
@@ -18,19 +18,19 @@ namespace {
 
 using namespace std::chrono_literals;
 
-nxt::Size terminal_size()
+nxtui::Size terminal_size()
 {
     auto ws = winsize{};
     if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0
         && ws.ws_col > 0
         && ws.ws_row > 0) {
-        return nxt::Size{
-            static_cast<std::size_t>(ws.ws_col) * nxt::ch,
-            static_cast<std::size_t>(ws.ws_row) * nxt::ln,
+        return nxtui::Size{
+            static_cast<std::size_t>(ws.ws_col) * nxtui::ch,
+            static_cast<std::size_t>(ws.ws_row) * nxtui::ln,
         };
     }
 
-    return nxt::Size{72 * nxt::ch, 14 * nxt::ln};
+    return nxtui::Size{72 * nxtui::ch, 14 * nxtui::ln};
 }
 
 std::string sparkline(int tick, std::size_t width)
@@ -48,37 +48,37 @@ std::string sparkline(int tick, std::size_t width)
     return out;
 }
 
-auto frame_layout(int tick, nxt::Size size)
+auto frame_layout(int tick, nxtui::Size size)
 {
     auto width = std::max<std::size_t>(16, size.w.count());
-    auto bar = ((tick * 7) % 101) * nxt::percent;
+    auto bar = ((tick * 7) % 101) * nxtui::percent;
     auto pulse = sparkline(tick, std::min<std::size_t>(width, 64));
 
-    return nxt::tui::column(
-        nxt::tui::row(
-            nxt::tui::text(" nxt::rt TUI demo ", nxt::tui::bold),
-            nxt::tui::flex_fill(nxt::Rgba8::bright_black())),
-        nxt::tui::hrule(),
-        nxt::tui::text(
+    return nxtui::tui::column(
+        nxtui::tui::row(
+            nxtui::tui::text(" nxt::rt TUI demo ", nxtui::tui::bold),
+            nxtui::tui::flex_fill(nxtui::Rgba8::bright_black())),
+        nxtui::tui::hrule(),
+        nxtui::tui::text(
             "running without libcoro: deck + wand + root zone",
-            nxt::tui::fg(nxt::Rgba8::bright_cyan())),
-        nxt::tui::text(
+            nxtui::tui::fg(nxtui::Rgba8::bright_cyan())),
+        nxtui::tui::text(
             "frame " + std::to_string(tick)
                 + "  size " + std::to_string(size.w.count())
                 + "x" + std::to_string(size.h.count())),
-        nxt::tui::progress_bar(
+        nxtui::tui::progress_bar(
             bar,
-            nxt::Rgba8::bright_green(),
-            nxt::Rgba8::bright_black()),
-        nxt::tui::text(pulse, nxt::tui::fg(nxt::Rgba8::bright_magenta())),
-        nxt::tui::hrule(),
-        nxt::tui::text("this is the tiny first TUI island on nxt::rt"));
+            nxtui::Rgba8::bright_green(),
+            nxtui::Rgba8::bright_black()),
+        nxtui::tui::text(pulse, nxtui::tui::fg(nxtui::Rgba8::bright_magenta())),
+        nxtui::tui::hrule(),
+        nxtui::tui::text("this is the tiny first TUI island on nxt::rt"));
 }
 
 void render_frame(
-    nxt::tui::TerminalCompositor & compositor,
+    nxtui::tui::TerminalCompositor & compositor,
     int tick,
-    nxt::Size size)
+    nxtui::Size size)
 {
     auto & buffer = compositor.back_buffer();
     buffer.clear();
@@ -91,12 +91,12 @@ void render_frame(
 
 nxt::rt::task<void> run_demo()
 {
-    nxt::ansi::init();
-    nxt::ansi::mode = nxt::ansi::Mode::enabled;
+    nxtui::ansi::init();
+    nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
 
     auto size = terminal_size();
-    auto glyphs = nxt::GlyphTable{};
-    auto compositor = nxt::tui::TerminalCompositor{size, glyphs};
+    auto glyphs = nxtui::GlyphTable{};
+    auto compositor = nxtui::tui::TerminalCompositor{size, glyphs};
 
     std::cout << "\x1b[?25l\x1b[2J\x1b[H" << std::flush;
     try {

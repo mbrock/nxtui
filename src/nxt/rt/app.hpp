@@ -4,8 +4,8 @@
 #include "nxt/rt/event.hpp"
 #include "nxt/rt/task.hpp"
 
-#include <nxt/input.hpp>
-#include <nxt/units.hpp>
+#include <nxtui/input.hpp>
+#include <nxtui/units.hpp>
 
 #if defined(__linux__)
 #include "nxt/rt/uring_wand.hpp"
@@ -44,7 +44,7 @@ template<typename Fn>
 
 } // namespace detail
 
-/// Small application-facing owner for the ng runtime.
+/// Small application-facing owner for the runtime.
 ///
 /// This is intentionally not the terminal UI runtime yet. It is the common
 /// owner the UI runtime can be built around: one `deck`, one platform `wand`,
@@ -55,8 +55,8 @@ template<typename Fn>
 class runtime
 {
 public:
-    using term_size = nxt::Size;
-    using input_event = nxt::input::KeyEvent;
+    using term_size = nxtui::Size;
+    using input_event = nxtui::input::KeyEvent;
 
     runtime()
         : deck_(&wand_)

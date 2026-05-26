@@ -1,12 +1,12 @@
 #pragma once
 
-#include "nxt/layout.hpp"
+#include "nxtui/layout.hpp"
 
 #include <memory>
 #include <type_traits>
 #include <utility>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 /// Type-erased Layout. Holds any value satisfying the `Layout` concept
 /// behind a small vtable so it can sit inside `Slot<AnyLayout>` and be
@@ -84,4 +84,4 @@ private:
     std::shared_ptr<const Concept> impl_;
 };
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

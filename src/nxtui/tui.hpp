@@ -1,11 +1,11 @@
 #pragma once
 
-#include "nxt/any_layout.hpp"
-#include "nxt/raster.hpp"
-#include "nxt/chart.hpp"
-#include "nxt/layout.hpp"
-#include "nxt/units.hpp"
-#include "nxt/utf8.hpp"
+#include "nxtui/any_layout.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/chart.hpp"
+#include "nxtui/layout.hpp"
+#include "nxtui/units.hpp"
+#include "nxtui/utf8.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 /// Leaf layout backed by a render callback.
 template<typename RenderFn>
@@ -1040,4 +1040,4 @@ auto list(const std::vector<T> & items, ViewFn && view)
     return list(std::span<const T>(items), std::forward<ViewFn>(view));
 }
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

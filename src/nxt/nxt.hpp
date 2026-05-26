@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include "nxt/ansi.hpp"
-#include "nxt/compositor.hpp"
-#include "nxt/glyph-table.hpp"
-#include "nxt/input.hpp"
-#include "nxt/raster.hpp"
-#include "nxt/tui.hpp"
-#include "nxt/units.hpp"
+#include "nxtui/ansi.hpp"
+#include "nxtui/compositor.hpp"
+#include "nxtui/glyph-table.hpp"
+#include "nxtui/input.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/tui.hpp"
+#include "nxtui/units.hpp"

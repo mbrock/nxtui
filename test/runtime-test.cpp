@@ -1,5 +1,5 @@
 #include <nxt/sparkline.hpp>
-#include <nxt/tui_text.hpp>
+#include <nxtui/tui_text.hpp>
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/channel.hpp>
 #include <nxt/rt/event.hpp>
@@ -25,6 +25,8 @@
 #include <vector>
 
 namespace nxt::test {
+
+using namespace nxtui;
 
 using namespace boost::ut;
 using namespace std::literals;
@@ -347,7 +349,7 @@ nxt::rt::task<void> record_task_stop_state_after_yield(
 
 nxt::rt::task<void> draw_busy_and_mark(bool & ran)
 {
-    co_await nxt::rt::draw(nxt::tui::text("busy"));
+    co_await nxt::rt::draw(nxtui::tui::text("busy"));
     ran = true;
     co_return;
 }
@@ -387,9 +389,9 @@ nxt::rt::task<void> run_spawned_widget_clear_test(
 
 nxt::rt::task<int> draw_work_measure_and_stop(
     nxt::rt::widget_slot root,
-    nxt::height_t & composed_height)
+    nxtui::height_t & composed_height)
 {
-    co_await nxt::rt::draw(nxt::tui::text("work"));
+    co_await nxt::rt::draw(nxtui::tui::text("work"));
     co_await nxt::rt::yield();
     composed_height = root.height_hint().min;
     nxt::rt::require_current_zone().stop();
@@ -398,7 +400,7 @@ nxt::rt::task<int> draw_work_measure_and_stop(
 
 nxt::rt::task<void> draw_rate_until_stopped(bool & companion_stopped)
 {
-    co_await nxt::rt::draw(nxt::tui::text("rate"));
+    co_await nxt::rt::draw(nxtui::tui::text("rate"));
     while (!nxt::rt::stop_requested())
         co_await nxt::rt::yield();
     companion_stopped = true;
@@ -407,7 +409,7 @@ nxt::rt::task<void> draw_rate_until_stopped(bool & companion_stopped)
 nxt::rt::task<nxt::rt::catching_deed<int>> spawn_sibling_widgets(
     nxt::rt::widget_slot root,
     bool & companion_stopped,
-    nxt::height_t & composed_height)
+    nxtui::height_t & composed_height)
 {
     auto worker = nxt::rt::spawn_widget(
         [root, &composed_height] {
@@ -418,7 +420,7 @@ nxt::rt::task<nxt::rt::catching_deed<int>> spawn_sibling_widgets(
             return draw_rate_until_stopped(companion_stopped);
         });
     co_await nxt::rt::draw(
-        nxt::tui::column(worker.surface(), companion.surface()));
+        nxtui::tui::column(worker.surface(), companion.surface()));
     co_return std::move(worker).cope();
 }
 
@@ -427,7 +429,7 @@ run_sibling_widget_compose_test(
     nxt::rt::ui_runtime & runtime,
     nxt::rt::widget_slot root,
     bool & companion_stopped,
-    nxt::height_t & composed_height)
+    nxtui::height_t & composed_height)
 {
     auto body = [&] {
         return nxt::rt::with_env<nxt::rt::current_ui_runtime_key>(
@@ -450,7 +452,7 @@ nxt::rt::task<bool> draw_after_stopping_current_zone()
 {
     nxt::rt::require_current_zone().stop();
     try {
-        co_await nxt::rt::draw(nxt::tui::text("after-stop"));
+        co_await nxt::rt::draw(nxtui::tui::text("after-stop"));
     } catch (const nxt::rt::operation_cancelled &) {
         co_return true;
     }
@@ -510,7 +512,7 @@ static suite runtime_tests{
             "sparkline is a pure width-to-text transform"_test = [] {
                 auto values = std::to_array<double>({0.0, 1.0, 2.0});
 
-                auto line = nxt::chart::sparkline(values, 6);
+                auto line = nxtui::chart::sparkline(values, 6);
 
                 expect(line == "    ▄█");
             };
@@ -519,24 +521,24 @@ static suite runtime_tests{
                 auto values = std::to_array<double>(
                     {0.0, 1.0, 2.0, 3.0, 4.0});
 
-                auto line = nxt::chart::sparkline(values, 3);
+                auto line = nxtui::chart::sparkline(values, 3);
 
                 expect(line == "▄▆█");
             };
 
             "empty sparkline reserves the requested cells"_test = [] {
                 expect(
-                    nxt::chart::sparkline(std::span<const double>{}, 4)
+                    nxtui::chart::sparkline(std::span<const double>{}, 4)
                     == "    ");
             };
 
             "sparkline can use a fixed value range"_test = [] {
                 auto values = std::to_array<double>({0.0, 10.0, 100.0});
 
-                auto line = nxt::chart::sparkline(
+                auto line = nxtui::chart::sparkline(
                     values,
                     3,
-                    nxt::chart::value_range{0.0, 100.0});
+                    nxtui::chart::value_range{0.0, 100.0});
 
                 expect(line == " ▁█");
             };
@@ -545,31 +547,31 @@ static suite runtime_tests{
                 auto values =
                     std::to_array<double>({0.0, 25.0, 50.0, 75.0, 100.0});
 
-                auto rows = nxt::chart::sparkline2(
+                auto rows = nxtui::chart::sparkline2(
                     values,
                     5,
-                    nxt::chart::value_range{0.0, 100.0});
+                    nxtui::chart::value_range{0.0, 100.0});
 
                 expect(rows[0] == "   ▄█");
                 expect(rows[1] == " ▄███");
             };
 
             "progress bar projects fill coverage per cell"_test = [] {
-                expect(nxt::chart::progress_bar(0.625, 4) == "██▌ ");
+                expect(nxtui::chart::progress_bar(0.625, 4) == "██▌ ");
             };
 
             "range progress bar projects partial coverage per cell"_test =
                 [] {
-                expect(nxt::chart::range_bar(0.25, 0.625, 4) == " █▌ ");
-                expect(nxt::chart::range_bar(0.125, 0.75, 4) == "▐██ ");
+                expect(nxtui::chart::range_bar(0.25, 0.625, 4) == " █▌ ");
+                expect(nxtui::chart::range_bar(0.125, 0.75, 4) == "▐██ ");
             };
         };
 
         "text flow"_test = [] {
             "wraps paragraphs with markdown list continuation"_test = [] {
-                auto lines = nxt::tui::text_flow::wrap_text(
+                auto lines = nxtui::tui::text_flow::wrap_text(
                     "- hello wide world\n\nnext paragraph",
-                    12 * nxt::ch);
+                    12 * nxtui::ch);
 
                 expect(
                     lines
@@ -582,20 +584,20 @@ static suite runtime_tests{
             };
 
             "parses simple inline markdown spans"_test = [] {
-                auto spans = nxt::tui::text_flow::parse_inline_markdown(
-                    "a **bold** `code`", nxt::tui::fg(nxt::Rgba8::white()));
+                auto spans = nxtui::tui::text_flow::parse_inline_markdown(
+                    "a **bold** `code`", nxtui::tui::fg(nxtui::Rgba8::white()));
 
                 expect(spans.size() == std::size_t{4});
                 expect(spans[0].text == "a ");
                 expect(spans[1].text == "bold");
-                expect(has_emphasis(spans[1].style.em, nxt::Emphasis::bold));
+                expect(has_emphasis(spans[1].style.em, nxtui::Emphasis::bold));
                 expect(spans[2].text == " ");
                 expect(spans[3].text == "code");
-                expect(spans[3].style.bg != nxt::DEFAULT_COLOR);
+                expect(spans[3].style.bg != nxtui::DEFAULT_COLOR);
             };
 
             "sanitizes terminal controls while preserving newlines"_test = [] {
-                auto text = nxt::tui::text_flow::sanitize_terminal_text(
+                auto text = nxtui::tui::text_flow::sanitize_terminal_text(
                     "a\x1b[31mb\tc\r\nd\x01");
 
                 expect(text == "ab    c\nd");
@@ -1013,26 +1015,26 @@ static suite runtime_tests{
             "child slots expose independently drawable surfaces"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
-                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
                 auto child = runtime.make_surface();
 
                 root.publish(
-                    nxt::tui::AnyLayout{
-                        nxt::tui::row(child, nxt::tui::text("!"))});
-                child.publish(nxt::tui::AnyLayout{nxt::tui::text("hi")});
+                    nxtui::tui::AnyLayout{
+                        nxtui::tui::row(child, nxtui::tui::text("!"))});
+                child.publish(nxtui::tui::AnyLayout{nxtui::tui::text("hi")});
 
-                expect(child.width_hint().min == 2 * nxt::ch);
-                expect(root.width_hint().min == 3 * nxt::ch);
+                expect(child.width_hint().min == 2 * nxtui::ch);
+                expect(root.width_hint().min == 3 * nxtui::ch);
             };
 
             "spawned child widgets clear their slot on exit"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
-                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
                 auto captured =
-                    nxt::tui::Slot<nxt::tui::AnyLayout>{nxt::tui::AnyLayout{}};
+                    nxtui::tui::Slot<nxtui::tui::AnyLayout>{nxtui::tui::AnyLayout{}};
                 auto ran = false;
                 auto deck = nxt::rt::deck{};
 
@@ -1044,17 +1046,17 @@ static suite runtime_tests{
                         ran));
 
                 expect(ran);
-                expect(captured.width_hint().min == 0 * nxt::ch);
+                expect(captured.width_hint().min == 0 * nxtui::ch);
             };
 
             "ambient child widgets compose as siblings"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
-                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
                 auto deck = nxt::rt::deck{};
                 auto companion_stopped = false;
-                auto composed_height = 0 * nxt::ln;
+                auto composed_height = 0 * nxtui::ln;
 
                 auto worker_deed = deck.sync_wait(
                     run_sibling_widget_compose_test(
@@ -1067,13 +1069,13 @@ static suite runtime_tests{
                 expect(result.has_value());
                 expect(*result == 7_i);
                 expect(companion_stopped);
-                expect(composed_height == 2 * nxt::ln);
+                expect(composed_height == 2 * nxtui::ln);
             };
 
             "draw observes zone stop before publishing"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
-                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
                 auto deck = nxt::rt::deck{};
 
@@ -1081,13 +1083,13 @@ static suite runtime_tests{
                     run_draw_after_stop_check(runtime, root));
 
                 expect(cancelled);
-                expect(root.width_hint().min == 0 * nxt::ch);
+                expect(root.width_hint().min == 0 * nxtui::ch);
             };
 
             "print observes zone stop before enqueueing"_test = [] {
                 auto runtime = nxt::rt::ui_runtime{
                     {.render = false,
-                     .fallback_size = {16 * nxt::ch, 4 * nxt::ln}}};
+                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
                 auto root = runtime.surface();
                 auto deck = nxt::rt::deck{};
 

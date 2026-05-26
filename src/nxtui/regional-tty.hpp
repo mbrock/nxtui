@@ -1,7 +1,7 @@
 #pragma once
 
-#include "nxt/ansi.hpp"
-#include "nxt/units.hpp"
+#include "nxtui/ansi.hpp"
+#include "nxtui/units.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::regional_tty {
+namespace nxtui::regional_tty {
 
 /// Half-open vertical terminal region: [top, bottom_exclusive).
 ///
@@ -642,4 +642,4 @@ struct scrollback_append_state
     }
 };
 
-} // namespace nxt::regional_tty
+} // namespace nxtui::regional_tty

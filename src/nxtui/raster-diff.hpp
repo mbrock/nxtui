@@ -1,12 +1,12 @@
 #pragma once
 
-#include "nxt/raster.hpp"
+#include "nxtui/raster.hpp"
 
 #include <optional>
 #include <ranges>
 #include <span>
 
-namespace nxt {
+namespace nxtui {
 
 /// A detected change: position, glyphs, colors, emphasis (before
 /// optimization).
@@ -157,4 +157,4 @@ void diff_rasters(const Raster & front, const Raster & back, F && emit)
         emit(style(raw));
 }
 
-} // namespace nxt
+} // namespace nxtui

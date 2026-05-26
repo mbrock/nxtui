@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <type_traits>
 
-namespace nxt {
+namespace nxtui {
 
 /// Literal unit for terminal-cell widths.
 struct ch_unit
@@ -589,4 +589,4 @@ struct Pos
     return to_ansi(pos.y);
 }
 
-} // namespace nxt
+} // namespace nxtui

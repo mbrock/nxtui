@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace nxt {
+namespace nxtui {
 
 /// Unicode string interning table for terminal glyphs.
 /// Maps UTF-8 sequences to 32-bit glyph IDs.
@@ -83,4 +83,4 @@ private:
     mutable std::mutex mutex_;
 };
 
-} // namespace nxt
+} // namespace nxtui

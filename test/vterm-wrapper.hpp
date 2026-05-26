@@ -1,3 +1,3 @@
 #pragma once
 
-#include <nxt/vterm.hpp>
+#include <nxtui/vterm.hpp>

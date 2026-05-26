@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::vterm {
+namespace nxtui::vterm {
 
 /// Terminal color as reported by libvterm.
 struct Color
@@ -579,4 +579,4 @@ private:
     int cursor_shape_ = VTERM_PROP_CURSORSHAPE_BLOCK;
 };
 
-} // namespace nxt::vterm
+} // namespace nxtui::vterm

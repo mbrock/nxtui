@@ -1,18 +1,20 @@
-#include <nxt/ansi.hpp>
-#include <nxt/raster-diff.hpp>
-#include <nxt/tui.hpp>
-#include <nxt/units.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/raster-diff.hpp>
+#include <nxtui/tui.hpp>
+#include <nxtui/units.hpp>
 
 #include "test.hpp"
 #include <format>
 
 namespace nxt::test {
 
+using namespace nxtui;
+
 using namespace boost::ut;
-using nxt::ChangeRun;
-using nxt::GlyphTable;
-using nxt::Raster;
-using nxt::Rgba8;
+using nxtui::ChangeRun;
+using nxtui::GlyphTable;
+using nxtui::Raster;
+using nxtui::Rgba8;
 
 // ============================================================================
 // Test helper: renders(layout) | "row1" | "row2" | "row3";

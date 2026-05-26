@@ -1,8 +1,8 @@
-#include "nxt/glyph-table.hpp"
+#include "nxtui/glyph-table.hpp"
 
 #include <stdexcept>
 
-namespace nxt {
+namespace nxtui {
 
 GlyphTable::GlyphTable()
 {
@@ -95,4 +95,4 @@ void GlyphTable::clear()
     init_ascii();
 }
 
-} // namespace nxt
+} // namespace nxtui

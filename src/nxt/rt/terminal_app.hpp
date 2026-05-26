@@ -1,9 +1,9 @@
 #pragma once
 
-#include <nxt/ansi.hpp>
-#include <nxt/compositor.hpp>
-#include <nxt/glyph-table.hpp>
-#include <nxt/units.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/compositor.hpp>
+#include <nxtui/glyph-table.hpp>
+#include <nxtui/units.hpp>
 
 #include <fcntl.h>
 #include <iostream>
@@ -19,19 +19,19 @@ struct terminal_app_options
     bool alternate_screen = false;
     bool hide_cursor = true;
     bool clear_screen = true;
-    nxt::Size fallback_size{96 * nxt::ch, 26 * nxt::ln};
+    nxtui::Size fallback_size{96 * nxtui::ch, 26 * nxtui::ln};
 };
 
-inline nxt::Size current_terminal_size(
-    nxt::Size fallback = {96 * nxt::ch, 26 * nxt::ln})
+inline nxtui::Size current_terminal_size(
+    nxtui::Size fallback = {96 * nxtui::ch, 26 * nxtui::ln})
 {
     auto ws = winsize{};
     if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0
         && ws.ws_col > 0
         && ws.ws_row > 0) {
-        return nxt::Size{
-            static_cast<std::size_t>(ws.ws_col) * nxt::ch,
-            static_cast<std::size_t>(ws.ws_row) * nxt::ln,
+        return nxtui::Size{
+            static_cast<std::size_t>(ws.ws_col) * nxtui::ch,
+            static_cast<std::size_t>(ws.ws_row) * nxtui::ln,
         };
     }
     return fallback;
@@ -89,8 +89,8 @@ public:
         , size_(current_terminal_size(options.fallback_size))
         , compositor_(size_, glyphs_)
     {
-        nxt::ansi::init();
-        nxt::ansi::mode = nxt::ansi::Mode::enabled;
+        nxtui::ansi::init();
+        nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
 
         if (options_.alternate_screen)
             std::cout << "\x1b[?1049h";
@@ -114,12 +114,12 @@ public:
         std::cout << std::flush;
     }
 
-    [[nodiscard]] nxt::Size size() const noexcept
+    [[nodiscard]] nxtui::Size size() const noexcept
     {
         return size_;
     }
 
-    [[nodiscard]] nxt::tui::TerminalCompositor & compositor() noexcept
+    [[nodiscard]] nxtui::tui::TerminalCompositor & compositor() noexcept
     {
         return compositor_;
     }
@@ -137,9 +137,9 @@ public:
 private:
     terminal_app_options options_;
     raw_terminal_mode raw_;
-    nxt::GlyphTable glyphs_;
-    nxt::Size size_;
-    nxt::tui::TerminalCompositor compositor_;
+    nxtui::GlyphTable glyphs_;
+    nxtui::Size size_;
+    nxtui::tui::TerminalCompositor compositor_;
 };
 
 } // namespace nxt::rt

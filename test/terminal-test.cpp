@@ -1,9 +1,9 @@
 #include "vterm-wrapper.hpp"
-#include <nxt/ansi.hpp>
-#include <nxt/compositor.hpp>
-#include <nxt/regional-tty.hpp>
-#include <nxt/tui.hpp>
-#include <nxt/tui_terminal.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/compositor.hpp>
+#include <nxtui/regional-tty.hpp>
+#include <nxtui/tui.hpp>
+#include <nxtui/tui_terminal.hpp>
 
 #include "test.hpp"
 #include <format>
@@ -12,9 +12,11 @@
 
 namespace nxt::test {
 
+using namespace nxtui;
+
 using namespace boost::ut;
-namespace tui = nxt::tui;
-namespace rtty = nxt::regional_tty;
+namespace tui = nxtui::tui;
+namespace rtty = nxtui::regional_tty;
 
 template<typename Exception, typename Fn>
 bool throws_exception(Fn fn)
@@ -83,7 +85,7 @@ void write_at(vterm::Terminal & term, row_t row, std::string_view text)
 {
     ansi::mode = ansi::Mode::enabled;
     std::string buf;
-    nxt::ansi::Writer w(buf);
+    nxtui::ansi::Writer w(buf);
     w.move_to(Pos{terminal_origin + 0 * ch, row});
     w.text(text);
     term.write(buf);
@@ -93,7 +95,7 @@ void move_cursor_to(vterm::Terminal & term, row_t row)
 {
     ansi::mode = ansi::Mode::enabled;
     std::string buf;
-    nxt::ansi::Writer w(buf);
+    nxtui::ansi::Writer w(buf);
     w.move_to(Pos{terminal_origin + 0 * ch, row});
     term.write(buf);
 }
@@ -115,7 +117,7 @@ void println_at(vterm::Terminal & term, row_t row, std::string_view text)
 {
     ansi::mode = ansi::Mode::enabled;
     std::string buf;
-    nxt::ansi::Writer w(buf);
+    nxtui::ansi::Writer w(buf);
     w.move_to(Pos{terminal_origin + 0 * ch, row});
     w.text(text);
     w.clear_line_from_cursor();
@@ -131,7 +133,7 @@ void block_at(
 {
     ansi::mode = ansi::Mode::enabled;
     std::string buf;
-    nxt::ansi::Writer w(buf);
+    nxtui::ansi::Writer w(buf);
     w.move_to(Pos{terminal_origin + 0 * ch, row});
     w.reset();
     w.text(text);
@@ -147,7 +149,7 @@ void block_next(
 {
     ansi::mode = ansi::Mode::enabled;
     std::string buf;
-    nxt::ansi::Writer w(buf);
+    nxtui::ansi::Writer w(buf);
     w.reset();
     w.text(text);
     if (finish_at_next_line)
@@ -160,7 +162,7 @@ void first_runtime_block_at(
 {
     ansi::mode = ansi::Mode::enabled;
     std::string buf;
-    nxt::ansi::Writer w(buf);
+    nxtui::ansi::Writer w(buf);
     w.move_to(Pos{terminal_origin + 0 * ch, row});
     w.reset();
     w.text("\n");
@@ -1167,7 +1169,7 @@ static suite scroll_region_tests{
 
             // Set scroll region
             std::string buf;
-            nxt::ansi::Writer sw(buf);
+            nxtui::ansi::Writer sw(buf);
             sw.set_scroll_region(
                 terminal_origin_v + 0 * ln, terminal_origin_v + 3 * ln);
             term.write(buf);

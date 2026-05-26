@@ -1,9 +1,9 @@
 #pragma once
 
-#include "nxt/raster.hpp"
-#include "nxt/tui.hpp"
-#include "nxt/units.hpp"
-#include "nxt/vterm.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/tui.hpp"
+#include "nxtui/units.hpp"
+#include "nxtui/vterm.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -12,7 +12,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 namespace detail {
 
@@ -35,7 +35,7 @@ inline void append_utf8(std::string & out, std::uint32_t cp)
     }
 }
 
-inline std::string cell_text(const nxt::vterm::Cell & cell)
+inline std::string cell_text(const nxtui::vterm::Cell & cell)
 {
     std::string out;
     for (auto cp : cell.chars)
@@ -43,7 +43,7 @@ inline std::string cell_text(const nxt::vterm::Cell & cell)
     return out;
 }
 
-inline Rgba8 color_from_vterm(const nxt::vterm::Color & color)
+inline Rgba8 color_from_vterm(const nxtui::vterm::Color & color)
 {
     if (color.is_default_fg() || color.is_default_bg())
         return DEFAULT_COLOR;
@@ -57,7 +57,7 @@ inline Rgba8 color_from_vterm(const nxt::vterm::Color & color)
     return DEFAULT_COLOR;
 }
 
-inline Emphasis emphasis_from_cell(const nxt::vterm::Cell & cell)
+inline Emphasis emphasis_from_cell(const nxtui::vterm::Cell & cell)
 {
     auto em = DEFAULT_EMPHASIS;
     if (cell.bold)
@@ -83,7 +83,7 @@ inline Rgba8 cursor_color_or(Rgba8 color, Rgba8 fallback)
 inline void render_cursor(
     RasterView & raster,
     Size size,
-    const nxt::vterm::Cursor & cursor,
+    const nxtui::vterm::Cursor & cursor,
     Style clear_style)
 {
     if (!cursor.visible || cursor.row < 0 || cursor.col < 0)
@@ -124,10 +124,10 @@ struct NoResize
 inline void render_vterm_screen(
     RasterView & raster,
     Size size,
-    nxt::vterm::Terminal & terminal,
+    nxtui::vterm::Terminal & terminal,
     Style clear_style = {});
 
-/// Layout adapter that renders a `nxt::vterm::Terminal`.
+/// Layout adapter that renders a `nxtui::vterm::Terminal`.
 ///
 /// `ResizeFn`, when supplied, is called with the raster size before rendering
 /// so PTY-backed terminals can stay in sync with their pane.
@@ -135,7 +135,7 @@ template<typename ResizeFn = detail::NoResize>
 struct VTermScreen
 {
     /// Terminal to render; null renders nothing.
-    nxt::vterm::Terminal * terminal = nullptr;
+    nxtui::vterm::Terminal * terminal = nullptr;
     /// Optional resize hook run before drawing.
     ResizeFn resize;
     /// Style used to clear the pane before terminal cells are drawn.
@@ -168,7 +168,7 @@ struct VTermScreen
 inline void render_vterm_screen(
     RasterView & raster,
     Size size,
-    nxt::vterm::Terminal & terminal,
+    nxtui::vterm::Terminal & terminal,
     Style clear_style)
 {
     std::ranges::fill(raster.glyphs(), 32);
@@ -230,13 +230,13 @@ inline void render_vterm_screen(
 }
 
 /// Build a growable terminal layout without a resize hook.
-inline auto vterm_screen(nxt::vterm::Terminal & terminal)
+inline auto vterm_screen(nxtui::vterm::Terminal & terminal)
 {
     return VTermScreen<detail::NoResize>{&terminal, {}, {}};
 }
 
 /// Build a growable terminal layout with a custom clear style.
-inline auto vterm_screen(nxt::vterm::Terminal & terminal, Style clear_style)
+inline auto vterm_screen(nxtui::vterm::Terminal & terminal, Style clear_style)
 {
     return VTermScreen<detail::NoResize>{&terminal, {}, clear_style};
 }
@@ -244,7 +244,7 @@ inline auto vterm_screen(nxt::vterm::Terminal & terminal, Style clear_style)
 /// Build a growable terminal layout with a resize hook.
 template<typename ResizeFn>
     requires(!std::same_as<std::decay_t<ResizeFn>, Style>)
-auto vterm_screen(nxt::vterm::Terminal & terminal, ResizeFn && resize)
+auto vterm_screen(nxtui::vterm::Terminal & terminal, ResizeFn && resize)
 {
     return VTermScreen<std::decay_t<ResizeFn>>{
         &terminal,
@@ -255,7 +255,7 @@ auto vterm_screen(nxt::vterm::Terminal & terminal, ResizeFn && resize)
 /// Build a growable terminal layout with a resize hook and clear style.
 template<typename ResizeFn>
 auto vterm_screen(
-    nxt::vterm::Terminal & terminal,
+    nxtui::vterm::Terminal & terminal,
     ResizeFn && resize,
     Style clear_style)
 {
@@ -265,4 +265,4 @@ auto vterm_screen(
         clear_style};
 }
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

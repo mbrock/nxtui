@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <ostream>
 
-namespace nxt {
+namespace nxtui {
 
 /// Opaque 24-bit RGB color.
 struct Rgb8
@@ -163,4 +163,4 @@ constexpr bool has_emphasis(Emphasis set, Emphasis flag) noexcept
 inline constexpr Emphasis DEFAULT_EMPHASIS = Emphasis::none;
 inline constexpr Rgba8 DEFAULT_COLOR = Rgba8::terminal_default();
 
-} // namespace nxt
+} // namespace nxtui

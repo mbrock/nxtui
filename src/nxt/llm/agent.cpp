@@ -2,7 +2,7 @@
 
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/ui_runtime.hpp>
-#include <nxt/tui.hpp>
+#include <nxtui/tui.hpp>
 #include <nxt/llm/tool_tui.hpp>
 
 #include <chrono>
@@ -72,48 +72,48 @@ auto header_layout(std::string_view model, std::string_view status)
 {
     namespace tt = nxt::llm::tool_tui;
     auto summary = std::format("{}  {}", model, status);
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(tt::chip(
         " nxtllm ",
         tt::slate_950,
         tt::amber_300,
-        nxt::Emphasis::bold));
-    children.push_back(nxt::tui::flex_text(
+        nxtui::Emphasis::bold));
+    children.push_back(nxtui::tui::flex_text(
         std::move(summary),
-        nxt::tui::fg(tt::slate_400) | nxt::tui::bg(tt::band_bg)));
-    return nxt::tui::row(std::move(children));
+        nxtui::tui::fg(tt::slate_400) | nxtui::tui::bg(tt::band_bg)));
+    return nxtui::tui::row(std::move(children));
 }
 
-nxt::tui::AnyLayout assistant_preview_layout(std::string_view assistant_text)
+nxtui::tui::AnyLayout assistant_preview_layout(std::string_view assistant_text)
 {
     namespace tt = nxt::llm::tool_tui;
     if (assistant_text.empty())
         return {};
     auto preview = join_lines(last_lines(assistant_text, 8));
-    return nxt::tui::text_lines(
-        std::move(preview), nxt::tui::fg(tt::slate_300));
+    return nxtui::tui::text_lines(
+        std::move(preview), nxtui::tui::fg(tt::slate_300));
 }
 
-nxt::tui::AnyLayout agent_layout(
+nxtui::tui::AnyLayout agent_layout(
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text,
-    nxt::tui::AnyLayout child)
+    nxtui::tui::AnyLayout child)
 {
     namespace tt = nxt::llm::tool_tui;
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     children.push_back(header_layout(model, status));
     children.push_back(assistant_preview_layout(assistant_text));
     children.push_back(std::move(child));
-    return nxt::tui::surface(
-        nxt::tui::Style{
+    return nxtui::tui::surface(
+        nxtui::tui::Style{
             .fg = tt::slate_300,
             .bg = tt::page_bg,
-            .em = nxt::DEFAULT_EMPHASIS,
+            .em = nxtui::DEFAULT_EMPHASIS,
         },
-        nxt::tui::column(std::move(children)));
+        nxtui::tui::column(std::move(children)));
 }
 
 template<typename T>
@@ -204,7 +204,7 @@ nxt::rt::task<void> run_agent_loop(
         : std::chrono::milliseconds{0};
     prepare_tool_request(request, tools);
     co_await nxt::rt::draw(
-        agent_layout(model, status, assistant_text, nxt::tui::empty()));
+        agent_layout(model, status, assistant_text, nxtui::tui::empty()));
 
     for (std::size_t step = 0; step < max_steps; ++step) {
         status = std::format("turn {} streaming", step + 1);
@@ -219,7 +219,7 @@ nxt::rt::task<void> run_agent_loop(
             status = "done";
             co_await nxt::rt::draw(
                 agent_layout(
-                    model, status, assistant_text, nxt::tui::empty()));
+                    model, status, assistant_text, nxtui::tui::empty()));
             co_return;
         }
 
@@ -244,7 +244,7 @@ nxt::rt::task<void> run_agent_loop(
         status = std::format(
             "{} tool call(s) in {}ms", results.size(), elapsed);
         co_await nxt::rt::draw(
-            agent_layout(model, status, assistant_text, nxt::tui::empty()));
+            agent_layout(model, status, assistant_text, nxtui::tui::empty()));
 
         auto outputs = nxt::llm::tools::output_items_from_results(results);
         request = original;

@@ -1,14 +1,14 @@
 #include <nxt/llm/tool_tui.hpp>
 
-#include <nxt/tui.hpp>
-#include <nxt/tui_text.hpp>
+#include <nxtui/tui.hpp>
+#include <nxtui/tui_text.hpp>
 
 #include <utility>
 
 namespace nxt::llm::tool_tui {
 namespace {
 
-nxt::tui::Style chip_style(
+nxtui::tui::Style chip_style(
     Rgba8 fg_color,
     Rgba8 bg_color,
     Emphasis em_flags)
@@ -19,17 +19,17 @@ nxt::tui::Style chip_style(
     return style;
 }
 
-nxt::tui::AnyLayout row_layout(std::vector<nxt::tui::AnyLayout> children)
+nxtui::tui::AnyLayout row_layout(std::vector<nxtui::tui::AnyLayout> children)
 {
-    return nxt::tui::row(std::move(children));
+    return nxtui::tui::row(std::move(children));
 }
 
-nxt::tui::AnyLayout column_layout(std::vector<nxt::tui::AnyLayout> children)
+nxtui::tui::AnyLayout column_layout(std::vector<nxtui::tui::AnyLayout> children)
 {
-    return nxt::tui::column(std::move(children));
+    return nxtui::tui::column(std::move(children));
 }
 
-nxt::tui::AnyLayout spine(const call_view & c)
+nxtui::tui::AnyLayout spine(const call_view & c)
 {
     auto k = classify(c.name);
     switch (c.state) {
@@ -43,10 +43,10 @@ nxt::tui::AnyLayout spine(const call_view & c)
     return status_chip("", slate_300, band_bg);
 }
 
-nxt::tui::AnyLayout call_header(const call_view & c)
+nxtui::tui::AnyLayout call_header(const call_view & c)
 {
     auto k = classify(c.name);
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(5);
     children.push_back(spine(c));
     children.push_back(chip(
@@ -64,7 +64,7 @@ nxt::tui::AnyLayout call_header(const call_view & c)
     return row_layout(std::move(children));
 }
 
-nxt::tui::AnyLayout result_window(const call_view & c)
+nxtui::tui::AnyLayout result_window(const call_view & c)
 {
     auto line_color = c.state == status::error ? rose_300 : slate_300;
     auto lines = first_lines(c.output, 4);
@@ -73,7 +73,7 @@ nxt::tui::AnyLayout result_window(const call_view & c)
     return inset_block(body_lines(std::move(lines), line_color));
 }
 
-nxt::tui::AnyLayout shell_header(
+nxtui::tui::AnyLayout shell_header(
     const call_view & c,
     std::string title,
     Rgba8 title_color)
@@ -82,7 +82,7 @@ nxt::tui::AnyLayout shell_header(
     if (c.latest_memory_current)
         latest_memory = compact_bytes(*c.latest_memory_current);
 
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(4);
     children.push_back(flex_text(
         std::move(title),
@@ -99,7 +99,7 @@ nxt::tui::AnyLayout shell_header(
     return row_layout(std::move(children));
 }
 
-nxt::tui::AnyLayout shell_script_window(std::string_view command)
+nxtui::tui::AnyLayout shell_script_window(std::string_view command)
 {
     auto rows = std::vector<std::vector<Span>>{};
     auto prefix = std::string{"$ "};
@@ -116,7 +116,7 @@ nxt::tui::AnyLayout shell_script_window(std::string_view command)
             std::move(rows), Style{.fg = amber_200, .bg = page_bg}));
 }
 
-nxt::tui::AnyLayout shell_output_window(const call_view & c)
+nxtui::tui::AnyLayout shell_output_window(const call_view & c)
 {
     auto line_color = c.state == status::error ? rose_300 : slate_300;
     auto header = chip(
@@ -126,8 +126,8 @@ nxt::tui::AnyLayout shell_output_window(const call_view & c)
         c.state == status::running ? DEFAULT_EMPHASIS : Emphasis::bold);
     auto lines = std::vector<std::string>{};
     if (!c.output.empty()) {
-        auto sanitized = nxt::tui::text_flow::sanitize_terminal_text(c.output);
-        lines = nxt::tui::text_flow::wrap_text(sanitized, 88 * ch);
+        auto sanitized = nxtui::tui::text_flow::sanitize_terminal_text(c.output);
+        lines = nxtui::tui::text_flow::wrap_text(sanitized, 88 * ch);
         if (lines.size() > 8)
             lines.resize(8);
     }
@@ -136,7 +136,7 @@ nxt::tui::AnyLayout shell_output_window(const call_view & c)
     return block(std::move(header), body_lines(std::move(lines), line_color));
 }
 
-nxt::tui::AnyLayout render_bash_call(const call_view & c)
+nxtui::tui::AnyLayout render_bash_call(const call_view & c)
 {
     auto command = bash_command(c.arguments);
     auto short_command = command && short_shell_oneliner(*command);
@@ -146,7 +146,7 @@ nxt::tui::AnyLayout render_bash_call(const call_view & c)
     auto title_color = short_command ? amber_200 : orange_300;
     auto script = command.value_or(std::string{});
 
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     children.push_back(inset_block(shell_header(c, std::move(title), title_color)));
     if (command.has_value() && !short_command)
@@ -156,9 +156,9 @@ nxt::tui::AnyLayout render_bash_call(const call_view & c)
     return column_layout(std::move(children));
 }
 
-nxt::tui::AnyLayout render_generic_call(const call_view & c)
+nxtui::tui::AnyLayout render_generic_call(const call_view & c)
 {
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(inset_block(call_header(c)));
     if (!c.output.empty() || c.state == status::running)
@@ -168,7 +168,7 @@ nxt::tui::AnyLayout render_generic_call(const call_view & c)
 
 } // namespace
 
-nxt::tui::AnyLayout chip(
+nxtui::tui::AnyLayout chip(
     std::string s,
     Rgba8 fg_color,
     Rgba8 bg_color,
@@ -177,7 +177,7 @@ nxt::tui::AnyLayout chip(
     return text(std::move(s), chip_style(fg_color, bg_color, em_flags));
 }
 
-nxt::tui::AnyLayout status_chip(
+nxtui::tui::AnyLayout status_chip(
     std::string_view s,
     Rgba8 fg_color,
     Rgba8 bg_color,
@@ -186,33 +186,33 @@ nxt::tui::AnyLayout status_chip(
     return chip(std::format(" {} ", s), fg_color, bg_color, em_flags);
 }
 
-nxt::tui::AnyLayout inset_block(nxt::tui::AnyLayout body, width_t pad)
+nxtui::tui::AnyLayout inset_block(nxtui::tui::AnyLayout body, width_t pad)
 {
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(hfill(pad, page_bg));
     children.push_back(grow_width(std::move(body)));
     return row_layout(std::move(children));
 }
 
-nxt::tui::AnyLayout block(
-    nxt::tui::AnyLayout header,
-    nxt::tui::AnyLayout body,
+nxtui::tui::AnyLayout block(
+    nxtui::tui::AnyLayout header,
+    nxtui::tui::AnyLayout body,
     width_t pad)
 {
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(std::move(header));
     children.push_back(std::move(body));
     return inset_block(column_layout(std::move(children)), pad);
 }
 
-nxt::tui::AnyLayout body_line(std::string s, Rgba8 fg_color)
+nxtui::tui::AnyLayout body_line(std::string s, Rgba8 fg_color)
 {
     return text(std::move(s), fg(fg_color));
 }
 
-nxt::tui::AnyLayout body_lines(std::vector<std::string> lines, Rgba8 fg_color)
+nxtui::tui::AnyLayout body_lines(std::vector<std::string> lines, Rgba8 fg_color)
 {
     if (lines.empty())
         lines.push_back({});
@@ -225,38 +225,38 @@ nxt::tui::AnyLayout body_lines(std::vector<std::string> lines, Rgba8 fg_color)
         std::move(styled), Style{.fg = fg_color, .bg = page_bg});
 }
 
-nxt::tui::AnyLayout render_call(const call_view & c)
+nxtui::tui::AnyLayout render_call(const call_view & c)
 {
     if (c.name == "bash")
         return render_bash_call(c);
     return render_generic_call(c);
 }
 
-nxt::tui::AnyLayout thought_block(std::string s)
+nxtui::tui::AnyLayout thought_block(std::string s)
 {
     return block(
         chip(" thinking ", slate_950, sky_300, Emphasis::bold),
-        nxt::tui::text_flow::markdown_block(
+        nxtui::tui::text_flow::markdown_block(
             s,
             fg(slate_300),
             88 * ch,
             Style{.fg = slate_300, .bg = page_bg}));
 }
 
-nxt::tui::AnyLayout assistant_block(std::string s)
+nxtui::tui::AnyLayout assistant_block(std::string s)
 {
     return block(
         chip(" assistant ", slate_950, emerald_300, Emphasis::bold),
-        nxt::tui::text_flow::markdown_block(
+        nxtui::tui::text_flow::markdown_block(
             s,
             fg(slate_300),
             88 * ch,
             Style{.fg = slate_300, .bg = page_bg}));
 }
 
-nxt::tui::AnyLayout render_turn(const turn_view & t)
+nxtui::tui::AnyLayout render_turn(const turn_view & t)
 {
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     if (!t.thought.empty())
         children.push_back(thought_block(t.thought));

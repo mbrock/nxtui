@@ -359,7 +359,7 @@ try {
     nxt::rt::run_with_kqueue(
         [url = std::move(url)]() mutable { return fetch(std::move(url)); });
 #else
-    static_assert(NXT_RT_HAS_KQUEUE, "ng http demo needs a runtime wand");
+    static_assert(NXT_RT_HAS_KQUEUE, "http demo needs a runtime wand");
 #endif
 
     return 0;

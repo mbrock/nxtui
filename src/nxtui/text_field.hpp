@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include "nxt/raster.hpp"
-#include "nxt/tui.hpp"
-#include "nxt/units.hpp"
-#include "nxt/utf8.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/tui.hpp"
+#include "nxtui/units.hpp"
+#include "nxtui/utf8.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -25,7 +25,7 @@
 #include <string_view>
 #include <utility>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 /// Single-line editable text with a UTF-8-aware cursor.
 ///
@@ -261,4 +261,4 @@ inline auto text_field(
         });
 }
 
-}  // namespace nxt::tui
+}  // namespace nxtui::tui

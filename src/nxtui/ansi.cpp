@@ -1,6 +1,6 @@
-#include "nxt/ansi.hpp"
-#include "nxt/tui.hpp"
-#include "nxt/units.hpp"
+#include "nxtui/ansi.hpp"
+#include "nxtui/tui.hpp"
+#include "nxtui/units.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -12,7 +12,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-namespace nxt::ansi {
+namespace nxtui::ansi {
 
 Mode mode = Mode::disabled;
 
@@ -690,4 +690,4 @@ SynchronizedUpdate::~SynchronizedUpdate()
         end_synchronized_update();
 }
 
-} // namespace nxt::ansi
+} // namespace nxtui::ansi

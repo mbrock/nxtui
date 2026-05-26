@@ -2,13 +2,13 @@
 
 #include <cstdint>
 #include <memory>
-#include <nxt/units.hpp>
+#include <nxtui/units.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace nxt::input {
+namespace nxtui::input {
 
 /// Normalized key identity after terminal escape-sequence decoding.
 enum class Key {
@@ -188,4 +188,4 @@ private:
     std::unique_ptr<TermiosStorage> termios_;
 };
 
-} // namespace nxt::input
+} // namespace nxtui::input

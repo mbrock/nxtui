@@ -1,3 +1,3 @@
 #pragma once
 
-#include "nxt/chart.hpp"
+#include "nxtui/chart.hpp"

@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "nxt/raster.hpp"
+#include "nxtui/raster.hpp"
 
-namespace nxt::theme {
+namespace nxtui::theme {
 
 /// Complete color slot set shared by the Baltic light and dark themes.
 struct Palette
@@ -202,4 +202,4 @@ inline constexpr Palette baltic_church{
     .removed_hl_bg   = {0x4a, 0x1d, 0x1a},
 };
 
-}  // namespace nxt::theme
+}  // namespace nxtui::theme

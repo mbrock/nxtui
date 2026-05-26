@@ -1,6 +1,6 @@
-#include "nxt/compositor.hpp"
-#include "nxt/ansi.hpp"
-#include "nxt/raster-diff.hpp"
+#include "nxtui/compositor.hpp"
+#include "nxtui/ansi.hpp"
+#include "nxtui/raster-diff.hpp"
 
 #include <iostream>
 #include <mutex>
@@ -9,10 +9,10 @@
 #include <string>
 #include <string_view>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 namespace {
 
-namespace rtty = nxt::regional_tty;
+namespace rtty = nxtui::regional_tty;
 
 [[nodiscard]] int row_index(const row_t row)
 {
@@ -58,7 +58,7 @@ void write_terminal_text(ansi::Writer & w, std::string_view text)
 } // namespace
 
 TerminalCompositor::TerminalCompositor(
-    const nxt::Size size, GlyphTable & glyphs)
+    const nxtui::Size size, GlyphTable & glyphs)
     : front_(size.w, size.h, glyphs)
     , back_(size.w, size.h, glyphs)
     , glyphs_(glyphs)
@@ -66,7 +66,7 @@ TerminalCompositor::TerminalCompositor(
 {
 }
 
-void TerminalCompositor::resize(nxt::Size size)
+void TerminalCompositor::resize(nxtui::Size size)
 {
     // In HUD mode, the raster only covers HUD rows; fullscreen layouts use
     // the whole terminal.
@@ -190,7 +190,7 @@ GlyphTable & TerminalCompositor::glyphs() const noexcept
     return glyphs_;
 }
 
-nxt::Size TerminalCompositor::size() const noexcept
+nxtui::Size TerminalCompositor::size() const noexcept
 {
     return {back_.width(), back_.height()};
 }
@@ -285,4 +285,4 @@ void TerminalCompositor::present_frame(std::ostream & out)
     back_ = front_;
 }
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

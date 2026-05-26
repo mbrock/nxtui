@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "nxt/units.hpp"
+#include "nxtui/units.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +15,7 @@
 
 #include <utf8proc.h>
 
-namespace nxt::utf8 {
+namespace nxtui::utf8 {
 
 /// Byte offset into a UTF-8 string.
 struct byte_offset_t
@@ -783,4 +783,4 @@ byte_at_column(std::string_view text, width_t column) noexcept
     return byte_offset(text.size());
 }
 
-}  // namespace nxt::utf8
+}  // namespace nxtui::utf8

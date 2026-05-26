@@ -4,9 +4,9 @@
 #include "nxt/rt/subprocess.hpp"
 #include "nxt/rt/task.hpp"
 
-#include <nxt/tui_terminal.hpp>
-#include <nxt/units.hpp>
-#include <nxt/vterm.hpp>
+#include <nxtui/tui_terminal.hpp>
+#include <nxtui/units.hpp>
+#include <nxtui/vterm.hpp>
 
 #include <algorithm>
 #include <array>
@@ -28,10 +28,10 @@ using namespace std::chrono_literals;
 struct spawn_options
 {
     std::vector<std::string> argv;
-    nxt::Size size{80 * nxt::ch, 24 * nxt::ln};
+    nxtui::Size size{80 * nxtui::ch, 24 * nxtui::ln};
 };
 
-inline winsize winsize_from(nxt::Size size)
+inline winsize winsize_from(nxtui::Size size)
 {
     return winsize{
         .ws_row = static_cast<unsigned short>(std::max<std::size_t>(
@@ -50,7 +50,7 @@ class session
 public:
     session() = default;
 
-    explicit session(nxt::rt::pty_child child, nxt::Size size)
+    explicit session(nxt::rt::pty_child child, nxtui::Size size)
         : child_(std::move(child))
         , size_(size)
         , terminal_(
@@ -73,19 +73,19 @@ public:
         return child_.master_fd();
     }
 
-    [[nodiscard]] nxt::vterm::Terminal & terminal() noexcept
+    [[nodiscard]] nxtui::vterm::Terminal & terminal() noexcept
     {
         return terminal_;
     }
 
-    [[nodiscard]] const nxt::vterm::Terminal & terminal() const noexcept
+    [[nodiscard]] const nxtui::vterm::Terminal & terminal() const noexcept
     {
         return terminal_;
     }
 
-    void resize(nxt::Size size)
+    void resize(nxtui::Size size)
     {
-        if (size.w == 0 * nxt::ch || size.h == 0 * nxt::ln)
+        if (size.w == 0 * nxtui::ch || size.h == 0 * nxtui::ln)
             return;
         if (size.w == size_.w && size.h == size_.h)
             return;
@@ -150,8 +150,8 @@ public:
 
 private:
     nxt::rt::pty_child child_;
-    nxt::Size size_{80 * nxt::ch, 24 * nxt::ln};
-    nxt::vterm::Terminal terminal_{24, 80};
+    nxtui::Size size_{80 * nxtui::ch, 24 * nxtui::ln};
+    nxtui::vterm::Terminal terminal_{24, 80};
 };
 
 inline task<session> spawn(spawn_options options)
@@ -169,24 +169,24 @@ inline task<session> spawn(spawn_options options)
 struct screen
 {
     session * pty = nullptr;
-    nxt::tui::Style clear_style{};
+    nxtui::tui::Style clear_style{};
 
-    constexpr nxt::tui::WidthHint width_hint() const
+    constexpr nxtui::tui::WidthHint width_hint() const
     {
-        return nxt::tui::WidthHint::grow();
+        return nxtui::tui::WidthHint::grow();
     }
 
-    constexpr nxt::tui::HeightHint height_hint() const
+    constexpr nxtui::tui::HeightHint height_hint() const
     {
-        return nxt::tui::HeightHint::grow();
+        return nxtui::tui::HeightHint::grow();
     }
 
-    void render(nxt::RasterView & raster, nxt::Size size) const
+    void render(nxtui::RasterView & raster, nxtui::Size size) const
     {
         if (pty == nullptr)
             return;
         pty->resize(size);
-        nxt::tui::render_vterm_screen(
+        nxtui::tui::render_vterm_screen(
             raster,
             size,
             pty->terminal(),
@@ -194,7 +194,7 @@ struct screen
     }
 };
 
-inline screen pty_screen(session & pty, nxt::tui::Style clear_style = {})
+inline screen pty_screen(session & pty, nxtui::tui::Style clear_style = {})
 {
     return screen{.pty = &pty, .clear_style = clear_style};
 }

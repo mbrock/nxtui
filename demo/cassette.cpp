@@ -13,19 +13,19 @@
 //   affordances) render_result: Result -> std::optional<AnyLayout>
 //
 // Each cassette piece is a small function returning an AnyLayout. The
-// pieces compose with row/column combinators from nxt::tui; the
+// pieces compose with row/column combinators from nxtui::tui; the
 // vector-overloads of row/column live in nxt/any_layout.hpp.
 //
 // The trace itself is one synthetic turn assembled in `sample_turn()`,
 // matching cassette/trace-sample.xml line-for-line so the output can be
 // diffed against `./cassette/trace-render --intermediate`.
 
-#include <nxt/any_layout.hpp>
-#include <nxt/ansi.hpp>
-#include <nxt/glyph-table.hpp>
-#include <nxt/raster.hpp>
-#include <nxt/tui.hpp>
-#include <nxt/units.hpp>
+#include <nxtui/any_layout.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/glyph-table.hpp>
+#include <nxtui/raster.hpp>
+#include <nxtui/tui.hpp>
+#include <nxtui/units.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -44,7 +44,7 @@
 
 namespace nxt::cassette {
 
-using namespace nxt::tui;
+using namespace nxtui::tui;
 
 // ============================================================================
 // Palette — Tailwind's Slate / Amber / Emerald / Orange / Violet / Lime /
@@ -222,7 +222,7 @@ inline std::string primary_arg(const Call & c)
 }
 
 // ============================================================================
-// All layout primitives now come from nxt::tui — text/flex_text for
+// All layout primitives now come from nxtui::tui — text/flex_text for
 // strings, hfill/flex_fill for bg strips, column/row (and their
 // vector-of-AnyLayout overloads in any_layout.hpp) for stacks.
 // ============================================================================
@@ -607,7 +607,7 @@ inline std::size_t terminal_width(std::size_t fallback = 100)
 
 int run(int /*argc*/, char ** /*argv*/)
 {
-    nxt::ansi::mode = nxt::ansi::Mode::enabled;
+    nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
 
     auto turn = sample_turn();
     auto inner = render_turn(turn);
@@ -628,7 +628,7 @@ int run(int /*argc*/, char ** /*argv*/)
     auto view = raster.view();
     layout.render(view, raster.extent());
 
-    std::fputs(nxt::ansi::render_raster(raster).c_str(), stdout);
+    std::fputs(nxtui::ansi::render_raster(raster).c_str(), stdout);
     std::fputc('\n', stdout);
     return 0;
 }

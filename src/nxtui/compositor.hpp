@@ -1,31 +1,31 @@
 #pragma once
 
-#include "nxt/glyph-table.hpp"
-#include "nxt/raster.hpp"
-#include "nxt/regional-tty.hpp"
-#include "nxt/units.hpp"
+#include "nxtui/glyph-table.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/regional-tty.hpp"
+#include "nxtui/units.hpp"
 
 #include <iosfwd>
 #include <mutex>
 #include <optional>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 /// Double-buffered terminal compositor with HUD/scroll region support.
 class TerminalCompositor
 {
 public:
     /// Create double buffers for a terminal of `size`.
-    TerminalCompositor(nxt::Size size, GlyphTable & glyphs);
+    TerminalCompositor(nxtui::Size size, GlyphTable & glyphs);
     /// Resize both front and back buffers and terminal bookkeeping.
-    void resize(nxt::Size size);
+    void resize(nxtui::Size size);
 
     /// Mutable buffer rendered by the next frame.
     Raster & back_buffer() noexcept;
     /// Shared glyph table used by both buffers.
     GlyphTable & glyphs() const noexcept;
     /// Current compositor size.
-    nxt::Size size() const noexcept;
+    nxtui::Size size() const noexcept;
 
     /// Set HUD height. In HUD mode, the scroll region ends immediately above
     /// the HUD. If the HUD fills the terminal, the compositor uses full-screen
@@ -73,4 +73,4 @@ private:
     std::mutex * output_mutex_ = nullptr;
 };
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

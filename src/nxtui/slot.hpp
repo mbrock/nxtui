@@ -1,13 +1,13 @@
 #pragma once
 
-#include "nxt/layout.hpp"
+#include "nxtui/layout.hpp"
 
 #include <atomic>
 #include <functional>
 #include <memory>
 #include <utility>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 /// A live hole in the layout tree.
 ///
@@ -91,4 +91,4 @@ auto slot(L initial, std::function<void()> on_publish = {})
     return Slot<L>(std::move(initial), std::move(on_publish));
 }
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

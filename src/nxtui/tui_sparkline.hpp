@@ -1,7 +1,7 @@
 #pragma once
 
 #include "nxt/sparkline.hpp"
-#include "nxt/tui.hpp"
+#include "nxtui/tui.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,13 +9,13 @@
 #include <span>
 #include <vector>
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 inline void render_sparkline(
     RasterView & r,
     Size size,
     std::span<const double> values,
-    std::optional<nxt::chart::value_range> range,
+    std::optional<nxtui::chart::value_range> range,
     Style style)
 {
     std::ranges::fill(r.glyphs(), 32);
@@ -31,7 +31,7 @@ inline void render_sparkline(
     if (cols == 0 || rows == 0 || values.empty())
         return;
 
-    auto scale = range ? *range : nxt::chart::dynamic_range(values);
+    auto scale = range ? *range : nxtui::chart::dynamic_range(values);
     if (std::abs(scale.hi - scale.lo) < 1e-9)
         scale.hi = scale.lo + 1.0;
 
@@ -43,7 +43,7 @@ inline void render_sparkline(
         auto value = values[offset + x];
         auto fraction = (value - scale.lo) / (scale.hi - scale.lo);
         for (std::size_t y = 0; y != rows; ++y) {
-            auto glyph = nxt::chart::vertical_cell(fraction, y, rows);
+            auto glyph = nxtui::chart::vertical_cell(fraction, y, rows);
             if (glyph == " ")
                 continue;
             r.write_text(Pos::at((pad + x) * ch, y * ln), glyph);
@@ -56,7 +56,7 @@ inline auto sparkline(
     std::vector<double> values,
     height_t height,
     Style style = {},
-    std::optional<nxt::chart::value_range> range = std::nullopt)
+    std::optional<nxtui::chart::value_range> range = std::nullopt)
 {
     return leaf(
         WidthHint::grow(),
@@ -71,7 +71,7 @@ inline auto sparkline(
     std::span<const double> values,
     height_t height,
     Style style = {},
-    std::optional<nxt::chart::value_range> range = std::nullopt)
+    std::optional<nxtui::chart::value_range> range = std::nullopt)
 {
     return leaf(
         WidthHint::grow(),
@@ -85,7 +85,7 @@ inline auto sparkline(
 inline auto sparkline(
     std::vector<double> values,
     Style style = {},
-    std::optional<nxt::chart::value_range> range = std::nullopt)
+    std::optional<nxtui::chart::value_range> range = std::nullopt)
 {
     return sparkline(std::move(values), 1 * ln, style, range);
 }
@@ -94,7 +94,7 @@ inline auto sparkline(
 inline auto sparkline(
     std::span<const double> values,
     Style style = {},
-    std::optional<nxt::chart::value_range> range = std::nullopt)
+    std::optional<nxtui::chart::value_range> range = std::nullopt)
 {
     return sparkline(values, 1 * ln, style, range);
 }
@@ -103,7 +103,7 @@ inline auto sparkline(
 inline auto sparkline2(
     std::vector<double> values,
     Style style = {},
-    std::optional<nxt::chart::value_range> range = std::nullopt)
+    std::optional<nxtui::chart::value_range> range = std::nullopt)
 {
     return sparkline(std::move(values), 2 * ln, style, range);
 }
@@ -112,9 +112,9 @@ inline auto sparkline2(
 inline auto sparkline2(
     std::span<const double> values,
     Style style = {},
-    std::optional<nxt::chart::value_range> range = std::nullopt)
+    std::optional<nxtui::chart::value_range> range = std::nullopt)
 {
     return sparkline(values, 2 * ln, style, range);
 }
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

@@ -7,11 +7,11 @@ namespace nxt::test {
 
 using namespace boost::ut;
 
-static boost::ut::suite public_ng_include_tests{
-    "PUBLIC NG INCLUDES", [] {
+static boost::ut::suite public_include_tests{
+    "PUBLIC INCLUDES", [] {
     "core umbrella does not pull the legacy app runtime"_test = [] {
-        auto event = nxt::input::KeyEvent{};
-        boost::ut::expect(event.key == nxt::input::Key::unknown);
+        auto event = nxtui::input::KeyEvent{};
+        boost::ut::expect(event.key == nxtui::input::Key::unknown);
     };
 
     "runtime umbrella exposes task"_test = [] {

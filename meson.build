@@ -73,12 +73,12 @@ nxt_core_deps += utf8proc_dep
 nxt_core_deps += nxt_libvterm_dep
 
 nxt_core_sources = files(
-  'src/nxt/ansi.cpp',
-  'src/nxt/compositor.cpp',
+  'src/nxtui/ansi.cpp',
+  'src/nxtui/compositor.cpp',
   'src/nxt/crypto.cpp',
-  'src/nxt/glyph-table.cpp',
-  'src/nxt/input.cpp',
-  'src/nxt/raster.cpp',
+  'src/nxtui/glyph-table.cpp',
+  'src/nxtui/input.cpp',
+  'src/nxtui/raster.cpp',
 )
 
 nxt_core_lib = static_library('nxt-core',

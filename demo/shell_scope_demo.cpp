@@ -1,14 +1,14 @@
-#include <nxt/ansi.hpp>
-#include <nxt/any_layout.hpp>
-#include <nxt/compositor.hpp>
-#include <nxt/glyph-table.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/any_layout.hpp>
+#include <nxtui/compositor.hpp>
+#include <nxtui/glyph-table.hpp>
 #include <nxt/rt/app.hpp>
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/cgroup.hpp>
 #include <nxt/rt/pty.hpp>
 #include <nxt/rt/terminal_app.hpp>
-#include <nxt/tui.hpp>
-#include <nxt/tui_sparkline.hpp>
+#include <nxtui/tui.hpp>
+#include <nxtui/tui_sparkline.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -137,7 +137,7 @@ double cpu_percent(const session_state & state)
 
 auto metrics_layout(const session_state & state)
 {
-    constexpr auto value_width = 20 * nxt::ch;
+    constexpr auto value_width = 20 * nxtui::ch;
     auto latest = state.samples.empty() ? sample{} : state.samples.back();
     auto cpu = cpu_percent(state);
     auto mem_peak = latest.memory_peak.v == 0
@@ -150,42 +150,42 @@ auto metrics_layout(const session_state & state)
         format_bytes(latest.memory_peak));
     auto cpu_line = std::format("{:.0f}% CPU", cpu);
 
-    return nxt::tui::column(
-        nxt::tui::row(
-            nxt::tui::fixed_width(
+    return nxtui::tui::column(
+        nxtui::tui::row(
+            nxtui::tui::fixed_width(
                 value_width,
-                nxt::tui::text(
+                nxtui::tui::text(
                     std::move(mem_line),
-                    nxt::tui::fg(nxt::Rgba8{230, 205, 130}))),
-            nxt::tui::text("  "),
-            nxt::tui::sparkline(
+                    nxtui::tui::fg(nxtui::Rgba8{230, 205, 130}))),
+            nxtui::tui::text("  "),
+            nxtui::tui::sparkline(
                 std::span<const double>{state.memory_points},
-                2 * nxt::ln,
-                nxt::tui::fg(nxt::Rgba8{225, 175, 105}),
-                nxt::chart::value_range{0.0, mem_peak})),
-        nxt::tui::row(
-            nxt::tui::fixed_width(
+                2 * nxtui::ln,
+                nxtui::tui::fg(nxtui::Rgba8{225, 175, 105}),
+                nxtui::chart::value_range{0.0, mem_peak})),
+        nxtui::tui::row(
+            nxtui::tui::fixed_width(
                 value_width,
-                nxt::tui::text(
+                nxtui::tui::text(
                     std::move(cpu_line),
-                    nxt::tui::fg(nxt::Rgba8{160, 210, 150}))),
-            nxt::tui::text("  "),
-            nxt::tui::sparkline(
+                    nxtui::tui::fg(nxtui::Rgba8{160, 210, 150}))),
+            nxtui::tui::text("  "),
+            nxtui::tui::sparkline(
                 std::span<const double>{state.cpu_points},
-                2 * nxt::ln,
-                nxt::tui::fg(nxt::Rgba8{105, 190, 170}),
-                nxt::chart::value_range{0.0, 100.0})));
+                2 * nxtui::ln,
+                nxtui::tui::fg(nxtui::Rgba8{105, 190, 170}),
+                nxtui::chart::value_range{0.0, 100.0})));
 }
 
 auto frame_layout(
     const session_state & state,
     nxt::rt::pty::session & pty)
 {
-    return nxt::tui::column(
+    return nxtui::tui::column(
         metrics_layout(state),
         nxt::rt::pty::pty_screen(
             pty,
-            nxt::tui::bg(nxt::Rgba8{12, 14, 18})));
+            nxtui::tui::bg(nxtui::Rgba8{12, 14, 18})));
 }
 
 void render_frame(
@@ -327,8 +327,8 @@ std::vector<std::string> scoped_shell_argv(
 
 nxt::rt::task<void> run_scoped_command(std::string command = {})
 {
-    nxt::ansi::init();
-    nxt::ansi::mode = nxt::ansi::Mode::enabled;
+    nxtui::ansi::init();
+    nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
 
     auto state = session_state{};
     state.unit_name = make_unit_name();

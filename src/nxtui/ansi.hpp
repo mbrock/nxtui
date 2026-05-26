@@ -4,10 +4,10 @@
 #include <string>
 #include <string_view>
 
-#include "nxt/raster.hpp"
-#include "nxt/units.hpp"
+#include "nxtui/raster.hpp"
+#include "nxtui/units.hpp"
 
-namespace nxt::ansi {
+namespace nxtui::ansi {
 
 /// ANSI output modes
 enum class Mode {
@@ -209,4 +209,4 @@ private:
     bool enabled_{false};
 };
 
-} // namespace nxt::ansi
+} // namespace nxtui::ansi

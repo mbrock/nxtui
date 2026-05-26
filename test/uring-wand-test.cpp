@@ -32,6 +32,8 @@ using namespace std::chrono_literals;
 
 namespace nxt::test {
 
+using namespace nxtui;
+
 using namespace boost::ut;
 
 nxt::rt::task<std::string> echo_over_socketpair(int tx, int rx)
@@ -365,8 +367,8 @@ static suite uring_wand_tests{
 
                 expect(std::move(child).get() == 41_i);
 
-                auto key = nxt::input::KeyEvent{};
-                key.key = nxt::input::Key::character;
+                auto key = nxtui::input::KeyEvent{};
+                key.key = nxtui::input::Key::character;
                 key.text = "x";
 
                 auto input_text = rt.run(
@@ -381,12 +383,12 @@ static suite uring_wand_tests{
                 expect(input_text == "x");
 
                 auto resized = rt.publish_resize(
-                    nxt::Size{80 * nxt::ch, 24 * nxt::ln});
+                    nxtui::Size{80 * nxtui::ch, 24 * nxtui::ln});
                 expect(resized);
                 auto size = rt.next_resize_now();
                 expect(size.has_value());
-                expect(size->w == 80 * nxt::ch);
-                expect(size->h == 24 * nxt::ln);
+                expect(size->w == 80 * nxtui::ch);
+                expect(size->h == 24 * nxtui::ln);
             };
 
             "runtime sleeps on its platform wand"_test = [] {

@@ -6,7 +6,7 @@
 #include <nxt/rt/sampling.hpp>
 #include <nxt/rt/tls.hpp>
 #include <nxt/rt/ui_runtime.hpp>
-#include <nxt/tui.hpp>
+#include <nxtui/tui.hpp>
 #include <nxt/http.hpp>
 #include <nxt/json.hpp>
 #include <nxt/llm/tool_tui.hpp>
@@ -536,7 +536,7 @@ std::string format_compact_rate(double bytes_per_second)
         static_cast<std::size_t>(std::max(bytes_per_second, 0.0))) + "/s";
 }
 
-nxt::Rgba8 blend(nxt::Rgba8 a, nxt::Rgba8 b, double t)
+nxtui::Rgba8 blend(nxtui::Rgba8 a, nxtui::Rgba8 b, double t)
 {
     t = std::clamp(t, 0.0, 1.0);
     auto channel = [=](std::uint8_t x, std::uint8_t y) {
@@ -544,14 +544,14 @@ nxt::Rgba8 blend(nxt::Rgba8 a, nxt::Rgba8 b, double t)
             static_cast<double>(x)
             + (static_cast<double>(y) - static_cast<double>(x)) * t);
     };
-    return nxt::Rgba8{
+    return nxtui::Rgba8{
         channel(a.r(), b.r()),
         channel(a.g(), b.g()),
         channel(a.b(), b.b()),
     };
 }
 
-nxt::Rgba8 rate_bg(nxt::Rgba8 color, double bytes_per_second)
+nxtui::Rgba8 rate_bg(nxtui::Rgba8 color, double bytes_per_second)
 {
     static constexpr auto max_display_rate = 32.0 * 1024.0;
     auto fraction =
@@ -565,7 +565,7 @@ std::string fit_cell(std::string s, std::size_t width, cell_align align)
 {
     if (width == 0)
         return {};
-    auto display_width = static_cast<std::size_t>(nxt::tui::utf8_width(s).count());
+    auto display_width = static_cast<std::size_t>(nxtui::tui::utf8_width(s).count());
     if (display_width > width) {
         if (width == 1)
             return s.substr(0, 1);
@@ -582,27 +582,27 @@ std::string fit_cell(std::string s, std::size_t width, cell_align align)
 }
 
 auto fixed_cell(
-    nxt::width_t width,
+    nxtui::width_t width,
     std::string s,
-    nxt::tui::Style style,
+    nxtui::tui::Style style,
     cell_align align = cell_align::left)
 {
     auto cells = static_cast<std::size_t>(width.count());
-    return nxt::tui::line_text(
-        nxt::tui::WidthHint::fixed(width),
-        [s = std::move(s), cells, align](nxt::width_t) {
+    return nxtui::tui::line_text(
+        nxtui::tui::WidthHint::fixed(width),
+        [s = std::move(s), cells, align](nxtui::width_t) {
             return fit_cell(s, cells, align);
         },
         style);
 }
 
-auto rate_cell(std::string label, double bytes_per_second, nxt::Rgba8 color)
+auto rate_cell(std::string label, double bytes_per_second, nxtui::Rgba8 color)
 {
     namespace tt = nxt::llm::tool_tui;
-    auto style = nxt::tui::fg(tt::slate_300) | nxt::tui::bg(rate_bg(color, bytes_per_second));
-    return nxt::tui::line_text(
-        nxt::tui::WidthHint{7 * nxt::ch, 1.0 * nxt::one},
-        [label = std::move(label)](nxt::width_t width) {
+    auto style = nxtui::tui::fg(tt::slate_300) | nxtui::tui::bg(rate_bg(color, bytes_per_second));
+    return nxtui::tui::line_text(
+        nxtui::tui::WidthHint{7 * nxtui::ch, 1.0 * nxtui::one},
+        [label = std::move(label)](nxtui::width_t width) {
             return fit_cell(label, width.count(), cell_align::right);
         },
         style);
@@ -625,35 +625,35 @@ auto header_layout(std::string_view model, std::string_view status)
 {
     namespace tt = nxt::llm::tool_tui;
     auto summary = std::format("{}  {}", model, status);
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(tt::chip(
         " nxtllm ",
         tt::slate_950,
         tt::amber_300,
-        nxt::Emphasis::bold));
-    children.push_back(nxt::tui::flex_text(
+        nxtui::Emphasis::bold));
+    children.push_back(nxtui::tui::flex_text(
         std::move(summary),
-        nxt::tui::fg(tt::slate_400) | nxt::tui::bg(tt::band_bg)));
-    return nxt::tui::row(std::move(children));
+        nxtui::tui::fg(tt::slate_400) | nxtui::tui::bg(tt::band_bg)));
+    return nxtui::tui::row(std::move(children));
 }
 
-nxt::tui::AnyLayout assistant_preview_layout(std::string_view assistant_text)
+nxtui::tui::AnyLayout assistant_preview_layout(std::string_view assistant_text)
 {
     namespace tt = nxt::llm::tool_tui;
     if (assistant_text.empty())
         return {};
     auto preview = join_lines(last_lines(assistant_text, 8));
-    return nxt::tui::text_lines(
-        std::move(preview), nxt::tui::fg(tt::slate_300));
+    return nxtui::tui::text_lines(
+        std::move(preview), nxtui::tui::fg(tt::slate_300));
 }
 
-nxt::tui::AnyLayout stream_activity_layout(
+nxtui::tui::AnyLayout stream_activity_layout(
     std::string_view thought,
     std::string_view assistant_text,
     const std::vector<live_tool_call> & live_calls)
 {
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     if (!thought.empty())
         children.push_back(
@@ -661,104 +661,104 @@ nxt::tui::AnyLayout stream_activity_layout(
     if (!assistant_text.empty())
         children.push_back(assistant_preview_layout(assistant_text));
     if (!live_calls.empty()) {
-        children.push_back(nxt::tui::each(
+        children.push_back(nxtui::tui::each(
             std::vector<live_tool_call>{live_calls},
             [](const live_tool_call & call) {
                 return nxt::llm::tool_tui::render_call(call.view);
             }));
     }
-    return nxt::tui::column(std::move(children));
+    return nxtui::tui::column(std::move(children));
 }
 
-nxt::tui::AnyLayout network_footer_layout(const network_hud_state & net)
+nxtui::tui::AnyLayout network_footer_layout(const network_hud_state & net)
 {
     namespace tt = nxt::llm::tool_tui;
     if (net.phase.empty() && net.socket_rx == 0 && net.socket_tx == 0)
         return {};
 
     auto phase = net.phase.empty() ? std::string{"network"} : net.phase;
-    auto value_style = nxt::tui::fg(tt::slate_300) | nxt::tui::bg(tt::page_bg);
-    auto phase_style = nxt::tui::fg(tt::teal_300) | nxt::tui::bg(tt::page_bg)
-                     | nxt::tui::em(nxt::Emphasis::bold);
-    auto event_style = nxt::tui::fg(tt::slate_500) | nxt::tui::bg(tt::page_bg);
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto value_style = nxtui::tui::fg(tt::slate_300) | nxtui::tui::bg(tt::page_bg);
+    auto phase_style = nxtui::tui::fg(tt::teal_300) | nxtui::tui::bg(tt::page_bg)
+                     | nxtui::tui::em(nxtui::Emphasis::bold);
+    auto event_style = nxtui::tui::fg(tt::slate_500) | nxtui::tui::bg(tt::page_bg);
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(13);
-    children.push_back(nxt::tui::hfill(1 * nxt::ch, tt::page_bg));
-    children.push_back(fixed_cell(14 * nxt::ch, std::move(phase), phase_style));
-    children.push_back(nxt::tui::hfill(1 * nxt::ch, tt::page_bg));
+    children.push_back(nxtui::tui::hfill(1 * nxtui::ch, tt::page_bg));
+    children.push_back(fixed_cell(14 * nxtui::ch, std::move(phase), phase_style));
+    children.push_back(nxtui::tui::hfill(1 * nxtui::ch, tt::page_bg));
     children.push_back(fixed_cell(
-        7 * nxt::ch,
+        7 * nxtui::ch,
         format_compact_bytes(net.socket_rx) + "↓",
         value_style,
         cell_align::right));
-    children.push_back(nxt::tui::hfill(1 * nxt::ch, tt::page_bg));
+    children.push_back(nxtui::tui::hfill(1 * nxtui::ch, tt::page_bg));
     children.push_back(rate_cell(
         format_compact_rate(net.socket_rx_bps) + "↓",
         net.socket_rx_bps,
         tt::teal_300));
-    children.push_back(nxt::tui::hfill(1 * nxt::ch, tt::page_bg));
+    children.push_back(nxtui::tui::hfill(1 * nxtui::ch, tt::page_bg));
     children.push_back(fixed_cell(
-        7 * nxt::ch,
+        7 * nxtui::ch,
         format_compact_bytes(net.socket_tx) + "↑",
         value_style,
         cell_align::right));
-    children.push_back(nxt::tui::hfill(1 * nxt::ch, tt::page_bg));
+    children.push_back(nxtui::tui::hfill(1 * nxtui::ch, tt::page_bg));
     children.push_back(rate_cell(
         format_compact_rate(net.socket_tx_bps) + "↑",
         net.socket_tx_bps,
         tt::amber_300));
-    children.push_back(nxt::tui::hfill(1 * nxt::ch, tt::page_bg));
+    children.push_back(nxtui::tui::hfill(1 * nxtui::ch, tt::page_bg));
     children.push_back(fixed_cell(
-        5 * nxt::ch,
+        5 * nxtui::ch,
         net.sse_events == 0
             ? std::string{}
             : std::format("#{}", net.sse_events),
         event_style,
         cell_align::right));
-    children.push_back(nxt::tui::flex_text("", nxt::tui::bg(tt::page_bg)));
-    return nxt::tui::row(std::move(children));
+    children.push_back(nxtui::tui::flex_text("", nxtui::tui::bg(tt::page_bg)));
+    return nxtui::tui::row(std::move(children));
 }
 
-nxt::tui::AnyLayout agent_layout(
+nxtui::tui::AnyLayout agent_layout(
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text,
-    nxt::tui::AnyLayout child)
+    nxtui::tui::AnyLayout child)
 {
     namespace tt = nxt::llm::tool_tui;
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     children.push_back(header_layout(model, status));
     children.push_back(assistant_preview_layout(assistant_text));
     children.push_back(std::move(child));
-    return nxt::tui::surface(
-        nxt::tui::Style{
+    return nxtui::tui::surface(
+        nxtui::tui::Style{
             .fg = tt::slate_300,
             .bg = tt::page_bg,
-            .em = nxt::DEFAULT_EMPHASIS,
+            .em = nxtui::DEFAULT_EMPHASIS,
         },
-        nxt::tui::column(std::move(children)));
+        nxtui::tui::column(std::move(children)));
 }
 
-nxt::tui::AnyLayout stream_layout(
+nxtui::tui::AnyLayout stream_layout(
     std::string_view thought,
     std::string_view assistant_text,
     const std::vector<live_tool_call> & live_calls,
     const network_hud_state & network)
 {
     namespace tt = nxt::llm::tool_tui;
-    auto children = std::vector<nxt::tui::AnyLayout>{};
+    auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(
         stream_activity_layout(thought, assistant_text, live_calls));
     children.push_back(network_footer_layout(network));
-    return nxt::tui::surface(
-        nxt::tui::Style{
+    return nxtui::tui::surface(
+        nxtui::tui::Style{
             .fg = tt::slate_300,
             .bg = tt::page_bg,
-            .em = nxt::DEFAULT_EMPHASIS,
+            .em = nxtui::DEFAULT_EMPHASIS,
         },
-        nxt::tui::column(std::move(children)));
+        nxtui::tui::column(std::move(children)));
 }
 
 nxt::rt::task<void> publish_stream_view(

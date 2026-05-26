@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace nxt::chart {
+namespace nxtui::chart {
 
 struct value_range
 {
@@ -250,4 +250,4 @@ sparkline2(std::span<const double> values, std::size_t cells)
     return sparkline2(values, cells, dynamic_range(values));
 }
 
-} // namespace nxt::chart
+} // namespace nxtui::chart

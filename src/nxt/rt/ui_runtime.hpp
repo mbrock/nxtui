@@ -5,14 +5,14 @@
 #include "nxt/rt/stdout_trace.hpp"
 #include "nxt/rt/terminal_app.hpp"
 
-#include <nxt/ansi.hpp>
-#include <nxt/any_layout.hpp>
-#include <nxt/compositor.hpp>
-#include <nxt/glyph-table.hpp>
-#include <nxt/input.hpp>
-#include <nxt/regional-tty.hpp>
-#include <nxt/slot.hpp>
-#include <nxt/units.hpp>
+#include <nxtui/ansi.hpp>
+#include <nxtui/any_layout.hpp>
+#include <nxtui/compositor.hpp>
+#include <nxtui/glyph-table.hpp>
+#include <nxtui/input.hpp>
+#include <nxtui/regional-tty.hpp>
+#include <nxtui/slot.hpp>
+#include <nxtui/units.hpp>
 
 #include <algorithm>
 #include <array>
@@ -34,13 +34,15 @@
 
 namespace nxt::rt {
 
-using widget_slot = nxt::tui::Slot<nxt::tui::AnyLayout>;
+using namespace nxtui;
+
+using widget_slot = nxtui::tui::Slot<nxtui::tui::AnyLayout>;
 
 struct widget_slots_column_layout
 {
     std::span<const widget_slot> slots;
 
-    nxt::tui::WidthHint width_hint() const
+    nxtui::tui::WidthHint width_hint() const
     {
         auto max_min = 0 * ch;
         for (const auto & slot : slots)
@@ -48,12 +50,12 @@ struct widget_slots_column_layout
         return {max_min, 1.0 * one};
     }
 
-    nxt::tui::HeightHint height_hint() const
+    nxtui::tui::HeightHint height_hint() const
     {
         auto total_min = 0 * ln;
         for (const auto & slot : slots)
             total_min += slot.height_hint().min;
-        return nxt::tui::HeightHint::fixed(total_min);
+        return nxtui::tui::HeightHint::fixed(total_min);
     }
 
     void render(RasterView & raster, Size size) const
@@ -87,13 +89,13 @@ struct ui_runtime_options
 {
     bool render = true;
     bool hide_cursor = true;
-    nxt::Size fallback_size{96 * nxt::ch, 26 * nxt::ln};
+    nxtui::Size fallback_size{96 * nxtui::ch, 26 * nxtui::ln};
 };
 
 /// New-runtime UI owner for terminal-guest applications.
 ///
 /// This is the `nxt::rt` successor to the useful part of the old
-/// `nxt::tui::UIRuntime`: a live layout surface, a bottom HUD rendered through
+/// `nxtui::tui::UIRuntime`: a live layout surface, a bottom HUD rendered through
 /// `TerminalCompositor`, and durable scrollback blocks written above it.
 class ui_runtime
 {
@@ -104,10 +106,10 @@ public:
         , raw_(STDIN_FILENO, terminal_surface_ && ::isatty(STDIN_FILENO) != 0)
         , size_(current_terminal_size(options.fallback_size))
         , compositor_(size_, glyphs_)
-        , surface_(nxt::tui::AnyLayout{}, [this] { signal_damage(); })
+        , surface_(nxtui::tui::AnyLayout{}, [this] { signal_damage(); })
     {
-        nxt::ansi::init();
-        nxt::ansi::mode = nxt::ansi::Mode::enabled;
+        nxtui::ansi::init();
+        nxtui::ansi::mode = nxtui::ansi::Mode::enabled;
     }
 
     ui_runtime(const ui_runtime &) = delete;
@@ -132,7 +134,7 @@ public:
         return terminal_surface_;
     }
 
-    [[nodiscard]] nxt::Size terminal_size() const noexcept
+    [[nodiscard]] nxtui::Size terminal_size() const noexcept
     {
         return size_;
     }
@@ -144,7 +146,7 @@ public:
 
     [[nodiscard]] widget_slot make_surface()
     {
-        return widget_slot{nxt::tui::AnyLayout{}, [this] {
+        return widget_slot{nxtui::tui::AnyLayout{}, [this] {
             signal_damage();
         }};
     }
@@ -171,15 +173,15 @@ public:
         return stopping_;
     }
 
-    void draw(nxt::tui::AnyLayout layout) const
+    void draw(nxtui::tui::AnyLayout layout) const
     {
         surface_.publish(std::move(layout));
     }
 
-    template<nxt::tui::Layout Layout>
+    template<nxtui::tui::Layout Layout>
     void draw(Layout && layout) const
     {
-        draw(nxt::tui::AnyLayout{std::forward<Layout>(layout)});
+        draw(nxtui::tui::AnyLayout{std::forward<Layout>(layout)});
     }
 
     [[nodiscard]] bool queue_print_block(std::string text)
@@ -199,14 +201,14 @@ public:
         (void)queue_print_block(std::move(text));
     }
 
-    template<nxt::tui::Layout Layout>
+    template<nxtui::tui::Layout Layout>
     void print(Layout && layout)
     {
         print_block(
             render_scrollback_layout(std::forward<Layout>(layout)));
     }
 
-    template<nxt::tui::Layout Layout>
+    template<nxtui::tui::Layout Layout>
     [[nodiscard]] std::string render_print_layout(Layout && layout)
     {
         return render_scrollback_layout(std::forward<Layout>(layout));
@@ -227,7 +229,7 @@ public:
         if (!terminal_surface_ || ::isatty(STDIN_FILENO) == 0)
             co_return;
 
-        auto parser = nxt::input::Parser{};
+        auto parser = nxtui::input::Parser{};
         auto storage = std::array<std::byte, 256>{};
 
         while (!stop_requested()) {
@@ -287,13 +289,13 @@ public:
         flush_output_queue(out);
         if (has_terminal_surface()) {
             auto restore = std::string{};
-            auto w = nxt::ansi::Writer{restore};
+            auto w = nxtui::ansi::Writer{restore};
             w.save_cursor();
             w.reset_scroll_region();
             w.restore_cursor();
-            w.move_to(nxt::Pos{
-                nxt::terminal_origin + 0 * nxt::ch,
-                nxt::terminal_origin_v + size_.h - 1 * nxt::ln});
+            w.move_to(nxtui::Pos{
+                nxtui::terminal_origin + 0 * nxtui::ch,
+                nxtui::terminal_origin_v + size_.h - 1 * nxtui::ln});
             w.clear_line();
             w.reset();
             w.show_cursor();
@@ -382,12 +384,12 @@ private:
             return;
 
         auto buf = std::string{};
-        auto w = nxt::ansi::Writer{buf};
-        auto first = nxt::terminal_origin_v + size_.h - rows;
-        auto last = nxt::terminal_origin_v + size_.h;
+        auto w = nxtui::ansi::Writer{buf};
+        auto first = nxtui::terminal_origin_v + size_.h - rows;
+        auto last = nxtui::terminal_origin_v + size_.h;
         w.save_cursor();
         for (auto row = first; row < last; row += 1 * ln) {
-            w.move_to(nxt::Pos{nxt::terminal_origin + 0 * nxt::ch, row});
+            w.move_to(nxtui::Pos{nxtui::terminal_origin + 0 * nxtui::ch, row});
             w.clear_line();
         }
         w.restore_cursor();
@@ -424,7 +426,7 @@ private:
         discard_cursor_reports();
 
         auto query = std::string{};
-        auto w = nxt::ansi::Writer{query};
+        auto w = nxtui::ansi::Writer{query};
         w.request_cursor_position();
         co_await write_stdout_all(std::move(query));
 
@@ -464,14 +466,14 @@ private:
         initial_insertion_cursor_ = co_await request_initial_insertion_cursor();
     }
 
-    template<nxt::tui::Layout Layout>
+    template<nxtui::tui::Layout Layout>
     [[nodiscard]] std::string render_scrollback_layout(Layout && layout)
     {
         auto height = layout.height_hint().min;
         if (height.count() == 0)
             height = 1 * ln;
 
-        auto raster = nxt::Raster(size_.w, height, glyphs_);
+        auto raster = nxtui::Raster(size_.w, height, glyphs_);
         auto view = raster.view();
         layout.render(view, raster.extent());
         auto out = std::string{};
@@ -479,7 +481,7 @@ private:
         // autowrap is left enabled, writing the last terminal column followed by
         // a newline can consume an extra row on real terminals.
         out += "\x1b[?7l";
-        out += nxt::ansi::render_raster(raster);
+        out += nxtui::ansi::render_raster(raster);
         out += "\x1b[?7h";
         return out;
     }
@@ -612,9 +614,9 @@ private:
     ui_runtime_options options_;
     bool terminal_surface_ = false;
     raw_terminal_mode raw_;
-    nxt::GlyphTable glyphs_;
-    nxt::Size size_;
-    nxt::tui::TerminalCompositor compositor_;
+    nxtui::GlyphTable glyphs_;
+    nxtui::Size size_;
+    nxtui::tui::TerminalCompositor compositor_;
     widget_slot surface_;
     event damage_event_;
     std::uint64_t damage_generation_ = 0;
@@ -680,7 +682,7 @@ inline const widget_slot & require_current_widget_slot()
 class draw_awaiter
 {
 public:
-    explicit draw_awaiter(nxt::tui::AnyLayout layout)
+    explicit draw_awaiter(nxtui::tui::AnyLayout layout)
         : layout_(std::move(layout))
     {}
 
@@ -698,24 +700,24 @@ public:
     }
 
 private:
-    nxt::tui::AnyLayout layout_;
+    nxtui::tui::AnyLayout layout_;
 };
 
-[[nodiscard]] inline draw_awaiter draw(nxt::tui::AnyLayout layout)
+[[nodiscard]] inline draw_awaiter draw(nxtui::tui::AnyLayout layout)
 {
     throw_if_stop_requested();
     return draw_awaiter{std::move(layout)};
 }
 
-template<nxt::tui::Layout Layout>
+template<nxtui::tui::Layout Layout>
 [[nodiscard]] draw_awaiter draw(Layout && layout)
 {
-    return draw(nxt::tui::AnyLayout{std::forward<Layout>(layout)});
+    return draw(nxtui::tui::AnyLayout{std::forward<Layout>(layout)});
 }
 
 inline void clear_widget()
 {
-    require_current_widget_slot().publish(nxt::tui::AnyLayout{});
+    require_current_widget_slot().publish(nxtui::tui::AnyLayout{});
 }
 
 inline bool has_terminal_surface()
@@ -755,7 +757,7 @@ private:
     return print_block_awaiter{std::move(text)};
 }
 
-template<nxt::tui::Layout Layout>
+template<nxtui::tui::Layout Layout>
 [[nodiscard]] print_block_awaiter print(Layout && layout)
 {
     throw_if_stop_requested();
@@ -841,7 +843,7 @@ task<void> run_ui_zone_body_child(
 
 inline task<void> clear_widget_slot_task(widget_slot slot)
 {
-    slot.publish(nxt::tui::AnyLayout{});
+    slot.publish(nxtui::tui::AnyLayout{});
     co_return;
 }
 

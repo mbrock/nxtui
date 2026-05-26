@@ -8,11 +8,11 @@
 
 #include <experimental/mdspan>
 
-#include "nxt/glyph-table.hpp"
-#include "nxt/style.hpp"
-#include "nxt/units.hpp"
+#include "nxtui/glyph-table.hpp"
+#include "nxtui/style.hpp"
+#include "nxtui/units.hpp"
 
-namespace nxt {
+namespace nxtui {
 
 /// Dynamic extents for terminal-cell rasters.
 using mdspan_extents = std::experimental::
@@ -398,4 +398,4 @@ inline auto zip_rows(const Raster & front, const Raster & back)
              });
 }
 
-} // namespace nxt
+} // namespace nxtui

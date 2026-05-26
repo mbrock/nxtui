@@ -1,14 +1,14 @@
 #pragma once
 
-#include "nxt/units.hpp"
+#include "nxtui/units.hpp"
 
 #include <concepts>
 
-namespace nxt {
+namespace nxtui {
 class RasterView;
 }
 
-namespace nxt::tui {
+namespace nxtui::tui {
 
 template<auto Unit>
 struct hint_extent;
@@ -56,4 +56,4 @@ concept Layout =
         { layout.render(raster, size) } -> std::same_as<void>;
     };
 
-} // namespace nxt::tui
+} // namespace nxtui::tui

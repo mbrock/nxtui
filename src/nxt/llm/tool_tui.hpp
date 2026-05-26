@@ -1,8 +1,8 @@
 #pragma once
 
-#include <nxt/any_layout.hpp>
-#include <nxt/style.hpp>
-#include <nxt/units.hpp>
+#include <nxtui/any_layout.hpp>
+#include <nxtui/style.hpp>
+#include <nxtui/units.hpp>
 #include <nxt/llm/tool_json.hpp>
 
 #include <format>
@@ -15,7 +15,8 @@
 
 namespace nxt::llm::tool_tui {
 
-using namespace nxt::tui;
+using namespace nxtui;
+using namespace nxtui::tui;
 
 constexpr Rgba8 slate_950{2, 6, 23};
 constexpr Rgba8 slate_900{15, 23, 42};
@@ -142,34 +143,34 @@ first_lines(std::string_view text, std::size_t max_lines)
     return lines;
 }
 
-nxt::tui::AnyLayout chip(
+nxtui::tui::AnyLayout chip(
     std::string s,
     Rgba8 fg_color,
     Rgba8 bg_color,
     Emphasis em_flags = DEFAULT_EMPHASIS);
 
-nxt::tui::AnyLayout status_chip(
+nxtui::tui::AnyLayout status_chip(
     std::string_view s,
     Rgba8 fg_color,
     Rgba8 bg_color,
     Emphasis em_flags = DEFAULT_EMPHASIS);
 
-nxt::tui::AnyLayout inset_block(
-    nxt::tui::AnyLayout body,
+nxtui::tui::AnyLayout inset_block(
+    nxtui::tui::AnyLayout body,
     width_t pad = 1 * ch);
 
-nxt::tui::AnyLayout block(
-    nxt::tui::AnyLayout header,
-    nxt::tui::AnyLayout body,
+nxtui::tui::AnyLayout block(
+    nxtui::tui::AnyLayout header,
+    nxtui::tui::AnyLayout body,
     width_t pad = 1 * ch);
 
-nxt::tui::AnyLayout body_line(std::string s, Rgba8 fg_color);
-nxt::tui::AnyLayout body_lines(
+nxtui::tui::AnyLayout body_line(std::string s, Rgba8 fg_color);
+nxtui::tui::AnyLayout body_lines(
     std::vector<std::string> lines,
     Rgba8 fg_color);
-nxt::tui::AnyLayout render_call(const call_view & c);
-nxt::tui::AnyLayout thought_block(std::string s);
-nxt::tui::AnyLayout assistant_block(std::string s);
-nxt::tui::AnyLayout render_turn(const turn_view & t);
+nxtui::tui::AnyLayout render_call(const call_view & c);
+nxtui::tui::AnyLayout thought_block(std::string s);
+nxtui::tui::AnyLayout assistant_block(std::string s);
+nxtui::tui::AnyLayout render_turn(const turn_view & t);
 
 } // namespace nxt::llm::tool_tui

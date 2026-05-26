@@ -1,4 +1,4 @@
-#include "nxt/input.hpp"
+#include "nxtui/input.hpp"
 
 #include <cerrno>
 #include <cstdlib>
@@ -10,7 +10,7 @@
 #include <sys/termios.h>
 #include <unistd.h>
 
-namespace nxt::input {
+namespace nxtui::input {
 namespace {
 
 // Enable Kitty keyboard protocol flags:
@@ -541,4 +541,4 @@ InputModeGuard::~InputModeGuard()
         tcsetattr(STDIN_FILENO, TCSANOW, &termios_->old_term);
 }
 
-} // namespace nxt::input
+} // namespace nxtui::input

@@ -1,14 +1,14 @@
 #pragma once
 
-#include "nxt/tui.hpp"
-#include "nxt/utf8.hpp"
+#include "nxtui/tui.hpp"
+#include "nxtui/utf8.hpp"
 
 #include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace nxt::tui::text_flow {
+namespace nxtui::tui::text_flow {
 
 inline void trim_trailing_space(std::string & text)
 {
@@ -250,4 +250,4 @@ inline std::string sanitize_terminal_text(std::string_view text)
     return out;
 }
 
-} // namespace nxt::tui::text_flow
+} // namespace nxtui::tui::text_flow

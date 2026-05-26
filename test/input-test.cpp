@@ -1,4 +1,4 @@
-#include <nxt/input.hpp>
+#include <nxtui/input.hpp>
 
 #include "test.hpp"
 
@@ -6,15 +6,17 @@
 
 namespace nxt::test {
 
+using namespace nxtui;
+
 using namespace boost::ut;
-using nxt::input::EventType;
-using nxt::input::Key;
+using nxtui::input::EventType;
+using nxtui::input::Key;
 
 static suite input_parser_tests{
     "Input parser", [] {
         "text"_test = [] {
             "parses plain UTF-8"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("a\xc4\x89");
 
                 expect(events.size() == 2_ul);
@@ -27,7 +29,7 @@ static suite input_parser_tests{
             };
 
             "waits for partial UTF-8"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\xc4");
                 expect(events.empty());
 
@@ -39,7 +41,7 @@ static suite input_parser_tests{
             };
 
             "advances past invalid bytes"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\xffx");
 
                 expect(events.size() == 2_ul);
@@ -51,7 +53,7 @@ static suite input_parser_tests{
 
         "controls"_test = [] {
             "parses simple keys"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\r\t\x7f");
 
                 expect(events.size() == 3_ul);
@@ -61,7 +63,7 @@ static suite input_parser_tests{
             };
 
             "falls back for legacy Ctrl letters"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x01");
 
                 expect(events.size() == 1_ul);
@@ -73,7 +75,7 @@ static suite input_parser_tests{
 
         "Kitty CSI u"_test = [] {
             "parses modified characters"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[97;5u");
 
                 expect(events.size() == 1_ul);
@@ -85,7 +87,7 @@ static suite input_parser_tests{
             };
 
             "parses event type and associated text"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[97;1;97u\x1b[97;1:3;97u");
 
                 expect(events.size() == 2_ul);
@@ -102,7 +104,7 @@ static suite input_parser_tests{
             };
 
             "parses repeat text events"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[97;1:2;97u");
 
                 expect(events.size() == 1_ul);
@@ -111,7 +113,7 @@ static suite input_parser_tests{
             };
 
             "parses alternate keys"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[61:43;6;43u");
 
                 expect(events.size() == 1_ul);
@@ -125,7 +127,7 @@ static suite input_parser_tests{
             };
 
             "parses associated text without a key code"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[0;1;229u");
 
                 expect(events.size() == 1_ul);
@@ -136,7 +138,7 @@ static suite input_parser_tests{
             };
 
             "recognizes Ctrl-C"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[99;5u");
 
                 expect(events.size() == 1_ul);
@@ -145,7 +147,7 @@ static suite input_parser_tests{
             };
 
             "parses Escape"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[27u");
 
                 expect(events.size() == 1_ul);
@@ -153,7 +155,7 @@ static suite input_parser_tests{
             };
 
             "parses arrows and modifiers"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[1;6D\x1b[1C");
 
                 expect(events.size() == 2_ul);
@@ -164,7 +166,7 @@ static suite input_parser_tests{
             };
 
             "parses tilde navigation keys"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[3~\x1b[5;3~");
 
                 expect(events.size() == 2_ul);
@@ -174,7 +176,7 @@ static suite input_parser_tests{
             };
 
             "waits for partial escape sequences"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[1;");
                 expect(events.empty());
 
@@ -185,7 +187,7 @@ static suite input_parser_tests{
             };
 
             "parses cursor position reports"_test = [] {
-                nxt::input::Parser parser;
+                nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[12;34R");
 
                 expect(events.size() == 1_ul);
@@ -194,10 +196,10 @@ static suite input_parser_tests{
                 expect(events[0].cursor_position.has_value());
                 expect(
                     events[0].cursor_position->x
-                    == nxt::terminal_origin + 33 * nxt::ch);
+                    == nxtui::terminal_origin + 33 * nxtui::ch);
                 expect(
                     events[0].cursor_position->y
-                    == nxt::terminal_origin_v + 11 * nxt::ln);
+                    == nxtui::terminal_origin_v + 11 * nxtui::ln);
             };
 	        };
 	    }};
