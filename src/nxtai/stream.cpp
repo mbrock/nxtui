@@ -1,4 +1,4 @@
-#include <nxt/llm/common.hpp>
+#include <nxtai/common.hpp>
 
 #include <nxt/rt/buffers.hpp>
 #include <nxt/rt/http.hpp>
@@ -9,8 +9,8 @@
 #include <nxtui/tui.hpp>
 #include <nxt/http.hpp>
 #include <nxt/json.hpp>
-#include <nxt/llm/tool_tui.hpp>
-#include <nxt/llm/trace_tui.hpp>
+#include <nxtai/tool_tui.hpp>
+#include <nxtai/trace_tui.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm {
+namespace nxtai {
 namespace {
 struct stream_event
 {
@@ -38,7 +38,7 @@ struct live_tool_call
 {
     std::string item_id;
     int output_index = -1;
-    nxt::llm::tool_tui::call_view view;
+    nxtai::tool_tui::call_view view;
 };
 
 struct network_hud_state
@@ -200,7 +200,7 @@ read_response_created_id(std::string_view data)
     }
 }
 
-nxt::rt::task<std::optional<nxt::llm::openai::raw_json>>
+nxt::rt::task<std::optional<nxtai::openai::raw_json>>
 read_output_item_done_item(std::string_view data)
 {
     auto in = nxt::json::string_reader{.input = data};
@@ -230,7 +230,7 @@ read_output_item_done_item(std::string_view data)
         auto value_end = in.offset;
 
         if (key == "item")
-            co_return nxt::llm::openai::raw_json{
+            co_return nxtai::openai::raw_json{
                 std::string{data.substr(value_begin, value_end - value_begin)}};
 
         token = co_await next_json_token(in);
@@ -247,7 +247,7 @@ std::optional<std::string> event_string_field(
     std::string_view data,
     std::string_view field)
 {
-    return nxt::llm::tools::json_string_member(data, field);
+    return nxtai::tools::json_string_member(data, field);
 }
 
 live_tool_call * find_live_tool_call(
@@ -276,12 +276,12 @@ live_tool_call & ensure_live_tool_call(
             .item_id = std::move(item_id),
             .output_index = output_index,
             .view =
-                nxt::llm::tool_tui::call_view{
+                nxtai::tool_tui::call_view{
                     .name = {},
                     .arguments = {},
                     .output = {},
                     .latest_memory_current = std::nullopt,
-                    .state = nxt::llm::tool_tui::status::running,
+                    .state = nxtai::tool_tui::status::running,
                     .elapsed_ms = -1,
                 },
         });
@@ -556,7 +556,7 @@ nxtui::Rgba8 rate_bg(nxtui::Rgba8 color, double bytes_per_second)
     static constexpr auto max_display_rate = 32.0 * 1024.0;
     auto fraction =
         std::clamp(bytes_per_second / max_display_rate, 0.0, 1.0);
-    return blend(nxt::llm::tool_tui::slate_900, color, 0.12 + 0.58 * fraction);
+    return blend(nxtai::tool_tui::slate_900, color, 0.12 + 0.58 * fraction);
 }
 
 enum class cell_align { left, right };
@@ -598,7 +598,7 @@ auto fixed_cell(
 
 auto rate_cell(std::string label, double bytes_per_second, nxtui::Rgba8 color)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     auto style = nxtui::tui::fg(tt::slate_300) | nxtui::tui::bg(rate_bg(color, bytes_per_second));
     return nxtui::tui::line_text(
         nxtui::tui::WidthHint{7 * nxtui::ch, 1.0 * nxtui::one},
@@ -623,7 +623,7 @@ void append_thought_delta(std::string & thought, std::string_view delta)
 
 auto header_layout(std::string_view model, std::string_view status)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     auto summary = std::format("{}  {}", model, status);
     auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
@@ -640,7 +640,7 @@ auto header_layout(std::string_view model, std::string_view status)
 
 nxtui::tui::AnyLayout assistant_preview_layout(std::string_view assistant_text)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     if (assistant_text.empty())
         return {};
     auto preview = join_lines(last_lines(assistant_text, 8));
@@ -657,14 +657,14 @@ nxtui::tui::AnyLayout stream_activity_layout(
     children.reserve(3);
     if (!thought.empty())
         children.push_back(
-            nxt::llm::tool_tui::thought_block(std::string{thought}));
+            nxtai::tool_tui::thought_block(std::string{thought}));
     if (!assistant_text.empty())
         children.push_back(assistant_preview_layout(assistant_text));
     if (!live_calls.empty()) {
         children.push_back(nxtui::tui::each(
             std::vector<live_tool_call>{live_calls},
             [](const live_tool_call & call) {
-                return nxt::llm::tool_tui::render_call(call.view);
+                return nxtai::tool_tui::render_call(call.view);
             }));
     }
     return nxtui::tui::column(std::move(children));
@@ -672,7 +672,7 @@ nxtui::tui::AnyLayout stream_activity_layout(
 
 nxtui::tui::AnyLayout network_footer_layout(const network_hud_state & net)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     if (net.phase.empty() && net.socket_rx == 0 && net.socket_tx == 0)
         return {};
 
@@ -725,7 +725,7 @@ nxtui::tui::AnyLayout agent_layout(
     std::string_view assistant_text,
     nxtui::tui::AnyLayout child)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     children.push_back(header_layout(model, status));
@@ -746,7 +746,7 @@ nxtui::tui::AnyLayout stream_layout(
     const std::vector<live_tool_call> & live_calls,
     const network_hud_state & network)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
     children.push_back(
@@ -891,7 +891,7 @@ void note_tls_progress(
     if (progress.kind == nxt::rt::tls::handshake_progress_kind::begin) {
         network.phase = std::format(
             "TLS {}",
-            nxt::llm::trace_tui::display_name(progress.name));
+            nxtai::trace_tui::display_name(progress.name));
         if (trace != nullptr && tls_span)
             active_tls_spans.push_back(
                 trace->start_span(
@@ -917,7 +917,7 @@ void note_tls_progress(
         tls_span.event(std::string{progress.name});
     network.phase = std::format(
         "TLS {}",
-        nxt::llm::trace_tui::display_name(progress.name));
+        nxtai::trace_tui::display_name(progress.name));
 }
 
 nxt::rt::task<void> print_tls_ready(
@@ -929,14 +929,14 @@ nxt::rt::task<void> print_tls_ready(
 
     if (trace != nullptr && tls_span) {
         co_await nxt::rt::print(
-            nxt::llm::trace_tui::render_span_waterfall(
+            nxtai::trace_tui::render_span_waterfall(
                 *trace,
                 tls_span,
                 {
                     .label = "",
                     .detail = "TLS 1.3",
                     .subject = "api.openai.com",
-                    .accent = nxt::llm::tool_tui::teal_300,
+                    .accent = nxtai::tool_tui::teal_300,
                 }));
     } else {
         co_await nxt::rt::print_block(
@@ -1023,7 +1023,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
     co_await publisher.publish(true);
 
     auto http_request =
-        nxt::llm::responses::openai_responses_http_request(request);
+        nxtai::responses::openai_responses_http_request(request);
     for (auto & header : http_request.headers) {
         if (header.name == "Connection")
             header.value = "close";
@@ -1102,7 +1102,7 @@ nxt::rt::task<stream_phase_result> stream_openai_response(
             thought.clear();
             if (nxt::rt::has_terminal_surface() && !summary.empty())
                 co_await nxt::rt::print(
-                    nxt::llm::tool_tui::thought_block(std::move(summary)));
+                    nxtai::tool_tui::thought_block(std::move(summary)));
             co_await publisher.publish(true);
         } else if (event.type == "response.output_text.delta") {
             auto first_stream_delta = assistant_text.empty();
@@ -1179,4 +1179,4 @@ nxt::rt::task<stream_phase_result> run_stream_phase(
 }
 
 
-} // namespace nxt::llm
+} // namespace nxtai

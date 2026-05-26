@@ -170,7 +170,7 @@ integers throughout layout and rendering code.
 
 - `src/nxt` contains core terminal, raster, units, and layout code.
 - `src/nxt/rt` contains the structured coroutine runtime.
-- `src/nxt/llm` contains the runtime `nxtllm` entry point.
+- `src/nxtai` contains the runtime `nxtllm` entry point.
 - `test` contains raster, terminal compositor, and runtime tests.
 - `vendor/mdspan` vendors the header-only mdspan implementation.
 - `vendor/libvterm` is used by the terminal tests.

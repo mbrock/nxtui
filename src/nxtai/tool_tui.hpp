@@ -3,7 +3,7 @@
 #include <nxtui/any_layout.hpp>
 #include <nxtui/style.hpp>
 #include <nxtui/units.hpp>
-#include <nxt/llm/tool_json.hpp>
+#include <nxtai/tool_json.hpp>
 
 #include <format>
 #include <cstdint>
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::tool_tui {
+namespace nxtai::tool_tui {
 
 using namespace nxtui;
 using namespace nxtui::tui;
@@ -114,7 +114,7 @@ inline std::optional<std::string> bash_command(std::string_view arguments)
     if (arguments.empty())
         return std::nullopt;
 
-    auto command = nxt::llm::tools::json_string_member(arguments, "command");
+    auto command = nxtai::tools::json_string_member(arguments, "command");
     if (!command || command->empty())
         return std::nullopt;
     return command;
@@ -173,4 +173,4 @@ nxtui::tui::AnyLayout thought_block(std::string s);
 nxtui::tui::AnyLayout assistant_block(std::string s);
 nxtui::tui::AnyLayout render_turn(const turn_view & t);
 
-} // namespace nxt::llm::tool_tui
+} // namespace nxtai::tool_tui

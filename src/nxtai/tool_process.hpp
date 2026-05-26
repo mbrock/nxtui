@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::tool_process {
+namespace nxtai::tool_process {
 
 using namespace std::chrono_literals;
 
@@ -169,4 +169,4 @@ capture(
         capture_options{.max_capture_bytes = max_capture_bytes});
 }
 
-} // namespace nxt::llm::tool_process
+} // namespace nxtai::tool_process

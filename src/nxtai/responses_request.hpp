@@ -2,14 +2,14 @@
 
 #include <nxt/http.hpp>
 #include <nxt/json.hpp>
-#include <nxt/llm/openai_types.hpp>
+#include <nxtai/openai_types.hpp>
 
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::responses {
+namespace nxtai::responses {
 
 struct openai_responses_request
 {
@@ -225,4 +225,4 @@ openai_responses_http_request(const openai_responses_request & request)
     };
 }
 
-} // namespace nxt::llm::responses
+} // namespace nxtai::responses

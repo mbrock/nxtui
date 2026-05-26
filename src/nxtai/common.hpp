@@ -1,9 +1,9 @@
 #pragma once
 
 #include <nxt/rt/task.hpp>
-#include <nxt/llm/openai_types.hpp>
-#include <nxt/llm/responses_request.hpp>
-#include <nxt/llm/tool_batch.hpp>
+#include <nxtai/openai_types.hpp>
+#include <nxtai/responses_request.hpp>
+#include <nxtai/tool_batch.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -12,20 +12,20 @@
 #include <string_view>
 #include <vector>
 
-namespace nxt::llm {
+namespace nxtai {
 
-using llm_request = nxt::llm::responses::openai_responses_request;
-using function_call = nxt::llm::tools::function_call;
-using function_call_result = nxt::llm::tools::function_call_result;
-using tool_result = nxt::llm::tools::tool_result;
-using tool_registry = nxt::llm::tools::tool_registry;
+using llm_request = nxtai::responses::openai_responses_request;
+using function_call = nxtai::tools::function_call;
+using function_call_result = nxtai::tools::function_call_result;
+using tool_result = nxtai::tools::tool_result;
+using tool_registry = nxtai::tools::tool_registry;
 
 constexpr std::size_t default_max_output_tokens = 128000;
 constexpr auto frame_interval = std::chrono::milliseconds{16};
 
 struct response_stream_result
 {
-    std::vector<nxt::llm::openai::raw_json> output_items;
+    std::vector<nxtai::openai::raw_json> output_items;
     std::optional<std::string> response_id;
     bool completed = false;
 };
@@ -47,16 +47,16 @@ nxt::rt::task<stream_phase_result> run_stream_phase(
     std::string_view status,
     std::string_view assistant_text);
 
-nxt::rt::task<std::vector<nxt::llm::tools::function_call_result>>
+nxt::rt::task<std::vector<nxtai::tools::function_call_result>>
 run_function_tool_batch_ui(
     const tool_registry & tools,
-    std::vector<nxt::llm::tools::function_call> calls,
+    std::vector<nxtai::tools::function_call> calls,
     std::chrono::milliseconds settle_delay);
 
-nxt::rt::task<std::vector<nxt::llm::tools::function_call_result>>
+nxt::rt::task<std::vector<nxtai::tools::function_call_result>>
 run_tool_phase(
     const tool_registry & tools,
-    std::vector<nxt::llm::tools::function_call> calls,
+    std::vector<nxtai::tools::function_call> calls,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text,
@@ -71,4 +71,4 @@ nxt::rt::task<void> run_agent_ui_zone(
     llm_request request,
     tool_registry tools);
 
-} // namespace nxt::llm
+} // namespace nxtai

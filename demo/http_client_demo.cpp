@@ -6,7 +6,7 @@
 #include <nxt/tls.hpp>
 #include <nxt/tls/cert.hpp>
 #include <nxt/unique-fd.hpp>
-#include <nxt/llm/responses_request.hpp>
+#include <nxtai/responses_request.hpp>
 
 #if defined(__linux__)
 #  include <nxt/rt/uring_wand.hpp>
@@ -80,7 +80,7 @@ std::string make_https_request(nxt::rt::http::url const & url)
         nxt::tls::require_tls(
             api_key != nullptr && std::string_view{api_key}.size() > 0,
             "OPENAI_API_KEY is not set");
-        auto request = nxt::llm::responses::openai_responses_request{
+        auto request = nxtai::responses::openai_responses_request{
             .api_key = api_key,
             .model = "gpt-5-mini",
             .input =
@@ -91,7 +91,7 @@ std::string make_https_request(nxt::rt::http::url const & url)
             .store = false,
         };
         auto http_request =
-            nxt::llm::responses::openai_responses_http_request(request);
+            nxtai::responses::openai_responses_http_request(request);
         for (auto & header : http_request.headers) {
             if (header.name == "Connection")
                 header.value = "close";

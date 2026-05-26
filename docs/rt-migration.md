@@ -24,7 +24,7 @@ task zones, and explicit UI/runtime capabilities.
 
 The old application stack is no longer in the tree. The former `src/nxt/ai`
 LLM stack has also been removed; the surviving LLM code lives in
-`src/nxt/llm`.
+`src/nxtai`.
 
 ## Migration table
 
@@ -42,7 +42,7 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::scope` | `nxt::rt::task_zone` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxt::rt::op::spawn_pty` + `nxt::rt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
-| old LLM entry point | `src/nxt/llm/nxtllm.cpp` | Done. The executable streams one-shot turns and runs tool batches; richer interactive HUD work remains. |
+| old LLM entry point | `src/nxtai/nxtllm.cpp` | Done. The executable streams one-shot turns and runs tool batches; richer interactive HUD work remains. |
 
 ## Completed Slices
 
@@ -57,19 +57,19 @@ LLM stack has also been removed; the surviving LLM code lives in
 
 3. Port buffer and HTTP helpers to `nxt::rt::task`. Done in `src/nxt/rt`.
    Keep request/response data structures free of runtime dependencies.
-   `src/nxt/llm/responses_request.hpp` is the model for that split.
+   `src/nxtai/responses_request.hpp` is the model for that split.
 
 4. Make OpenAI streaming use `src` networking. Done for the one-shot
    `nxtllm` path: it connects over `nxt::rt` TCP/TLS, reads HTTP/SSE, and
    collects completed output items.
 
 5. Port tool execution after streaming works. Done as
-   `src/nxt/llm/tool_batch.hpp`, `agent_tools.hpp`, and
+   `src/nxtai/tool_batch.hpp`, `agent_tools.hpp`, and
    `tool_process.hpp`. Batches fork one task per call in a zone and return
    ordered `function_call_output` items.
 
 6. Re-enable `nxtllm` on the runtime. Done in
-   `src/nxt/llm/nxtllm.cpp`: the executable builds by default, parses CLI
+   `src/nxtai/nxtllm.cpp`: the executable builds by default, parses CLI
    options, enters `nxt::rt::runtime`, streams responses over the `src`
    HTTP/TLS stack, and can complete a bash tool-call smoke test.
 

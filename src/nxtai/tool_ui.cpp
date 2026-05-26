@@ -1,8 +1,8 @@
-#include <nxt/llm/common.hpp>
+#include <nxtai/common.hpp>
 
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/ui_runtime.hpp>
-#include <nxt/llm/tool_tui.hpp>
+#include <nxtai/tool_tui.hpp>
 
 #include <chrono>
 #include <format>
@@ -11,15 +11,15 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm {
+namespace nxtai {
 namespace {
-nxt::rt::task<nxt::llm::tools::tool_result> run_one_tool_call_worker(
+nxt::rt::task<nxtai::tools::tool_result> run_one_tool_call_worker(
     const tool_registry & tools,
-    const nxt::llm::tools::function_call & call,
+    const nxtai::tools::function_call & call,
     bool & done)
 {
     try {
-        auto result = co_await nxt::llm::tools::run_function_tool(tools, call);
+        auto result = co_await nxtai::tools::run_function_tool(tools, call);
         done = true;
         co_return result;
     } catch (...) {
@@ -33,7 +33,7 @@ run_one_tool_call_meter(
     const tool_registry & tools,
     const function_call & call,
     std::chrono::steady_clock::time_point started,
-    nxt::llm::tool_tui::call_view & view,
+    nxtai::tool_tui::call_view & view,
     bool & done)
 {
     auto deed = nxt::rt::fork(
@@ -45,27 +45,27 @@ run_one_tool_call_meter(
                 std::chrono::steady_clock::now() - started)
                 .count();
         view.elapsed_ms = static_cast<int>(elapsed);
-        co_await nxt::rt::draw(nxt::llm::tool_tui::render_call(view));
+        co_await nxt::rt::draw(nxtai::tool_tui::render_call(view));
         co_await nxt::rt::op::timeout::after(frame_interval);
     }
     co_return std::move(deed);
 }
 
-nxt::rt::task<nxt::llm::tools::function_call_result> run_one_tool_call_ui(
+nxt::rt::task<nxtai::tools::function_call_result> run_one_tool_call_ui(
     const tool_registry & tools,
-    nxt::llm::tools::function_call call,
+    nxtai::tools::function_call call,
     std::chrono::milliseconds settle_delay)
 {
     auto started = std::chrono::steady_clock::now();
-    auto view = nxt::llm::tool_tui::call_view{
+    auto view = nxtai::tool_tui::call_view{
         .name = call.name,
         .arguments = call.arguments,
         .output = {},
         .latest_memory_current = std::nullopt,
-        .state = nxt::llm::tool_tui::status::running,
+        .state = nxtai::tool_tui::status::running,
         .elapsed_ms = -1,
     };
-    co_await nxt::rt::draw(nxt::llm::tool_tui::render_call(view));
+    co_await nxt::rt::draw(nxtai::tool_tui::render_call(view));
 
     auto done = false;
     auto worker = co_await nxt::rt::with_zone(
@@ -88,8 +88,8 @@ nxt::rt::task<nxt::llm::tools::function_call_result> run_one_tool_call_ui(
             .count();
 
     view.state = result.failed
-        ? nxt::llm::tool_tui::status::error
-        : nxt::llm::tool_tui::status::ok;
+        ? nxtai::tool_tui::status::error
+        : nxtai::tool_tui::status::ok;
     view.output = result.output;
     if (result.observed && result.observed->latest())
         view.latest_memory_current =
@@ -97,25 +97,25 @@ nxt::rt::task<nxt::llm::tools::function_call_result> run_one_tool_call_ui(
     else
         view.latest_memory_current = std::nullopt;
     view.elapsed_ms = static_cast<int>(elapsed);
-    co_await nxt::rt::draw(nxt::llm::tool_tui::render_call(view));
+    co_await nxt::rt::draw(nxtai::tool_tui::render_call(view));
     if (settle_delay > std::chrono::milliseconds{0})
         co_await nxt::rt::op::timeout::after(settle_delay);
 
     auto output_item =
-        nxt::llm::tools::function_call_output(
+        nxtai::tools::function_call_output(
             call.call_id,
-            nxt::llm::tools::tool_result_json(result));
-    co_return nxt::llm::tools::function_call_result{
+            nxtai::tools::tool_result_json(result));
+    co_return nxtai::tools::function_call_result{
         .call = std::move(call),
         .result = std::move(result),
         .output_item = std::move(output_item),
     };
 }
 
-nxt::rt::task<nxt::llm::tools::function_call_result>
+nxt::rt::task<nxtai::tools::function_call_result>
 run_one_tool_call_counted(
     const tool_registry & tools,
-    nxt::llm::tools::function_call call,
+    nxtai::tools::function_call call,
     std::chrono::milliseconds settle_delay,
     std::size_t & done_count)
 {
@@ -168,17 +168,17 @@ spawn_tool_call_children(
 
 } // namespace
 
-nxt::rt::task<std::vector<nxt::llm::tools::function_call_result>>
+nxt::rt::task<std::vector<nxtai::tools::function_call_result>>
 run_function_tool_batch_ui(
     const tool_registry & tools,
-    std::vector<nxt::llm::tools::function_call> calls,
+    std::vector<nxtai::tools::function_call> calls,
     std::chrono::milliseconds settle_delay)
 {
     if (!nxt::rt::has_terminal_surface()) {
         co_await nxt::rt::write_stdout_all(
             std::format(
                 "[tools] running {} tool call(s)\n", calls.size()));
-        auto results = co_await nxt::llm::tools::run_function_tool_batch(
+        auto results = co_await nxtai::tools::run_function_tool_batch(
             tools,
             std::move(calls));
         for (const auto & result : results) {
@@ -205,7 +205,7 @@ run_function_tool_batch_ui(
         });
 
     try {
-        auto out = std::vector<nxt::llm::tools::function_call_result>{};
+        auto out = std::vector<nxtai::tools::function_call_result>{};
         out.reserve(deeds.size());
         for (auto & deed : deeds) {
             auto result = std::move(deed).get();
@@ -224,4 +224,4 @@ run_function_tool_batch_ui(
 }
 
 
-} // namespace nxt::llm
+} // namespace nxtai

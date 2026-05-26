@@ -1,9 +1,9 @@
-#include <nxt/llm/trace_tui.hpp>
+#include <nxtai/trace_tui.hpp>
 
 #include <nxtui/tui.hpp>
 #include <utility>
 
-namespace nxt::llm::trace_tui {
+namespace nxtai::trace_tui {
 
 using namespace nxtui;
 
@@ -129,4 +129,4 @@ nxtui::tui::AnyLayout render_span_waterfall(
     return render_waterfall(std::move(view), std::move(options));
 }
 
-} // namespace nxt::llm::trace_tui
+} // namespace nxtai::trace_tui

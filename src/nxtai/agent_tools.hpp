@@ -1,7 +1,7 @@
 #pragma once
 
-#include <nxt/llm/tool_batch.hpp>
-#include <nxt/llm/tool_process.hpp>
+#include <nxtai/tool_batch.hpp>
+#include <nxtai/tool_process.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::agent_tools {
+namespace nxtai::agent_tools {
 
 inline std::string read_file_to_string(
     const std::filesystem::path & p,
@@ -219,4 +219,4 @@ struct read_file_tool
     });
 }
 
-} // namespace nxt::llm::agent_tools
+} // namespace nxtai::agent_tools

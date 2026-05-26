@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace nxt::llm::openai {
+namespace nxtai::openai {
 
 struct raw_json
 {
@@ -87,4 +87,4 @@ struct message_item
     std::vector<message_content_part> content;
 };
 
-} // namespace nxt::llm::openai
+} // namespace nxtai::openai

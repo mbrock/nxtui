@@ -1,9 +1,9 @@
-#include <nxt/llm/common.hpp>
+#include <nxtai/common.hpp>
 
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/ui_runtime.hpp>
 #include <nxtui/tui.hpp>
-#include <nxt/llm/tool_tui.hpp>
+#include <nxtai/tool_tui.hpp>
 
 #include <chrono>
 #include <format>
@@ -12,21 +12,21 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm {
+namespace nxtai {
 
 void prepare_tool_request(llm_request & request, const tool_registry & tools)
 {
-    if (nxt::llm::tools::empty(tools))
+    if (nxtai::tools::empty(tools))
         return;
-    request.tools = nxt::llm::tools::function_tool_definitions(tools);
+    request.tools = nxtai::tools::function_tool_definitions(tools);
     if (!request.store)
         request.include = {"reasoning.encrypted_content"};
 }
 
 void append_stateless_turn(
-    std::vector<nxt::llm::openai::raw_json> & input,
-    std::vector<nxt::llm::openai::raw_json> output_items,
-    std::vector<nxt::llm::openai::raw_json> tool_outputs)
+    std::vector<nxtai::openai::raw_json> & input,
+    std::vector<nxtai::openai::raw_json> output_items,
+    std::vector<nxtai::openai::raw_json> tool_outputs)
 {
     for (auto & item : output_items)
         input.push_back(std::move(item));
@@ -70,7 +70,7 @@ std::string join_lines(const std::vector<std::string> & lines)
 
 auto header_layout(std::string_view model, std::string_view status)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     auto summary = std::format("{}  {}", model, status);
     auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(2);
@@ -87,7 +87,7 @@ auto header_layout(std::string_view model, std::string_view status)
 
 nxtui::tui::AnyLayout assistant_preview_layout(std::string_view assistant_text)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     if (assistant_text.empty())
         return {};
     auto preview = join_lines(last_lines(assistant_text, 8));
@@ -101,7 +101,7 @@ nxtui::tui::AnyLayout agent_layout(
     std::string_view assistant_text,
     nxtui::tui::AnyLayout child)
 {
-    namespace tt = nxt::llm::tool_tui;
+    namespace tt = nxtai::tool_tui;
     auto children = std::vector<nxtui::tui::AnyLayout>{};
     children.reserve(3);
     children.push_back(header_layout(model, status));
@@ -152,10 +152,10 @@ spawn_tool_phase_child(
 
 } // namespace
 
-nxt::rt::task<std::vector<nxt::llm::tools::function_call_result>>
+nxt::rt::task<std::vector<nxtai::tools::function_call_result>>
 run_tool_phase(
     const tool_registry & tools,
-    std::vector<nxt::llm::tools::function_call> calls,
+    std::vector<nxtai::tools::function_call> calls,
     std::string_view model,
     std::string_view status,
     std::string_view assistant_text,
@@ -181,7 +181,7 @@ nxt::rt::task<void> print_assistant_if_terminal(std::string & assistant_text)
     if (!nxt::rt::has_terminal_surface() || assistant_text.empty())
         co_return;
     co_await nxt::rt::print(
-        nxt::llm::tool_tui::assistant_block(
+        nxtai::tool_tui::assistant_block(
             std::move(assistant_text)));
     assistant_text.clear();
     co_return;
@@ -195,7 +195,7 @@ nxt::rt::task<void> run_agent_loop(
     std::size_t max_steps)
 {
     auto original = request;
-    auto stateless_input = nxt::llm::responses::input_items_from_request(request);
+    auto stateless_input = nxtai::responses::input_items_from_request(request);
     auto assistant_text = std::string{};
     auto status = std::string{"starting"};
     auto model = request.model;
@@ -212,7 +212,7 @@ nxt::rt::task<void> run_agent_loop(
             request, model, status, assistant_text);
         auto response = std::move(stream.response);
         assistant_text += stream.assistant_text;
-        auto calls = co_await nxt::llm::tools::read_function_calls_from_items(
+        auto calls = co_await nxtai::tools::read_function_calls_from_items(
             std::move(response.output_items));
         if (calls.empty()) {
             co_await print_assistant_if_terminal(assistant_text);
@@ -246,7 +246,7 @@ nxt::rt::task<void> run_agent_loop(
         co_await nxt::rt::draw(
             agent_layout(model, status, assistant_text, nxtui::tui::empty()));
 
-        auto outputs = nxt::llm::tools::output_items_from_results(results);
+        auto outputs = nxtai::tools::output_items_from_results(results);
         request = original;
         request.input.clear();
         request.input_items.clear();
@@ -285,4 +285,4 @@ nxt::rt::task<void> run_agent_ui_zone(
 
 
 
-} // namespace nxt::llm
+} // namespace nxtai

@@ -16,10 +16,10 @@
 #include <vector>
 
 #include <nxt/json.hpp>
-#include <nxt/llm/common.hpp>
+#include <nxtai/common.hpp>
 #include <nxt/rt/app.hpp>
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/trace.hpp>
 #include <nxt/rt/ui_runtime.hpp>
-#include <nxt/llm/responses_request.hpp>
-#include <nxt/llm/tool_tui.hpp>
+#include <nxtai/responses_request.hpp>
+#include <nxtai/tool_tui.hpp>

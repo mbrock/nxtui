@@ -172,16 +172,16 @@ if get_option('llm_tool')
   nxtllm_dependencies += nxt_llm_cares_dep
 
   executable('nxtllm',
-    'src/nxt/llm/nxtllm.cpp',
-    'src/nxt/llm/trace_tui.cpp',
-    'src/nxt/llm/tool_tui.cpp',
-    'src/nxt/llm/agent.cpp',
-    'src/nxt/llm/stream.cpp',
-    'src/nxt/llm/tool_ui.cpp',
+    'src/nxtai/nxtllm.cpp',
+    'src/nxtai/trace_tui.cpp',
+    'src/nxtai/tool_tui.cpp',
+    'src/nxtai/agent.cpp',
+    'src/nxtai/stream.cpp',
+    'src/nxtai/tool_ui.cpp',
     include_directories : nxt_inc,
     dependencies : nxtllm_dependencies,
     cpp_args : nxt_stacktrace_cpp_args,
-    cpp_pch : 'src/nxt/llm/nxtllm_pch.hpp',
+    cpp_pch : 'src/nxtai/nxtllm_pch.hpp',
   )
 endif
 

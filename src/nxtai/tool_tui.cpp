@@ -1,11 +1,11 @@
-#include <nxt/llm/tool_tui.hpp>
+#include <nxtai/tool_tui.hpp>
 
 #include <nxtui/tui.hpp>
 #include <nxtui/tui_text.hpp>
 
 #include <utility>
 
-namespace nxt::llm::tool_tui {
+namespace nxtai::tool_tui {
 namespace {
 
 nxtui::tui::Style chip_style(
@@ -275,4 +275,4 @@ nxtui::tui::AnyLayout render_turn(const turn_view & t)
         column_layout(std::move(children)));
 }
 
-} // namespace nxt::llm::tool_tui
+} // namespace nxtai::tool_tui

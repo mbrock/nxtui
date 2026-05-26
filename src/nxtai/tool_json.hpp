@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::tools {
+namespace nxtai::tools {
 
 inline void skip_json_ws(std::string_view input, std::size_t & offset)
 {
@@ -214,4 +214,4 @@ json_string_member(std::string_view object, std::string_view key)
     return std::nullopt;
 }
 
-} // namespace nxt::llm::tools
+} // namespace nxtai::tools

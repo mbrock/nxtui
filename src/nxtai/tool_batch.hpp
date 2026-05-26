@@ -3,8 +3,8 @@
 #include <nxt/json.hpp>
 #include <nxt/rt/scoped_process.hpp>
 #include <nxt/rt/task.hpp>
-#include <nxt/llm/openai_types.hpp>
-#include <nxt/llm/tool_json.hpp>
+#include <nxtai/openai_types.hpp>
+#include <nxtai/tool_json.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::tools {
+namespace nxtai::tools {
 
 struct tool_result
 {
@@ -400,4 +400,4 @@ inline nxt::rt::task<std::vector<function_call_result>> run_function_tool_batch(
     return out;
 }
 
-} // namespace nxt::llm::tools
+} // namespace nxtai::tools

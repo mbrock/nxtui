@@ -9,7 +9,7 @@
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/terminal_app.hpp>
 #include <nxt/rt/ui_runtime.hpp>
-#include <nxt/llm/tool_batch.hpp>
+#include <nxtai/tool_batch.hpp>
 
 #include "test.hpp"
 
@@ -194,16 +194,16 @@ struct echo_tool
 
     static std::optional<parameters> parse_parameters(std::string_view json)
     {
-        auto text = nxt::llm::tools::json_string_member(json, "text");
+        auto text = nxtai::tools::json_string_member(json, "text");
         if (!text)
             return std::nullopt;
         return parameters{.text = std::move(*text)};
     }
 
-    nxt::rt::task<nxt::llm::tools::tool_result> run(parameters args) const
+    nxt::rt::task<nxtai::tools::tool_result> run(parameters args) const
     {
         co_await nxt::rt::yield();
-        co_return nxt::llm::tools::tool_result{
+        co_return nxtai::tools::tool_result{
             .output = std::move(args.text),
             .observed = std::nullopt,
         };
@@ -1661,19 +1661,19 @@ static suite runtime_tests{
             "parse calls and return function_call_output items in order"_test = [] {
                 auto deck = nxt::rt::deck{};
                 auto calls = deck.sync_wait(
-                    nxt::llm::tools::read_function_calls_from_items(
+                    nxtai::tools::read_function_calls_from_items(
                         {
-                            nxt::llm::openai::raw_json{
+                            nxtai::openai::raw_json{
                                 R"({"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo","arguments":"{\"text\":\"one\"}"})"},
-                            nxt::llm::openai::raw_json{
+                            nxtai::openai::raw_json{
                                 R"({"id":"fc_2","type":"function_call","call_id":"call_2","name":"echo","arguments":"{\"text\":\"two\"}"})"},
                         }));
-                auto tools = nxt::llm::tools::make_tool_registry({
-                    nxt::llm::tools::make_function_tool(echo_tool{}),
+                auto tools = nxtai::tools::make_tool_registry({
+                    nxtai::tools::make_function_tool(echo_tool{}),
                 });
 
                 auto results = deck.sync_wait(
-                    nxt::llm::tools::run_function_tool_batch(
+                    nxtai::tools::run_function_tool_batch(
                         tools,
                         std::move(calls)));
 
@@ -1693,11 +1693,11 @@ static suite runtime_tests{
 
             "unknown tools become failed batch results"_test = [] {
                 auto deck = nxt::rt::deck{};
-                auto tools = nxt::llm::tools::make_tool_registry({
-                    nxt::llm::tools::make_function_tool(echo_tool{}),
+                auto tools = nxtai::tools::make_tool_registry({
+                    nxtai::tools::make_function_tool(echo_tool{}),
                 });
-                auto calls = std::vector<nxt::llm::tools::function_call>{
-                    nxt::llm::tools::function_call{
+                auto calls = std::vector<nxtai::tools::function_call>{
+                    nxtai::tools::function_call{
                         .call_id = "call_missing",
                         .name = "missing",
                         .arguments = "{}",
@@ -1705,7 +1705,7 @@ static suite runtime_tests{
                 };
 
                 auto results = deck.sync_wait(
-                    nxt::llm::tools::run_function_tool_batch(
+                    nxtai::tools::run_function_tool_batch(
                         tools,
                         std::move(calls)));
 

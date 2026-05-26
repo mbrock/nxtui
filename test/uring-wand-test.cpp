@@ -5,7 +5,7 @@
 #include <nxt/rt/subprocess.hpp>
 #include <nxt/rt/uring_wand.hpp>
 #include <nxt/unique-fd.hpp>
-#include <nxt/llm/tool_process.hpp>
+#include <nxtai/tool_process.hpp>
 
 #include "test.hpp"
 
@@ -222,7 +222,7 @@ nxt::rt::task<void> write_to_fd(int fd, std::string_view text)
         throw std::runtime_error{"short write wish"};
 }
 
-nxt::rt::task<nxt::llm::tool_process::result> capture_shell(
+nxt::rt::task<nxtai::tool_process::result> capture_shell(
     std::string command,
     std::size_t cap_bytes = 64 * 1024)
 {
@@ -230,7 +230,7 @@ nxt::rt::task<nxt::llm::tool_process::result> capture_shell(
     argv.emplace_back("/bin/sh");
     argv.emplace_back("-c");
     argv.push_back(std::move(command));
-    co_return co_await nxt::llm::tool_process::capture(
+    co_return co_await nxtai::tool_process::capture(
         std::move(argv), cap_bytes);
 }
 

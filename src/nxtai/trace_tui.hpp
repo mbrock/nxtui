@@ -1,7 +1,7 @@
 #pragma once
 
 #include <nxt/rt/trace.hpp>
-#include <nxt/llm/tool_tui.hpp>
+#include <nxtai/tool_tui.hpp>
 
 #include <chrono>
 #include <format>
@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace nxt::llm::trace_tui {
+namespace nxtai::trace_tui {
 
 using namespace nxtui;
 
@@ -146,4 +146,4 @@ nxtui::tui::AnyLayout render_span_waterfall(
     const nxt::rt::trace_span & span,
     waterfall_options options = {});
 
-} // namespace nxt::llm::trace_tui
+} // namespace nxtai::trace_tui

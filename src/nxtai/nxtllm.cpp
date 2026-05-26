@@ -2,8 +2,8 @@
 #include <nxt/rt/task.hpp>
 #include <nxt/rt/trace.hpp>
 #include <nxt/rt/ui_runtime.hpp>
-#include <nxt/llm/common.hpp>
-#include <nxt/llm/agent_tools.hpp>
+#include <nxtai/common.hpp>
+#include <nxtai/agent_tools.hpp>
 
 #include <chrono>
 #include <cstdlib>
@@ -21,9 +21,9 @@
 
 namespace {
 
-using nxt::llm::llm_request;
-using nxt::llm::default_max_output_tokens;
-using nxt::llm::frame_interval;
+using nxtai::llm_request;
+using nxtai::default_max_output_tokens;
+using nxtai::frame_interval;
 
 struct cli_options
 {
@@ -139,7 +139,7 @@ llm_request make_request(const cli_options & options)
 nxt::rt::task<int> run_nxtllm(cli_options options)
 {
     auto request = make_request(options);
-    auto tools = nxt::llm::agent_tools::for_agent();
+    auto tools = nxtai::agent_tools::for_agent();
 
     if (!options.oneshot_prompt) {
         std::cout
@@ -150,10 +150,10 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
         co_return EXIT_SUCCESS;
     }
 
-    nxt::llm::prepare_tool_request(request, tools);
+    nxtai::prepare_tool_request(request, tools);
 
     if (options.dump_request) {
-        std::cout << nxt::llm::responses::openai_responses_body(request)
+        std::cout << nxtai::responses::openai_responses_body(request)
                   << '\n';
         co_return EXIT_SUCCESS;
     }
@@ -182,7 +182,7 @@ nxt::rt::task<int> run_nxtllm(cli_options options)
                         return nxt::rt::with_ui_zone(
                             [request = std::move(request),
                              tools = std::move(tools)]() mutable {
-                                return nxt::llm::run_agent_ui_zone(
+                                return nxtai::run_agent_ui_zone(
                                     std::move(request),
                                     std::move(tools));
                             },
