@@ -22,6 +22,7 @@ docs:
 	rm -rf docs/html
 	mkdir -p docs/html
 	uvx poxy --output-dir docs docs/poxy.toml
+	chmod -R a+rX docs/html
 
 docs-publish: docs
 	rsync -a --delete docs/html/ /var/www/nxtui/
