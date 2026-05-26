@@ -9,7 +9,7 @@
 #include <mutex>
 #include <optional>
 
-namespace nxt::ui {
+namespace nxt::tui {
 
 /// Double-buffered terminal compositor with HUD/scroll region support.
 class TerminalCompositor
@@ -73,4 +73,4 @@ private:
     std::mutex * output_mutex_ = nullptr;
 };
 
-} // namespace nxt::ui
+} // namespace nxt::tui

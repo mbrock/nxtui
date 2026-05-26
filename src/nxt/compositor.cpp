@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-namespace nxt::ui {
+namespace nxt::tui {
 namespace {
 
 namespace rtty = nxt::regional_tty;
@@ -285,4 +285,4 @@ void TerminalCompositor::present_frame(std::ostream & out)
     back_ = front_;
 }
 
-} // namespace nxt::ui
+} // namespace nxt::tui

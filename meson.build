@@ -67,11 +67,6 @@ nxt_inc = include_directories(
   'src',
   'vendor/mdspan/include',
 )
-
-nxt_ng_inc = include_directories(
-  'src-ng',
-)
-
 nxt_core_deps = []
 nxt_core_deps += nxt_awslc_dep
 nxt_core_deps += utf8proc_dep
@@ -177,35 +172,35 @@ if get_option('llm_tool')
   nxtllm_dependencies += nxt_llm_cares_dep
 
   executable('nxtllm',
-    'src-ng/nxtai/nxtllm.cpp',
-    'src-ng/nxtai/trace_tui.cpp',
-    'src-ng/nxtai/tool_tui.cpp',
-    'src-ng/nxt/llm/agent.cpp',
-    'src-ng/nxt/llm/stream.cpp',
-    'src-ng/nxt/llm/tool_ui.cpp',
-    include_directories : [nxt_inc, nxt_ng_inc],
+    'src/nxt/llm/nxtllm.cpp',
+    'src/nxt/llm/trace_tui.cpp',
+    'src/nxt/llm/tool_tui.cpp',
+    'src/nxt/llm/agent.cpp',
+    'src/nxt/llm/stream.cpp',
+    'src/nxt/llm/tool_ui.cpp',
+    include_directories : nxt_inc,
     dependencies : nxtllm_dependencies,
     cpp_args : nxt_stacktrace_cpp_args,
-    cpp_pch : 'src-ng/nxtai/nxtllm_pch.hpp',
+    cpp_pch : 'src/nxt/llm/nxtllm_pch.hpp',
   )
 endif
 
 if get_option('tests')
   nxt_test_inc = include_directories('test')
 
-  nxt_ng_test_sources = files(
+  nxt_test_sources = files(
 	    'test/input-test.cpp',
 	    'test/json-test.cpp',
-	    'test/ng-include-test.cpp',
-    'test/ng-runtime-test.cpp',
+	    'test/include-test.cpp',
+    'test/runtime-test.cpp',
     'test/terminal-test.cpp',
-    'src/nxtio/stacktrace.cpp',
+    'src/nxt/stacktrace.cpp',
     'test/test-main.cpp',
   )
-  nxt_ng_test_deps = []
-  nxt_ng_test_deps += nxt_core_dep
-  nxt_ng_test_deps += utf8proc_dep
-  nxt_ng_test_deps += nxt_stacktrace_deps
+  nxt_test_deps = []
+  nxt_test_deps += nxt_core_dep
+  nxt_test_deps += utf8proc_dep
+  nxt_test_deps += nxt_stacktrace_deps
 
   if host_machine.system() == 'linux'
     nxt_test_liburing_dep = dependency(
@@ -215,22 +210,22 @@ if get_option('tests')
     )
 
     if nxt_test_liburing_dep.found()
-      nxt_ng_test_sources += files('test/ng-uring-wand-test.cpp')
-      nxt_ng_test_deps += nxt_test_liburing_dep
+      nxt_test_sources += files('test/uring-wand-test.cpp')
+      nxt_test_deps += nxt_test_liburing_dep
 
       nxt_test_cares_dep = dependency('libcares', required : false)
       if nxt_test_cares_dep.found()
-        nxt_ng_test_sources += files('test/ng-cares-test.cpp')
-        nxt_ng_test_deps += nxt_test_cares_dep
+        nxt_test_sources += files('test/cares-test.cpp')
+        nxt_test_deps += nxt_test_cares_dep
       endif
     endif
   endif
 
-  nxt_ng_tests = executable('ng-tests',
-    nxt_ng_test_sources,
-    include_directories : [nxt_inc, nxt_ng_inc, nxt_test_inc],
-    dependencies : nxt_ng_test_deps,
+  nxt_tests = executable('nxt-tests',
+    nxt_test_sources,
+    include_directories : [nxt_inc, nxt_test_inc],
+    dependencies : nxt_test_deps,
     cpp_args : nxt_stacktrace_cpp_args,
   )
-  test('ng-tests', nxt_ng_tests)
+  test('nxt-tests', nxt_tests)
 endif

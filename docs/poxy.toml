@@ -15,9 +15,7 @@ paths = [
     'rt-overview.md',
 ]
 recursive_paths = [
-    '../src-ng',
-    '../src/nxt',
-    '../src/nxtio',
+    '../src',
 ]
 patterns = [
     '*.h',
@@ -25,12 +23,10 @@ patterns = [
     '*.md',
 ]
 strip_paths = [
-    '../src-ng',
     '../src',
     '../test',
 ]
 strip_includes = [
-    '../src-ng/',
     '../src/',
 ]
 

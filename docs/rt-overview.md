@@ -1,6 +1,6 @@
 # nxt::rt runtime overview {#rt_overview}
 
-`nxt::rt` is the experimental async runtime used by `src-ng`. It is a small
+`nxt::rt` is the experimental async runtime used by `src`. It is a small
 coroutine runtime with explicit scheduling, structured child tasks, and a
 backend boundary for platform I/O.
 

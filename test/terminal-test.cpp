@@ -33,7 +33,7 @@ bool throws_exception(Fn fn)
 
 /// Render a layout through the compositor and capture ANSI output.
 std::string render_to_string(
-    ui::TerminalCompositor & compositor, const auto & layout, Size size)
+    tui::TerminalCompositor & compositor, const auto & layout, Size size)
 {
     ansi::mode = ansi::Mode::enabled;
     auto & buffer = compositor.back_buffer();
@@ -48,7 +48,7 @@ std::string render_to_string(
 
 /// Apply compositor control sequences to the virtual terminal.
 void set_hud_height(
-    ui::TerminalCompositor & compositor,
+    tui::TerminalCompositor & compositor,
     vterm::Terminal & term,
     height_t hud_height,
     height_t term_height)
@@ -410,7 +410,7 @@ static suite compositor_tests{
     "Terminal compositor", [] {
         "renders text at correct position"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 5 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 5 * ln}, glyphs);
             vterm::Terminal term(5, 20);
 
             auto output = render_to_string(
@@ -430,7 +430,7 @@ static suite compositor_tests{
 
         "renders column layout"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 5 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 5 * ln}, glyphs);
             vterm::Terminal term(5, 20);
 
             auto layout = tui::column(
@@ -451,7 +451,7 @@ static suite compositor_tests{
 
         "renders vterm screen layout"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({12 * ch, 3 * ln}, glyphs);
+            tui::TerminalCompositor compositor({12 * ch, 3 * ln}, glyphs);
             vterm::Terminal source(3, 12);
             vterm::Terminal term(3, 12);
 
@@ -500,7 +500,7 @@ static suite compositor_tests{
 
         "renders styled text with colors"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
             vterm::Terminal term(1, 20);
 
             const Rgba8 red(255, 0, 0);
@@ -517,7 +517,7 @@ static suite compositor_tests{
 
         "renders bold text"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
             vterm::Terminal term(1, 20);
 
             term.write(render_to_string(
@@ -531,7 +531,7 @@ static suite compositor_tests{
 
         "rejects control characters before terminal output"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 3 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 3 * ln}, glyphs);
 
             expect(throws_exception<std::logic_error>([&] {
                 (void) render_to_string(
@@ -541,7 +541,7 @@ static suite compositor_tests{
 
         "combines emphasis styles"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 1 * ln}, glyphs);
             vterm::Terminal term(1, 20);
 
             term.write(render_to_string(
@@ -565,7 +565,7 @@ static suite hud_tests{
         "placement"_test = [] {
             "appears at the bottom of the terminal"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 6 * ln}, glyphs);
                 vterm::Terminal term(6, 20);
 
@@ -592,7 +592,7 @@ static suite hud_tests{
         "initial install"_test = [] {
             "scrolls existing bottom prompts above the HUD"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 12 * ln}, glyphs);
                 vterm::Terminal term(12, 20);
 
@@ -627,7 +627,7 @@ static suite hud_tests{
 
             "leaves an empty first scrollback output row"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 12 * ln}, glyphs);
                 vterm::Terminal term(12, 20);
 
@@ -666,7 +666,7 @@ static suite hud_tests{
 
             "preserves insertion cursors above the fixed region"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 12 * ln}, glyphs);
                 vterm::Terminal term(12, 20);
 
@@ -705,7 +705,7 @@ static suite hud_tests{
             "keeps first zero-height frame from consuming initial attachment"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 8 * ln}, glyphs);
                     vterm::Terminal term(8, 20);
 
@@ -733,7 +733,7 @@ static suite hud_tests{
             "preserves wrapped shell commands through the first block"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 6 * ln}, glyphs);
                     vterm::Terminal term(6, 20);
 
@@ -783,7 +783,7 @@ static suite hud_tests{
         "rendering"_test = [] {
             "preserves the scrollback insertion cursor"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 6 * ln}, glyphs);
                 vterm::Terminal term(6, 20);
 
@@ -825,7 +825,7 @@ static suite hud_tests{
 
             "supports full-screen HUDs"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 3 * ln}, glyphs);
                 vterm::Terminal term(3, 20);
 
@@ -843,7 +843,7 @@ static suite hud_tests{
         "resizing"_test = [] {
             "clears rows freed by shrinking"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 6 * ln}, glyphs);
                 vterm::Terminal term(6, 20);
 
@@ -889,7 +889,7 @@ static suite hud_tests{
 
             "preserves bottom log content while growing"_test = [] {
                 GlyphTable glyphs;
-                ui::TerminalCompositor compositor(
+                tui::TerminalCompositor compositor(
                     {20 * ch, 6 * ln}, glyphs);
                 vterm::Terminal term(6, 20);
 
@@ -913,7 +913,7 @@ static suite hud_tests{
             "preserves box footers at the old scroll bottom while growing"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 6 * ln}, glyphs);
                     vterm::Terminal term(6, 20);
 
@@ -951,7 +951,7 @@ static suite hud_tests{
             "does not promote a speculative blank row while growing after a block"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 8 * ln}, glyphs);
                     vterm::Terminal term(8, 20);
                     auto append_state = rtty::scrollback_append_state{};
@@ -988,7 +988,7 @@ static suite hud_tests{
             "preserves bottom box footers when entering from zero height"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 6 * ln}, glyphs);
                     vterm::Terminal term(6, 20);
 
@@ -1023,7 +1023,7 @@ static suite hud_tests{
             "releases rows below existing log content while shrinking"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 6 * ln}, glyphs);
                     vterm::Terminal term(6, 20);
 
@@ -1062,7 +1062,7 @@ static suite hud_tests{
             "releases rows without erasing the final block when hidden"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 6 * ln}, glyphs);
                     vterm::Terminal term(6, 20);
 
@@ -1105,7 +1105,7 @@ static suite hud_tests{
             "stacks the next block without a spacer row after newlines"_test =
                 [] {
                     GlyphTable glyphs;
-                    ui::TerminalCompositor compositor(
+                    tui::TerminalCompositor compositor(
                         {20 * ch, 12 * ln}, glyphs);
                     vterm::Terminal term(12, 20);
 
@@ -1154,7 +1154,7 @@ static suite scroll_region_tests{
             // 6 row terminal, 2 row HUD at bottom
             // Scroll region: rows 0-3, HUD: rows 4-5
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
+            tui::TerminalCompositor compositor({20 * ch, 6 * ln}, glyphs);
             vterm::Terminal term(6, 20);
 
             set_hud_height(compositor, term, 2 * ln, 6 * ln);
@@ -1237,7 +1237,7 @@ static suite diff_tests{
     "Terminal diffs", [] {
         "re-render only changed cells"_test = [] {
             GlyphTable glyphs;
-            ui::TerminalCompositor compositor({10 * ch, 1 * ln}, glyphs);
+            tui::TerminalCompositor compositor({10 * ch, 1 * ln}, glyphs);
 
             auto output1 = render_to_string(
                 compositor, tui::text("AAAAAAAAAA"), {10 * ch, 1 * ln});

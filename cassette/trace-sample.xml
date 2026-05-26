@@ -29,7 +29,7 @@
   </call>
 
   <call name="read_file" status="ok" elapsed_ms="81">
-    <args><path>src/nxtio/arrow.hpp</path></args>
+    <args><path>src/nxt/stacktrace.hpp</path></args>
     <result kind="document" bytes="3072" lines="109">
       <line>#pragma once</line>
       <line>#include &lt;chrono&gt;</line>

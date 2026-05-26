@@ -1,6 +1,6 @@
 #pragma once
 
-#include <nxtio/stacktrace.hpp>
+#include <nxt/stacktrace.hpp>
 
 #include <ranges>
 #include <chrono>
@@ -292,13 +292,13 @@ struct test_case
                 ++failures;
                 std::cerr << result.name
                           << ": unexpected exception: " << e.what() << '\n';
-                nxt::io::print_current_exception_trace(std::cerr, "  ");
+                nxt::debug::print_current_exception_trace(std::cerr, "  ");
             }
         } catch (...) {
             if (phase == run_phase::execution) {
                 ++failures;
                 std::cerr << result.name << ": unexpected non-std exception\n";
-                nxt::io::print_current_exception_trace(std::cerr, "  ");
+                nxt::debug::print_current_exception_trace(std::cerr, "  ");
             }
         }
 

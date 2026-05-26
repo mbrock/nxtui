@@ -22,10 +22,8 @@ const browserEntry = path.join(docs, "forge-doc-graphs.ts");
 const browserBundle = path.join(docs, "forge-doc-graphs.js");
 
 const scanRoots = [
-	path.join(root, "src-ng"),
+	path.join(root, "src"),
 	path.join(root, "src", "nxt"),
-	path.join(root, "src", "nxtai"),
-	path.join(root, "src", "nxtio"),
 	path.join(root, "test"),
 ];
 

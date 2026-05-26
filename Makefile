@@ -12,7 +12,7 @@ full:
 	meson compile -C build
 
 test:
-	meson compile -C build ng-tests
+	meson compile -C build nxt-tests
 	meson test -C build
 
 spec:

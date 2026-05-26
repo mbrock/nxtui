@@ -99,10 +99,10 @@ auto jobs_view = list(jobs, [](const Job & job) {
 ## Running an App
 
 New application work should start on `nxt::rt`, the structured coroutine
-runtime in `src-ng`. It owns a `deck`, a platform I/O wand, a root task zone,
+runtime in `src`. It owns a `deck`, a platform I/O wand, a root task zone,
 and small app-facing queues for input, resize, and damage notifications.
 
-The current smallest TUI entry point is `ng-tui-demo`: it renders a real
+The current smallest TUI entry point is `nxt-tui-demo`: it renders a real
 terminal compositor frame from an `nxt::rt::runtime` task and animates with
 runtime sleeps.
 
@@ -125,10 +125,10 @@ int main()
 }
 ```
 
-The old `nxtio` runner sources are still in the tree as migration reference
-material, but the Meson build no longer vendors or builds `libcoro`.
+The old `nxtio` runner sources have been removed; the Meson build no longer
+vendors or builds `libcoro`.
 
-The ng runtime owns:
+The runtime owns:
 
 - `signal_damage()` and `damage_event()` for redraw coordination
 - input and resize channels
@@ -169,9 +169,8 @@ integers throughout layout and rendering code.
 ## Structure
 
 - `src/nxt` contains core terminal, raster, units, and layout code.
-- `src-ng/nxt/rt` contains the new structured coroutine runtime.
-- `src-ng/nxtai` contains the new-runtime `nxtllm` entry point.
-- `src/nxtio` contains legacy app runtime sources kept for porting reference.
+- `src/nxt/rt` contains the new structured coroutine runtime.
+- `src/nxt/llm` contains the runtime `nxtllm` entry point.
 - `test` contains raster, terminal compositor, and runtime tests.
 - `vendor/mdspan` vendors the header-only mdspan implementation.
 - `vendor/libvterm` is used by the terminal tests.
@@ -186,15 +185,15 @@ meson compile -C build
 meson test -C build
 ```
 
-The default build is the new-runtime lane: it builds core layout/raster code,
-`ng-tests`, `nxtllm`, and the ng demos without pulling in `libcoro`. Try the
+The default build is the runtime lane: it builds core layout/raster code,
+`nxt-tests`, `nxtllm`, and the runtime demos without pulling in `libcoro`. Try the
 small TUI demo with:
 
 ```sh
-build/demo/ng-tui-demo
+build/demo/nxt-tui-demo
 ```
 
-`nxtllm` is also an ng target now. It can parse the familiar CLI and construct
+`nxtllm` is also an target now. It can parse the familiar CLI and construct
 OpenAI Responses requests on `nxt::rt`; network streaming and the richer HUD are
 the next migration slices:
 

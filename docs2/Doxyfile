@@ -18,11 +18,11 @@ HIDE_UNDOC_MEMBERS = NO
 SHOW_INCLUDE_FILES = YES
 FULL_PATH_NAMES = YES
 
-INPUT = ../test ../src-ng ../src/nxt ../src/nxtai ../src/nxtio
+INPUT = ../test ../src
 RECURSIVE = YES
 FILE_PATTERNS = *.h *.hpp
-STRIP_FROM_PATH = ../src-ng ../src ../test
-STRIP_FROM_INC_PATH = ../src-ng ../src
+STRIP_FROM_PATH = ../src ../test
+STRIP_FROM_INC_PATH = ../src
 
 ALIASES += "forgegraph{3}=\xmlonly <forge-graph frg=\"\1\" run=\"\2\" title=\"\3\"/> \endxmlonly"
 

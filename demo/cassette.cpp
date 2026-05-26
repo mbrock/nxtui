@@ -517,7 +517,7 @@ inline Turn sample_turn()
         c.name = "read_file";
         c.status = Status::ok;
         c.elapsed_ms = 81;
-        c.args = {{"path", "src/nxtio/arrow.hpp"}};
+        c.args = {{"path", "src/nxt/stacktrace.hpp"}};
         Document d;
         d.lines = 109;
         d.bytes = 3072;
