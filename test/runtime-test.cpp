@@ -199,18 +199,27 @@ struct chunking_string_sink final : nxtrt::byte_writer
 private:
     nxtrt::hope<std::size_t>
     drain_more(
-        std::span<const std::span<const std::byte>> chunks) override
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) override
     {
+        if (chunks.empty())
+            return nxtrt::hope<std::size_t>::ready(0);
         auto remaining = limit;
         auto n = std::size_t{0};
-        for (auto chunk : chunks) {
+        auto append = [&](std::span<const std::byte> chunk) {
             auto take = std::min(remaining, chunk.size());
             text += nxtrt::as_string_view(chunk.first(take));
             n += take;
             remaining -= take;
+        };
+
+        for (auto chunk : chunks.first(chunks.size() - 1)) {
+            append(chunk);
             if (remaining == 0)
-                break;
+                return nxtrt::hope<std::size_t>::ready(n);
         }
+        for (auto i = std::size_t{0}; i < splat && remaining != 0; ++i)
+            append(chunks.back());
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -242,18 +251,27 @@ struct shared_string_sink final : nxtrt::byte_writer
 private:
     nxtrt::hope<std::size_t>
     drain_more(
-        std::span<const std::span<const std::byte>> chunks) override
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) override
     {
+        if (chunks.empty())
+            return nxtrt::hope<std::size_t>::ready(0);
         auto remaining = limit;
         auto n = std::size_t{0};
-        for (auto chunk : chunks) {
+        auto append = [&](std::span<const std::byte> chunk) {
             auto take = std::min(remaining, chunk.size());
             *text += nxtrt::as_string_view(chunk.first(take));
             n += take;
             remaining -= take;
+        };
+
+        for (auto chunk : chunks.first(chunks.size() - 1)) {
+            append(chunk);
             if (remaining == 0)
-                break;
+                return nxtrt::hope<std::size_t>::ready(n);
         }
+        for (auto i = std::size_t{0}; i < splat && remaining != 0; ++i)
+            append(chunks.back());
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -2332,6 +2350,46 @@ static suite runtime_tests{
                 expect(reader.buffered_size() == std::size_t{0});
             };
 
+            "byte_reader reads directly into caller storage"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"ab"sv, "cde"sv, "fg"sv};
+                auto source_storage = std::array<std::byte, 2>{};
+                auto reader = text_source(chunks, std::span{source_storage});
+                auto out = std::array<std::byte, 5>{};
+                auto dsts = std::array{std::span<std::byte>{out}};
+
+                auto read = deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
+                    co_return (co_await reader.read_vec(std::span{dsts})).bytes;
+                });
+
+                expect(read == std::size_t{5});
+                expect(nxtrt::as_string_view(out) == "abcde");
+                expect(reader.buffered_size() == std::size_t{0});
+            };
+
+            "byte_reader read_vec scatters buffered bytes"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"abcd"sv};
+                auto source_storage = std::array<std::byte, 4>{};
+                auto reader = text_source(chunks, std::span{source_storage});
+                auto first = std::array<std::byte, 2>{};
+                auto second = std::array<std::byte, 1>{};
+                auto dsts = std::array{
+                    std::span<std::byte>{first},
+                    std::span<std::byte>{second},
+                };
+
+                auto read = deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
+                    co_await reader.fill(4);
+                    co_return (co_await reader.read_vec(std::span{dsts})).bytes;
+                });
+
+                expect(read == std::size_t{3});
+                expect(nxtrt::as_string_view(first) == "ab");
+                expect(nxtrt::as_string_view(second) == "c");
+                expect(nxtrt::as_string_view(reader.buffered()) == "d");
+            };
+
             "byte_reader discards without exposing bytes"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abcd"sv};
@@ -2625,6 +2683,32 @@ static suite runtime_tests{
                         });
 
                         expect(writer.text == "abcdef");
+                        expect(writer.buffered_size() == std::size_t{0});
+                    };
+
+                    "writes repeated byte patterns"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{64, std::size_t{8}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.write_splat("ab"sv, 3);
+                            expect(writer.text.empty());
+                            co_await writer.flush();
+                        });
+
+                        expect(writer.text == "ababab");
+                    };
+
+                    "drains splatted patterns after buffered prefix"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{4, std::size_t{2}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.write("x"sv);
+                            co_await writer.write_splat("ab"sv, 3);
+                        });
+
+                        expect(writer.text == "xababab");
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 

@@ -149,8 +149,50 @@ inline std::size_t byte_size(
     return total;
 }
 
+inline std::size_t byte_size(
+    std::span<const std::span<const std::byte>> chunks,
+    std::size_t splat)
+{
+    if (chunks.empty())
+        return 0;
+
+    auto total = std::size_t{0};
+    for (auto chunk : chunks.first(chunks.size() - 1))
+        total += chunk.size();
+
+    auto last = chunks.back().size();
+    if (last != 0 && splat > std::numeric_limits<std::size_t>::max() / last)
+        throw buffer_error{"byte count overflow"};
+    return total + last * splat;
+}
+
 inline std::span<const std::byte> first_nonempty(
     std::span<const std::span<const std::byte>> chunks) noexcept
+{
+    for (auto chunk : chunks) {
+        if (!chunk.empty())
+            return chunk;
+    }
+    return {};
+}
+
+inline std::span<const std::byte> first_nonempty(
+    std::span<const std::span<const std::byte>> chunks,
+    std::size_t splat) noexcept
+{
+    if (chunks.empty())
+        return {};
+    for (auto chunk : chunks.first(chunks.size() - 1)) {
+        if (!chunk.empty())
+            return chunk;
+    }
+    if (splat != 0 && !chunks.back().empty())
+        return chunks.back();
+    return {};
+}
+
+inline std::span<std::byte> first_nonempty(
+    std::span<std::span<std::byte>> chunks) noexcept
 {
     for (auto chunk : chunks) {
         if (!chunk.empty())
@@ -169,8 +211,9 @@ inline std::span<const std::byte> first_nonempty(
 ///
 /// Pending output is `buffer_[seek_..end_]`; bytes before `seek_` have already
 /// been consumed by the sink. Derived writers implement `drain_more()`, the
-/// slow-path operation that drains a vector of byte spans to the concrete
-/// backend.
+/// slow-path operation that drains byte spans to the concrete backend. As in
+/// Zig, the final span is repeated `splat` times so repeated patterns do not
+/// need to be materialized as a temporary range of identical spans.
 class byte_writer
 {
 public:
@@ -235,6 +278,27 @@ public:
         return write_slow(bytes);
     }
 
+    hope<void> write_splat(
+        std::span<const std::byte> pattern,
+        std::size_t splat)
+    {
+        if (pattern.empty() || splat == 0)
+            return hope<void>::ready();
+
+        auto count = repeated_size(pattern.size(), splat);
+        if (count <= unused_capacity().size()) {
+            append_splat_to_buffer(pattern, splat);
+            return hope<void>::ready();
+        }
+
+        return write_splat_slow(pattern, splat);
+    }
+
+    hope<void> write_splat(std::string_view pattern, std::size_t splat)
+    {
+        return write_splat(as_bytes(pattern), splat);
+    }
+
     task<void> write(std::string text)
     {
         co_await write(as_bytes(std::string_view{text}));
@@ -263,13 +327,22 @@ public:
 
 protected:
     virtual hope<std::size_t> drain_more(
-        std::span<const std::span<const std::byte>> chunks) = 0;
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) = 0;
 
 private:
     void append_to_buffer(std::span<const std::byte> bytes)
     {
         std::memcpy(buffer_.data() + end_, bytes.data(), bytes.size());
         advance(bytes.size());
+    }
+
+    void append_splat_to_buffer(
+        std::span<const std::byte> pattern,
+        std::size_t splat)
+    {
+        for (auto i = std::size_t{0}; i < splat; ++i)
+            append_to_buffer(pattern);
     }
 
     void reset_if_empty() noexcept
@@ -296,12 +369,19 @@ private:
             throw buffer_error{"writer overreported written bytes"};
     }
 
+    static std::size_t repeated_size(std::size_t size, std::size_t count)
+    {
+        if (size != 0 && count > std::numeric_limits<std::size_t>::max() / size)
+            throw buffer_error{"byte count overflow"};
+        return size * count;
+    }
+
     task<void> flush_slow()
     {
         while (buffered_size() != 0) {
             auto pending = buffered();
             auto chunks = std::array{pending};
-            auto written = co_await drain_more(std::span{chunks});
+            auto written = co_await drain_more(std::span{chunks}, 1);
             require_progress(written, pending.size());
             consume_buffered(written);
         }
@@ -316,7 +396,7 @@ private:
                 ? std::array{remaining, std::span<const std::byte>{}}
                 : std::array{pending, remaining};
             auto count = pending.size() + remaining.size();
-            auto written = co_await drain_more(std::span{chunks});
+            auto written = co_await drain_more(std::span{chunks}, 1);
             require_progress(written, count);
 
             auto from_pending = std::min(written, pending.size());
@@ -325,6 +405,58 @@ private:
             if (written > remaining.size())
                 throw buffer_error{"writer overreported written bytes"};
             remaining = remaining.subspan(written);
+        }
+    }
+
+    task<void> drain_pending_and_splat(
+        std::span<const std::byte> pattern,
+        std::size_t splat)
+    {
+        auto partial = std::span<const std::byte>{};
+        while (buffered_size() != 0 || !partial.empty() || splat != 0) {
+            auto pending = buffered();
+            auto chunks = std::array{
+                std::span<const std::byte>{},
+                std::span<const std::byte>{},
+                std::span<const std::byte>{},
+            };
+            auto chunk_count = std::size_t{0};
+            if (!pending.empty())
+                chunks[chunk_count++] = pending;
+            if (!partial.empty())
+                chunks[chunk_count++] = partial;
+            if (splat != 0)
+                chunks[chunk_count++] = pattern;
+
+            auto available = pending.size()
+                + partial.size()
+                + repeated_size(pattern.size(), splat);
+            auto repeated = splat == 0 ? std::size_t{1} : splat;
+            auto written = co_await drain_more(
+                std::span{chunks}.first(chunk_count),
+                repeated);
+            require_progress(written, available);
+
+            auto from_pending = std::min(written, pending.size());
+            consume_buffered(from_pending);
+            written -= from_pending;
+
+            auto from_partial = std::min(written, partial.size());
+            partial = partial.subspan(from_partial);
+            written -= from_partial;
+
+            if (written == 0)
+                continue;
+
+            auto full = std::min(splat, written / pattern.size());
+            splat -= full;
+            written -= full * pattern.size();
+            if (written != 0) {
+                if (written > pattern.size() || splat == 0)
+                    throw buffer_error{"writer overreported written bytes"};
+                partial = pattern.subspan(written);
+                --splat;
+            }
         }
     }
 
@@ -347,6 +479,27 @@ private:
         }
     }
 
+    task<void> write_splat_slow(
+        std::span<const std::byte> pattern,
+        std::size_t splat)
+    {
+        if (pattern.size() >= buffer_.size()) {
+            co_await drain_pending_and_splat(pattern, splat);
+            co_return;
+        }
+
+        while (splat != 0) {
+            if (unused_capacity().size() < pattern.size())
+                co_await flush();
+
+            auto fit = std::min(
+                splat,
+                unused_capacity().size() / pattern.size());
+            append_splat_to_buffer(pattern, fit);
+            splat -= fit;
+        }
+    }
+
     std::vector<std::byte> owned_buffer_;
     std::span<std::byte> buffer_;
     std::size_t seek_ = 0;
@@ -363,7 +516,9 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(std::span<const std::span<const std::byte>>) override
+    drain_more(
+        std::span<const std::span<const std::byte>>,
+        std::size_t) override
     {
         throw buffer_error{"fixed writer is full"};
     }
@@ -379,9 +534,11 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(std::span<const std::span<const std::byte>> chunks) override
+    drain_more(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) override
     {
-        return hope<std::size_t>::ready(detail::byte_size(chunks));
+        return hope<std::size_t>::ready(detail::byte_size(chunks, splat));
     }
 };
 
@@ -401,15 +558,19 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(std::span<const std::span<const std::byte>> chunks) override
+    drain_more(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) override
     {
-        return drain_more_task(chunks);
+        return drain_more_task(chunks, splat);
     }
 
     task<std::size_t>
-    drain_more_task(std::span<const std::span<const std::byte>> chunks)
+    drain_more_task(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat)
     {
-        auto src = detail::first_nonempty(chunks);
+        auto src = detail::first_nonempty(chunks, splat);
         while (true) {
             try {
                 co_return co_await op::write_some{
@@ -459,15 +620,19 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(std::span<const std::span<const std::byte>> chunks) override
+    drain_more(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) override
     {
-        return drain_more_task(chunks);
+        return drain_more_task(chunks, splat);
     }
 
     task<std::size_t>
-    drain_more_task(std::span<const std::span<const std::byte>> chunks)
+    drain_more_task(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat)
     {
-        auto src = detail::first_nonempty(chunks);
+        auto src = detail::first_nonempty(chunks, splat);
         while (true) {
             try {
                 co_return co_await op::send_some{
@@ -507,17 +672,25 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(std::span<const std::span<const std::byte>> chunks) override
+    drain_more(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat) override
     {
-        return drain_more_task(chunks);
+        return drain_more_task(chunks, splat);
     }
 
     task<std::size_t>
-    drain_more_task(std::span<const std::span<const std::byte>> chunks)
+    drain_more_task(
+        std::span<const std::span<const std::byte>> chunks,
+        std::size_t splat)
     {
-        auto total = detail::byte_size(chunks);
-        for (auto chunk : chunks)
+        if (chunks.empty())
+            co_return std::size_t{0};
+        auto total = detail::byte_size(chunks, splat);
+        for (auto chunk : chunks.first(chunks.size() - 1))
             co_await inner_.write(chunk);
+        for (auto i = std::size_t{0}; i < splat; ++i)
+            co_await inner_.write(chunks.back());
         co_await inner_.flush();
         if (total != 0)
             progress_(total);
@@ -626,10 +799,12 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 // readers (socket -> tls -> http_body -> sse). It is the "eager wish" idea
 // applied to the cold verb, achieved without any wand change.
 //
-// The wider Zig vocabulary is now structural: `stream()` uses buffered bytes
-// when it has them and otherwise calls `stream_more()` directly; `discard()`
-// uses buffered bytes when it has them and otherwise streams into a discarding
-// writer. Refill is just `stream_more(fixed_writer{unused_capacity()}, limit)`.
+// The wider Zig vocabulary is now structural: `stream()` and `read_vec()` use
+// buffered bytes when they have them and otherwise call the corresponding cold
+// virtual (`stream_more()` / `read_vec_more()`). `discard()` uses buffered bytes
+// when it has them and otherwise calls overridable `discard_more()`. Refill is
+// just `read_vec_more({unused_capacity()})`, i.e. readVec into this reader's
+// own buffer.
 //
 // On the writer side we intentionally one-up Zig a little: `byte_writer` has a
 // reader-like `seek_` as well as `end_`, so partially drained buffered output
@@ -642,14 +817,14 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 // TODO(zig-stream): teach concrete fd/socket readers and writers about each
 //   other so `stream_more()` can eventually use sendfile/readv/writev-shaped
 //   paths. Today it has the right API shape but still moves ordinary spans.
-// TODO(zig-readvec): a vectored refill/read API that can fill caller-provided
-//   scatter buffers directly (not just `buffer_`), to avoid a copy on large
-//   `take(n)` where the caller already owns the destination.
-// TODO(zig-discard): optimized `discard(limit)` overrides so protocols can skip
-//   bytes (chunked trailers, body skip-to-end) without buffering and copying
-//   them through a writer-shaped shim.
-// TODO(zig-rebase): make `rebase` virtual (Zig keeps it in the vtable with a
-//   memmove default) so a ring- or mmap-backed reader can make room differently.
+// TODO(zig-readvec): teach fd/socket/task-backed sources real scatter reads.
+//   The virtual slot exists, but the generic default still streams into only
+//   the first non-empty destination, matching Zig's simple default.
+// TODO(zig-discard): optimized `discard_more(limit)` overrides so protocols can
+//   skip bytes (chunked trailers, body skip-to-end) without buffering and
+//   copying them through a writer-shaped shim.
+// TODO(zig-rebase): use the virtual `rebase_more` slot for a ring- or
+//   mmap-backed reader that can make room differently from memmove.
 // TODO(eager-wand): push the synchronous-completion idea of `stream_more()` down
 //   to the wish layer -- an honest `waiter::await_ready()` plus a sync path in
 //   `wand::prepare` -- so a warm `read_some` on the fd also skips the
@@ -662,10 +837,10 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 ///
 /// The hot-path methods are non-virtual and operate directly on `buffer_`,
 /// `seek_`, and `end_`, returning `hope<...>` so the buffered case never
-/// suspends. Derived readers implement only `stream_more()`, the cold path that
-/// pushes source bytes into a writer. Refill is derived by streaming into a
-/// fixed writer over `unused_capacity()`, which then advances `end_` by the
-/// returned byte count.
+/// suspends. Derived readers implement `stream_more()`, the mandatory cold
+/// path that pushes source bytes into a writer. They may also override
+/// `read_vec_more()`, `discard_more()`, or `rebase_more()`; the base defaults
+/// derive those from `stream_more()` and memmove.
 class byte_reader
 {
 public:
@@ -713,11 +888,9 @@ public:
             throw buffer_error{"reader buffer is too small"};
         if (buffer_.size() - seek_ >= capacity)
             return;
-
-        auto pending = buffered_size();
-        std::memmove(buffer_.data(), buffer_.data() + seek_, pending);
-        seek_ = 0;
-        end_ = pending;
+        rebase_more(capacity);
+        if (buffer_.size() - seek_ < capacity)
+            throw buffer_error{"reader rebase did not make enough room"};
     }
 
     hope<void> fill(std::size_t n)
@@ -847,6 +1020,26 @@ public:
         return take_until(as_bytes(delimiter));
     }
 
+    /// Pull one available chunk into caller-owned destination spans.
+    hope<read_result> read_vec(std::span<std::span<std::byte>> dsts)
+    {
+        if (buffered_size() != 0) {
+            auto n = copy_buffered_to(dsts);
+            return hope<read_result>::ready(read_result{.bytes = n});
+        }
+
+        auto first = first_nonempty_index(dsts);
+        if (!first)
+            return hope<read_result>::ready(read_result{});
+        return read_vec_more(dsts.subspan(*first));
+    }
+
+    hope<read_result> read(std::span<std::byte> dst)
+    {
+        auto dsts = std::array{dst};
+        return read_vec(std::span{dsts});
+    }
+
     /// Transfer one available chunk to `writer`, up to `limit` bytes.
     hope<read_result> stream(
         byte_writer & writer,
@@ -886,14 +1079,39 @@ protected:
         byte_writer & writer,
         std::size_t limit) = 0;
 
-private:
-    void append_read_bytes(std::size_t n)
+    virtual hope<read_result> read_vec_more(
+        std::span<std::span<std::byte>> dsts)
     {
-        if (n > unused_capacity().size())
-            throw buffer_error{"source overfilled read buffer"};
-        end_ += n;
+        auto dst = detail::first_nonempty(dsts);
+        if (dst.empty())
+            return hope<read_result>::ready(read_result{});
+
+        auto writer = fixed_byte_writer{dst};
+        auto result = stream_more(writer, dst.size());
+        if (result.is_ready())
+            return hope<read_result>::ready(
+                finish_fixed_write(writer, result.take_ready()));
+        return read_vec_more_slow(dst);
     }
 
+    virtual hope<read_result> discard_more(std::size_t limit)
+    {
+        auto writer = discarding_byte_writer{buffer_};
+        auto result = stream_more(writer, limit);
+        if (result.is_ready())
+            return hope<read_result>::ready(result.take_ready());
+        return discard_more_slow(limit);
+    }
+
+    virtual void rebase_more(std::size_t)
+    {
+        auto pending = buffered_size();
+        std::memmove(buffer_.data(), buffer_.data() + seek_, pending);
+        seek_ = 0;
+        end_ = pending;
+    }
+
+private:
     hope<read_result> stream_buffered(
         byte_writer & writer,
         std::size_t limit)
@@ -910,13 +1128,30 @@ private:
         return stream_buffered_slow(std::move(write), n);
     }
 
-    hope<read_result> discard_more(std::size_t limit)
+    static std::optional<std::size_t> first_nonempty_index(
+        std::span<std::span<std::byte>> dsts) noexcept
     {
-        auto writer = discarding_byte_writer{buffer_};
-        auto result = stream_more(writer, limit);
-        if (result.is_ready())
-            return hope<read_result>::ready(result.take_ready());
-        return discard_more_slow(limit);
+        for (auto i = std::size_t{0}; i < dsts.size(); ++i) {
+            if (!dsts[i].empty())
+                return i;
+        }
+        return std::nullopt;
+    }
+
+    std::size_t copy_buffered_to(std::span<std::span<std::byte>> dsts)
+    {
+        auto total = std::size_t{0};
+        for (auto dst : dsts) {
+            if (dst.empty())
+                continue;
+            auto n = std::min(dst.size(), buffered_size());
+            if (n == 0)
+                break;
+            std::memcpy(dst.data(), buffered().data(), n);
+            toss(n);
+            total += n;
+        }
+        return total;
     }
 
     hope<read_result> read_more()
@@ -925,22 +1160,28 @@ private:
         if (dst.empty())
             throw buffer_error{"reader buffer is full"};
 
-        auto writer = fixed_byte_writer{dst};
-        auto result = stream_more(writer, dst.size());
+        auto dsts = std::array{dst};
+        auto result = read_vec_more(std::span{dsts});
         if (result.is_ready())
-            return hope<read_result>::ready(
-                finish_stream_read(writer, result.take_ready()));
+            return hope<read_result>::ready(finish_read(result.take_ready()));
         return read_more_slow(dst.size());
     }
 
-    read_result finish_stream_read(
+    read_result finish_fixed_write(
         fixed_byte_writer & writer,
         read_result result)
     {
         auto written = writer.buffered_size();
         if (written != result.bytes)
             throw buffer_error{"reader stream byte count mismatch"};
-        append_read_bytes(written);
+        return result;
+    }
+
+    read_result finish_read(read_result result)
+    {
+        if (result.bytes > unused_capacity().size())
+            throw buffer_error{"source overfilled read buffer"};
+        end_ += result.bytes;
         return result;
     }
 
@@ -963,9 +1204,9 @@ private:
 
     task<read_result> read_more_slow(std::size_t limit)
     {
-        auto writer = fixed_byte_writer{unused_capacity().first(limit)};
-        auto result = co_await stream_more(writer, limit);
-        co_return finish_stream_read(writer, result);
+        auto dsts = std::array{unused_capacity().first(limit)};
+        auto result = co_await read_vec_more(std::span{dsts});
+        co_return finish_read(result);
     }
 
     task<read_result> stream_buffered_slow(
@@ -981,6 +1222,13 @@ private:
     {
         auto writer = discarding_byte_writer{buffer_};
         co_return co_await stream_more(writer, limit);
+    }
+
+    task<read_result> read_vec_more_slow(std::span<std::byte> dst)
+    {
+        auto writer = fixed_byte_writer{dst};
+        auto result = co_await stream_more(writer, dst.size());
+        co_return finish_fixed_write(writer, result);
     }
 
     task<std::span<const std::byte>> peek_slow(std::size_t n)
