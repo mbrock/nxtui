@@ -92,6 +92,48 @@ std::string zlib_text(std::string_view text)
     return deflated_text(text, MAX_WBITS);
 }
 
+#if defined(NXTRT_HAVE_ZSTD)
+std::string zstd_text(std::string_view text)
+{
+    auto out = std::string(ZSTD_compressBound(text.size()), '\0');
+    auto n = ZSTD_compress(
+        out.data(),
+        out.size(),
+        text.data(),
+        text.size(),
+        1);
+    if (ZSTD_isError(n))
+        throw std::runtime_error{ZSTD_getErrorName(n)};
+    out.resize(n);
+    return out;
+}
+#endif
+
+#if defined(NXTRT_HAVE_BROTLI)
+std::string brotli_hello_text()
+{
+    const auto bytes = std::array<char, 16>{
+        '\x8b',
+        '\x05',
+        '\x80',
+        'h',
+        'e',
+        'l',
+        'l',
+        'o',
+        ' ',
+        'b',
+        'r',
+        'o',
+        't',
+        'l',
+        'i',
+        '\x03',
+    };
+    return std::string{bytes.data(), bytes.size()};
+}
+#endif
+
 struct ambient_int_key
 {
     using value_type = int;
@@ -3347,6 +3389,70 @@ static suite runtime_tests{
 
                     expect(result == "hello deflate");
                 };
+
+            #if defined(NXTRT_HAVE_ZSTD)
+            "zstd content-encoding is decompressed after transfer decoding"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto compressed = zstd_text("hello zstd");
+                    auto wire =
+                        "HTTP/1.1 200 OK\r\nContent-Length: "s
+                        + std::to_string(compressed.size())
+                        + "\r\nContent-Encoding: zstd\r\n\r\n"
+                        + compressed;
+                    auto chunks = std::array{std::string_view{wire}};
+                    auto storage = std::array<std::byte, 128>{};
+                    auto reader = text_source(chunks, std::span{storage});
+
+                    auto result =
+                        deck.sync_wait([&]() -> nxtrt::task<std::string> {
+                            auto head =
+                                co_await nxtrt::http::read_response_head(
+                                    reader);
+                            auto body =
+                                nxtrt::http::read_response_body(
+                                    reader, head);
+                            auto text = std::string{};
+                            while (auto chunk = co_await body.next())
+                                text += nxtrt::as_string_view(*chunk);
+                            co_return text;
+                        });
+
+                    expect(result == "hello zstd");
+                };
+            #endif
+
+            #if defined(NXTRT_HAVE_BROTLI)
+            "brotli content-encoding is decompressed after transfer decoding"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto compressed = brotli_hello_text();
+                    auto wire =
+                        "HTTP/1.1 200 OK\r\nContent-Length: "s
+                        + std::to_string(compressed.size())
+                        + "\r\nContent-Encoding: br\r\n\r\n"
+                        + compressed;
+                    auto chunks = std::array{std::string_view{wire}};
+                    auto storage = std::array<std::byte, 128>{};
+                    auto reader = text_source(chunks, std::span{storage});
+
+                    auto result =
+                        deck.sync_wait([&]() -> nxtrt::task<std::string> {
+                            auto head =
+                                co_await nxtrt::http::read_response_head(
+                                    reader);
+                            auto body =
+                                nxtrt::http::read_response_body(
+                                    reader, head);
+                            auto text = std::string{};
+                            while (auto chunk = co_await body.next())
+                                text += nxtrt::as_string_view(*chunk);
+                            co_return text;
+                        });
+
+                    expect(result == "hello brotli");
+                };
+            #endif
 
             "server-sent events parse through response body readers"_test = [] {
                 auto deck = nxtrt::deck{};

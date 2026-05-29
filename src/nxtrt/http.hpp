@@ -295,6 +295,8 @@ enum class content_encoding
     identity,
     gzip,
     deflate,
+    zstd,
+    brotli,
 };
 
 inline content_encoding response_content_encoding(const response_head & response)
@@ -318,6 +320,10 @@ inline content_encoding response_content_encoding(const response_head & response
                 encoding = content_encoding::gzip;
             } else if (iequals(part, "deflate")) {
                 encoding = content_encoding::deflate;
+            } else if (iequals(part, "zstd")) {
+                encoding = content_encoding::zstd;
+            } else if (iequals(part, "br")) {
+                encoding = content_encoding::brotli;
             } else {
                 throw protocol_error{"unsupported Content-Encoding"};
             }
@@ -543,12 +549,30 @@ private:
         case content_encoding::identity:
             break;
         case content_encoding::gzip:
-            decoded_.emplace(transfer_, zlib_format::gzip, buffer_size);
-            active_ = &*decoded_;
+            decoded_zlib_.emplace(transfer_, zlib_format::gzip, buffer_size);
+            active_ = &*decoded_zlib_;
             break;
         case content_encoding::deflate:
-            decoded_.emplace(transfer_, zlib_format::zlib, buffer_size);
-            active_ = &*decoded_;
+            decoded_zlib_.emplace(transfer_, zlib_format::zlib, buffer_size);
+            active_ = &*decoded_zlib_;
+            break;
+        case content_encoding::zstd:
+#if defined(NXTRT_HAVE_ZSTD)
+            decoded_zstd_.emplace(transfer_, buffer_size);
+            active_ = &*decoded_zstd_;
+#else
+            throw protocol_error{
+                "zstd Content-Encoding is not supported by this build"};
+#endif
+            break;
+        case content_encoding::brotli:
+#if defined(NXTRT_HAVE_BROTLI)
+            decoded_brotli_.emplace(transfer_, buffer_size);
+            active_ = &*decoded_brotli_;
+#else
+            throw protocol_error{
+                "brotli Content-Encoding is not supported by this build"};
+#endif
             break;
         }
     }
@@ -561,7 +585,13 @@ private:
     }
 
     http_body_reader transfer_;
-    std::optional<zlib_reader> decoded_;
+    std::optional<zlib_reader> decoded_zlib_;
+#if defined(NXTRT_HAVE_ZSTD)
+    std::optional<zstd_reader> decoded_zstd_;
+#endif
+#if defined(NXTRT_HAVE_BROTLI)
+    std::optional<brotli_reader> decoded_brotli_;
+#endif
     byte_reader * active_;
 };
 

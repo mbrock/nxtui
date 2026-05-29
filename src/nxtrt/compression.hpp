@@ -2,8 +2,16 @@
 
 #include "nxtrt/buffers.hpp"
 
+#if defined(NXTRT_HAVE_BROTLI)
+#include <brotli/decode.h>
+#endif
+#if defined(NXTRT_HAVE_ZSTD)
+#include <zstd.h>
+#endif
+
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <string>
@@ -216,5 +224,284 @@ inline zlib_reader deflate_reader(
 {
     return zlib_reader{reader, zlib_format::zlib, buffer};
 }
+
+#if defined(NXTRT_HAVE_ZSTD)
+
+class zstd_reader final : public byte_reader
+{
+public:
+    explicit zstd_reader(byte_reader & reader, std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , reader_(&reader)
+        , stream_(ZSTD_createDStream())
+    {
+        if (stream_ == nullptr)
+            throw compression_error{"zstd decompressor init failed"};
+    }
+
+    explicit zstd_reader(byte_reader & reader, std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , reader_(&reader)
+        , stream_(ZSTD_createDStream())
+    {
+        if (stream_ == nullptr)
+            throw compression_error{"zstd decompressor init failed"};
+    }
+
+    ~zstd_reader() override
+    {
+        ZSTD_freeDStream(stream_);
+    }
+
+private:
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
+    {
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
+        if (done_)
+            return hope<read_result>::ready(read_result{.eof = true});
+        return stream_more_task(writer, limit);
+    }
+
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
+    {
+        auto into_reader = false;
+        auto out = output_capacity(writer, limit, into_reader);
+
+        while (true) {
+            if (out.empty())
+                co_return read_result{};
+
+            if (input_.pos == input_.size)
+                co_await refill_input();
+
+            auto output = ZSTD_outBuffer{
+                .dst = out.data(),
+                .size = std::min(out.size(), std::numeric_limits<std::size_t>::max()),
+                .pos = 0,
+            };
+            auto rc = ZSTD_decompressStream(stream_, &output, &input_);
+            if (ZSTD_isError(rc))
+                throw compression_error{ZSTD_getErrorName(rc)};
+            if (rc == 0)
+                done_ = true;
+
+            if (output.pos != 0) {
+                if (into_reader) {
+                    advance(output.pos);
+                    co_return read_result{};
+                }
+
+                writer.advance(output.pos);
+                co_return read_result{.bytes = output.pos};
+            }
+
+            if (done_)
+                co_return read_result{.eof = true};
+        }
+    }
+
+    std::span<std::byte> output_capacity(
+        byte_writer & writer,
+        std::size_t limit,
+        bool & into_reader)
+    {
+        auto out = writer.unused_capacity();
+        if (out.empty()) {
+            into_reader = true;
+            rebase(1);
+            out = unused_capacity();
+        }
+
+        return out.first(std::min(limit, out.size()));
+    }
+
+    task<void> refill_input()
+    {
+        while (input_.pos == input_.size) {
+            auto chunk = co_await reader_->take_some();
+            if (!chunk)
+                throw compression_error{"unexpected end of zstd stream"};
+            if (chunk->empty())
+                continue;
+
+            input_span_ = *chunk;
+            input_ = ZSTD_inBuffer{
+                .src = input_span_.data(),
+                .size = input_span_.size(),
+                .pos = 0,
+            };
+        }
+    }
+
+    byte_reader * reader_;
+    ZSTD_DStream * stream_;
+    std::span<const std::byte> input_span_;
+    ZSTD_inBuffer input_{};
+    bool done_ = false;
+};
+
+inline zstd_reader zstd_reader_for(
+    byte_reader & reader,
+    std::size_t buffer_size = 4096)
+{
+    return zstd_reader{reader, buffer_size};
+}
+
+inline zstd_reader zstd_reader_for(
+    byte_reader & reader,
+    std::span<std::byte> buffer)
+{
+    return zstd_reader{reader, buffer};
+}
+
+#endif
+
+#if defined(NXTRT_HAVE_BROTLI)
+
+class brotli_reader final : public byte_reader
+{
+public:
+    explicit brotli_reader(byte_reader & reader, std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , reader_(&reader)
+        , state_(BrotliDecoderCreateInstance(nullptr, nullptr, nullptr))
+    {
+        if (state_ == nullptr)
+            throw compression_error{"brotli decompressor init failed"};
+    }
+
+    explicit brotli_reader(byte_reader & reader, std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , reader_(&reader)
+        , state_(BrotliDecoderCreateInstance(nullptr, nullptr, nullptr))
+    {
+        if (state_ == nullptr)
+            throw compression_error{"brotli decompressor init failed"};
+    }
+
+    ~brotli_reader() override
+    {
+        BrotliDecoderDestroyInstance(state_);
+    }
+
+private:
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
+    {
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
+        if (done_)
+            return hope<read_result>::ready(read_result{.eof = true});
+        return stream_more_task(writer, limit);
+    }
+
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
+    {
+        auto into_reader = false;
+        auto out = output_capacity(writer, limit, into_reader);
+
+        while (true) {
+            if (out.empty())
+                co_return read_result{};
+
+            if (available_in_ == 0)
+                co_await refill_input();
+
+            auto next_out = reinterpret_cast<std::uint8_t *>(out.data());
+            auto available_out = out.size();
+            auto result = BrotliDecoderDecompressStream(
+                state_,
+                &available_in_,
+                &next_in_,
+                &available_out,
+                &next_out,
+                nullptr);
+            auto produced = out.size() - available_out;
+
+            if (result == BROTLI_DECODER_RESULT_ERROR) {
+                auto code = BrotliDecoderGetErrorCode(state_);
+                throw compression_error{
+                    BrotliDecoderErrorString(code)};
+            }
+            if (result == BROTLI_DECODER_RESULT_SUCCESS)
+                done_ = true;
+
+            if (produced != 0) {
+                if (into_reader) {
+                    advance(produced);
+                    co_return read_result{};
+                }
+
+                writer.advance(produced);
+                co_return read_result{.bytes = produced};
+            }
+
+            if (done_)
+                co_return read_result{.eof = true};
+        }
+    }
+
+    std::span<std::byte> output_capacity(
+        byte_writer & writer,
+        std::size_t limit,
+        bool & into_reader)
+    {
+        auto out = writer.unused_capacity();
+        if (out.empty()) {
+            into_reader = true;
+            rebase(1);
+            out = unused_capacity();
+        }
+
+        return out.first(std::min(limit, out.size()));
+    }
+
+    task<void> refill_input()
+    {
+        while (available_in_ == 0) {
+            auto chunk = co_await reader_->take_some();
+            if (!chunk)
+                throw compression_error{"unexpected end of brotli stream"};
+            if (chunk->empty())
+                continue;
+
+            input_ = *chunk;
+            next_in_ =
+                reinterpret_cast<const std::uint8_t *>(input_.data());
+            available_in_ = input_.size();
+        }
+    }
+
+    byte_reader * reader_;
+    BrotliDecoderState * state_;
+    std::span<const std::byte> input_;
+    const std::uint8_t * next_in_ = nullptr;
+    std::size_t available_in_ = 0;
+    bool done_ = false;
+};
+
+inline brotli_reader brotli_reader_for(
+    byte_reader & reader,
+    std::size_t buffer_size = 4096)
+{
+    return brotli_reader{reader, buffer_size};
+}
+
+inline brotli_reader brotli_reader_for(
+    byte_reader & reader,
+    std::span<std::byte> buffer)
+{
+    return brotli_reader{reader, buffer};
+}
+
+#endif
 
 } // namespace nxtrt

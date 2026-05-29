@@ -32,6 +32,23 @@ utf8proc_dep = dependency(
 )
 
 zlib_dep = dependency('zlib')
+zstd_dep = dependency('libzstd', required : false)
+brotli_dep = dependency('libbrotlidec', required : false)
+
+nxt_compression_deps = [zlib_dep]
+nxt_compression_args = []
+
+if zstd_dep.found()
+  message('zstd decompression available')
+  nxt_compression_deps += zstd_dep
+  nxt_compression_args += '-DNXTRT_HAVE_ZSTD=1'
+endif
+
+if brotli_dep.found()
+  message('brotli decompression available')
+  nxt_compression_deps += brotli_dep
+  nxt_compression_args += '-DNXTRT_HAVE_BROTLI=1'
+endif
 
 nxt_mdspan_args = [
   '-DMDSPAN_USE_BRACKET_OPERATOR=1',
@@ -74,7 +91,7 @@ nxt_core_deps = []
 nxt_core_deps += nxt_awslc_dep
 nxt_core_deps += utf8proc_dep
 nxt_core_deps += nxt_libvterm_dep
-nxt_core_deps += zlib_dep
+nxt_core_deps += nxt_compression_deps
 
 nxt_core_sources = files(
   'src/nxtui/ansi.cpp',
@@ -89,7 +106,7 @@ nxt_core_lib = static_library('nxt-core',
   nxt_core_sources,
   include_directories : nxt_inc,
   dependencies : nxt_core_deps,
-  cpp_args : nxt_mdspan_args,
+  cpp_args : nxt_mdspan_args + nxt_compression_args,
   install : true,
 )
 
@@ -97,7 +114,7 @@ nxt_core_dep = declare_dependency(
   link_with : nxt_core_lib,
   include_directories : nxt_inc,
   dependencies : nxt_core_deps,
-  compile_args : nxt_mdspan_args,
+  compile_args : nxt_mdspan_args + nxt_compression_args,
 )
 
 nxt_stacktrace_deps = []
