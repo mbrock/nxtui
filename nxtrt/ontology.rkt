@@ -5,17 +5,27 @@
 
 (provide nxt
          deck
-         wand
          zone
          task
          wish
          exec
+         exec-state
+         prepared-state
+         parked-state
+         settled-state
+         retired-state
+         parked-phase
+         queued-phase
+         submitted-phase
+         cancelling-phase
+         settled-phase
+         ready-to-retire-phase
+         draining-phase
          deed
-         waves
          has-ready
-         has-prepared
-         has-submitted
-         has-parked
+         has-lifecycle
+         has-parked-phase
+         has-settled-phase
          spawned
          issued
          observes

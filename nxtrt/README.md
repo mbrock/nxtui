@@ -49,14 +49,15 @@ Predicates in `runtime.rkt` are written in the indentation-sensitive
 `rdf-forge` language rather than raw Forge text. For example:
 
 ```racket
-predicate wand-has-parked-exec
-  some ([w wand])
-    some (w has-parked)
+predicate has-parked-exec
+  some ([a exec])
+    in (a has-lifecycle) parked-state
 ```
 
 Quantified variables are callable inside predicate bodies. Calling a variable
-with relation steps follows that path from the variable, so `(w has-parked)` is
-the same relation expression as `(follow w has-parked)`.
+with relation steps follows that path from the variable, so
+`(a has-lifecycle)` is the same relation expression as
+`(follow a has-lifecycle)`.
 
 Field declarations resolve overloaded properties from the enclosing signature
 domain, so a signature can stay close to the ontology wording:

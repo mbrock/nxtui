@@ -26,17 +26,19 @@ runtime or lifetime bug.
 
 ## Runtime Model
 
-The executable `nxtrt` runtime/wand model lives in `nxtrt/runtime.rkt`. It uses
+The executable `nxtrt` runtime/exec model lives in `nxtrt/runtime.rkt`. It uses
 `#lang rdf-forge` to keep the RDF ontology vocabulary and the Forge-style model
 in one source file: classes and properties name the runtime concepts,
 signatures describe their shape, predicates state invariants or temporal
 expectations, and `run` blocks are small witness/debugging scenarios.
 
 `nxtrt/model.rkt` is only the CLI wrapper for that model, and
-`nxtrt/ontology.rkt` is the ontology export wrapper. When changing deck, wand,
+`nxtrt/ontology.rkt` is the ontology export wrapper. When changing deck,
 wish/exec, task, deed, or task-zone semantics, update `nxtrt/runtime.rkt`
 alongside the C++ code so the executable model keeps describing the runtime you
-mean to have.
+mean to have. The model currently focuses on exec lifecycle semantics; add wand
+vocabulary only when modeling wand-level scheduling, ownership, or backend
+capacity.
 
 Run the model with:
 
@@ -50,11 +52,13 @@ or directly with:
 racket nxtrt/model.rkt --run-all
 ```
 
-For wand bugs, first map the concrete state to the model vocabulary:
-`has-prepared`, `has-submitted`, `has-parked`, `has-ready`,
-`has-continuation`, `realizes`, `spawned`, `issued`, and `observes`. If the bug
-is a missing invariant or impossible transition, encode that in the model
-before or alongside the runtime fix.
+For wand bugs, first map the concrete operation to the model vocabulary:
+`has-lifecycle`, `prepared-state`, `parked-state`, `settled-state`,
+`retired-state`, `has-parked-phase`, `has-settled-phase`, `has-ready`,
+`has-continuation`, `realizes`, `spawned`, `issued`, and `observes`. Each exec
+owns its lifecycle and backend phase details. If the bug is a missing invariant
+or impossible transition, encode that in the model before or alongside the
+runtime fix.
 
 ## Tests
 

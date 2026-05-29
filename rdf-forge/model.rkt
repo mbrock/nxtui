@@ -847,7 +847,7 @@
   (number->string (add1 (string->number number))))
 
 (define (field-relation name)
-  (match (regexp-match #rx"^(.+)-for-[^-]+-[^-]+$" name)
+  (match (regexp-match #rx"^(.+)-for-.+$" name)
     [(list _ relation) (words relation)]
     [_ (words name)]))
 
