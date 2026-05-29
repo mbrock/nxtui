@@ -170,8 +170,8 @@ def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Text:
         f"and completed {n(completes)} CQEs.\n")
     out.append(
         f"It entered the kernel {n(enters)} times and returned {n(exits)} "
-        f"times, averaging {avg_submit:.2f} SQEs submitted and "
-        f"{avg_complete:.2f} CQEs completed per enter.\n")
+        f"times, averaging {avg_submit:.2f} SQEs accepted per enter "
+        f"and {avg_complete:.2f} CQE trace events per enter interval.\n")
     out.append(
         f"The ring armed poll {n(poll_arms)} times, waited on the CQ ring "
         f"{n(cq_waits)} times, and queued async work {n(async_work)} times.")
@@ -234,6 +234,50 @@ def numeric_counts(
     return [(as_int(key), count) for key, count in rows], total
 
 
+def completion_batch_counts(
+    con: duckdb.DuckDBPyConnection,
+    limit: int,
+) -> tuple[list[tuple[int, int]], int]:
+    rows = con.execute(
+        """
+        with ordered as (
+            select
+                eid,
+                sample.timestamp as timestamp,
+                sample.to_submit is not null as is_enter,
+                sample.res is not null as is_complete,
+                sum(case when sample.to_submit is not null then 1 else 0 end)
+                    over (order by sample.timestamp, eid) as enter_seq
+            from events
+        ),
+        enters as (
+            select enter_seq
+            from ordered
+            where is_enter
+        ),
+        completions as (
+            select enter_seq, count(*)::int as cqe_count
+            from ordered
+            where is_complete and enter_seq > 0
+            group by 1
+        ),
+        batches as (
+            select coalesce(cqe_count, 0)::int as cqe_count
+            from enters
+            left join completions using (enter_seq)
+        )
+        select cqe_count, count(*)::int as count
+        from batches
+        group by 1
+        order by 2 desc, 1
+        limit ?;
+        """,
+        [limit],
+    ).fetchall()
+    total = count_where(con, "sample.to_submit is not null")
+    return rows, total
+
+
 def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
     row = con.execute(
         """
@@ -275,7 +319,7 @@ def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
         """
     ).fetchone()
     table = Table.grid(padding=(0, 2))
-    table.add_column(no_wrap=True)
+    table.add_column()
     if row and row[0]:
         calls, min_us, p50, p90, p99, max_us, avg = row
         table.add_row(
@@ -340,6 +384,13 @@ def main() -> int:
     print_section(
         console,
         "number of SQEs accepted per enter",
+        count_table(rows, total, min_pct=args.min_pct),
+    )
+
+    rows, total = completion_batch_counts(con, args.lines)
+    print_section(
+        console,
+        "CQEs completed after each enter",
         count_table(rows, total, min_pct=args.min_pct),
     )
 
