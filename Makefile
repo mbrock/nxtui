@@ -1,8 +1,11 @@
-.PHONY: all setup build full test freebsd-test bench spec docs docs-publish clean traces
+.PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot spec docs docs-publish clean traces
 
 BENCH_CLIENTS ?= 16
 BENCH_MESSAGES ?= 512
 BENCH_PAYLOAD ?= 64
+BENCH_PERF_DATA ?= build-bench-release/nxt-echo.perf.data
+BENCH_PERF_FREQ ?= 999
+BENCH_PERF_CALLGRAPH ?= fp
 
 all: build
 
@@ -22,14 +25,23 @@ test:
 freebsd-test:
 	scripts/freebsd-vm test
 
-bench:
+bench-build:
 	@if [ ! -d build-bench-release ]; then \
 		meson setup build-bench-release --buildtype=release -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false; \
-	else \
-		meson setup build-bench-release --reconfigure -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false; \
 	fi
 	meson compile -C build-bench-release nxt-echo-bench
+
+bench: bench-build
 	build-bench-release/nxt-echo-bench --clients $(BENCH_CLIENTS) --messages $(BENCH_MESSAGES) --payload $(BENCH_PAYLOAD)
+
+bench-perf: bench-build
+	sudo perf record -F $(BENCH_PERF_FREQ) -g --call-graph $(BENCH_PERF_CALLGRAPH) -o $(BENCH_PERF_DATA) -- build-bench-release/nxt-echo-bench --clients $(BENCH_CLIENTS) --messages $(BENCH_MESSAGES) --payload $(BENCH_PAYLOAD)
+
+bench-perf-report:
+	sudo perf report -i $(BENCH_PERF_DATA)
+
+bench-perf-hot:
+	sudo perf report -i $(BENCH_PERF_DATA) --stdio --no-children --no-call-graph --sort dso,symbol | head -80
 
 spec:
 	racket nxtrt/model.rkt --run-all
