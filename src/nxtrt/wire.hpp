@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <deque>
 #include <optional>
-#include <stop_token>
 #include <type_traits>
 #include <utility>
 
@@ -24,6 +23,96 @@ class wire
 public:
     using value_type = std::remove_cv_t<T>;
 
+    /// Write endpoint for a wire.
+    ///
+    /// This is a non-owning view; the parent `wire` owns the queue, bells, and
+    /// closed state. It exists to make producer/consumer direction explicit at
+    /// call sites without changing the wire's scoped lifetime model.
+    class tx_side
+    {
+    public:
+        explicit tx_side(wire & owner) noexcept
+            : owner_(&owner)
+        {}
+
+        [[nodiscard]] bool closed() const noexcept
+        {
+            return owner_->closed();
+        }
+
+        [[nodiscard]] bool full() const noexcept
+        {
+            return owner_->full();
+        }
+
+        [[nodiscard]] std::size_t capacity() const noexcept
+        {
+            return owner_->capacity();
+        }
+
+        [[nodiscard]] bool try_send(T value)
+        {
+            return owner_->try_send(std::move(value));
+        }
+
+        [[nodiscard]] hope<bool> send(T value)
+        {
+            return owner_->send(std::move(value));
+        }
+
+        [[nodiscard]] hope<void> flush()
+        {
+            return owner_->flush();
+        }
+
+        void close()
+        {
+            owner_->close();
+        }
+
+    private:
+        wire * owner_;
+    };
+
+    /// Read endpoint for a wire.
+    ///
+    /// This is also a non-owning view.
+    class rx_side
+    {
+    public:
+        explicit rx_side(wire & owner) noexcept
+            : owner_(&owner)
+        {}
+
+        [[nodiscard]] bool closed() const noexcept
+        {
+            return owner_->closed();
+        }
+
+        [[nodiscard]] bool empty() const noexcept
+        {
+            return owner_->empty();
+        }
+
+        [[nodiscard]] std::size_t capacity() const noexcept
+        {
+            return owner_->capacity();
+        }
+
+        [[nodiscard]] std::optional<value_type> try_next()
+        {
+            return owner_->try_next();
+        }
+
+        [[nodiscard]] hope<std::optional<value_type>> next()
+        {
+            return owner_->next();
+        }
+
+    private:
+        wire * owner_;
+    };
+
     explicit wire(std::size_t capacity = 64)
         : capacity_(capacity == 0 ? 1 : capacity)
     {}
@@ -35,17 +124,7 @@ public:
 
     ~wire()
     {
-        cancel();
-    }
-
-    [[nodiscard]] std::stop_token stop_token() const noexcept
-    {
-        return stop_.get_token();
-    }
-
-    [[nodiscard]] bool stop_requested() const noexcept
-    {
-        return stop_.stop_requested();
+        close();
     }
 
     [[nodiscard]] bool closed() const noexcept
@@ -66,6 +145,16 @@ public:
     [[nodiscard]] std::size_t capacity() const noexcept
     {
         return capacity_;
+    }
+
+    [[nodiscard]] tx_side tx() noexcept
+    {
+        return tx_side{*this};
+    }
+
+    [[nodiscard]] rx_side rx() noexcept
+    {
+        return rx_side{*this};
     }
 
     [[nodiscard]] std::optional<value_type> try_next()
@@ -92,7 +181,7 @@ public:
 
     [[nodiscard]] hope<bool> send(T value)
     {
-        if (closed_ || stop_.stop_requested())
+        if (closed_)
             return hope<bool>::ready(false);
         if (can_send_now()) {
             push_ready(std::move(value));
@@ -103,7 +192,7 @@ public:
 
     [[nodiscard]] hope<void> flush()
     {
-        if (values_.empty() || closed_ || stop_.stop_requested())
+        if (values_.empty() || closed_)
             return hope<void>::ready();
         return flush_slow();
     }
@@ -112,7 +201,7 @@ public:
     {
         if (auto value = try_next())
             return hope<std::optional<value_type>>::ready(std::move(value));
-        if (closed_ || stop_.stop_requested())
+        if (closed_)
             return hope<std::optional<value_type>>::ready(std::nullopt);
         return next_slow();
     }
@@ -126,17 +215,11 @@ public:
         space_.ring();
     }
 
-    void cancel()
-    {
-        stop_.request_stop();
-        close();
-    }
-
 private:
     task<bool> send_slow(T value)
     {
         while (true) {
-            if (closed_ || stop_.stop_requested())
+            if (closed_)
                 co_return false;
             if (can_send_now()) {
                 push_ready(std::move(value));
@@ -148,7 +231,7 @@ private:
                 push_ready(std::move(value));
                 co_return true;
             }
-            if (closed_ || stop_.stop_requested())
+            if (closed_)
                 co_return false;
             co_await space_;
         }
@@ -156,9 +239,9 @@ private:
 
     task<void> flush_slow()
     {
-        while (!values_.empty() && !closed_ && !stop_.stop_requested()) {
+        while (!values_.empty() && !closed_) {
             space_.reset();
-            if (values_.empty() || closed_ || stop_.stop_requested())
+            if (values_.empty() || closed_)
                 co_return;
             co_await space_;
         }
@@ -169,13 +252,13 @@ private:
         while (true) {
             if (auto value = try_next())
                 co_return std::move(value);
-            if (closed_ || stop_.stop_requested())
+            if (closed_)
                 co_return std::nullopt;
 
             data_.reset();
             if (auto value = try_next())
                 co_return std::move(value);
-            if (closed_ || stop_.stop_requested())
+            if (closed_)
                 co_return std::nullopt;
             co_await data_;
         }
@@ -189,7 +272,7 @@ private:
 
     [[nodiscard]] bool can_send_now() const noexcept
     {
-        if (closed_ || stop_.stop_requested())
+        if (closed_)
             return false;
         return !full();
     }
@@ -198,7 +281,6 @@ private:
     std::size_t capacity_ = 64;
     bell data_;
     bell space_;
-    std::stop_source stop_;
     bool closed_ = false;
 };
 

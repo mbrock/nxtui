@@ -56,6 +56,12 @@ if http_client_demo_available
     include_directories : nxt_inc,
     dependencies : http_client_demo_dependencies,
   )
+
+  executable('nxt-openai-sse-demo',
+    'openai_sse_demo.cpp',
+    include_directories : nxt_inc,
+    dependencies : http_client_demo_dependencies,
+  )
 else
   message('no HTTP demo dependencies found; skipping nxt-http-client-demo')
 endif

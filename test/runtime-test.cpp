@@ -3156,7 +3156,7 @@ static suite runtime_tests{
                 expect(!events.try_send(2));
             };
 
-            "cancel requests stop and wakes pending consumers"_test = [] {
+            "close wakes pending consumers"_test = [] {
                 auto rt = nxtrt::runtime{};
                 auto events = nxtrt::wire<int>{};
                 auto finished = false;
@@ -3164,10 +3164,10 @@ static suite runtime_tests{
                 rt.run([&]() -> nxtrt::task<void> {
                     nxtrt::fork(record_closed_wire(events, finished));
                     co_await nxtrt::yield();
-                    events.cancel();
+                    events.close();
                 });
 
-                expect(events.stop_requested());
+                expect(events.closed());
                 expect(finished);
                 expect(!events.try_send(1));
             };
@@ -3179,6 +3179,26 @@ static suite runtime_tests{
                 auto value = events.try_next();
                 expect(value && *value == 3_i);
                 expect(!events.try_next());
+            };
+
+            "tx and rx sides expose directional operations"_test = [] {
+                auto events = nxtrt::wire<int>{1};
+                auto tx = events.tx();
+                auto rx = events.rx();
+
+                expect(tx.capacity() == std::size_t{1});
+                expect(rx.capacity() == std::size_t{1});
+                expect(tx.try_send(5));
+                expect(tx.full());
+
+                auto value = rx.try_next();
+                expect(value && *value == 5_i);
+                expect(rx.empty());
+
+                tx.close();
+                expect(tx.closed());
+                expect(rx.closed());
+                expect(!tx.try_send(6));
             };
 
             "bounded queues reject immediate sends when full"_test = [] {

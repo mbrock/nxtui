@@ -159,15 +159,15 @@ public:
 
     void request_stop()
     {
-        input_wire_.cancel();
-        resize_wire_.cancel();
+        stopping_ = true;
+        input_wire_.close();
+        resize_wire_.close();
         signal_damage();
     }
 
     [[nodiscard]] bool stop_requested() const noexcept
     {
-        return input_wire_.stop_requested()
-            || resize_wire_.stop_requested();
+        return stopping_;
     }
 
 private:
@@ -176,6 +176,7 @@ private:
     bell damage_bell_;
     wire<term_size> resize_wire_;
     wire<input_event> input_wire_;
+    bool stopping_ = false;
 };
 #endif
 
