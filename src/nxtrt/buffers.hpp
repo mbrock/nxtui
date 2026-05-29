@@ -115,30 +115,50 @@ concept byte_writer_chunk_range =
     && (!byte_writer_chunk<T>)
     && byte_writer_chunk<std::ranges::range_reference_t<T>>;
 
+template<typename T>
+concept byte_reader_chunk =
+    std::convertible_to<T, std::span<const std::byte>>
+    || (
+        std::convertible_to<T, std::string_view>
+        && (
+            !std::same_as<std::remove_cvref_t<T>, std::string>
+            || std::is_lvalue_reference_v<T>));
+
+template<typename T>
+concept byte_reader_chunk_range =
+    std::ranges::input_range<T>
+    && byte_reader_chunk<std::ranges::range_reference_t<T>>;
+
+template<byte_reader_chunk Chunk>
+std::span<const std::byte> reader_chunk_bytes(Chunk && chunk) noexcept
+{
+    if constexpr (std::convertible_to<Chunk, std::span<const std::byte>>) {
+        return std::span<const std::byte>{std::forward<Chunk>(chunk)};
+    } else {
+        return as_bytes(std::string_view{std::forward<Chunk>(chunk)});
+    }
+}
+
 } // namespace detail
 
 /// Buffered asynchronous writer base.
 ///
-/// The hot-path methods are non-virtual and only copy into `buffer_`.
-/// Derived writers implement `write_more()`, the slow-path operation that
-/// drains bytes to the concrete backend.
+/// The hot-path methods are non-virtual and copy into `buffer_` when there is
+/// capacity. An empty buffer is valid and means unbuffered writes: non-empty
+/// writes always go through the slow path. Derived writers implement
+/// `write_more()`, the slow-path operation that drains bytes to the concrete
+/// backend.
 class byte_writer
 {
 public:
     explicit byte_writer(std::span<std::byte> buffer)
         : buffer_(buffer)
-    {
-        if (buffer.empty())
-            throw buffer_error{"writer buffer is empty"};
-    }
+    {}
 
     explicit byte_writer(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
         , buffer_(owned_buffer_)
-    {
-        if (owned_buffer_.empty())
-            throw buffer_error{"writer buffer is empty"};
-    }
+    {}
 
     byte_writer(const byte_writer &) = delete;
     byte_writer & operator=(const byte_writer &) = delete;
@@ -427,17 +447,29 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 /// `seek_`, and `end_`. Derived readers only implement `read_more()`, the
 /// slow-path operation that appends bytes to `unused_capacity()` and advances
 /// `end_` by the returned byte count.
+///
+/// Unlike Zig's `std.Io.Reader`, this reader's virtual boundary is refill-style
+/// rather than stream/readv-style: source bytes must first land in `buffer_`
+/// before borrowed-span APIs such as `peek()` and `take()` can expose them.
+/// That means a reader needs at least one byte of storage, even if the caller
+/// wants every operation to use the cold path.
 class byte_reader
 {
 public:
     explicit byte_reader(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
         , buffer_(owned_buffer_)
-    {}
+    {
+        if (owned_buffer_.empty())
+            throw buffer_error{"reader buffer is empty"};
+    }
 
     explicit byte_reader(std::span<std::byte> buffer)
         : buffer_(buffer)
-    {}
+    {
+        if (buffer.empty())
+            throw buffer_error{"reader buffer is empty"};
+    }
 
     virtual ~byte_reader() = default;
 
@@ -779,22 +811,36 @@ private:
     Read read_;
 };
 
-/// Borrowed in-memory reader.
-class string_source final : public byte_reader
+/// Borrowed in-memory byte reader over a single-pass range of byte-like chunks.
+///
+/// Chunks may be byte spans or UTF-8 text views; text chunks are treated as
+/// their underlying bytes.
+template<std::ranges::input_range Chunks>
+    requires std::ranges::view<Chunks>
+        && detail::byte_reader_chunk_range<Chunks>
+class byte_span_source final : public byte_reader
 {
 public:
-    string_source(
-        std::span<const std::string_view> chunks,
-        std::span<std::byte> buffer)
+    template<std::ranges::viewable_range Range>
+        requires std::constructible_from<Chunks, std::views::all_t<Range>>
+            && detail::byte_reader_chunk_range<std::views::all_t<Range>>
+    byte_span_source(Range && chunks, std::span<std::byte> buffer)
         : byte_reader(buffer)
-        , chunks_(chunks)
+        , chunks_(std::views::all(std::forward<Range>(chunks)))
+        , chunk_(std::ranges::begin(chunks_))
+        , end_(std::ranges::end(chunks_))
     {}
 
-    explicit string_source(
-        std::span<const std::string_view> chunks,
+    template<std::ranges::viewable_range Range>
+        requires std::constructible_from<Chunks, std::views::all_t<Range>>
+            && detail::byte_reader_chunk_range<std::views::all_t<Range>>
+    explicit byte_span_source(
+        Range && chunks,
         std::size_t buffer_size = 4096)
         : byte_reader(buffer_size)
-        , chunks_(chunks)
+        , chunks_(std::views::all(std::forward<Range>(chunks)))
+        , chunk_(std::ranges::begin(chunks_))
+        , end_(std::ranges::end(chunks_))
     {}
 
 private:
@@ -805,9 +851,9 @@ private:
             throw buffer_error{"reader buffer is full"};
 
         auto written = std::size_t{0};
-        while (written < dst.size() && chunk_ < chunks_.size()) {
-            auto chunk = chunks_[chunk_];
-            auto rest = chunk.substr(offset_);
+        while (written < dst.size() && chunk_ != end_) {
+            auto chunk = detail::reader_chunk_bytes(*chunk_);
+            auto rest = chunk.subspan(offset_);
             auto n = std::min(dst.size() - written, rest.size());
             std::memcpy(dst.data() + written, rest.data(), n);
 
@@ -823,20 +869,36 @@ private:
         return hope<read_result>::ready(
             read_result{
                 .bytes = written,
-                .eof = chunk_ == chunks_.size(),
+                .eof = chunk_ == end_,
             });
     }
 
-    std::span<const std::string_view> chunks_;
-    std::size_t chunk_ = 0;
+    Chunks chunks_;
+    std::ranges::iterator_t<Chunks> chunk_;
+    std::ranges::sentinel_t<Chunks> end_;
     std::size_t offset_ = 0;
 };
+
+template<std::ranges::viewable_range Range>
+    requires detail::byte_reader_chunk_range<std::views::all_t<Range>>
+byte_span_source(Range &&, std::span<std::byte>)
+    -> byte_span_source<std::views::all_t<Range>>;
+
+template<std::ranges::viewable_range Range>
+    requires detail::byte_reader_chunk_range<std::views::all_t<Range>>
+byte_span_source(Range &&)
+    -> byte_span_source<std::views::all_t<Range>>;
+
+template<std::ranges::viewable_range Range>
+    requires detail::byte_reader_chunk_range<std::views::all_t<Range>>
+byte_span_source(Range &&, std::size_t)
+    -> byte_span_source<std::views::all_t<Range>>;
 
 /// Reader for a file descriptor.
 class fd_source final : public byte_reader
 {
 public:
-    explicit fd_source(int fd, std::span<std::byte> buffer) noexcept
+    explicit fd_source(int fd, std::span<std::byte> buffer)
         : byte_reader(buffer)
         , fd_(fd)
     {}
@@ -887,7 +949,7 @@ public:
     explicit socket_source(
         int fd,
         std::span<std::byte> buffer,
-        int flags = 0) noexcept
+        int flags = 0)
         : byte_reader(buffer)
         , fd_(fd)
         , flags_(flags)
