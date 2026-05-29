@@ -97,6 +97,9 @@ struct runtime_env
     runtime_env & operator=(runtime_env &&) noexcept = default;
 
     /// Replace this environment's entries with cloned entries from `other`.
+    ///
+    /// Cloning gives child coroutine frames their own ambient values, so they
+    /// never borrow storage owned by a caller's scoped binding guard.
     void copy_entries_from(const runtime_env & other)
     {
         if (this == &other)

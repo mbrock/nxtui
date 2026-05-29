@@ -70,6 +70,7 @@ struct promise_base
         void await_resume() const noexcept {}
     };
 
+    /// Capture the ambient environment visible at coroutine frame creation.
     promise_base()
         : id(task_ids.next())
     {
@@ -452,6 +453,10 @@ private:
 
 namespace detail {
 
+/// Run `fn` with `Key` temporarily bound in the current task environment.
+///
+/// The binding mutates the promise-owned environment and restores the previous
+/// entry when the scoped child task completes.
 template<typename Key, stored_task_factory Fn>
 [[nodiscard]] task<stored_task_result_t<Fn>>
 with_env_bound(typename Key::value_type value, Fn fn)
@@ -986,6 +991,8 @@ public:
         auto record = std::shared_ptr<detail::child_record<T>>{};
         try {
             auto & promise = handle.promise();
+            // Forked children outlive the call site, so they inherit owned
+            // clones of the current ambient environment.
             promise.env.copy_entries_from(*current);
             record = std::make_shared<detail::child_record<T>>(handle);
         } catch (...) {
