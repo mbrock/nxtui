@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+data=${1:-build-bench-release/nxt-echo.perf.data}
+json=${2:-${data%.data}.json}
+lines=${BENCH_PERF_DUCK_LINES:-20}
+symbol_width=${BENCH_PERF_SYMBOL_WIDTH:-96}
+edge_symbol_width=$((symbol_width / 2))
+
+if [[ ! -f "$data" ]]; then
+    echo "perf data not found: $data" >&2
+    exit 1
+fi
+
+if [[ ! -f "$json" || "$data" -nt "$json" ]]; then
+    sudo perf data convert -i "$data" --to-json "$json" >&2
+    sudo chmod a+r "$json"
+fi
+
+duckdb -table <<SQL
+create temp table raw as
+    select unnest(samples) as sample
+    from read_json('$json', maximum_object_size = 10000000);
+
+create temp table samples as
+    select row_number() over () as sid, sample
+    from raw
+    where sample.comm = 'nxt-echo-bench';
+
+create temp table frames as
+    select
+        sid,
+        depth,
+        frame.dso as dso,
+        frame.symbol as symbol
+    from samples,
+        unnest(sample.callchain) with ordinality as u(frame, depth)
+    where frame.symbol is not null;
+
+create temp table total as
+    select count(*)::double as samples
+    from samples;
+
+.print Self samples
+
+with leaf as (
+    select
+        sample.callchain[1].dso as dso,
+        sample.callchain[1].symbol as symbol,
+        count(*) as samples
+    from samples
+    where sample.callchain[1].symbol is not null
+    group by 1, 2
+)
+select
+    printf('%5.2f%%', 100.0 * leaf.samples / total.samples) as pct,
+    leaf.samples,
+    leaf.dso,
+    case
+        when length(leaf.symbol) > $symbol_width
+            then substr(leaf.symbol, 1, $symbol_width - 3) || '...'
+        else leaf.symbol
+    end as symbol
+from leaf, total
+order by leaf.samples desc
+limit $lines;
+
+.print Inclusive samples
+
+with inclusive as (
+    select
+        dso,
+        symbol,
+        count(distinct sid) as samples
+    from frames
+    group by 1, 2
+)
+select
+    printf('%5.2f%%', 100.0 * inclusive.samples / total.samples) as pct,
+    inclusive.samples,
+    inclusive.dso,
+    case
+        when length(inclusive.symbol) > $symbol_width
+            then substr(inclusive.symbol, 1, $symbol_width - 3) || '...'
+        else inclusive.symbol
+    end as symbol
+from inclusive, total
+order by inclusive.samples desc
+limit $lines;
+
+.print Hot call edges
+
+with edges as (
+    select
+        child.dso as child_dso,
+        child.symbol as child,
+        parent.dso as parent_dso,
+        parent.symbol as parent,
+        count(*) as samples
+    from frames child
+    join frames parent
+        on parent.sid = child.sid
+        and parent.depth = child.depth + 1
+    group by 1, 2, 3, 4
+)
+select
+    printf('%5.2f%%', 100.0 * edges.samples / total.samples) as pct,
+    edges.samples,
+    edges.child_dso as dso,
+    case
+        when length(edges.child) > $edge_symbol_width
+            then substr(edges.child, 1, $edge_symbol_width - 3) || '...'
+        else edges.child
+    end as callee,
+    case
+        when length(edges.parent) > $edge_symbol_width
+            then substr(edges.parent, 1, $edge_symbol_width - 3) || '...'
+        else edges.parent
+    end as caller
+from edges, total
+order by edges.samples desc
+limit $lines;
+SQL

@@ -1,4 +1,4 @@
-.PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot spec docs docs-publish clean traces
+.PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot bench-perf-duck spec docs docs-publish clean traces
 
 BENCH_CLIENTS ?= 16
 BENCH_MESSAGES ?= 512
@@ -13,6 +13,8 @@ BENCH_PERF_PAYLOAD ?= 64
 BENCH_PERF_HOT_LIMIT ?= 0.5
 BENCH_PERF_HOT_LINES ?= 40
 BENCH_PERF_SYMBOL_WIDTH ?= 96
+BENCH_PERF_DUCK_JSON ?= build-bench-release/nxt-echo.perf.json
+BENCH_PERF_DUCK_LINES ?= 20
 
 all: build
 
@@ -64,6 +66,9 @@ bench-perf-hot:
 			printf "%-8s %-18s %s\n", $$1, $$2, $$3 \
 		}' \
 		| head -$(BENCH_PERF_HOT_LINES)
+
+bench-perf-duck:
+	@BENCH_PERF_DUCK_LINES=$(BENCH_PERF_DUCK_LINES) BENCH_PERF_SYMBOL_WIDTH=$(BENCH_PERF_SYMBOL_WIDTH) scripts/perf-duckdb $(BENCH_PERF_DATA) $(BENCH_PERF_DUCK_JSON)
 
 spec:
 	racket nxtrt/model.rkt --run-all
