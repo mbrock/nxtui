@@ -52,6 +52,19 @@ nxtrt::task<std::string> echo_over_socketpair(int tx, int rx)
     co_return std::string{nxtrt::as_string_view(*chunk)};
 }
 
+nxtrt::task<std::pair<std::string, std::size_t>>
+read_socket_source_count(int fd)
+{
+    auto source = nxtrt::socket_source{fd};
+    auto chunk = co_await source.take_some();
+    if (!chunk)
+        throw std::runtime_error{"socket recv reached eof"};
+
+    co_return std::pair{
+        std::string{nxtrt::as_string_view(*chunk)},
+        source.received_size()};
+}
+
 nxtrt::task<void> poll_after_socket_send(int tx, int rx)
 {
     auto message = std::string_view{"x"};
@@ -226,22 +239,15 @@ nxtrt::task<void> write_to_fd(int fd, std::string_view text)
         throw std::runtime_error{"short write wish"};
 }
 
-nxtrt::task<std::size_t> write_with_socket_sink_progress(
+nxtrt::task<std::size_t> write_with_socket_sink_count(
     int fd,
     std::string_view text)
 {
-    auto progress = std::size_t{0};
-    auto sink = nxtrt::socket_sink{
-        fd,
-        0,
-        std::size_t{4},
-        [&](std::size_t bytes) {
-            progress += bytes;
-        }};
+    auto sink = nxtrt::socket_sink{fd, 0, std::size_t{4}};
     co_await sink.write(text);
     co_await sink.write(std::string_view{"!"});
     co_await sink.flush();
-    co_return progress;
+    co_return sink.sent_size();
 }
 
 nxtrt::task<nxtai::tool_process::result> capture_shell(
@@ -441,6 +447,30 @@ static suite uring_wand_tests{
                 expect(echoed == "socket wish smoke");
             };
 
+            "socket sources count received bytes"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
+
+                auto tx = nxt::unique_fd{sockets[0]};
+                auto rx = nxt::unique_fd{sockets[1]};
+
+                auto message = std::string_view{"received"};
+                auto n = ::write(tx.get(), message.data(), message.size());
+                if (n != static_cast<ssize_t>(message.size()))
+                    throw std::runtime_error{"socket write failed"};
+
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto task = read_socket_source_count(rx.get());
+
+                deck.start(task);
+                auto result = pump_until_done(deck, wand, task);
+
+                expect(result.first == "received");
+                expect(result.second == std::size_t{8});
+            };
+
             "socket sends complete before readability is polled"_test = [] {
                 auto sockets = std::array<int, 2>{-1, -1};
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
@@ -552,7 +582,7 @@ static suite uring_wand_tests{
                     == "wishful stdout");
             };
 
-            "socket sinks report sent progress"_test = [] {
+            "socket sinks count sent bytes"_test = [] {
                 auto fds = std::array<int, 2>{-1, -1};
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()) != 0)
                     throw std::runtime_error{"socketpair failed"};
@@ -562,7 +592,7 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = write_with_socket_sink_progress(tx.get(), "counted");
+                auto task = write_with_socket_sink_count(tx.get(), "counted");
 
                 deck.start(task);
                 auto counted = pump_until_done(deck, wand, task);

@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstring>
 #include <format>
-#include <functional>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -804,24 +803,26 @@ public:
     explicit socket_sink(
         int fd,
         std::span<std::byte> buffer,
-        int flags = 0,
-        std::function<void(std::size_t)> progress = {})
+        int flags = 0)
         : byte_writer(buffer)
         , fd_(fd)
         , flags_(flags)
-        , progress_(std::move(progress))
     {}
 
     explicit socket_sink(
         int fd,
         int flags = 0,
-        std::size_t buffer_size = 4096,
-        std::function<void(std::size_t)> progress = {})
+        std::size_t buffer_size = 4096)
         : byte_writer(buffer_size)
         , fd_(fd)
         , flags_(flags)
-        , progress_(std::move(progress))
     {}
+
+    /// Bytes successfully sent by completed socket drains.
+    [[nodiscard]] std::size_t sent_size() const noexcept
+    {
+        return sent_;
+    }
 
 private:
     hope<std::size_t>
@@ -845,8 +846,7 @@ private:
                     .buffer = src,
                     .flags = flags_,
                 };
-                if (n != 0 && progress_)
-                    progress_(n);
+                sent_ += n;
                 co_return n;
             } catch (const interrupted_system_call &) {
             }
@@ -855,7 +855,7 @@ private:
 
     int fd_ = -1;
     int flags_ = 0;
-    std::function<void(std::size_t)> progress_;
+    std::size_t sent_ = 0;
 };
 
 template<typename Chunks>
@@ -1870,6 +1870,12 @@ public:
         , flags_(flags)
     {}
 
+    /// Bytes successfully received from the socket by completed reads.
+    [[nodiscard]] std::size_t received_size() const noexcept
+    {
+        return received_;
+    }
+
 private:
     hope<read_result> stream_more(
         byte_writer & writer,
@@ -1907,11 +1913,13 @@ private:
     {
         while (true) {
             try {
-                co_return co_await op::recv_some{
+                auto n = co_await op::recv_some{
                     .fd = fd_,
                     .buffer = dst,
                     .flags = flags_,
                 };
+                received_ += n;
+                co_return n;
             } catch (const interrupted_system_call &) {
             }
         }
@@ -1919,63 +1927,8 @@ private:
 
     int fd_ = -1;
     int flags_ = 0;
+    std::size_t received_ = 0;
 };
-
-class metered_byte_source final : public byte_reader
-{
-public:
-    metered_byte_source(
-        byte_reader & inner,
-        std::span<std::byte> buffer,
-        std::function<void(std::size_t)> progress)
-        : byte_reader(buffer)
-        , inner_(inner)
-        , progress_(std::move(progress))
-    {}
-
-    metered_byte_source(
-        byte_reader & inner,
-        std::function<void(std::size_t)> progress,
-        std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
-        , inner_(inner)
-        , progress_(std::move(progress))
-    {}
-
-private:
-    hope<read_result> stream_more(
-        byte_writer & writer,
-        std::size_t limit) override
-    {
-        auto streamed = inner_.stream(writer, limit);
-        if (streamed.is_ready())
-            return hope<read_result>::ready(meter(streamed.take_ready()));
-        return stream_more_slow(std::move(streamed));
-    }
-
-    task<read_result> stream_more_slow(hope<read_result> streamed)
-    {
-        co_return meter(co_await std::move(streamed));
-    }
-
-    read_result meter(read_result result)
-    {
-        if (result.bytes != 0)
-            progress_(result.bytes);
-        return result;
-    }
-
-    byte_reader & inner_;
-    std::function<void(std::size_t)> progress_;
-};
-
-inline metered_byte_source meter_source(
-    byte_reader & inner,
-    std::function<void(std::size_t)> progress,
-    std::size_t buffer_size = 4096)
-{
-    return metered_byte_source{inner, std::move(progress), buffer_size};
-}
 
 /// Repeatedly consume the reader's buffered chunks and visit each one.
 ///
