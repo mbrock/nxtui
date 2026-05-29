@@ -17,7 +17,6 @@
 #include <chrono>
 #include <cstdint>
 #include <format>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -808,7 +807,8 @@ struct stream_view_publisher
     network_hud_state & network;
     nxtrt::ema_rate & rx_rate;
     nxtrt::ema_rate & tx_rate;
-    std::function<void()> sample_network{};
+    const nxtrt::socket_source * socket_source = nullptr;
+    const nxtrt::socket_sink * socket_sink = nullptr;
     std::size_t last_rx;
     std::size_t last_tx;
     std::chrono::steady_clock::time_point last_sample;
@@ -822,10 +822,17 @@ struct stream_view_publisher
         force_pending = force_pending || force;
     }
 
+    void sample_network() noexcept
+    {
+        if (socket_source != nullptr)
+            network.socket_rx = socket_source->received_size();
+        if (socket_sink != nullptr)
+            network.socket_tx = socket_sink->sent_size();
+    }
+
     nxtrt::task<void> publish(bool force = false)
     {
-        if (sample_network)
-            sample_network();
+        sample_network();
         pending = false;
         force_pending = false;
         co_await publish_stream_view(
@@ -844,8 +851,7 @@ struct stream_view_publisher
 
     nxtrt::task<void> flush()
     {
-        if (sample_network)
-            sample_network();
+        sample_network();
         auto force = force_pending;
         auto network_changed =
             network.socket_rx != last_rx || network.socket_tx != last_tx;
@@ -977,10 +983,8 @@ nxtrt::task<stream_phase_result> stream_openai_response(
         std::size_t{4096}};
 
     auto socket_source = nxtrt::socket_source{socket.get()};
-    publisher.sample_network = [&] {
-        network.socket_rx = socket_source.received_size();
-        network.socket_tx = socket_output.sent_size();
-    };
+    publisher.socket_source = &socket_source;
+    publisher.socket_sink = &socket_output;
 
     auto tls = nxtrt::tls::tls13_client_session{
         socket_source,
