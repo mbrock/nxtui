@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxtrt/buffers.hpp"
+#include "nxtrt/compression.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -289,6 +290,46 @@ inline bool is_chunked(const response_head & response)
     return has_header_token(response, "transfer-encoding", "chunked");
 }
 
+enum class content_encoding
+{
+    identity,
+    gzip,
+    deflate,
+};
+
+inline content_encoding response_content_encoding(const response_head & response)
+{
+    auto value = header_value(response, "content-encoding");
+    if (!value)
+        return content_encoding::identity;
+
+    auto encoding = content_encoding::identity;
+    auto have_encoding = false;
+    auto rest = *value;
+    while (true) {
+        auto comma = rest.find(',');
+        auto part = trim_ascii(rest.substr(0, comma));
+        if (!part.empty() && !iequals(part, "identity")) {
+            if (have_encoding)
+                throw protocol_error{
+                    "stacked Content-Encoding values are not supported"};
+
+            if (iequals(part, "gzip") || iequals(part, "x-gzip")) {
+                encoding = content_encoding::gzip;
+            } else if (iequals(part, "deflate")) {
+                encoding = content_encoding::deflate;
+            } else {
+                throw protocol_error{"unsupported Content-Encoding"};
+            }
+            have_encoding = true;
+        }
+
+        if (comma == std::string_view::npos)
+            return encoding;
+        rest.remove_prefix(comma + 1);
+    }
+}
+
 inline std::size_t parse_chunk_size(std::span<const std::byte> line)
 {
     auto text = as_string_view(line);
@@ -449,10 +490,54 @@ private:
     bool done_ = false;
 };
 
-inline http_body_reader
+class response_body_reader final : public byte_reader
+{
+public:
+    response_body_reader(
+        byte_reader & reader,
+        const response_head & head,
+        std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , transfer_(reader, head, buffer_size)
+        , active_(&transfer_)
+    {
+        switch (response_content_encoding(head)) {
+        case content_encoding::identity:
+            break;
+        case content_encoding::gzip:
+            decoded_.emplace(transfer_, zlib_format::gzip, buffer_size);
+            active_ = &*decoded_;
+            break;
+        case content_encoding::deflate:
+            decoded_.emplace(transfer_, zlib_format::zlib, buffer_size);
+            active_ = &*decoded_;
+            break;
+        }
+    }
+
+    task<std::optional<std::span<const std::byte>>>
+    next(std::size_t limit = std::numeric_limits<std::size_t>::max())
+    {
+        co_return co_await take_some(limit);
+    }
+
+private:
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
+    {
+        return active_->stream(writer, limit);
+    }
+
+    http_body_reader transfer_;
+    std::optional<zlib_reader> decoded_;
+    byte_reader * active_;
+};
+
+inline response_body_reader
 read_response_body(byte_reader & reader, const response_head & head)
 {
-    return http_body_reader{reader, head};
+    return response_body_reader{reader, head};
 }
 
 inline task<std::optional<server_sent_event>>

@@ -31,6 +31,8 @@ utf8proc_dep = dependency(
   default_options : ['tests=disabled'],
 )
 
+zlib_dep = dependency('zlib')
+
 nxt_mdspan_args = [
   '-DMDSPAN_USE_BRACKET_OPERATOR=1',
   '-DMDSPAN_USE_PAREN_OPERATOR=0',
@@ -72,6 +74,7 @@ nxt_core_deps = []
 nxt_core_deps += nxt_awslc_dep
 nxt_core_deps += utf8proc_dep
 nxt_core_deps += nxt_libvterm_dep
+nxt_core_deps += zlib_dep
 
 nxt_core_sources = files(
   'src/nxtui/ansi.cpp',

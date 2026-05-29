@@ -24,6 +24,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <zlib.h>
 
 namespace nxt::test {
 
@@ -39,6 +40,55 @@ auto text_source(Range && chunks, std::span<std::byte> storage)
         std::forward<Range>(chunks),
         storage,
     };
+}
+
+std::string deflated_text(std::string_view text, int window_bits)
+{
+    auto stream = z_stream{};
+    auto rc = ::deflateInit2(
+        &stream,
+        Z_BEST_SPEED,
+        Z_DEFLATED,
+        window_bits,
+        8,
+        Z_DEFAULT_STRATEGY);
+    if (rc != Z_OK)
+        throw std::runtime_error{"deflateInit2 failed"};
+
+    auto end = false;
+    auto out = std::string{};
+    auto buffer = std::array<char, 128>{};
+    stream.next_in = reinterpret_cast<Bytef *>(
+        const_cast<char *>(text.data()));
+    stream.avail_in = static_cast<uInt>(text.size());
+
+    while (!end) {
+        stream.next_out = reinterpret_cast<Bytef *>(buffer.data());
+        stream.avail_out = static_cast<uInt>(buffer.size());
+
+        rc = ::deflate(&stream, Z_FINISH);
+        if (rc == Z_STREAM_END) {
+            end = true;
+        } else if (rc != Z_OK) {
+            ::deflateEnd(&stream);
+            throw std::runtime_error{"deflate failed"};
+        }
+
+        out.append(buffer.data(), buffer.size() - stream.avail_out);
+    }
+
+    ::deflateEnd(&stream);
+    return out;
+}
+
+std::string gzip_text(std::string_view text)
+{
+    return deflated_text(text, MAX_WBITS + 16);
+}
+
+std::string zlib_text(std::string_view text)
+{
+    return deflated_text(text, MAX_WBITS);
 }
 
 struct ambient_int_key
@@ -3203,8 +3253,76 @@ static suite runtime_tests{
                             expect(second.status == 201_i);
                             co_return text;
                         });
-
                     expect(result == "hello");
+                };
+
+            "gzip content-encoding is inflated after transfer decoding"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto compressed = gzip_text(
+                        "event: response.output_text.delta\n"
+                        "data: {\"delta\":\"hi\"}\n"
+                        "\n");
+                    auto wire =
+                        "HTTP/1.1 200 OK\r\nContent-Length: "s
+                        + std::to_string(compressed.size())
+                        + "\r\nContent-Encoding: gzip\r\n\r\n"
+                        + compressed
+                        + "HTTP/1.1 204 No Content\r\n"
+                          "Content-Length: 0\r\n\r\n";
+                    auto chunks = std::array{std::string_view{wire}};
+                    auto storage = std::array<std::byte, 256>{};
+                    auto reader = text_source(chunks, std::span{storage});
+
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        auto head =
+                            co_await nxtrt::http::read_response_head(
+                                reader);
+                        expect(head.status == 200_i);
+
+                        auto body = nxtrt::http::read_response_body(
+                            reader, head);
+                        auto event =
+                            co_await nxtrt::http::parse_sse_event(body);
+                        expect(event.has_value());
+                        expect(event->type == "response.output_text.delta");
+                        expect(event->data == "{\"delta\":\"hi\"}");
+
+                        auto second =
+                            co_await nxtrt::http::read_response_head(
+                                reader);
+                        expect(second.status == 204_i);
+                    });
+                };
+
+            "deflate content-encoding is inflated after transfer decoding"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto compressed = zlib_text("hello deflate");
+                    auto wire =
+                        "HTTP/1.1 200 OK\r\nContent-Length: "s
+                        + std::to_string(compressed.size())
+                        + "\r\nContent-Encoding: deflate\r\n\r\n"
+                        + compressed;
+                    auto chunks = std::array{std::string_view{wire}};
+                    auto storage = std::array<std::byte, 128>{};
+                    auto reader = text_source(chunks, std::span{storage});
+
+                    auto result =
+                        deck.sync_wait([&]() -> nxtrt::task<std::string> {
+                            auto head =
+                                co_await nxtrt::http::read_response_head(
+                                    reader);
+                            auto body =
+                                nxtrt::http::read_response_body(
+                                    reader, head);
+                            auto text = std::string{};
+                            while (auto chunk = co_await body.next())
+                                text += nxtrt::as_string_view(*chunk);
+                            co_return text;
+                        });
+
+                    expect(result == "hello deflate");
                 };
 
             "server-sent events parse through response body readers"_test = [] {
