@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/exec_lifecycle.hpp"
 #include "nxtrt/task.hpp"
 
 #include <boost/container/hub.hpp>
@@ -85,13 +86,10 @@ class uring_wand final : public wand
 private:
     using uring_wish = wish_variant;
 
-    /// Allocated by `prepare_wish`; not yet parked by the awaiter.
-    struct prepared
-    {};
-
-    /// Parked and waiting for submission queue space.
-    struct queued
-    {};
+    using prepared = detail::wand_exec::prepared;
+    using queued = detail::wand_exec::queued;
+    using ready_to_retire = detail::wand_exec::ready_to_retire;
+    using retired = detail::wand_exec::retired;
 
     /// Main operation SQE has been submitted; an op CQE may arrive.
     struct submitted
@@ -117,19 +115,6 @@ private:
         cancel_submitted,
         cancel_drained>;
 
-    /// Suspended task plus the submission/cancellation phase of its wish.
-    struct parked
-    {
-        /// Coroutine to requeue when the wish settles.
-        parked_task continuation;
-        /// Current phase while the continuation is still parked.
-        parked_phase phase = queued{};
-    };
-
-    /// No more CQEs are needed before the hub slot can be reused.
-    struct ready_to_retire
-    {};
-
     /// The op CQE arrived first; keep the slot until cancel CQE drains.
     struct waiting_cancel_cqe
     {};
@@ -139,18 +124,11 @@ private:
         ready_to_retire,
         waiting_cancel_cqe>;
 
-    /// Fulfilled execution waiting for a compaction sync point.
-    struct settled
-    {
-        settled_phase phase = ready_to_retire{};
-    };
-
-    /// Tombstone used during hub compaction.
-    struct retired
-    {};
-
-    /// Full lifecycle of one wish execution.
-    using exec_state = std::variant<prepared, parked, settled, retired>;
+    using exec_lifecycle =
+        detail::wand_exec::lifecycle<parked_phase, settled_phase>;
+    using parked = exec_lifecycle::parked;
+    using settled = exec_lifecycle::settled;
+    using exec_state = exec_lifecycle::state;
 
     struct exec;
 
@@ -789,13 +767,6 @@ private:
             || std::holds_alternative<cancel_drained>(phase);
     }
 
-    [[nodiscard]] static bool is_retirable(exec_state const & state) noexcept
-    {
-        auto const * settled_state = std::get_if<settled>(&state);
-        return settled_state != nullptr
-            && std::holds_alternative<ready_to_retire>(settled_state->phase);
-    }
-
     /// Erase retired hub records at sync points after pointer users are gone.
     void compact_execs()
     {
@@ -812,7 +783,7 @@ private:
         });
 
         for (auto it = execs_.begin(); it != execs_.end();) {
-            if (is_retirable(it->state))
+            if (exec_lifecycle::is_retirable(it->state))
                 it->state = retired{};
             if (std::holds_alternative<retired>(it->state)) {
                 it = execs_.erase(it);

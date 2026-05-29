@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/exec_lifecycle.hpp"
 #include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
@@ -58,13 +59,10 @@ class kqueue_wand final : public wand
 private:
     using kqueue_wish = wish_variant;
 
-    /// Allocated by `prepare_wish`; not yet parked by the awaiter.
-    struct prepared
-    {};
-
-    /// Parked and waiting for its kevent registrations to be staged.
-    struct queued
-    {};
+    using prepared = detail::wand_exec::prepared;
+    using queued = detail::wand_exec::queued;
+    using ready_to_retire = detail::wand_exec::ready_to_retire;
+    using retired = detail::wand_exec::retired;
 
     /// The operation has live kqueue registrations.
     struct submitted
@@ -85,19 +83,6 @@ private:
         cancel_queued,
         delete_queued>;
 
-    /// Suspended task plus the registration/cancellation phase of its wish.
-    struct parked
-    {
-        /// Coroutine to requeue when the wish settles.
-        parked_task continuation;
-        /// Current phase while the continuation is still parked.
-        parked_phase phase = queued{};
-    };
-
-    /// No more kqueue events are needed before the hub slot can be reused.
-    struct ready_to_retire
-    {};
-
     /// EV_DELETE changes are staged but have not been applied to the kqueue.
     struct delete_pending
     {};
@@ -112,18 +97,11 @@ private:
         delete_pending,
         delete_applied>;
 
-    /// Fulfilled execution waiting for a compaction sync point.
-    struct settled
-    {
-        settled_phase phase = ready_to_retire{};
-    };
-
-    /// Tombstone used during hub compaction.
-    struct retired
-    {};
-
-    /// Full lifecycle of one wish execution.
-    using exec_state = std::variant<prepared, parked, settled, retired>;
+    using exec_lifecycle =
+        detail::wand_exec::lifecycle<parked_phase, settled_phase>;
+    using parked = exec_lifecycle::parked;
+    using settled = exec_lifecycle::settled;
+    using exec_state = exec_lifecycle::state;
 
     struct exec;
 
@@ -1275,13 +1253,6 @@ private:
         fulfill(d, execution, continuation);
     }
 
-    [[nodiscard]] static bool is_retirable(exec_state const & state) noexcept
-    {
-        auto const * settled_state = std::get_if<settled>(&state);
-        return settled_state != nullptr
-            && std::holds_alternative<ready_to_retire>(settled_state->phase);
-    }
-
     /// Mark EV_DELETE changes as applied after a successful changelist flush.
     void mark_deletes_applied()
     {
@@ -1320,7 +1291,7 @@ private:
         });
 
         for (auto it = execs_.begin(); it != execs_.end();) {
-            if (is_retirable(it->state))
+            if (exec_lifecycle::is_retirable(it->state))
                 it->state = retired{};
             if (std::holds_alternative<retired>(it->state)) {
                 it = execs_.erase(it);
