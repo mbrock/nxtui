@@ -52,6 +52,29 @@ quiet() {
     return 1
 }
 
+describe_bench() {
+    local round_trips=$((bench_clients * bench_messages))
+    local bytes_each_way=$((round_trips * bench_payload))
+    local transfer_each_way
+    transfer_each_way="$(awk -v bytes="$bytes_each_way" 'BEGIN {
+        if (bytes < 1048576)
+            printf "%.1f KiB", bytes / 1024;
+        else
+            printf "%.2f MiB", bytes / 1048576;
+    }')"
+
+    printf "Benchmark: loopback TCP echo\n"
+    printf "Workload: %s clients x %s messages x %s-byte payloads\n" \
+        "$bench_clients" "$bench_messages" "$bench_payload"
+    printf "Expected: %s round trips, %s each way\n" \
+        "$round_trips" "$transfer_each_way"
+    printf "Passes:\n"
+    printf "  1. CPU residency + sampled stacks: perf record -F %s --call-graph %s\n" \
+        "$perf_freq" "$perf_callgraph"
+    printf "  2. io_uring tracepoints: submits, completions, enters, poll arms\n"
+    printf "\n"
+}
+
 build_bench() {
     if [[ ! -d "$build_dir" ]]; then
         quiet meson setup "$build_dir" \
@@ -206,6 +229,7 @@ case "${1:-all}" in
     plain) run_plain ;;
     residency) run_residency ;;
     all)
+        describe_bench
         run_perf
         run_uring
         ;;
