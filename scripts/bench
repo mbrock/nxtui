@@ -133,6 +133,7 @@ duck_perf() {
 
 run_perf() {
     record_perf
+    printf "\n"
     duck_perf
 }
 
@@ -163,6 +164,7 @@ duck_uring() {
 
 run_uring() {
     record_uring
+    printf "\n"
     duck_uring
 }
 
