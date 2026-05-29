@@ -305,11 +305,15 @@ inline std::size_t parse_chunk_size(std::span<const std::byte> line)
     return size;
 }
 
-class http_body_reader final : public byte_source
+class http_body_reader final : public byte_reader
 {
 public:
-    http_body_reader(byte_reader & reader, const response_head & head)
-        : reader_(&reader)
+    http_body_reader(
+        byte_reader & reader,
+        const response_head & head,
+        std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , reader_(&reader)
     {
         if (is_chunked(head)) {
             mode_ = mode::chunked;
@@ -340,22 +344,6 @@ public:
         co_return std::nullopt;
     }
 
-    task<read_result> read_some(std::span<std::byte> dst) override
-    {
-        if (dst.empty())
-            co_return read_result{.bytes = 0, .eof = done_};
-
-        auto chunk = co_await next(dst.size());
-        if (!chunk)
-            co_return read_result{.bytes = 0, .eof = true};
-
-        std::memcpy(dst.data(), chunk->data(), chunk->size());
-        co_return read_result{
-            .bytes = chunk->size(),
-            .eof = done_ && chunk->empty(),
-        };
-    }
-
 private:
     enum class mode
     {
@@ -363,6 +351,33 @@ private:
         chunked,
         until_eof,
     };
+
+    hope<read_result> read_more() override
+    {
+        if (unused_capacity().empty())
+            throw buffer_error{"reader buffer is full"};
+        return read_more_task();
+    }
+
+    task<read_result> read_more_task()
+    {
+        if (done_)
+            co_return read_result{.bytes = 0, .eof = true};
+
+        auto chunk = co_await next(unused_capacity().size());
+        if (!chunk)
+            co_return read_result{.bytes = 0, .eof = true};
+
+        auto dst = unused_capacity();
+        if (chunk->size() > dst.size())
+            throw buffer_error{"HTTP body reader overfilled buffer"};
+        std::memcpy(dst.data(), chunk->data(), chunk->size());
+        append_read_bytes(chunk->size());
+        co_return read_result{
+            .bytes = chunk->size(),
+            .eof = done_ && chunk->empty(),
+        };
+    }
 
     task<std::optional<std::span<const std::byte>>>
     next_content_length(std::size_t limit)

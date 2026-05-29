@@ -515,6 +515,18 @@ public:
         return std::holds_alternative<T>(state_);
     }
 
+    [[nodiscard]] bool is_ready() const noexcept
+    {
+        return await_ready();
+    }
+
+    T take_ready()
+    {
+        if (auto * value = std::get_if<T>(&state_))
+            return std::move(*value);
+        throw runtime_error{"nxtrt hope is not ready"};
+    }
+
     void await_suspend(std::coroutine_handle<> awaiting)
     {
         std::get<task<T>>(state_).splice_onto(awaiting, follow_stop_);
@@ -556,6 +568,17 @@ public:
     [[nodiscard]] bool await_ready() const noexcept
     {
         return std::holds_alternative<std::monostate>(state_);
+    }
+
+    [[nodiscard]] bool is_ready() const noexcept
+    {
+        return await_ready();
+    }
+
+    void take_ready()
+    {
+        if (!is_ready())
+            throw runtime_error{"nxtrt hope is not ready"};
     }
 
     void await_suspend(std::coroutine_handle<> awaiting)

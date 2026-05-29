@@ -68,11 +68,15 @@ task<std::decay_t<T>> ready_task(T value)
     co_return std::move(value);
 }
 
-class tls13_client_session final : public byte_source
+class tls13_client_session final : public byte_reader
 {
 public:
-    tls13_client_session(byte_reader & reader, byte_writer & writer)
-        : reader_(reader)
+    tls13_client_session(
+        byte_reader & reader,
+        byte_writer & writer,
+        std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , reader_(reader)
         , writer_(writer)
     {
     }
@@ -240,32 +244,45 @@ public:
         }
     }
 
-    task<read_result> read_some(std::span<std::byte> dst) override
+private:
+    hope<read_result> read_more() override
     {
         require_handshake();
-        if (dst.empty())
-            co_return read_result{.bytes = 0, .eof = false};
+        if (unused_capacity().empty())
+            throw buffer_error{"reader buffer is full"};
 
-        if (pending_offset_ == pending_.size()) {
-            pending_.clear();
-            pending_offset_ = 0;
-            do {
-                auto plaintext = co_await read();
-                if (plaintext.inner_type == 23) {
-                    pending_ = std::move(plaintext.content);
-                    break;
-                }
-            } while (pending_.empty());
-        }
+        if (pending_offset_ < pending_.size())
+            return hope<read_result>::ready(copy_pending());
 
+        return read_more_task();
+    }
+
+    task<read_result> read_more_task()
+    {
+        pending_.clear();
+        pending_offset_ = 0;
+        do {
+            auto plaintext = co_await read();
+            if (plaintext.inner_type == 23) {
+                pending_ = std::move(plaintext.content);
+                break;
+            }
+        } while (pending_.empty());
+
+        co_return copy_pending();
+    }
+
+    read_result copy_pending()
+    {
+        auto dst = unused_capacity();
         auto pending = std::span{pending_}.subspan(pending_offset_);
         auto n = std::min(dst.size(), pending.size());
         std::memcpy(dst.data(), pending.data(), n);
         pending_offset_ += n;
-        co_return read_result{.bytes = n, .eof = false};
+        append_read_bytes(n);
+        return read_result{.bytes = n, .eof = false};
     }
 
-private:
     void require_handshake() const
     {
         if (!handshaken_)

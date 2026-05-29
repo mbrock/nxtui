@@ -125,22 +125,23 @@ inline task<file_status> stat_path(int dirfd, std::string path)
 
 inline task<std::vector<std::string>> read_directory_names(int fd)
 {
+    auto storage = std::array<std::byte, 16 * 1024>{};
     auto source = task_byte_source{
         [fd](std::span<std::byte> dst) -> task<std::size_t> {
             co_return co_await op::getdents64{
                 .fd = fd,
                 .buffer = dst,
             };
-        }};
-    auto storage = std::array<std::byte, 16 * 1024>{};
-    auto reader = byte_reader{source, std::span{storage}};
+        },
+        std::span{storage}};
 
     auto names = std::vector<std::string>{};
-    while (auto header = co_await reader.take_struct<linux_dirent64_header>()) {
+    while (
+        auto header = co_await source.take_struct<linux_dirent64_header>()) {
         if (header->d_reclen < sizeof(linux_dirent64_header))
             throw std::runtime_error{"getdents64 returned a short entry"};
 
-        auto name = co_await reader.take_string_view(
+        auto name = co_await source.take_string_view(
             header->d_reclen - sizeof(linux_dirent64_header));
         name = name.substr(0, name.find('\0'));
         names.emplace_back(name);

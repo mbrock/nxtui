@@ -978,14 +978,14 @@ nxtrt::task<stream_phase_result> stream_openai_response(
         [&](std::size_t bytes) {
             network.socket_rx += bytes;
             publisher.request();
-        });
-    auto input_storage = std::vector<std::byte>(18 * 1024);
-    auto reader = nxtrt::byte_reader{
-        source,
-        std::span{input_storage},
-    };
+        },
+        18 * 1024);
 
-    auto tls = nxtrt::tls::tls13_client_session{reader, socket_output};
+    auto tls = nxtrt::tls::tls13_client_session{
+        source,
+        socket_output,
+        18 * 1024,
+    };
     network.phase = "TLS handshake";
     co_await publisher.publish(true);
     auto trace = nxtrt::current_trace_context();
@@ -1034,12 +1034,9 @@ nxtrt::task<stream_phase_result> stream_openai_response(
     co_await tls.write_all(request_text);
     co_await publisher.flush();
 
-    auto http_storage = std::vector<std::byte>(18 * 1024);
-    auto http_reader =
-        nxtrt::byte_reader{tls, std::span{http_storage}};
     network.phase = "http response";
     co_await publisher.publish(true);
-    auto head = co_await nxtrt::http::read_response_head(http_reader);
+    auto head = co_await nxtrt::http::read_response_head(tls);
     co_await publisher.flush();
     if (!response_status_is_success(head))
         throw nxtrt::runtime_error{
@@ -1049,13 +1046,11 @@ nxtrt::task<stream_phase_result> stream_openai_response(
         throw nxtrt::runtime_error{
             "OpenAI Responses expected text/event-stream"};
 
-    auto body = nxtrt::http::read_response_body(http_reader, head);
-    auto sse_storage = std::vector<std::byte>(18 * 1024);
-    auto sse_reader = nxtrt::byte_reader{body, std::span{sse_storage}};
+    auto body = nxtrt::http::read_response_body(tls, head);
     auto result = response_stream_result{};
     network.phase = "streaming SSE";
     co_await publisher.publish(true);
-    while (auto sse = co_await nxtrt::http::parse_sse_event(sse_reader)) {
+    while (auto sse = co_await nxtrt::http::parse_sse_event(body)) {
         co_await publisher.flush();
         if (sse->data == "[DONE]")
             break;

@@ -63,13 +63,15 @@ capture_output(
     std::size_t max_capture_bytes)
 {
     auto storage = std::array<std::byte, 4096>{};
-    auto source = nxtrt::fd_source{state->child.output_fd()};
+    auto source = nxtrt::fd_source{
+        state->child.output_fd(),
+        std::span{storage},
+    };
 
     while (true) {
-        auto read = co_await source.read_some(storage);
-        if (read.bytes != 0) {
-            auto text =
-                nxtrt::as_string_view(std::span{storage}.first(read.bytes));
+        auto chunk = co_await source.take_some();
+        if (chunk && !chunk->empty()) {
+            auto text = nxtrt::as_string_view(*chunk);
             auto & output = state->captured.output;
             if (output.size() < max_capture_bytes) {
                 auto remaining = max_capture_bytes - output.size();
@@ -81,7 +83,7 @@ capture_output(
                 state->captured.output_too_large = true;
             }
         }
-        if (read.eof)
+        if (!chunk)
             break;
     }
 

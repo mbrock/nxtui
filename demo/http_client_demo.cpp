@@ -160,10 +160,9 @@ nxtrt::task<void> probe_tls13(nxtrt::http::url url)
     auto socket_output = nxtrt::byte_writer{sink, 4096};
     co_await socket_output.write_all(hello.record);
 
-    auto source = nxtrt::socket_source{socket.get()};
     auto input_storage = std::vector<std::byte>(18 * 1024);
-    auto reader = nxtrt::byte_reader{
-        source,
+    auto reader = nxtrt::socket_source{
+        socket.get(),
         std::span{input_storage},
     };
 
@@ -323,10 +322,9 @@ nxtrt::task<void> fetch(nxtrt::http::url url)
     auto socket_output = nxtrt::byte_writer{sink, 4096};
     co_await socket_output.write_all(nxtrt::http::serialize(request));
 
-    auto source = nxtrt::socket_source{socket.get()};
     auto input_storage = std::vector<std::byte>(64 * 1024);
-    auto reader = nxtrt::byte_reader{
-        source,
+    auto reader = nxtrt::socket_source{
+        socket.get(),
         std::span{input_storage},
     };
 

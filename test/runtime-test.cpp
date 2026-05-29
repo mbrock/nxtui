@@ -105,35 +105,46 @@ public:
     int waves = 0;
 };
 
-struct empty_then_string_source final : nxtrt::byte_source
+struct empty_then_string_source final : nxtrt::byte_reader
 {
-    nxtrt::task<nxtrt::read_result>
-    read_some(std::span<std::byte> dst) override
+    explicit empty_then_string_source(std::size_t buffer_size = 8)
+        : nxtrt::byte_reader(buffer_size)
+    {}
+
+private:
+    nxtrt::hope<nxtrt::read_result> read_more() override
     {
+        auto dst = unused_capacity();
         if (!returned_empty) {
             returned_empty = true;
-            co_return nxtrt::read_result{
+            return nxtrt::hope<nxtrt::read_result>::ready(
+                nxtrt::read_result{
                 .bytes = 0,
                 .eof = false,
-            };
+            });
         }
 
-        if (offset == text.size())
-            co_return nxtrt::read_result{
+        if (offset == text.size()) {
+            return nxtrt::hope<nxtrt::read_result>::ready(
+                nxtrt::read_result{
                 .bytes = 0,
                 .eof = true,
-            };
+            });
+        }
 
         auto rest = std::string_view{text}.substr(offset);
         auto n = std::min(dst.size(), rest.size());
         std::memcpy(dst.data(), rest.data(), n);
         offset += n;
-        co_return nxtrt::read_result{
+        append_read_bytes(n);
+        return nxtrt::hope<nxtrt::read_result>::ready(
+            nxtrt::read_result{
             .bytes = n,
             .eof = offset == text.size(),
-        };
+        });
     }
 
+public:
     std::string_view text = "abc";
     std::size_t offset = 0;
     bool returned_empty = false;
@@ -581,6 +592,25 @@ run_hope(std::vector<int> & events, int & suspends, bool ready)
     auto value = co_await pick();
     events.push_back(99);
     co_return value;
+}
+
+inline nxtrt::task<std::string>
+take_three_buffered_bytes(nxtrt::byte_reader & reader, std::vector<int> & events)
+{
+    co_await reader.fill(3);
+    events.push_back(1);
+    auto first = co_await reader.take(1);
+    events.push_back(2);
+    auto second = co_await reader.take(1);
+    events.push_back(3);
+    auto third = co_await reader.take(1);
+    events.push_back(4);
+
+    auto out = std::string{};
+    out += nxtrt::as_string_view(first);
+    out += nxtrt::as_string_view(second);
+    out += nxtrt::as_string_view(third);
+    co_return out;
 }
 
 // `map` over the three awaitable shapes: a plain task, a synchronously-ready
@@ -2084,15 +2114,15 @@ static suite runtime_tests{
             "chunks are visited through reused storage"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 3>{};
+                auto source =
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
                 auto visited = std::vector<std::string>{};
 
                 auto total =
                     deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
                         co_return co_await nxtrt::for_each_chunk(
                             source,
-                            std::span{storage},
                             [&visited](std::span<const std::byte> chunk) {
                                 visited.emplace_back(
                                     nxtrt::as_string_view(chunk));
@@ -2107,10 +2137,9 @@ static suite runtime_tests{
             "protocol leftovers remain buffered"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abc--def--ghi"sv};
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 16>{};
                 auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
 
                 auto parts = deck.sync_wait(
                     [&]() -> nxtrt::task<std::vector<std::string>> {
@@ -2130,12 +2159,35 @@ static suite runtime_tests{
                     parts == std::vector<std::string>{"abc", "def", "ghi"});
             };
 
+            "buffer hits do not add suspension"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"abc"sv};
+                auto storage = std::array<std::byte, 3>{};
+                auto reader =
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
+                auto events = std::vector<int>{};
+
+                auto task = take_three_buffered_bytes(reader, events);
+                deck.start(task);
+
+                deck.run_ready();
+                expect(!task.done())
+                    << "initial fill should delegate to a slow task";
+                deck.run_ready();
+                expect(!task.done())
+                    << "fill continuation should wait for the next deck turn";
+                deck.run_ready();
+
+                expect(task.done())
+                    << "three buffered take(1) calls must finish inline";
+                expect(events == std::vector<int>{1, 2, 3, 4});
+                expect(std::move(task).result() == "abc");
+            };
+
             "empty reads are distinguished from EOF"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto source = empty_then_string_source{};
                 auto storage = std::array<std::byte, 8>{};
-                auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                auto reader = empty_then_string_source{storage.size()};
 
                 auto parts = deck.sync_wait(
                     [&]() -> nxtrt::task<std::vector<std::string>> {
@@ -2174,15 +2226,15 @@ static suite runtime_tests{
                             .eof = true,
                         };
                     };
-                    auto source = nxtrt::task_byte_source{read};
                     auto storage = std::array<std::byte, 4>{};
+                    auto source = nxtrt::task_byte_source{read, std::span{storage}};
 
                     auto result = deck.sync_wait(
                         [&]() -> nxtrt::task<std::string> {
-                        auto read = co_await source.read_some(storage);
-                        co_return std::string{
-                            nxtrt::as_string_view(
-                                std::span{storage}.first(read.bytes))};
+                        auto chunk = co_await source.take_some();
+                        if (!chunk)
+                            co_return std::string{};
+                        co_return std::string{nxtrt::as_string_view(*chunk)};
                     });
 
                     expect(result == "xy");
@@ -2196,12 +2248,16 @@ static suite runtime_tests{
                         std::memcpy(dst.data(), text.data(), text.size());
                         co_return text.size();
                     };
-                    auto source = nxtrt::task_byte_source{read};
                     auto storage = std::array<std::byte, 4>{};
+                    auto source = nxtrt::task_byte_source{read, std::span{storage}};
 
                     auto result = deck.sync_wait(
                         [&]() -> nxtrt::task<nxtrt::read_result> {
-                        co_return co_await source.read_some(storage);
+                        auto chunk = co_await source.take_some();
+                        co_return nxtrt::read_result{
+                            .bytes = chunk ? chunk->size() : 0,
+                            .eof = !chunk,
+                        };
                     });
 
                     expect(result.bytes == std::size_t{2});
@@ -2218,10 +2274,9 @@ static suite runtime_tests{
 
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abcd"sv};
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 4>{};
                 auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     auto first = co_await reader.peek_struct<pair>();
@@ -2246,10 +2301,9 @@ static suite runtime_tests{
 
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{""sv};
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 4>{};
                 auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
 
                 auto result = deck.sync_wait(
                     [&]() -> nxtrt::task<std::optional<pair>> {
@@ -2267,10 +2321,8 @@ static suite runtime_tests{
                 };
 
                 auto deck = nxtrt::deck{};
-                auto source = empty_then_string_source{};
                 auto storage = std::array<std::byte, 8>{};
-                auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                auto reader = empty_then_string_source{storage.size()};
 
                 auto result = deck.sync_wait(
                     [&]() -> nxtrt::task<std::optional<pair>> {
@@ -2285,10 +2337,9 @@ static suite runtime_tests{
             "byte_reader takes borrowed string views"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"abcd"sv};
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 4>{};
                 auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
 
                 auto result = deck.sync_wait([&]() -> nxtrt::task<std::string> {
                     auto view = co_await reader.take_string_view(3);
@@ -2669,10 +2720,9 @@ static suite runtime_tests{
                     "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
                     "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"sv,
                 };
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto storage = std::array<std::byte, 256>{};
                 auto reader =
-                    nxtrt::byte_reader{source, std::span{storage}};
+                    nxtrt::string_source{std::span{chunks}, std::span{storage}};
 
                 auto result =
                     deck.sync_wait([&]() -> nxtrt::task<std::string> {
@@ -2708,10 +2758,12 @@ static suite runtime_tests{
                         "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
                         "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"sv,
                     };
-                    auto source = nxtrt::string_source{std::span{chunks}};
                     auto storage = std::array<std::byte, 128>{};
                     auto reader =
-                        nxtrt::byte_reader{source, std::span{storage}};
+                        nxtrt::string_source{
+                            std::span{chunks},
+                            std::span{storage},
+                        };
 
                     auto result =
                         deck.sync_wait([&]() -> nxtrt::task<std::string> {
@@ -2747,28 +2799,27 @@ static suite runtime_tests{
                     "\r\n"
                     "0\r\n\r\n"sv,
                 };
-                auto source = nxtrt::string_source{std::span{chunks}};
                 auto head_storage = std::array<std::byte, 256>{};
                 auto reader =
-                    nxtrt::byte_reader{source, std::span{head_storage}};
+                    nxtrt::string_source{
+                        std::span{chunks},
+                        std::span{head_storage},
+                    };
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     auto head =
                         co_await nxtrt::http::read_response_head(reader);
                     auto body =
                         nxtrt::http::read_response_body(reader, head);
-                    auto body_storage = std::array<std::byte, 256>{};
-                    auto body_reader =
-                        nxtrt::byte_reader{body, std::span{body_storage}};
 
                     auto event =
-                        co_await nxtrt::http::parse_sse_event(body_reader);
+                        co_await nxtrt::http::parse_sse_event(body);
                     expect(event.has_value());
                     expect(event->type == "response.output_text.delta");
                     expect(event->data == "{\"delta\":\"hi\"}");
 
                     auto end =
-                        co_await nxtrt::http::parse_sse_event(body_reader);
+                        co_await nxtrt::http::parse_sse_event(body);
                     expect(!end);
                 });
             };

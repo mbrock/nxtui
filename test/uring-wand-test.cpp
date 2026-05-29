@@ -44,9 +44,8 @@ nxtrt::task<std::string> echo_over_socketpair(int tx, int rx)
         throw std::runtime_error{"short socket send"};
 
     auto storage = std::array<std::byte, 64>{};
-    auto source = nxtrt::socket_source{rx};
-    auto reader = nxtrt::byte_reader{source, std::span{storage}};
-    auto chunk = co_await reader.take_some();
+    auto source = nxtrt::socket_source{rx, std::span{storage}};
+    auto chunk = co_await source.take_some();
     if (!chunk)
         throw std::runtime_error{"socket recv reached eof"};
 

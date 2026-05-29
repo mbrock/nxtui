@@ -65,15 +65,6 @@ struct read_result
     bool eof = false;
 };
 
-/// Runtime-polymorphic byte source.
-class byte_source
-{
-public:
-    virtual ~byte_source() = default;
-
-    virtual task<read_result> read_some(std::span<std::byte> dst) = 0;
-};
-
 template<typename Read>
 concept byte_read_task =
     std::invocable<Read &, std::span<std::byte>>
@@ -86,33 +77,6 @@ concept byte_read_task =
             task_result_t<std::invoke_result_t<Read &, std::span<std::byte>>>,
             std::size_t>);
 
-/// Byte source backed by a callable returning `task<read_result>` or
-/// `task<std::size_t>`. Count-only reads treat zero bytes as EOF.
-template<byte_read_task Read>
-class task_byte_source final : public byte_source
-{
-public:
-    explicit task_byte_source(Read read)
-        : read_(std::move(read))
-    {}
-
-    task<read_result> read_some(std::span<std::byte> dst) override
-    {
-        auto result = co_await std::invoke(read_, dst);
-        if constexpr (std::same_as<decltype(result), read_result>) {
-            co_return result;
-        } else {
-            co_return read_result{
-                .bytes = result,
-                .eof = result == 0,
-            };
-        }
-    }
-
-private:
-    Read read_;
-};
-
 /// Runtime-polymorphic byte sink.
 class byte_sink
 {
@@ -120,75 +84,6 @@ public:
     virtual ~byte_sink() = default;
 
     virtual task<std::size_t> write_some(std::span<const std::byte> src) = 0;
-};
-
-/// Borrowed in-memory source exposed through the byte-source vtable.
-class string_source final : public byte_source
-{
-public:
-    explicit string_source(std::span<const std::string_view> chunks)
-        : chunks_(chunks)
-    {}
-
-    task<read_result> read_some(std::span<std::byte> dst) override
-    {
-        auto written = std::size_t{0};
-        while (written < dst.size() && chunk_ < chunks_.size()) {
-            auto chunk = chunks_[chunk_];
-            auto rest = chunk.substr(offset_);
-            auto n = std::min(dst.size() - written, rest.size());
-            std::memcpy(dst.data() + written, rest.data(), n);
-
-            written += n;
-            offset_ += n;
-            if (offset_ == chunk.size()) {
-                ++chunk_;
-                offset_ = 0;
-            }
-        }
-
-        co_return read_result{
-            .bytes = written,
-            .eof = chunk_ == chunks_.size(),
-        };
-    }
-
-private:
-    std::span<const std::string_view> chunks_;
-    std::size_t chunk_ = 0;
-    std::size_t offset_ = 0;
-};
-
-/// Byte source for a file descriptor.
-class fd_source final : public byte_source
-{
-public:
-    explicit fd_source(int fd) noexcept
-        : fd_(fd)
-    {}
-
-    task<read_result> read_some(std::span<std::byte> dst) override
-    {
-        auto n = std::size_t{0};
-        while (true) {
-            try {
-                n = co_await op::read_some{
-                    .fd = fd_,
-                    .buffer = dst,
-                    .offset = -1,
-                };
-                break;
-            } catch (const interrupted_system_call &) {
-            }
-        }
-        co_return read_result{
-            .bytes = n,
-            .eof = n == 0,
-        };
-    }
-
-private:
-    int fd_ = -1;
 };
 
 /// Byte sink for a file descriptor.
@@ -222,40 +117,6 @@ inline fd_sink standard_output() noexcept
     return fd_sink{STDOUT_FILENO};
 }
 
-/// Byte source for a connected socket.
-class socket_source final : public byte_source
-{
-public:
-    explicit socket_source(int fd, int flags = 0) noexcept
-        : fd_(fd)
-        , flags_(flags)
-    {}
-
-    task<read_result> read_some(std::span<std::byte> dst) override
-    {
-        auto n = std::size_t{0};
-        while (true) {
-            try {
-                n = co_await op::recv_some{
-                    .fd = fd_,
-                    .buffer = dst,
-                    .flags = flags_,
-                };
-                break;
-            } catch (const interrupted_system_call &) {
-            }
-        }
-        co_return read_result{
-            .bytes = n,
-            .eof = n == 0,
-        };
-    }
-
-private:
-    int fd_ = -1;
-    int flags_ = 0;
-};
-
 /// Byte sink for a connected socket.
 class socket_sink final : public byte_sink
 {
@@ -283,37 +144,6 @@ private:
     int fd_ = -1;
     int flags_ = 0;
 };
-
-class metered_byte_source final : public byte_source
-{
-public:
-    metered_byte_source(
-        byte_source & inner,
-        std::function<void(std::size_t)> progress)
-        : inner_(inner)
-        , progress_(std::move(progress))
-    {
-    }
-
-    task<read_result> read_some(std::span<std::byte> dst) override
-    {
-        auto result = co_await inner_.read_some(dst);
-        if (result.bytes > 0)
-            progress_(result.bytes);
-        co_return result;
-    }
-
-private:
-    byte_source & inner_;
-    std::function<void(std::size_t)> progress_;
-};
-
-inline metered_byte_source meter_source(
-    byte_source & inner,
-    std::function<void(std::size_t)> progress)
-{
-    return metered_byte_source{inner, std::move(progress)};
-}
 
 class metered_byte_sink final : public byte_sink
 {
@@ -552,14 +382,31 @@ inline task<void> write_all(
     co_await writer.write_all(std::forward<Chunks>(chunks));
 }
 
-/// Buffered asynchronous reader over a byte source.
+/// Buffered asynchronous reader base.
+///
+/// The hot-path methods are non-virtual and operate directly on `buffer_`,
+/// `seek_`, and `end_`. Derived readers only implement `read_more()`, the
+/// slow-path operation that appends bytes to `unused_capacity()` and advances
+/// `end_` by the returned byte count.
 class byte_reader
 {
 public:
-    byte_reader(byte_source & source, std::span<std::byte> buffer)
-        : source_(&source)
-        , buffer_(buffer)
+    explicit byte_reader(std::size_t buffer_size)
+        : owned_buffer_(buffer_size)
+        , buffer_(owned_buffer_)
     {}
+
+    explicit byte_reader(std::span<std::byte> buffer)
+        : buffer_(buffer)
+    {}
+
+    virtual ~byte_reader() = default;
+
+    byte_reader(const byte_reader &) = delete;
+    byte_reader & operator=(const byte_reader &) = delete;
+
+    byte_reader(byte_reader &&) = delete;
+    byte_reader & operator=(byte_reader &&) = delete;
 
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
@@ -589,63 +436,67 @@ public:
         end_ = pending;
     }
 
-    task<> fill(std::size_t n)
+    hope<void> fill(std::size_t n)
     {
         if (n > buffer_.size())
             throw buffer_error{"reader buffer is too small"};
         if (buffered_size() >= n)
-            co_return;
+            return hope<void>::ready();
 
-        rebase(n);
-        while (buffered_size() < n) {
-            auto read = co_await fill_more_without_rebase();
-            if (read.eof && read.bytes == 0)
-                throw end_of_stream{"unexpected end of input"};
-        }
+        return fill_slow(n);
     }
 
-    task<read_result> fill_more()
+    hope<read_result> fill_more()
     {
         if (buffered_size() == buffer_.size())
             throw buffer_error{"reader buffer is full"};
         rebase(buffered_size() + 1);
-        co_return co_await fill_more_without_rebase();
+        return fill_more_without_rebase();
     }
 
-    task<std::span<const std::byte>> peek(std::size_t n)
+    hope<std::span<const std::byte>> peek(std::size_t n)
     {
-        co_await fill(n);
-        co_return buffered().first(n);
+        if (n > buffer_.size())
+            throw buffer_error{"reader buffer is too small"};
+        if (buffered_size() >= n)
+            return hope<std::span<const std::byte>>::ready(
+                buffered().first(n));
+        return peek_slow(n);
     }
 
     template<typename T>
         requires std::is_trivially_copyable_v<T>
-    task<T> peek_struct()
+    hope<T> peek_struct()
     {
-        auto bytes = co_await peek(sizeof(T));
-        auto value = T{};
-        std::memcpy(&value, bytes.data(), sizeof(T));
-        co_return value;
+        auto bytes = peek(sizeof(T));
+        if (bytes.is_ready())
+            return hope<T>::ready(copy_struct<T>(bytes.take_ready()));
+        return peek_struct_slow<T>(std::move(bytes));
     }
 
     /// Consume and return the next borrowed chunk, up to `limit` bytes.
     ///
     /// The returned span may be empty. `std::nullopt` is the EOF signal.
-    task<std::optional<std::span<const std::byte>>>
+    hope<std::optional<std::span<const std::byte>>>
     take_some(std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
         if (buffered_size() == 0) {
-            auto read = co_await fill_more();
-            if (read.eof && read.bytes == 0)
-                co_return std::nullopt;
-            if (read.bytes == 0)
-                co_return buffered().first(0);
+            auto read = fill_more();
+            if (!read.is_ready())
+                return take_some_slow(std::move(read), limit);
+            auto result = read.take_ready();
+            if (result.eof && result.bytes == 0)
+                return hope<std::optional<std::span<const std::byte>>>::
+                    ready(std::nullopt);
+            if (result.bytes == 0)
+                return hope<std::optional<std::span<const std::byte>>>::
+                    ready(buffered().first(0));
         }
 
         auto n = std::min(limit, buffered_size());
         auto out = buffered().first(n);
         toss(n);
-        co_return out;
+        return hope<std::optional<std::span<const std::byte>>>::ready(out);
     }
 
     void toss(std::size_t n)
@@ -655,21 +506,142 @@ public:
         seek_ += n;
     }
 
-    task<std::span<const std::byte>> take(std::size_t n)
+    hope<std::span<const std::byte>> take(std::size_t n)
+    {
+        if (n > buffer_.size())
+            throw buffer_error{"reader buffer is too small"};
+        if (buffered_size() >= n) {
+            auto out = buffered().first(n);
+            toss(n);
+            return hope<std::span<const std::byte>>::ready(out);
+        }
+        return take_slow(n);
+    }
+
+    hope<std::string_view> take_string_view(std::size_t n)
+    {
+        auto bytes = take(n);
+        if (bytes.is_ready())
+            return hope<std::string_view>::ready(
+                as_string_view(bytes.take_ready()));
+        return take_string_view_slow(std::move(bytes));
+    }
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    hope<std::optional<T>> take_struct()
+    {
+        if (buffered_size() >= sizeof(T)) {
+            auto value = copy_struct<T>(buffered());
+            toss(sizeof(T));
+            return hope<std::optional<T>>::ready(value);
+        }
+
+        return take_struct_slow<T>();
+    }
+
+    hope<std::span<const std::byte>>
+    take_until(std::span<const std::byte> delimiter)
+    {
+        if (delimiter.empty())
+            throw buffer_error{"empty delimiter"};
+
+        auto available = buffered();
+        auto cut = find_bytes(available, delimiter);
+        if (cut < available.size()) {
+            auto out = available.first(cut);
+            seek_ += cut + delimiter.size();
+            return hope<std::span<const std::byte>>::ready(out);
+        }
+
+        return take_until_slow(delimiter);
+    }
+
+    hope<std::span<const std::byte>>
+    take_until(std::string_view delimiter)
+    {
+        return take_until(as_bytes(delimiter));
+    }
+
+protected:
+    [[nodiscard]] std::span<std::byte> buffer_storage() noexcept
+    {
+        return buffer_;
+    }
+
+    void append_read_bytes(std::size_t n)
+    {
+        if (n > unused_capacity().size())
+            throw buffer_error{"source overfilled read buffer"};
+        end_ += n;
+    }
+
+private:
+    virtual hope<read_result> read_more() = 0;
+
+    hope<read_result> fill_more_without_rebase()
+    {
+        if (unused_capacity().empty())
+            throw buffer_error{"reader buffer is full"};
+        return read_more();
+    }
+
+    task<> fill_slow(std::size_t n)
+    {
+        rebase(n);
+        while (buffered_size() < n) {
+            auto read = co_await fill_more_without_rebase();
+            if (read.eof && read.bytes == 0)
+                throw end_of_stream{"unexpected end of input"};
+        }
+    }
+
+    task<std::span<const std::byte>> peek_slow(std::size_t n)
+    {
+        co_await fill(n);
+        co_return buffered().first(n);
+    }
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    task<T> peek_struct_slow(hope<std::span<const std::byte>> bytes)
+    {
+        co_return copy_struct<T>(co_await std::move(bytes));
+    }
+
+    task<std::optional<std::span<const std::byte>>>
+    take_some_slow(
+        hope<read_result> first_read,
+        std::size_t limit)
+    {
+        auto read = co_await std::move(first_read);
+        if (read.eof && read.bytes == 0)
+            co_return std::nullopt;
+        if (read.bytes == 0)
+            co_return buffered().first(0);
+
+        auto n = std::min(limit, buffered_size());
+        auto out = buffered().first(n);
+        toss(n);
+        co_return out;
+    }
+
+    task<std::span<const std::byte>> take_slow(std::size_t n)
     {
         auto out = co_await peek(n);
         toss(n);
         co_return out;
     }
 
-    task<std::string_view> take_string_view(std::size_t n)
+    task<std::string_view>
+    take_string_view_slow(hope<std::span<const std::byte>> bytes)
     {
-        co_return as_string_view(co_await take(n));
+        co_return as_string_view(co_await std::move(bytes));
     }
 
     template<typename T>
         requires std::is_trivially_copyable_v<T>
-    task<std::optional<T>> take_struct()
+    task<std::optional<T>> take_struct_slow()
     {
         if (buffered_size() < sizeof(T)) {
             rebase(sizeof(T));
@@ -683,18 +655,22 @@ public:
             }
         }
 
-        auto value = T{};
-        std::memcpy(&value, buffered().data(), sizeof(T));
+        auto value = copy_struct<T>(buffered());
         toss(sizeof(T));
         co_return value;
     }
 
-    task<std::span<const std::byte>>
-    take_until(std::span<const std::byte> delimiter)
+    template<typename T>
+    static T copy_struct(std::span<const std::byte> bytes)
     {
-        if (delimiter.empty())
-            throw buffer_error{"empty delimiter"};
+        auto value = T{};
+        std::memcpy(&value, bytes.data(), sizeof(T));
+        return value;
+    }
 
+    task<std::span<const std::byte>>
+    take_until_slow(std::span<const std::byte> delimiter)
+    {
         while (true) {
             auto available = buffered();
             auto cut = find_bytes(available, delimiter);
@@ -713,51 +689,294 @@ public:
         }
     }
 
-    task<std::span<const std::byte>>
-    take_until(std::string_view delimiter)
-    {
-        co_return co_await take_until(as_bytes(delimiter));
-    }
-
-private:
-    task<read_result> fill_more_without_rebase()
-    {
-        auto dst = unused_capacity();
-        if (dst.empty())
-            throw buffer_error{"reader buffer is full"};
-
-        auto read = co_await source_->read_some(dst);
-        if (read.bytes > dst.size())
-            throw buffer_error{"source overfilled read buffer"};
-        end_ += read.bytes;
-        co_return read;
-    }
-
-    byte_source * source_;
+    std::vector<std::byte> owned_buffer_;
     std::span<std::byte> buffer_;
     std::size_t seek_ = 0;
     std::size_t end_ = 0;
 };
 
-/// Repeatedly fill the same caller-owned buffer and visit each chunk.
+/// Reader backed by a callable returning `task<read_result>` or
+/// `task<std::size_t>`. Count-only reads treat zero bytes as EOF.
+template<byte_read_task Read>
+class task_byte_source final : public byte_reader
+{
+public:
+    task_byte_source(Read read, std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , read_(std::move(read))
+    {}
+
+    explicit task_byte_source(Read read, std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , read_(std::move(read))
+    {}
+
+private:
+    hope<read_result> read_more() override
+    {
+        return read_more_task();
+    }
+
+    task<read_result> read_more_task()
+    {
+        auto dst = unused_capacity();
+        if (dst.empty())
+            throw buffer_error{"reader buffer is full"};
+
+        auto result = co_await std::invoke(read_, dst);
+        auto out = read_result{};
+        if constexpr (std::same_as<decltype(result), read_result>) {
+            out = result;
+        } else {
+            out = read_result{
+                .bytes = result,
+                .eof = result == 0,
+            };
+        }
+        append_read_bytes(out.bytes);
+        co_return out;
+    }
+
+    Read read_;
+};
+
+/// Borrowed in-memory reader.
+class string_source final : public byte_reader
+{
+public:
+    string_source(
+        std::span<const std::string_view> chunks,
+        std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , chunks_(chunks)
+    {}
+
+    explicit string_source(
+        std::span<const std::string_view> chunks,
+        std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , chunks_(chunks)
+    {}
+
+private:
+    hope<read_result> read_more() override
+    {
+        auto dst = unused_capacity();
+        if (dst.empty())
+            throw buffer_error{"reader buffer is full"};
+
+        auto written = std::size_t{0};
+        while (written < dst.size() && chunk_ < chunks_.size()) {
+            auto chunk = chunks_[chunk_];
+            auto rest = chunk.substr(offset_);
+            auto n = std::min(dst.size() - written, rest.size());
+            std::memcpy(dst.data() + written, rest.data(), n);
+
+            written += n;
+            offset_ += n;
+            if (offset_ == chunk.size()) {
+                ++chunk_;
+                offset_ = 0;
+            }
+        }
+
+        append_read_bytes(written);
+        return hope<read_result>::ready(
+            read_result{
+                .bytes = written,
+                .eof = chunk_ == chunks_.size(),
+            });
+    }
+
+    std::span<const std::string_view> chunks_;
+    std::size_t chunk_ = 0;
+    std::size_t offset_ = 0;
+};
+
+/// Reader for a file descriptor.
+class fd_source final : public byte_reader
+{
+public:
+    explicit fd_source(int fd, std::span<std::byte> buffer) noexcept
+        : byte_reader(buffer)
+        , fd_(fd)
+    {}
+
+    explicit fd_source(int fd, std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , fd_(fd)
+    {}
+
+private:
+    hope<read_result> read_more() override
+    {
+        return read_more_task();
+    }
+
+    task<read_result> read_more_task()
+    {
+        auto dst = unused_capacity();
+        if (dst.empty())
+            throw buffer_error{"reader buffer is full"};
+
+        auto n = std::size_t{0};
+        while (true) {
+            try {
+                n = co_await op::read_some{
+                    .fd = fd_,
+                    .buffer = dst,
+                    .offset = -1,
+                };
+                break;
+            } catch (const interrupted_system_call &) {
+            }
+        }
+        append_read_bytes(n);
+        co_return read_result{
+            .bytes = n,
+            .eof = n == 0,
+        };
+    }
+
+    int fd_ = -1;
+};
+
+/// Reader for a connected socket.
+class socket_source final : public byte_reader
+{
+public:
+    explicit socket_source(
+        int fd,
+        std::span<std::byte> buffer,
+        int flags = 0) noexcept
+        : byte_reader(buffer)
+        , fd_(fd)
+        , flags_(flags)
+    {}
+
+    explicit socket_source(
+        int fd,
+        int flags = 0,
+        std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , fd_(fd)
+        , flags_(flags)
+    {}
+
+private:
+    hope<read_result> read_more() override
+    {
+        return read_more_task();
+    }
+
+    task<read_result> read_more_task()
+    {
+        auto dst = unused_capacity();
+        if (dst.empty())
+            throw buffer_error{"reader buffer is full"};
+
+        auto n = std::size_t{0};
+        while (true) {
+            try {
+                n = co_await op::recv_some{
+                    .fd = fd_,
+                    .buffer = dst,
+                    .flags = flags_,
+                };
+                break;
+            } catch (const interrupted_system_call &) {
+            }
+        }
+        append_read_bytes(n);
+        co_return read_result{
+            .bytes = n,
+            .eof = n == 0,
+        };
+    }
+
+    int fd_ = -1;
+    int flags_ = 0;
+};
+
+class metered_byte_source final : public byte_reader
+{
+public:
+    metered_byte_source(
+        byte_reader & inner,
+        std::span<std::byte> buffer,
+        std::function<void(std::size_t)> progress)
+        : byte_reader(buffer)
+        , inner_(inner)
+        , progress_(std::move(progress))
+    {}
+
+    metered_byte_source(
+        byte_reader & inner,
+        std::function<void(std::size_t)> progress,
+        std::size_t buffer_size = 4096)
+        : byte_reader(buffer_size)
+        , inner_(inner)
+        , progress_(std::move(progress))
+    {}
+
+private:
+    hope<read_result> read_more() override
+    {
+        auto chunk = inner_.take_some(unused_capacity().size());
+        if (chunk.is_ready())
+            return hope<read_result>::ready(copy_chunk(chunk.take_ready()));
+        return read_more_slow(std::move(chunk));
+    }
+
+    task<read_result> read_more_slow(
+        hope<std::optional<std::span<const std::byte>>> chunk)
+    {
+        co_return copy_chunk(co_await std::move(chunk));
+    }
+
+    read_result copy_chunk(std::optional<std::span<const std::byte>> chunk)
+    {
+        if (!chunk)
+            return read_result{.bytes = 0, .eof = true};
+        auto dst = unused_capacity();
+        if (chunk->size() > dst.size())
+            throw buffer_error{"metered reader overfilled buffer"};
+        std::memcpy(dst.data(), chunk->data(), chunk->size());
+        append_read_bytes(chunk->size());
+        if (chunk->size() > 0)
+            progress_(chunk->size());
+        return read_result{.bytes = chunk->size(), .eof = false};
+    }
+
+    byte_reader & inner_;
+    std::function<void(std::size_t)> progress_;
+};
+
+inline metered_byte_source meter_source(
+    byte_reader & inner,
+    std::function<void(std::size_t)> progress,
+    std::size_t buffer_size = 4096)
+{
+    return metered_byte_source{inner, std::move(progress), buffer_size};
+}
+
+/// Repeatedly consume the reader's buffered chunks and visit each one.
 ///
 /// `visitor` is called synchronously with the bytes read before the next read
 /// is posted. The chunk span is only valid until the next loop iteration.
 template<typename Visitor>
 task<std::size_t> for_each_chunk(
-    byte_source & source,
-    std::span<std::byte> buffer,
+    byte_reader & reader,
     Visitor visitor)
 {
     auto total = std::size_t{0};
     while (true) {
-        auto read = co_await source.read_some(buffer);
-        if (read.eof && read.bytes == 0)
+        auto chunk = co_await reader.take_some();
+        if (!chunk)
             co_return total;
 
-        auto chunk = std::span<const std::byte>{buffer}.first(read.bytes);
-        visitor(chunk);
-        total += read.bytes;
+        visitor(*chunk);
+        total += chunk->size();
     }
 }
 
