@@ -204,17 +204,21 @@ inline std::span<std::byte> first_nonempty(
 
 } // namespace detail
 
-/// Buffered asynchronous writer base.
+/// Buffered asynchronous writer base, modeled on Zig's `std.Io.Writer`.
 ///
-/// The hot-path methods are non-virtual and copy into `buffer_` when there is
-/// capacity. An empty buffer is valid and means unbuffered writes: non-empty
-/// writes always go through the slow path.
+/// Zig's writer design is excellent: the concrete writer object owns the buffer
+/// cursors, while a tiny cold-path vtable handles the rare operation that cannot
+/// be satisfied from the buffer. `byte_writer` maps that idea into C++ by making
+/// the hot path ordinary non-virtual member functions that return `hope<void>`;
+/// if bytes fit in the buffer, awaiting them does not suspend or touch the deck.
 ///
 /// Pending output is `buffer_[seek_..end_]`; bytes before `seek_` have already
-/// been consumed by the sink. Derived writers implement `drain_more()`, the
-/// slow-path operation that drains byte spans to the concrete backend. As in
-/// Zig, the final span is repeated `splat` times so repeated patterns do not
-/// need to be materialized as a temporary range of identical spans.
+/// been consumed by the sink. Unlike Zig's current writer, this base keeps a
+/// reader-like seek cursor so partially drained buffered output is represented
+/// directly instead of being hidden during rebase/drain logic.
+///
+/// An empty writer buffer is valid. It means "always cold path": non-empty
+/// writes call `drain_more()` immediately.
 class byte_writer
 {
 public:
@@ -235,21 +239,28 @@ public:
 
     virtual ~byte_writer() = default;
 
+    /// Return the bytes currently staged for the sink.
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
         return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
     }
 
+    /// Return the number of bytes currently staged for the sink.
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
         return end_ - seek_;
     }
 
+    /// Return writable buffer capacity after the currently staged bytes.
+    ///
+    /// Source adapters may fill this span directly and then call `advance()`.
+    /// The span is invalidated by any later writer operation.
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
     {
         return buffer_.subspan(end_);
     }
 
+    /// Commit `n` bytes that were written directly into `unused_capacity()`.
     void advance(std::size_t n)
     {
         if (n > unused_capacity().size())
@@ -257,6 +268,10 @@ public:
         end_ += n;
     }
 
+    /// Drain all currently buffered output to the concrete sink.
+    ///
+    /// Returns ready when there is no buffered data. Otherwise this repeatedly
+    /// calls `drain_more()` until `buffered_size()` reaches zero.
     hope<void> flush()
     {
         if (buffered_size() == 0) {
@@ -266,6 +281,11 @@ public:
         return flush_slow();
     }
 
+    /// Write bytes, buffering them when capacity is available.
+    ///
+    /// This is a one-call convenience: when `bytes` does not fit in the current
+    /// buffer it may drain pending output and then either write directly to the
+    /// sink or stage a suffix in the buffer.
     hope<void> write(std::span<const std::byte> bytes)
     {
         if (bytes.empty())
@@ -279,6 +299,11 @@ public:
         return write_slow(bytes);
     }
 
+    /// Write `pattern` repeated `splat` times.
+    ///
+    /// Mirrors Zig's splat semantics: the final chunk passed to `drain_more()`
+    /// represents a span that should be repeated, avoiding allocation of a range
+    /// containing the same span many times.
     hope<void> write_splat(
         std::span<const std::byte> pattern,
         std::size_t splat)
@@ -295,27 +320,42 @@ public:
         return write_splat_slow(pattern, splat);
     }
 
+    /// Write a UTF-8 text pattern repeatedly as bytes.
     hope<void> write_splat(std::string_view pattern, std::size_t splat)
     {
         return write_splat(as_bytes(pattern), splat);
     }
 
+    /// Write an owned string, keeping its storage alive across suspension.
     task<void> write(std::string text)
     {
         co_await write(as_bytes(std::string_view{text}));
     }
 
+    /// Write a borrowed UTF-8 string view as bytes.
+    ///
+    /// If this returns a non-ready `hope`, the caller must ensure `text` remains
+    /// alive until the await completes.
     hope<void> write(std::string_view text)
     {
         return write(as_bytes(text));
     }
 
+    /// Format text with `std::format` and write the resulting bytes.
+    ///
+    /// This is the C++ counterpart to Zig writer `.print(fmt, ...)`. Formatting
+    /// materializes a temporary `std::string`; the resulting write still uses the
+    /// normal buffered writer semantics.
     template<typename... Args>
     task<void> print(std::format_string<Args...> fmt, Args &&... args)
     {
         co_await write(std::format(fmt, std::forward<Args>(args)...));
     }
 
+    /// Write each chunk in a byte/text chunk range.
+    ///
+    /// Chunks may be byte spans or UTF-8 string-like views. The range itself must
+    /// remain valid until the returned task completes.
     template<detail::byte_writer_chunk_range Chunks>
     task<void> write(Chunks && chunks)
     {
@@ -323,6 +363,7 @@ public:
             co_await write(std::forward<decltype(chunk)>(chunk));
     }
 
+    /// Write bytes or byte/text chunks, then flush the writer.
     template<typename Chunks>
         requires detail::byte_writer_chunk<Chunks>
             || detail::byte_writer_chunk_range<Chunks>
@@ -332,6 +373,7 @@ public:
         co_await flush();
     }
 
+    /// Format text, write it, then flush the writer.
     template<typename... Args>
     task<void> print_all(std::format_string<Args...> fmt, Args &&... args)
     {
@@ -340,6 +382,18 @@ public:
     }
 
 protected:
+    /// Cold-path sink operation.
+    ///
+    /// Implementations transfer bytes from `chunks` to the concrete backend and
+    /// return how many bytes were accepted. The return value may describe a
+    /// partial transfer, but it must be no larger than the total logical byte
+    /// count. Returning zero when any bytes are available is a protocol error for
+    /// the base writer, which relies on progress to avoid an infinite flush loop.
+    ///
+    /// The last span in `chunks` is repeated `splat` times. Earlier spans are
+    /// sent once. This follows Zig's `Writer.drain(data, splat)` trick and is
+    /// what lets `write_splat()` express repeated output without allocating or
+    /// manufacturing a large vector of identical spans.
     virtual hope<std::size_t> drain_more(
         std::span<const std::span<const std::byte>> chunks,
         std::size_t splat) = 0;
@@ -782,12 +836,14 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 // must be awaited -- we cannot make suspension invisible the way fibers do.
 //
 // The mandatory source cold path is now `stream_more()`, the Zig-shaped verb:
-// push up to `limit` bytes into a `byte_writer`. Pull-shaped refill is derived
-// by pointing a fixed writer at the reader's unused capacity, so source bytes
-// still land in `buffer_` before borrowed-span APIs (`peek`/`take`) expose
-// them. This gives us the structure of Zig's "stream into a writer, and refill
-// is just streaming into my own buffer" without yet caring about fd-to-fd
-// sendfile-style optimization.
+// push up to `limit` bytes into a `byte_writer`. Like Zig, an implementation may
+// also choose to put bytes in its own reader buffer and return zero streamed
+// bytes; the next public `stream()`/`take()` call will consume those buffered
+// bytes through the hot path. Pull-shaped refill is derived by pointing a fixed
+// writer at the reader's unused capacity, so source bytes still land in
+// `buffer_` before borrowed-span APIs (`peek`/`take`) expose them. This gives us
+// the structure of Zig's "stream into a writer, and refill is just streaming into
+// my own buffer" without yet caring about fd-to-fd sendfile-style optimization.
 //
 // The remaining divergence is that nxt readers still require at least one byte
 // of storage. Zig can express "fill my Reader.buffer" through `readVec`'s
@@ -847,17 +903,29 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 //   shared by wishes and readers alike. That is the endgame this whole family
 //   is shaped toward.
 
-/// Buffered asynchronous reader base.
+/// Buffered asynchronous reader base, modeled on Zig's `std.Io.Reader`.
 ///
-/// The hot-path methods are non-virtual and operate directly on `buffer_`,
-/// `seek_`, and `end_`, returning `hope<...>` so the buffered case never
-/// suspends. Derived readers implement `stream_more()`, the mandatory cold
-/// path that pushes source bytes into a writer. They may also override
-/// `read_vec_more()`, `discard_more()`, or `rebase_more()`; the base defaults
-/// derive those from `stream_more()` and memmove.
+/// Zig's post-0.15 reader design deserves real praise: the reader itself owns
+/// the buffer and exposes a small cold-path vtable, so parsers pay almost
+/// nothing when the requested bytes are already buffered. `byte_reader` ports
+/// that shape to C++ stackless coroutines by making the hot-path operations
+/// (`peek()`, `take()`, `take_struct()`, and friends) concrete, non-virtual, and
+/// `hope`-returning. A buffered hit is ready immediately; only a buffer miss
+/// builds or awaits a coroutine.
+///
+/// The mandatory cold primitive is `stream_more()`, following Zig's `stream`:
+/// push bytes into a `byte_writer`. Pull APIs such as `read_vec()` and refill
+/// are derived from that operation by default. Implementations may also put
+/// bytes into their own reader buffer and return zero streamed bytes; the next
+/// public operation will consume those bytes through the ordinary hot path.
+///
+/// Unlike Zig, this C++ reader currently requires at least one byte of buffer
+/// storage. Borrowed-span APIs need somewhere stable to park source bytes across
+/// awaits, and we do not yet have Zig's exact empty-slice `readVec` convention.
 class byte_reader
 {
 public:
+    /// Construct a reader with owned buffer storage.
     explicit byte_reader(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
         , buffer_(owned_buffer_)
@@ -866,6 +934,9 @@ public:
             throw buffer_error{"reader buffer is empty"};
     }
 
+    /// Construct a reader over caller-owned buffer storage.
+    ///
+    /// The storage must outlive the reader.
     explicit byte_reader(std::span<std::byte> buffer)
         : buffer_(buffer)
     {
@@ -881,21 +952,35 @@ public:
     byte_reader(byte_reader &&) = delete;
     byte_reader & operator=(byte_reader &&) = delete;
 
+    /// Return currently buffered bytes.
+    ///
+    /// The returned span is invalidated by any operation that refills, rebases,
+    /// or consumes the reader.
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
         return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
     }
 
+    /// Return the number of currently buffered bytes.
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
         return end_ - seek_;
     }
 
+    /// Return writable storage after the currently buffered bytes.
+    ///
+    /// Derived readers may write source bytes here and call protected
+    /// `advance()`.
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
     {
         return buffer_.subspan(end_);
     }
 
+    /// Ensure that `capacity` bytes can fit from the current seek position.
+    ///
+    /// The default cold path memmoves buffered data to the start of the buffer.
+    /// Derived readers may override `rebase_more()` for ring buffers or other
+    /// storage strategies.
     void rebase(std::size_t capacity)
     {
         if (capacity > buffer_.size())
@@ -907,6 +992,10 @@ public:
             throw buffer_error{"reader rebase did not make enough room"};
     }
 
+    /// Ensure at least `n` bytes are buffered.
+    ///
+    /// If the bytes are already present this returns ready and does not suspend.
+    /// If EOF occurs before `n` bytes are available, throws `end_of_stream`.
     hope<void> fill(std::size_t n)
     {
         if (n > buffer_.size())
@@ -917,6 +1006,11 @@ public:
         return fill_slow(n);
     }
 
+    /// Refill by one source operation when the buffer is not full.
+    ///
+    /// The returned byte count is the number of bytes appended to this reader's
+    /// buffer. A zero byte count is not necessarily EOF unless `read_result::eof`
+    /// is also true.
     hope<read_result> fill_more()
     {
         if (buffered_size() == buffer_.size())
@@ -925,6 +1019,10 @@ public:
         return fill_more_without_rebase();
     }
 
+    /// Borrow the next `n` bytes without consuming them.
+    ///
+    /// The returned span remains valid only until the next operation that may
+    /// mutate the reader buffer.
     hope<std::span<const std::byte>> peek(std::size_t n)
     {
         if (n > buffer_.size())
@@ -935,6 +1033,7 @@ public:
         return peek_slow(n);
     }
 
+    /// Copy a trivially copyable value from the next bytes without consuming it.
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     hope<T> peek_struct()
@@ -970,6 +1069,7 @@ public:
         return hope<std::optional<std::span<const std::byte>>>::ready(out);
     }
 
+    /// Discard `n` already-buffered bytes.
     void toss(std::size_t n)
     {
         if (n > buffered_size())
@@ -977,6 +1077,10 @@ public:
         seek_ += n;
     }
 
+    /// Consume and return exactly `n` borrowed bytes.
+    ///
+    /// Throws `buffer_error` if `n` is larger than this reader's whole buffer,
+    /// and `end_of_stream` if EOF arrives before `n` bytes are available.
     hope<std::span<const std::byte>> take(std::size_t n)
     {
         if (n > buffer_.size())
@@ -989,6 +1093,7 @@ public:
         return take_slow(n);
     }
 
+    /// Consume exactly `n` bytes and view them as UTF-8 text.
     hope<std::string_view> take_string_view(std::size_t n)
     {
         auto bytes = take(n);
@@ -998,6 +1103,10 @@ public:
         return take_string_view_slow(std::move(bytes));
     }
 
+    /// Consume and copy a trivially copyable value.
+    ///
+    /// Returns `std::nullopt` only when EOF is reached before any bytes of the
+    /// value are available. EOF in the middle of the value is `end_of_stream`.
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     hope<std::optional<T>> take_struct()
@@ -1011,6 +1120,11 @@ public:
         return take_struct_slow<T>();
     }
 
+    /// Consume and return bytes up to `delimiter`, excluding the delimiter.
+    ///
+    /// The delimiter is consumed. Throws `end_of_stream` if EOF arrives before
+    /// the delimiter, and `buffer_error` if the buffer fills before the delimiter
+    /// can be found.
     hope<std::span<const std::byte>>
     take_until(std::span<const std::byte> delimiter)
     {
@@ -1028,6 +1142,7 @@ public:
         return take_until_slow(delimiter);
     }
 
+    /// Consume and return bytes up to a UTF-8 text delimiter.
     hope<std::span<const std::byte>>
     take_until(std::string_view delimiter)
     {
@@ -1035,6 +1150,10 @@ public:
     }
 
     /// Pull one available chunk into caller-owned destination spans.
+    ///
+    /// If buffered bytes exist, they are copied synchronously into `dsts`.
+    /// Otherwise this calls `read_vec_more()`. The operation is intentionally
+    /// chunk-shaped, not "read exactly all destinations".
     hope<read_result> read_vec(std::span<std::span<std::byte>> dsts)
     {
         if (buffered_size() != 0) {
@@ -1048,6 +1167,7 @@ public:
         return read_vec_more(dsts.subspan(*first));
     }
 
+    /// Pull one available chunk into a single caller-owned destination span.
     hope<read_result> read(std::span<std::byte> dst)
     {
         auto dsts = std::array{dst};
@@ -1055,6 +1175,11 @@ public:
     }
 
     /// Transfer one available chunk to `writer`, up to `limit` bytes.
+    ///
+    /// This is the central Zig-shaped operation. It may return zero bytes without
+    /// EOF if the implementation filled its own reader buffer instead of the
+    /// writer; callers that want all bytes should loop until EOF or their limit
+    /// is satisfied.
     hope<read_result> stream(
         byte_writer & writer,
         std::size_t limit = std::numeric_limits<std::size_t>::max())
@@ -1069,6 +1194,10 @@ public:
     }
 
     /// Discard one available chunk, up to `limit` bytes.
+    ///
+    /// Buffered bytes are tossed synchronously. Otherwise this delegates to
+    /// `discard_more()`, whose default implementation streams into a discarding
+    /// writer.
     hope<read_result> discard(
         std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
@@ -1084,15 +1213,48 @@ public:
     }
 
 protected:
+    /// Return the full mutable reader storage.
+    ///
+    /// This is for derived storage strategies and adapters; ordinary refill code
+    /// should usually prefer `unused_capacity()`.
     [[nodiscard]] std::span<std::byte> buffer_storage() noexcept
     {
         return buffer_;
     }
 
+    /// Commit `n` bytes that a derived reader wrote into `unused_capacity()`.
+    void advance(std::size_t n)
+    {
+        if (n > unused_capacity().size())
+            throw buffer_error{"reader advanced past buffer capacity"};
+        end_ += n;
+    }
+
+    /// Mandatory cold-path source operation.
+    ///
+    /// Implementations should transfer up to `limit` bytes from the underlying
+    /// source into `writer`, returning the number of bytes logically advanced.
+    /// The number may be smaller than `limit`; a zero byte count does not by
+    /// itself mean EOF.
+    ///
+    /// To preserve Zig's reader shape, an implementation may instead append bytes
+    /// to this reader's own buffer using `unused_capacity()` and `advance()`, then
+    /// return `{.bytes = 0, .eof = false}`. This is the preferred fallback when
+    /// the destination writer has no writable capacity; do not allocate hidden
+    /// temporary storage just to satisfy `stream_more()`.
+    ///
+    /// Set `read_result::eof` only when the source has reached EOF. EOF with
+    /// bytes is allowed; EOF with zero bytes is the usual terminal signal.
     virtual hope<read_result> stream_more(
         byte_writer & writer,
         std::size_t limit) = 0;
 
+    /// Cold-path vectored pull operation.
+    ///
+    /// Called only when the public `read_vec()` has no buffered bytes to copy and
+    /// at least one destination span is non-empty. The default mirrors Zig's
+    /// simple default: stream into a fixed writer over the first non-empty
+    /// destination. Override this for real scatter reads.
     virtual hope<read_result> read_vec_more(
         std::span<std::span<std::byte>> dsts)
     {
@@ -1108,6 +1270,11 @@ protected:
         return read_vec_more_slow(dst);
     }
 
+    /// Cold-path discard operation.
+    ///
+    /// Called only when the public `discard()` has no buffered bytes to toss. The
+    /// default streams into a discarding writer backed by this reader's buffer.
+    /// Override this when the backend can skip bytes more directly.
     virtual hope<read_result> discard_more(std::size_t limit)
     {
         auto writer = discarding_byte_writer{buffer_};
@@ -1117,6 +1284,11 @@ protected:
         return discard_more_slow(limit);
     }
 
+    /// Cold-path rebase operation.
+    ///
+    /// Must make it possible for `capacity` bytes to fit from `seek_` onward, or
+    /// leave the object in a state where `rebase()` can report `buffer_error`.
+    /// The default memmoves buffered bytes to the start of `buffer_`.
     virtual void rebase_more(std::size_t)
     {
         auto pending = buffered_size();
@@ -1387,14 +1559,15 @@ private:
             co_return out;
         }
 
-        auto storage = std::vector<std::byte>(std::min(limit, std::size_t{4096}));
-        auto result = co_await std::invoke(read_, std::span{storage});
+        rebase(1);
+        auto storage = unused_capacity().first(
+            std::min(unused_capacity().size(), limit));
+        auto result = co_await std::invoke(read_, storage);
         auto out = normalize_result(result);
         if (out.bytes > storage.size())
-            throw buffer_error{"source overfilled temporary buffer"};
-        if (out.bytes != 0)
-            co_await writer.write(std::span{storage}.first(out.bytes));
-        co_return out;
+            throw buffer_error{"source overfilled reader buffer"};
+        advance(out.bytes);
+        co_return read_result{.bytes = 0, .eof = out.eof && out.bytes == 0};
     }
 
     template<typename Result>
@@ -1559,12 +1732,12 @@ private:
 
         auto dst = writer.unused_capacity();
         if (dst.empty()) {
-            auto storage =
-                std::vector<std::byte>(std::min(limit, std::size_t{4096}));
-            auto n = co_await read_some(std::span{storage});
-            if (n != 0)
-                co_await writer.write(std::span{storage}.first(n));
-            co_return read_result{.bytes = n, .eof = n == 0};
+            rebase(1);
+            dst = unused_capacity().first(
+                std::min(unused_capacity().size(), limit));
+            auto n = co_await read_some(dst);
+            advance(n);
+            co_return read_result{.bytes = 0, .eof = n == 0};
         }
 
         auto n = co_await read_some(dst.first(std::min(dst.size(), limit)));
@@ -1631,12 +1804,12 @@ private:
 
         auto dst = writer.unused_capacity();
         if (dst.empty()) {
-            auto storage =
-                std::vector<std::byte>(std::min(limit, std::size_t{4096}));
-            auto n = co_await recv_some(std::span{storage});
-            if (n != 0)
-                co_await writer.write(std::span{storage}.first(n));
-            co_return read_result{.bytes = n, .eof = n == 0};
+            rebase(1);
+            dst = unused_capacity().first(
+                std::min(unused_capacity().size(), limit));
+            auto n = co_await recv_some(dst);
+            advance(n);
+            co_return read_result{.bytes = 0, .eof = n == 0};
         }
 
         auto n = co_await recv_some(dst.first(std::min(dst.size(), limit)));

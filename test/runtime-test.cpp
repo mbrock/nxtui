@@ -2476,6 +2476,45 @@ static suite runtime_tests{
                     expect(result.bytes == std::size_t{2});
                     expect(!result.eof);
                 };
+
+                "buffers into its reader storage when the stream writer has no room"_test = [] {
+                    struct read_once
+                    {
+                        nxtrt::task<nxtrt::read_result>
+                        operator()(std::span<std::byte> dst)
+                        {
+                            auto text = std::string_view{"abc"};
+                            auto n = std::min(dst.size(), text.size());
+                            std::memcpy(dst.data(), text.data(), n);
+                            co_return nxtrt::read_result{
+                                .bytes = n,
+                                .eof = false,
+                            };
+                        }
+                    };
+
+                    auto deck = nxtrt::deck{};
+                    auto storage = std::array<std::byte, 4>{};
+                    auto source = nxtrt::task_byte_source{
+                        read_once{},
+                        std::span{storage},
+                    };
+                    auto writer = chunking_string_sink{64, std::size_t{0}};
+
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        auto first = co_await source.stream(writer, 3);
+                        expect(first.bytes == std::size_t{0});
+                        expect(!first.eof);
+                        expect(writer.text.empty());
+                        expect(nxtrt::as_string_view(source.buffered()) == "abc");
+
+                        auto second = co_await source.stream(writer, 3);
+                        expect(second.bytes == std::size_t{3});
+                    });
+
+                    expect(writer.text == "abc");
+                    expect(source.buffered_size() == std::size_t{0});
+                };
             };
 
             "byte_reader peeks and takes copied structs"_test = [] {
