@@ -194,11 +194,11 @@ private:
 
         auto round = std::deque<ready_item>{};
         round.swap(ready_);
-        trace("deck round begin size=" + std::to_string(round.size()));
+        trace("deck round begin size={}", round.size());
 
         for (auto const & item : round)
             item.resume_if_ready(*this);
-        trace("deck round end ready=" + std::to_string(ready_.size()));
+        trace("deck round end ready={}", ready_.size());
     }
 
     void dump_if_requested();

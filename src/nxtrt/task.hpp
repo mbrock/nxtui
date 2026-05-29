@@ -2042,8 +2042,11 @@ inline void waiter<T>::await_suspend(
         throw runtime_error{
             "nxtrt waiter awaited without a prepared wand"};
 
-    trace("waiter suspend token=" + std::to_string(token_));
-    debug::park_task(running->id, token_, description_);
+    trace("waiter suspend token={}", token_);
+    debug::park_task(
+        running->id,
+        token_,
+        debug::parked_wish_description(description_));
     active_wand->suspend(
         token_,
         parked_task{
@@ -2062,7 +2065,7 @@ inline waiter<void> op::manual::operator co_await() const
         throw runtime_error{
             "nxtrt manual wish awaited without a running wand"};
 
-    trace("wish manual prepare token=" + std::to_string(token));
+    trace("wish manual prepare token={}", token);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2078,7 +2081,7 @@ inline waiter<int> op::openat::operator co_await() const
         throw runtime_error{
             "nxtrt openat wish awaited without a running wand"};
 
-    trace("wish openat prepare path=" + path);
+    trace("wish openat prepare path={}", path);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2095,7 +2098,7 @@ inline waiter<statx_result> op::statx::operator co_await() const
         throw runtime_error{
             "nxtrt statx wish awaited without a running wand"};
 
-    trace("wish statx prepare path=" + path);
+    trace("wish statx prepare path={}", path);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2111,8 +2114,7 @@ inline waiter<std::size_t> op::getdents64::operator co_await() const
         throw runtime_error{
             "nxtrt getdents64 wish awaited without a running wand"};
 
-    trace("wish getdents64 prepare fd=" + std::to_string(fd)
-        + " bytes=" + std::to_string(buffer.size()));
+    trace("wish getdents64 prepare fd={} bytes={}", fd, buffer.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2128,7 +2130,7 @@ inline waiter<piped_child> op::spawn_piped::operator co_await() const
         throw runtime_error{
             "nxtrt spawn-piped wish awaited without a running wand"};
 
-    trace("wish spawn-piped prepare argv=" + std::to_string(argv.size()));
+    trace("wish spawn-piped prepare argv={}", argv.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2144,7 +2146,7 @@ inline waiter<pty_child> op::spawn_pty::operator co_await() const
         throw runtime_error{
             "nxtrt spawn-pty wish awaited without a running wand"};
 
-    trace("wish spawn-pty prepare argv=" + std::to_string(argv.size()));
+    trace("wish spawn-pty prepare argv={}", argv.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2160,7 +2162,7 @@ inline waiter<child_result> op::wait_child::operator co_await() const
         throw runtime_error{
             "nxtrt wait-child wish awaited without a running wand"};
 
-    trace("wish wait-child prepare pidfd=" + std::to_string(pidfd));
+    trace("wish wait-child prepare pidfd={}", pidfd);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2176,8 +2178,7 @@ inline waiter<void> op::signal_child::operator co_await() const
         throw runtime_error{
             "nxtrt signal-child wish awaited without a running wand"};
 
-    trace("wish signal-child prepare pidfd=" + std::to_string(pidfd)
-        + " signal=" + std::to_string(signal));
+    trace("wish signal-child prepare pidfd={} signal={}", pidfd, signal);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2194,8 +2195,7 @@ inline waiter<std::size_t> op::read_some::operator co_await() const
         throw runtime_error{
             "nxtrt read wish awaited without a running wand"};
 
-    trace("wish read prepare fd=" + std::to_string(fd)
-        + " bytes=" + std::to_string(buffer.size()));
+    trace("wish read prepare fd={} bytes={}", fd, buffer.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2211,8 +2211,7 @@ inline waiter<std::size_t> op::write_some::operator co_await() const
         throw runtime_error{
             "nxtrt write wish awaited without a running wand"};
 
-    trace("wish write prepare fd=" + std::to_string(fd)
-        + " bytes=" + std::to_string(buffer.size()));
+    trace("wish write prepare fd={} bytes={}", fd, buffer.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2228,8 +2227,7 @@ inline waiter<std::size_t> op::recv_some::operator co_await() const
         throw runtime_error{
             "nxtrt recv wish awaited without a running wand"};
 
-    trace("wish recv prepare fd=" + std::to_string(fd)
-        + " bytes=" + std::to_string(buffer.size()));
+    trace("wish recv prepare fd={} bytes={}", fd, buffer.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2245,8 +2243,7 @@ inline waiter<std::size_t> op::send_some::operator co_await() const
         throw runtime_error{
             "nxtrt send wish awaited without a running wand"};
 
-    trace("wish send prepare fd=" + std::to_string(fd)
-        + " bytes=" + std::to_string(buffer.size()));
+    trace("wish send prepare fd={} bytes={}", fd, buffer.size());
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2262,7 +2259,7 @@ inline waiter<void> op::connect::operator co_await() const
         throw runtime_error{
             "nxtrt connect wish awaited without a running wand"};
 
-    trace("wish connect prepare fd=" + std::to_string(fd));
+    trace("wish connect prepare fd={}", fd);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2278,7 +2275,7 @@ inline waiter<int> op::accept::operator co_await() const
         throw runtime_error{
             "nxtrt accept wish awaited without a running wand"};
 
-    trace("wish accept prepare fd=" + std::to_string(fd));
+    trace("wish accept prepare fd={}", fd);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2294,8 +2291,7 @@ inline waiter<int> op::poll::operator co_await() const
         throw runtime_error{
             "nxtrt poll wish awaited without a running wand"};
 
-    trace("wish poll prepare fd=" + std::to_string(fd)
-        + " events=" + std::to_string(events));
+    trace("wish poll prepare fd={} events={}", fd, events);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,
@@ -2327,8 +2323,7 @@ inline waiter<poll_until_result> op::poll_until::operator co_await() const
         throw runtime_error{
             "nxtrt poll-until wish awaited without a running wand"};
 
-    trace("wish poll-until prepare fd=" + std::to_string(fd)
-        + " events=" + std::to_string(events));
+    trace("wish poll-until prepare fd={} events={}", fd, events);
     return context.active_wand->prepare(
         *context.active_deck,
         *context.running,

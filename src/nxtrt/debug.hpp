@@ -14,7 +14,13 @@
 #include <string>
 #include <vector>
 
+#ifndef NXT_RT_DESCRIBE_WISHES
+#define NXT_RT_DESCRIBE_WISHES 0
+#endif
+
 namespace nxtrt::debug {
+
+inline constexpr bool describe_wishes = NXT_RT_DESCRIBE_WISHES != 0;
 
 using zone_id = std::uint64_t;
 
@@ -125,6 +131,15 @@ inline void park_task(task_id task, std::uint64_t token, std::string wish)
             .parked_at = parked_at,
             .wish = std::move(wish),
         });
+}
+
+[[nodiscard]] inline std::string parked_wish_description(
+    const std::string & wish)
+{
+    if constexpr (describe_wishes)
+        return wish;
+    else
+        return {};
 }
 
 inline void unpark_task(task_id task)

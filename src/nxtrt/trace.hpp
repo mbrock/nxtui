@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -15,6 +16,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#ifndef NXT_RT_ENABLE_TRACE
+#define NXT_RT_ENABLE_TRACE 1
+#endif
 
 namespace nxtrt {
 
@@ -33,8 +38,23 @@ inline bool trace_enabled = trace_env_enabled();
 
 inline void trace(std::string_view message)
 {
-    if (trace_enabled)
+    if constexpr (NXT_RT_ENABLE_TRACE) {
+        if (!trace_enabled)
+            return;
         std::cerr << "[nxtrt] " << message << '\n';
+    }
+}
+
+template<typename... Args>
+inline void trace(std::format_string<Args...> fmt, Args &&... args)
+{
+    if constexpr (NXT_RT_ENABLE_TRACE) {
+        if (!trace_enabled)
+            return;
+        std::cerr << "[nxtrt] "
+                  << std::format(fmt, std::forward<Args>(args)...)
+                  << '\n';
+    }
 }
 
 using trace_clock = std::chrono::steady_clock;

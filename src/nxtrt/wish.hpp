@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/debug.hpp"
 #include "nxtrt/exceptions.hpp"
 #include "nxt/unique-fd.hpp"
 
@@ -656,6 +657,15 @@ inline std::string describe_wish(const op::poll_until & wish)
         + " events " + std::to_string(wish.events);
 }
 
+template<typename Wish>
+[[nodiscard]] inline std::string describe_wish_for_waiter(const Wish & wish)
+{
+    if constexpr (debug::describe_wishes)
+        return describe_wish(wish);
+    else
+        return {};
+}
+
 } // namespace detail
 
 /// Backend interface for staged platform/event-loop machinery.
@@ -677,7 +687,7 @@ public:
     {
         using result_type = typename Wish::result_type;
         auto state = std::make_shared<wait_state<result_type>>();
-        auto description = detail::describe_wish(wish);
+        auto description = detail::describe_wish_for_waiter(wish);
         auto token = prepare_wish(
             d,
             promise,
@@ -689,7 +699,8 @@ public:
             *this,
             token,
             state,
-            std::move(description)};
+            std::move(description)
+        };
     }
 
     virtual void suspend(wait_token token, parked_task task) = 0;

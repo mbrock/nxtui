@@ -153,7 +153,7 @@ public:
 
     void suspend(wait_token token, parked_task task) override
     {
-        trace("uring park token=" + std::to_string(token));
+        trace("uring park token={}", token);
         auto * execution = exec_from_token(token);
         if (execution == nullptr)
             return;
@@ -184,7 +184,7 @@ public:
             return;
         }
 
-        trace("uring request cancel token=" + std::to_string(token));
+        trace("uring request cancel token={}", token);
     }
 
     void wave(deck & d) override
@@ -316,16 +316,19 @@ private:
             return;
 
         if (key.kind == cqe_kind::cancel) {
-            trace("uring cancel complete token="
-                + std::to_string(token_for(*key.execution))
-                + " result=" + std::to_string(result));
+            trace(
+                "uring cancel complete token={} result={}",
+                token_for(*key.execution),
+                result);
             handle_cancel_cqe(*key.execution);
             compact_execs();
             return;
         }
 
-        trace("uring complete token=" + std::to_string(token_for(*key.execution))
-            + " result=" + std::to_string(result));
+        trace(
+            "uring complete token={} result={}",
+            token_for(*key.execution),
+            result);
 
         handle_op_cqe(d, *key.execution, result);
         compact_execs();
@@ -507,8 +510,7 @@ private:
         auto & execution = *iterator;
         pending_submissions_.push_back(&execution);
         auto token = token_for(execution);
-        trace("uring prepare " + std::string{Wish::name}
-            + " token=" + std::to_string(token));
+        trace("uring prepare {} token={}", Wish::name, token);
         return token;
     }
 
@@ -673,8 +675,7 @@ private:
                 0);
             attach_exec(sqe, *execution, cqe_kind::cancel);
             state->phase = cancel_submitted{};
-            trace("uring prepare cancel token="
-                + std::to_string(token_for(*execution)));
+            trace("uring prepare cancel token={}", token_for(*execution));
         }
         pending_cancellations_ = std::move(deferred);
     }
@@ -749,7 +750,7 @@ private:
 
     void fulfill(deck & d, exec & execution, parked_task continuation)
     {
-        trace("uring fulfill token=" + std::to_string(token_for(execution)));
+        trace("uring fulfill token={}", token_for(execution));
         continuation.resume(d);
     }
 
@@ -1032,9 +1033,10 @@ inline bool op::getdents64::stage_uring(uring_submission & submission)
     if (result < 0)
         result = -errno;
 
-    trace("uring complete sync getdents64 token="
-        + std::to_string(submission.token())
-        + " result=" + std::to_string(result));
+    trace(
+        "uring complete sync getdents64 token={} result={}",
+        submission.token(),
+        result);
     submission.complete_sync(static_cast<int>(result));
     return false;
 }

@@ -3,9 +3,13 @@
 BENCH_CLIENTS ?= 16
 BENCH_MESSAGES ?= 512
 BENCH_PAYLOAD ?= 64
+BENCH_CPP_ARGS ?= -DNXT_RT_ENABLE_TRACE=0
 BENCH_PERF_DATA ?= build-bench-release/nxt-echo.perf.data
 BENCH_PERF_FREQ ?= 999
 BENCH_PERF_CALLGRAPH ?= fp
+BENCH_PERF_CLIENTS ?= 64
+BENCH_PERF_MESSAGES ?= 2048
+BENCH_PERF_PAYLOAD ?= 64
 
 all: build
 
@@ -27,15 +31,16 @@ freebsd-test:
 
 bench-build:
 	@if [ ! -d build-bench-release ]; then \
-		meson setup build-bench-release --buildtype=release -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false; \
+		meson setup build-bench-release --buildtype=release -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false -Dcpp_args=$(BENCH_CPP_ARGS); \
 	fi
+	meson configure build-bench-release -Dcpp_args=$(BENCH_CPP_ARGS)
 	meson compile -C build-bench-release nxt-echo-bench
 
 bench: bench-build
 	build-bench-release/nxt-echo-bench --clients $(BENCH_CLIENTS) --messages $(BENCH_MESSAGES) --payload $(BENCH_PAYLOAD)
 
 bench-perf: bench-build
-	sudo perf record -F $(BENCH_PERF_FREQ) -g --call-graph $(BENCH_PERF_CALLGRAPH) -o $(BENCH_PERF_DATA) -- build-bench-release/nxt-echo-bench --clients $(BENCH_CLIENTS) --messages $(BENCH_MESSAGES) --payload $(BENCH_PAYLOAD)
+	sudo perf record -F $(BENCH_PERF_FREQ) -g --call-graph $(BENCH_PERF_CALLGRAPH) -o $(BENCH_PERF_DATA) -- build-bench-release/nxt-echo-bench --clients $(BENCH_PERF_CLIENTS) --messages $(BENCH_PERF_MESSAGES) --payload $(BENCH_PERF_PAYLOAD)
 
 bench-perf-report:
 	sudo perf report -i $(BENCH_PERF_DATA)

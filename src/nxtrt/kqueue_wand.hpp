@@ -121,7 +121,7 @@ public:
 
     void suspend(wait_token token, parked_task task) override
     {
-        trace("kqueue park token=" + std::to_string(token));
+        trace("kqueue park token={}", token);
         auto * execution = exec_from_token(token);
         if (execution == nullptr)
             return;
@@ -152,7 +152,7 @@ public:
             return;
         }
 
-        trace("kqueue request cancel token=" + std::to_string(token));
+        trace("kqueue request cancel token={}", token);
     }
 
     void wave(deck & d) override
@@ -1255,7 +1255,7 @@ private:
         if (state == nullptr)
             return;
 
-        trace("kqueue complete token=" + std::to_string(token));
+        trace("kqueue complete token={}", token);
         if (!execution->specification.completion->on_event(
                 *this,
                 d,
@@ -1292,7 +1292,7 @@ private:
 
     void fulfill(deck & d, exec & execution, parked_task continuation)
     {
-        trace("kqueue fulfill token=" + std::to_string(token_for(execution)));
+        trace("kqueue fulfill token={}", token_for(execution));
         continuation.resume(d);
     }
 
@@ -1385,8 +1385,7 @@ wait_token kqueue_wand::prepare_kqueue_wish(
     auto & execution = *iterator;
     pending_submissions_.push_back(&execution);
     auto token = token_for(execution);
-    trace("kqueue prepare " + std::string{Wish::name}
-        + " token=" + std::to_string(token));
+    trace("kqueue prepare {} token={}", Wish::name, token);
     return token;
 }
 
