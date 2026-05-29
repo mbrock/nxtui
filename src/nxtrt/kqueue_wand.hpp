@@ -3,6 +3,8 @@
 #include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
+#include <boost/container/hub.hpp>
+
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) \
     || defined(__OpenBSD__) || defined(__DragonFly__)
 #define NXT_RT_HAS_KQUEUE 1
@@ -25,7 +27,6 @@
 #include <sys/socket.h>
 #include <type_traits>
 #include <unistd.h>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -47,8 +48,85 @@ inline constexpr bool has_kqueue_wand = NXT_RT_HAS_KQUEUE != 0;
 
 using kqueue_event = struct kevent;
 
+/// kqueue-backed wand for BSD runtime wishes.
+///
+/// Each awaited wish becomes one hub-stored execution record. Kevent `udata`
+/// points at that record while variant phases make prepared, parked, settled,
+/// delayed-delete, and retired states explicit.
 class kqueue_wand final : public wand
 {
+private:
+    using kqueue_wish = wish_variant;
+
+    /// Allocated by `prepare_wish`; not yet parked by the awaiter.
+    struct prepared
+    {};
+
+    /// Parked and waiting for its kevent registrations to be staged.
+    struct queued
+    {};
+
+    /// The operation has live kqueue registrations.
+    struct submitted
+    {};
+
+    /// Cancellation arrived before submission.
+    struct cancel_queued
+    {};
+
+    /// Cancellation must delete live kqueue registrations.
+    struct delete_queued
+    {};
+
+    /// Phases that still own a parked coroutine continuation.
+    using parked_phase = std::variant<
+        queued,
+        submitted,
+        cancel_queued,
+        delete_queued>;
+
+    /// Suspended task plus the registration/cancellation phase of its wish.
+    struct parked
+    {
+        /// Coroutine to requeue when the wish settles.
+        parked_task continuation;
+        /// Current phase while the continuation is still parked.
+        parked_phase phase = queued{};
+    };
+
+    /// No more kqueue events are needed before the hub slot can be reused.
+    struct ready_to_retire
+    {};
+
+    /// EV_DELETE changes are staged but have not been applied to the kqueue.
+    struct delete_pending
+    {};
+
+    /// EV_DELETE changes were applied; wait once before hub reuse.
+    struct delete_applied
+    {};
+
+    /// Phases after the waiting task has been fulfilled.
+    using settled_phase = std::variant<
+        ready_to_retire,
+        delete_pending,
+        delete_applied>;
+
+    /// Fulfilled execution waiting for a compaction sync point.
+    struct settled
+    {
+        settled_phase phase = ready_to_retire{};
+    };
+
+    /// Tombstone used during hub compaction.
+    struct retired
+    {};
+
+    /// Full lifecycle of one wish execution.
+    using exec_state = std::variant<prepared, parked, settled, retired>;
+
+    struct exec;
+
 public:
     kqueue_wand()
         : kq_(::kqueue())
@@ -66,22 +144,42 @@ public:
     void suspend(wait_token token, parked_task task) override
     {
         trace("kqueue park token=" + std::to_string(token));
-        waiters_.emplace(token, task);
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
+            return;
+        if (!std::holds_alternative<prepared>(execution->state))
+            return;
+        execution->state = parked{
+            .continuation = task,
+            .phase = queued{},
+        };
     }
 
     void cancel(wait_token token) override
     {
-        auto found = completions_.find(token);
-        if (found == completions_.end())
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
             return;
 
-        found->second->request_cancel();
-        pending_cancellations_.push_back(token);
+        auto * state = std::get_if<parked>(&execution->state);
+        if (state == nullptr)
+            return;
+
+        if (std::holds_alternative<queued>(state->phase)) {
+            state->phase = cancel_queued{};
+        } else if (std::holds_alternative<submitted>(state->phase)) {
+            state->phase = delete_queued{};
+            pending_cancellations_.push_back(execution);
+        } else {
+            return;
+        }
+
         trace("kqueue request cancel token=" + std::to_string(token));
     }
 
     void wave(deck & d) override
     {
+        compact_execs();
         stage_submissions(d);
         stage_cancellations(d);
         apply_changes();
@@ -121,25 +219,28 @@ public:
 
     void complete(deck & d, wait_token token, int result)
     {
-        auto found = completions_.find(token);
-        if (found == completions_.end())
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
             return;
 
-        found->second->complete(result);
-        completions_.erase(found);
-        fulfill(d, token);
+        auto * state = std::get_if<parked>(&execution->state);
+        if (state == nullptr)
+            return;
+
+        execution->specification.completion->complete(
+            execution->specification.request,
+            result,
+            false);
+        settle(d, *execution, ready_to_retire{});
     }
 
     void fulfill(deck & d, wait_token token)
     {
-        auto found = waiters_.find(token);
-        if (found == waiters_.end())
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
             return;
 
-        trace("kqueue fulfill token=" + std::to_string(token));
-        auto task = found->second;
-        waiters_.erase(found);
-        task.resume(d);
+        fulfill(d, *execution);
     }
 
 private:
@@ -155,8 +256,6 @@ protected:
         detail::prepared_wish packet) override;
 
 private:
-    using kqueue_wish = wish_variant;
-
     static void set_nonblocking(int fd)
     {
         auto flags = ::fcntl(fd, F_GETFL, 0);
@@ -216,92 +315,76 @@ private:
     class completion_base
     {
     public:
-        explicit completion_base(std::shared_ptr<kqueue_wish> request)
-            : request_(std::move(request))
-        {}
-
         virtual ~completion_base() = default;
 
         virtual bool submit(
             kqueue_wand & wand,
             deck & d,
             wait_token token,
+            kqueue_wish & request,
             std::vector<kqueue_event> & changes) = 0;
         virtual bool on_event(
             kqueue_wand & wand,
             deck & d,
             wait_token token,
+            kqueue_wish & request,
             kqueue_event const & event) = 0;
         virtual void delete_events(
             wait_token token,
+            kqueue_wish & request,
             std::vector<kqueue_event> & changes) = 0;
-        virtual void complete(int result) = 0;
+        virtual void complete(
+            kqueue_wish & request,
+            int result,
+            bool cancelled) = 0;
 
         [[nodiscard]] bool finished() const noexcept
         {
             return finished_;
         }
 
-        void request_cancel() noexcept
+        [[nodiscard]] bool consume_delete_pending() noexcept
         {
-            cancel_requested_ = true;
-        }
-
-        void mark_submitted() noexcept
-        {
-            submitted_ = true;
-        }
-
-        [[nodiscard]] bool submitted() const noexcept
-        {
-            return submitted_;
-        }
-
-        [[nodiscard]] bool cancel_requested() const noexcept
-        {
-            return cancel_requested_;
+            return std::exchange(delete_pending_, false);
         }
 
     protected:
-        std::shared_ptr<kqueue_wish> request_;
-        bool cancel_requested_ = false;
-        bool submitted_ = false;
+        void mark_delete_pending() noexcept
+        {
+            delete_pending_ = true;
+        }
+
         bool finished_ = false;
+        bool delete_pending_ = false;
     };
 
     template<typename T>
     class completion final : public completion_base
     {
     public:
-        completion(
-            std::shared_ptr<kqueue_wish> request,
-            std::shared_ptr<wait_state<T>> state)
-            : completion_base(std::move(request))
-            , state_(std::move(state))
+        explicit completion(std::shared_ptr<wait_state<T>> state)
+            : state_(std::move(state))
         {}
 
         bool submit(
             kqueue_wand & wand,
             deck & d,
             wait_token token,
+            kqueue_wish & request,
             std::vector<kqueue_event> & changes) override
         {
-            if (this->cancel_requested_) {
-                finish_cancelled();
-                return false;
-            }
-
             return std::visit(
                 [&](auto & op) {
                     return submit_op(wand, d, token, changes, op);
                 },
-                *this->request_);
+                request);
         }
 
         bool on_event(
             kqueue_wand & wand,
             deck & d,
             wait_token token,
+            kqueue_wish & request,
             kqueue_event const & event) override
         {
             if ((event.flags & EV_ERROR) != 0) {
@@ -309,32 +392,31 @@ private:
                 return true;
             }
 
-            if (this->cancel_requested_) {
-                finish_cancelled();
-                return true;
-            }
-
             return std::visit(
                 [&](auto & op) {
                     return event_op(wand, d, token, event, op);
                 },
-                *this->request_);
+                request);
         }
 
         void delete_events(
             wait_token token,
+            kqueue_wish & request,
             std::vector<kqueue_event> & changes) override
         {
             std::visit(
                 [&](auto & op) {
                     delete_op_events(token, changes, op);
                 },
-                *this->request_);
+                request);
         }
 
-        void complete(int result) override
+        void complete(
+            kqueue_wish &,
+            int result,
+            bool cancelled) override
         {
-            if (this->cancel_requested_) {
+            if (cancelled) {
                 finish_cancelled();
                 return;
             }
@@ -440,20 +522,20 @@ private:
         }
 
         bool submit_op(
-            kqueue_wand & wand,
-            deck & d,
+            kqueue_wand &,
+            deck &,
             wait_token token,
             std::vector<kqueue_event> & changes,
             op::connect & op)
         {
             set_nonblocking(op.fd);
             if (::connect(op.fd, op.sockaddr_ptr(), op.address_size) == 0) {
-                wand.complete(d, token, 0);
+                finish_result(0);
                 return false;
             }
 
             if (errno != EINPROGRESS && !would_block(errno)) {
-                wand.complete(d, token, -errno);
+                finish_result(-errno);
                 return false;
             }
 
@@ -641,13 +723,15 @@ private:
         }
 
         bool event_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
-            wait_token,
+            wait_token token,
             kqueue_event const & event,
-            op::poll &)
+            op::poll & op)
         {
             finish_result(poll_events_from_filter(event.filter));
+            if (wand.delete_poll_siblings(token, op, event.filter))
+                this->mark_delete_pending();
             return true;
         }
 
@@ -680,7 +764,8 @@ private:
                     .timed_out = false,
                 });
             }
-            wand.delete_poll_until_siblings(token, op, event.filter);
+            if (wand.delete_poll_until_siblings(token, op, event.filter))
+                this->mark_delete_pending();
             return true;
         }
 
@@ -882,48 +967,128 @@ private:
         std::shared_ptr<wait_state<T>> state_;
     };
 
+    /// Immutable wish recipe plus the typed completion sink for an exec.
+    struct spec
+    {
+        spec(
+            kqueue_wish request,
+            std::unique_ptr<completion_base> completion)
+            : request(std::move(request))
+            , completion(std::move(completion))
+        {}
+
+        /// Closed wish that knows how to register its kqueue events.
+        kqueue_wish request;
+        /// Type-erased bridge to the awaiter's result state.
+        std::unique_ptr<completion_base> completion;
+    };
+
+    /// Address-stable execution record used directly as wait token/udata.
+    struct exec
+    {
+        exec(
+            spec specification,
+            exec_state state = prepared{})
+            : specification(std::move(specification))
+            , state(std::move(state))
+        {}
+
+        /// The operation being realized by this execution.
+        spec specification;
+        /// Current lifecycle state.
+        exec_state state = prepared{};
+    };
+
+    /// Return the public wait token for a live hub execution.
+    static wait_token token_for(exec & execution) noexcept
+    {
+        static_assert(sizeof(std::uintptr_t) <= sizeof(wait_token));
+        return static_cast<wait_token>(
+            reinterpret_cast<std::uintptr_t>(&execution));
+    }
+
+    /// Decode a wait token back to the live hub execution it names.
+    static exec * exec_from_token(wait_token token) noexcept
+    {
+        return reinterpret_cast<exec *>(
+            static_cast<std::uintptr_t>(token));
+    }
+
     void stage_submissions(deck & d)
     {
-        auto tokens = std::vector<wait_token>{};
-        tokens.swap(pending_submissions_);
+        auto executions = std::vector<exec *>{};
+        executions.swap(pending_submissions_);
 
-        for (auto token : tokens) {
-            auto found = completions_.find(token);
-            if (found == completions_.end())
+        for (auto * execution : executions) {
+            if (execution == nullptr)
                 continue;
 
-            auto submitted =
-                found->second->submit(*this, d, token, pending_changes_);
-            if (found->second->finished()) {
-                completions_.erase(found);
-                fulfill(d, token);
-            } else if (submitted) {
-                found->second->mark_submitted();
+            auto * state = std::get_if<parked>(&execution->state);
+            if (state == nullptr)
+                continue;
+
+            if (std::holds_alternative<cancel_queued>(state->phase)) {
+                execution->specification.completion->complete(
+                    execution->specification.request,
+                    -ECANCELED,
+                    true);
+                settle(d, *execution, ready_to_retire{});
+                continue;
+            }
+
+            if (!std::holds_alternative<queued>(state->phase))
+                continue;
+
+            auto did_submit = execution->specification.completion->submit(
+                *this,
+                d,
+                token_for(*execution),
+                execution->specification.request,
+                pending_changes_);
+            if (execution->specification.completion->finished()) {
+                settle(d, *execution, ready_to_retire{});
+            } else if (did_submit) {
+                state->phase = submitted{};
             }
         }
     }
 
     void stage_cancellations(deck & d)
     {
-        auto tokens = std::vector<wait_token>{};
-        tokens.swap(pending_cancellations_);
+        auto executions = std::vector<exec *>{};
+        executions.swap(pending_cancellations_);
 
-        for (auto token : tokens) {
-            auto found = completions_.find(token);
-            if (found == completions_.end())
+        for (auto * execution : executions) {
+            if (execution == nullptr)
                 continue;
 
-            found->second->delete_events(token, pending_changes_);
-            found->second->complete(-ECANCELED);
-            completions_.erase(found);
-            fulfill(d, token);
+            auto * state = std::get_if<parked>(&execution->state);
+            if (state == nullptr
+                || !std::holds_alternative<delete_queued>(state->phase))
+                continue;
+
+            auto const before = pending_changes_.size();
+            execution->specification.completion->delete_events(
+                token_for(*execution),
+                execution->specification.request,
+                pending_changes_);
+            execution->specification.completion->complete(
+                execution->specification.request,
+                -ECANCELED,
+                true);
+            auto phase = pending_changes_.size() == before
+                ? settled_phase{ready_to_retire{}}
+                : settled_phase{delete_pending{}};
+            settle(d, *execution, std::move(phase));
         }
     }
 
     void apply_changes()
     {
-        if (pending_changes_.empty())
+        if (pending_changes_.empty()) {
+            mark_deletes_applied();
             return;
+        }
 
         auto changes = std::vector<kqueue_event>{};
         changes.swap(pending_changes_);
@@ -935,8 +1100,10 @@ private:
                 nullptr,
                 0,
                 nullptr);
-            if (rc == 0)
+            if (rc == 0) {
+                mark_deletes_applied();
                 return;
+            }
             if (rc < 0 && errno == EINTR)
                 continue;
             if (rc < 0)
@@ -968,7 +1135,25 @@ private:
         }
     }
 
-    void delete_poll_until_siblings(
+    [[nodiscard]] bool delete_poll_siblings(
+        wait_token token,
+        op::poll const & op,
+        short completed_filter)
+    {
+        auto changes = std::vector<kqueue_event>{};
+        if (completed_filter != EVFILT_READ && (op.events & POLLIN) != 0)
+            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+        if (completed_filter != EVFILT_WRITE && (op.events & POLLOUT) != 0)
+            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+        auto const any = !changes.empty();
+        pending_changes_.insert(
+            pending_changes_.end(),
+            changes.begin(),
+            changes.end());
+        return any;
+    }
+
+    [[nodiscard]] bool delete_poll_until_siblings(
         wait_token token,
         op::poll_until const & op,
         short completed_filter)
@@ -980,10 +1165,12 @@ private:
             set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
         if (completed_filter != EVFILT_WRITE && (op.events & POLLOUT) != 0)
             set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+        auto const any = !changes.empty();
         pending_changes_.insert(
             pending_changes_.end(),
             changes.begin(),
             changes.end());
+        return any;
     }
 
     void poll_with_timeout(deck & d, timespec const * timeout)
@@ -999,8 +1186,11 @@ private:
                 events.data(),
                 static_cast<int>(events.size()),
                 timeout);
-            if (rc == 0)
+            if (rc == 0) {
+                drain_applied_deletes();
+                compact_execs();
                 return;
+            }
             if (rc < 0 && errno == EINTR)
                 continue;
             if (rc < 0)
@@ -1009,6 +1199,8 @@ private:
 
             for (auto i = 0; i != rc; ++i)
                 handle_event(d, events[static_cast<std::size_t>(i)]);
+            drain_applied_deletes();
+            compact_execs();
             return;
         }
     }
@@ -1016,24 +1208,39 @@ private:
     void handle_event(deck & d, kqueue_event const & event)
     {
         auto token = event_token(event);
-        auto found = completions_.find(token);
-        if (found == completions_.end())
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
+            return;
+
+        auto * state = std::get_if<parked>(&execution->state);
+        if (state == nullptr)
             return;
 
         trace("kqueue complete token=" + std::to_string(token));
-        if (!found->second->on_event(*this, d, token, event))
+        if (!execution->specification.completion->on_event(
+                *this,
+                d,
+                token,
+                execution->specification.request,
+                event))
             return;
 
-        completions_.erase(found);
-        fulfill(d, token);
+        auto phase = execution->specification.completion->consume_delete_pending()
+            ? settled_phase{delete_pending{}}
+            : settled_phase{ready_to_retire{}};
+        settle(d, *execution, std::move(phase));
     }
 
     [[nodiscard]] bool has_submitted_completions() const noexcept
     {
         return std::ranges::any_of(
-            completions_,
-            [](auto const & entry) {
-                return entry.second->submitted();
+            execs_,
+            [](exec const & execution) {
+                auto const * state = std::get_if<parked>(&execution.state);
+                return state != nullptr
+                    && (std::holds_alternative<submitted>(state->phase)
+                        || std::holds_alternative<delete_queued>(
+                            state->phase));
             });
     }
 
@@ -1044,12 +1251,89 @@ private:
             || !pending_changes_.empty();
     }
 
+    void fulfill(deck & d, exec & execution, parked_task continuation)
+    {
+        trace("kqueue fulfill token=" + std::to_string(token_for(execution)));
+        continuation.resume(d);
+    }
+
+    void fulfill(deck & d, exec & execution)
+    {
+        if (auto * state = std::get_if<parked>(&execution.state))
+            fulfill(d, execution, state->continuation);
+    }
+
+    template<typename Phase>
+    void settle(deck & d, exec & execution, Phase phase)
+    {
+        auto * state = std::get_if<parked>(&execution.state);
+        if (state == nullptr)
+            return;
+
+        auto continuation = state->continuation;
+        execution.state = settled{.phase = std::move(phase)};
+        fulfill(d, execution, continuation);
+    }
+
+    [[nodiscard]] static bool is_retirable(exec_state const & state) noexcept
+    {
+        auto const * settled_state = std::get_if<settled>(&state);
+        return settled_state != nullptr
+            && std::holds_alternative<ready_to_retire>(settled_state->phase);
+    }
+
+    /// Mark EV_DELETE changes as applied after a successful changelist flush.
+    void mark_deletes_applied()
+    {
+        for (auto & execution : execs_) {
+            auto * state = std::get_if<settled>(&execution.state);
+            if (state != nullptr
+                && std::holds_alternative<delete_pending>(state->phase))
+                state->phase = delete_applied{};
+        }
+    }
+
+    /// Let one receive pass drain stale events before deleted exec reuse.
+    void drain_applied_deletes()
+    {
+        for (auto & execution : execs_) {
+            auto * state = std::get_if<settled>(&execution.state);
+            if (state != nullptr
+                && std::holds_alternative<delete_applied>(state->phase))
+                state->phase = ready_to_retire{};
+        }
+    }
+
+    /// Erase retired hub records only after registration users are gone.
+    void compact_execs()
+    {
+        std::erase_if(pending_submissions_, [](exec * execution) {
+            return execution == nullptr
+                || !std::holds_alternative<parked>(execution->state);
+        });
+        std::erase_if(pending_cancellations_, [](exec * execution) {
+            if (execution == nullptr)
+                return true;
+            auto const * state = std::get_if<parked>(&execution->state);
+            return state == nullptr
+                || !std::holds_alternative<delete_queued>(state->phase);
+        });
+
+        for (auto it = execs_.begin(); it != execs_.end();) {
+            if (is_retirable(it->state))
+                it->state = retired{};
+            if (std::holds_alternative<retired>(it->state)) {
+                it = execs_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     nxt::unique_fd kq_;
-    wait_token next_token_ = 1;
-    std::unordered_map<wait_token, std::unique_ptr<completion_base>> completions_;
-    std::unordered_map<wait_token, parked_task> waiters_;
-    std::vector<wait_token> pending_submissions_;
-    std::vector<wait_token> pending_cancellations_;
+    boost::container::hub<exec> execs_;
+    std::vector<exec *> pending_submissions_;
+    std::vector<exec *> pending_cancellations_;
     std::vector<kqueue_event> pending_changes_;
 };
 
@@ -1058,20 +1342,17 @@ wait_token kqueue_wand::prepare_kqueue_wish(
     Wish wish,
     std::shared_ptr<void> erased_state)
 {
-    auto token = wait_token{0};
-    if constexpr (std::is_same_v<Wish, op::manual>)
-        token = wish.token;
-    if (token == 0)
-        token = next_token_++;
-
     using result_type = typename Wish::result_type;
     auto state =
         std::static_pointer_cast<wait_state<result_type>>(erased_state);
-    auto request = std::make_shared<kqueue_wish>(std::move(wish));
-    completions_.emplace(
-        token,
-        std::make_unique<completion<result_type>>(request, state));
-    pending_submissions_.push_back(token);
+    auto iterator = execs_.emplace(
+        spec{
+            kqueue_wish{std::move(wish)},
+            std::make_unique<completion<result_type>>(state)},
+        prepared{});
+    auto & execution = *iterator;
+    pending_submissions_.push_back(&execution);
+    auto token = token_for(execution);
     trace("kqueue prepare " + std::string{Wish::name}
         + " token=" + std::to_string(token));
     return token;

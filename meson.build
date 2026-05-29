@@ -220,6 +220,8 @@ if get_option('tests')
         nxt_test_deps += nxt_test_cares_dep
       endif
     endif
+  elif host_machine.system() in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
+    nxt_test_sources += files('test/kqueue-wand-test.cpp')
   endif
 
   nxt_tests = executable('nxt-tests',

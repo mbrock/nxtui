@@ -158,7 +158,7 @@ ssh_pwauth: false
 runcmd:
   - pkg bootstrap -f -y
   - pkg update
-  - pkg install -y bash cmake gcc15 git meson ninja pkgconf python3 rsync sudo
+  - pkg install -y bash boost-libs cmake gcc15 git meson ninja pkgconf python3 rsync sudo
   - sysrc sshd_enable=YES
   - service sshd start
 EOF
