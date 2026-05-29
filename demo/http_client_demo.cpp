@@ -1,12 +1,20 @@
+// A small curl-like client built entirely on the nxt byte_reader tower:
+//
+//   socket_source -> tls13_client_session -> response_body_reader -> stdout
+//                    (TLS 1.3, handmade)     (de-chunk + decompress)
+//
+// It advertises every content encoding the build supports and lets the
+// response_body_reader transparently inflate whatever the server returns, so a
+// single drain loop handles identity, chunked, gzip, deflate, zstd, and brotli
+// bodies. Response metadata goes to stderr; the decoded body goes to stdout,
+// so it pipes like curl and is easy to watch under `strace`.
+
 #include "nxtrt/task.hpp"
-#include <nxt/http.hpp>
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/cares.hpp>
 #include <nxtrt/http.hpp>
-#include <nxt/tls.hpp>
-#include <nxt/tls/cert.hpp>
+#include <nxtrt/tls.hpp>
 #include <nxt/unique-fd.hpp>
-#include <nxtai/responses_request.hpp>
 
 #if defined(__linux__)
 #  include <nxtrt/uring_wand.hpp>
@@ -15,7 +23,7 @@
 #endif
 
 #include <cerrno>
-#include <cstdint>
+#include <cstddef>
 #include <cstdlib>
 #include <exception>
 #include <fcntl.h>
@@ -28,11 +36,8 @@
 #include <sys/socket.h>
 #include <system_error>
 #include <utility>
-#include <vector>
 
 namespace {
-
-using bytes = nxt::tls::bytes;
 
 void set_close_on_exec(int fd)
 {
@@ -73,273 +78,94 @@ connect_tcp(std::string host, std::string port)
         }));
 }
 
-std::string make_https_request(nxtrt::http::url const & url)
+// Every encoding this build can decode, so the server is free to pick its best.
+std::string accept_encoding_header()
 {
-    if (url.host == "api.openai.com") {
-        auto * api_key = std::getenv("OPENAI_API_KEY");
-        nxt::tls::require_tls(
-            api_key != nullptr && std::string_view{api_key}.size() > 0,
-            "OPENAI_API_KEY is not set");
-        auto request = nxtai::responses::openai_responses_request{
-            .api_key = api_key,
-            .model = "gpt-5-mini",
-            .input =
-                "Reply in one short sentence from a handmade TLS 1.3 client.",
-            .max_output_tokens = 64,
-            .reasoning_effort = "minimal",
-            .reasoning_summary = "",
-            .store = false,
-        };
-        auto http_request =
-            nxtai::responses::openai_responses_http_request(request);
-        for (auto & header : http_request.headers) {
-            if (header.name == "Connection")
-                header.value = "close";
-        }
-        return nxt::http::serialize(http_request);
-    }
+    auto value = std::string{"gzip, deflate"};
+#if defined(NXTRT_HAVE_ZSTD)
+    value += ", zstd";
+#endif
+#if defined(NXTRT_HAVE_BROTLI)
+    value += ", br";
+#endif
+    return value;
+}
 
+std::string build_request(const nxtrt::http::url & url)
+{
     auto request = nxtrt::http::request{
         .method = "GET",
         .target = url.target,
         .host = nxtrt::http::host_header(url),
         .headers =
             {
-                {"User-Agent", "nxt-tls-demo/0"},
+                {"User-Agent", "nxt-curl/0"},
                 {"Accept", "*/*"},
+                {"Accept-Encoding", accept_encoding_header()},
             },
         .body = {},
     };
     return nxtrt::http::serialize(request);
 }
 
-struct http_response_progress
+void report_head(const nxtrt::http::response_head & head)
 {
-    std::string bytes;
-    std::optional<std::size_t> body_offset;
-    std::optional<std::size_t> content_length;
-    bool chunked = false;
+    std::cerr << "< " << head.version << ' ' << head.status << ' '
+              << head.reason << '\n';
+    for (auto const & header : head.headers)
+        std::cerr << "< " << header.name << ": " << header.value << '\n';
+    std::cerr << '\n';
+}
 
-    bool append(std::span<const std::byte> chunk)
-    {
-        bytes.append(
-            reinterpret_cast<const char *>(chunk.data()), chunk.size());
-
-        if (!body_offset) {
-            auto head_end = bytes.find("\r\n\r\n");
-            if (head_end == std::string::npos)
-                return false;
-
-            auto head_text = std::string_view{bytes}.substr(0, head_end);
-            auto head = nxtrt::http::parse_response_head(
-                std::as_bytes(std::span{head_text}));
-            body_offset = head_end + 4;
-            content_length = nxtrt::http::content_length(head);
-            chunked = nxtrt::http::is_chunked(head);
-        }
-
-        if (chunked)
-            return bytes.find("\r\n0\r\n\r\n", *body_offset)
-                   != std::string::npos;
-
-        if (content_length)
-            return bytes.size() - *body_offset >= *content_length;
-
-        return false;
-    }
-};
-
-nxtrt::task<void> probe_tls13(nxtrt::http::url url)
+// Drain a fully-assembled body reader (already de-chunked and decompressed) to
+// stdout, returning the number of decoded bytes.
+nxtrt::task<std::size_t> drain_to_stdout(nxtrt::byte_reader & body)
 {
-    auto socket = co_await connect_tcp(url.host, url.port);
-    auto hello = nxt::tls::make_tls13_client_hello(url.host);
-
-    std::cerr << "sending TLS 1.3 ClientHello (" << hello.record.size()
-              << " bytes)\n";
-    auto socket_output =
-        nxtrt::socket_sink{socket.get(), 0, std::size_t{4096}};
-    co_await socket_output.write_all(hello.record);
-
-    auto input_storage = std::vector<std::byte>(18 * 1024);
-    auto reader = nxtrt::socket_source{
-        socket.get(),
-        std::span{input_storage},
-    };
-
-    auto record = co_await nxt::tls::read_tls_record(reader);
-    nxt::tls::describe_tls_record(0, record);
-    auto server_hello = nxt::tls::parse_tls13_server_hello(record);
-    nxt::tls::describe_server_hello(server_hello);
-
-    auto shared_secret = nxt::crypto::x25519_dh(
-        hello.key_pair.secret_key, server_hello.key_share);
-    nxt::tls::require_tls(
-        shared_secret.has_value(), "X25519 shared secret failed");
-    std::cerr << "computed X25519 shared secret: " << shared_secret->size()
-              << " bytes\n";
-
-    auto index = std::size_t{1};
-    auto transcript =
-        nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
-    auto handshake_keys =
-        nxt::tls::derive_tls13_handshake_keys(*shared_secret, transcript);
-    std::cerr << "derived handshake AES-128-GCM keys and IVs\n";
-
-    record = co_await nxt::tls::read_tls_record(reader);
-    nxt::tls::describe_tls_record(index, record);
-    if (record.type == 20) {
-        nxt::tls::dump_hex(record.payload);
-        ++index;
-        record = co_await nxt::tls::read_tls_record(reader);
-        nxt::tls::describe_tls_record(index, record);
+    auto out = nxtrt::standard_output(64 * 1024);
+    auto total = std::size_t{0};
+    while (auto chunk = co_await body.take_some()) {
+        total += chunk->size();
+        co_await out.write(*chunk);
     }
-
-    auto leaf_public_key = std::optional<bytes>{};
-    auto saw_server_finished = false;
-    while (true) {
-        auto plaintext =
-            nxt::tls::open_tls13_record(handshake_keys.server, record);
-        std::cerr << "decrypted inner record: "
-                  << nxt::tls::tls_record_type_name(plaintext.inner_type)
-                  << " type=" << unsigned{plaintext.inner_type}
-                  << " length=" << plaintext.content.size() << '\n';
-        if (plaintext.inner_type == 22)
-            nxt::tls::describe_handshake_messages(plaintext.content);
-        if (plaintext.content.size() <= 256)
-            nxt::tls::dump_hex(plaintext.content);
-
-        if (plaintext.inner_type == 22) {
-            for (auto const & message :
-                 nxt::tls::split_handshake_messages(plaintext.content)) {
-                auto type = std::to_integer<std::uint8_t>(message[0]);
-                if (type == 11) {
-                    auto cert = nxt::tls::parse_tls13_certificate(message);
-                    leaf_public_key =
-                        nxt::tls::extract_p256_public_key_from_certificate(
-                            cert.leaf_der);
-                    std::cerr << "parsed TLS certificate list: "
-                              << cert.chain_der.size() << " certificates\n";
-                    std::cerr << "extracted leaf P-256 public key: "
-                              << leaf_public_key->size() << " bytes\n";
-                } else if (type == 15) {
-                    nxt::tls::require_tls(
-                        leaf_public_key.has_value(),
-                        "certificate_verify arrived before certificate public key");
-                    auto cert_verify =
-                        nxt::tls::parse_tls13_certificate_verify(message);
-                    auto ok = nxt::tls::verify_certificate_verify(
-                        *leaf_public_key, transcript, cert_verify);
-                    nxt::tls::require_tls(
-                        ok, "CertificateVerify signature failed");
-                    std::cerr << "verified CertificateVerify signature\n";
-                } else if (type == 20) {
-                    auto received = nxt::tls::parse_tls13_finished(message);
-                    auto ok = nxt::tls::verify_finished(
-                        handshake_keys.server.traffic_secret,
-                        transcript,
-                        received);
-                    nxt::tls::require_tls(
-                        ok, "server Finished verification failed");
-                    std::cerr << "verified server Finished\n";
-                    saw_server_finished = true;
-                }
-                nxt::tls::put_bytes(transcript, message);
-            }
-        }
-
-        if (saw_server_finished)
-            break;
-        nxt::tls::require_tls(
-            reader.buffered_size() > 0,
-            "server flight ended before Finished");
-        ++index;
-        record = co_await nxt::tls::read_tls_record(reader);
-        nxt::tls::describe_tls_record(index, record);
-    }
-
-    auto application_keys = nxt::tls::derive_tls13_application_keys(
-        handshake_keys.secret, transcript);
-    std::cerr << "derived application AES-128-GCM keys and IVs\n";
-
-    auto client_finished = nxt::tls::make_finished_message(
-        handshake_keys.client.traffic_secret, transcript);
-    auto encrypted_finished = nxt::tls::seal_tls13_record(
-        handshake_keys.client, 22, client_finished);
-    co_await socket_output.write_all(encrypted_finished);
-    nxt::tls::put_bytes(transcript, client_finished);
-    std::cerr << "sent encrypted client Finished\n";
-
-    auto request_text = make_https_request(url);
-    auto encrypted_request = nxt::tls::seal_tls13_record(
-        application_keys.client, 23, nxtrt::as_bytes(request_text));
-    co_await socket_output.write_all(encrypted_request);
-    std::cerr << "sent encrypted HTTP request\n";
-
-    auto http_response = http_response_progress{};
-    while (true) {
-        record = co_await nxt::tls::read_tls_record(reader);
-        nxt::tls::describe_tls_record(++index, record);
-        auto plaintext =
-            nxt::tls::open_tls13_record(application_keys.server, record);
-        std::cerr << "decrypted application record: "
-                  << nxt::tls::tls_record_type_name(plaintext.inner_type)
-                  << " type=" << unsigned{plaintext.inner_type}
-                  << " length=" << plaintext.content.size() << '\n';
-        if (plaintext.inner_type == 23) {
-            auto stdout_sink = nxtrt::standard_output();
-            co_await nxtrt::write_all(stdout_sink, plaintext.content);
-            if (http_response.append(plaintext.content)) {
-                std::cerr << "read complete HTTP response body\n";
-                break;
-            }
-        } else if (plaintext.inner_type == 21) {
-            std::cerr << "received encrypted TLS alert\n";
-            nxt::tls::dump_hex(plaintext.content);
-            break;
-        }
-    }
+    co_await out.flush();
+    co_return total;
 }
 
 nxtrt::task<void> fetch(nxtrt::http::url url)
 {
-    if (url.tls)
-        co_return co_await probe_tls13(std::move(url));
+    auto request_text = build_request(url);
+    std::cerr << "> GET " << url.target << " HTTP/1.1 (" << url.host << ":"
+              << url.port << (url.tls ? ", TLS 1.3)\n" : ")\n");
 
     auto socket = co_await connect_tcp(url.host, url.port);
-    auto request = nxtrt::http::request{
-        .method = "GET",
-        .target = url.target,
-        .host = nxtrt::http::host_header(url),
-        .headers =
-            {
-                {"User-Agent", "nxt-http-demo/0"},
-                {"Accept", "*/*"},
-            },
-        .body = {},
-    };
+    auto sink = nxtrt::socket_sink{socket.get(), 0, std::size_t{16 * 1024}};
+    auto source =
+        nxtrt::socket_source{socket.get(), 0, std::size_t{64 * 1024}};
 
-    auto socket_output =
-        nxtrt::socket_sink{socket.get(), 0, std::size_t{4096}};
-    co_await socket_output.write_all(nxtrt::http::serialize(request));
+    // The transport reader is the TLS session for https, or the raw socket for
+    // http. Either way it is just a byte_reader to everything above.
+    auto tls = std::optional<nxtrt::tls::tls13_client_session>{};
+    auto * transport = static_cast<nxtrt::byte_reader *>(&source);
+    if (url.tls) {
+        tls.emplace(source, sink, std::size_t{64 * 1024});
+        co_await tls->handshake(url.host);
+        co_await tls->write_all(request_text);
+        transport = &*tls;
+    } else {
+        co_await sink.write(request_text);
+        co_await sink.flush();
+    }
 
-    auto input_storage = std::vector<std::byte>(64 * 1024);
-    auto reader = nxtrt::socket_source{
-        socket.get(),
-        std::span{input_storage},
-    };
+    auto head = co_await nxtrt::http::read_response_head(*transport);
+    report_head(head);
 
-    auto head = co_await nxtrt::http::read_response_head(reader);
-    std::cerr << head.version << ' ' << head.status << ' ' << head.reason
-              << "\n";
-    for (auto const & header : head.headers)
-        std::cerr << header.name << ": " << header.value << "\n";
-    std::cerr << "\n";
+    auto body = nxtrt::http::read_response_body(*transport, head);
+    auto decoded = co_await drain_to_stdout(body);
 
-    auto stdout_writer = nxtrt::standard_output_writer(64 * 1024);
-    auto body = nxtrt::http::read_response_body(reader, head);
-    while (auto chunk = co_await body.next())
-        co_await stdout_writer.write(*chunk);
-    co_await stdout_writer.flush();
+    auto encoding = nxtrt::http::header_value(head, "content-encoding");
+    std::cerr << "\n* decoded " << decoded << " body bytes (content-encoding: "
+              << (encoding ? *encoding : std::string_view{"identity"})
+              << ")\n";
 }
 
 } // namespace
@@ -362,6 +188,6 @@ try {
 
     return 0;
 } catch (std::exception const & error) {
-    std::cerr << "nxt-http-client-demo: " << error.what() << '\n';
+    std::cerr << "nxt-curl: " << error.what() << '\n';
     return 1;
 }
