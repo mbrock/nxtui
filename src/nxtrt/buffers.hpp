@@ -757,15 +757,6 @@ public:
         , fd_(fd)
     {}
 
-    /// Bytes successfully written to the file descriptor by completed drains.
-    ///
-    /// Bytes still staged in the writer buffer are not included until `flush()`
-    /// or another drain sends them to the descriptor.
-    [[nodiscard]] std::size_t written_size() const noexcept
-    {
-        return written_;
-    }
-
 private:
     hope<std::size_t>
     drain_more(
@@ -783,20 +774,17 @@ private:
         auto src = detail::first_nonempty(chunks, splat);
         while (true) {
             try {
-                auto n = co_await op::write_some{
+                co_return co_await op::write_some{
                     .fd = fd_,
                     .buffer = src,
                     .offset = -1,
                 };
-                written_ += n;
-                co_return n;
             } catch (const interrupted_system_call &) {
             }
         }
     }
 
     int fd_ = -1;
-    std::size_t written_ = 0;
 };
 
 inline fd_sink standard_output(std::size_t buffer_size = 4096)
@@ -816,19 +804,23 @@ public:
     explicit socket_sink(
         int fd,
         std::span<std::byte> buffer,
-        int flags = 0)
+        int flags = 0,
+        std::function<void(std::size_t)> progress = {})
         : byte_writer(buffer)
         , fd_(fd)
         , flags_(flags)
+        , progress_(std::move(progress))
     {}
 
     explicit socket_sink(
         int fd,
         int flags = 0,
-        std::size_t buffer_size = 4096)
+        std::size_t buffer_size = 4096,
+        std::function<void(std::size_t)> progress = {})
         : byte_writer(buffer_size)
         , fd_(fd)
         , flags_(flags)
+        , progress_(std::move(progress))
     {}
 
 private:
@@ -848,11 +840,14 @@ private:
         auto src = detail::first_nonempty(chunks, splat);
         while (true) {
             try {
-                co_return co_await op::send_some{
+                auto n = co_await op::send_some{
                     .fd = fd_,
                     .buffer = src,
                     .flags = flags_,
                 };
+                if (n != 0 && progress_)
+                    progress_(n);
+                co_return n;
             } catch (const interrupted_system_call &) {
             }
         }
@@ -860,67 +855,8 @@ private:
 
     int fd_ = -1;
     int flags_ = 0;
-};
-
-class metered_byte_sink final : public byte_writer
-{
-public:
-    metered_byte_sink(
-        byte_writer & inner,
-        std::span<std::byte> buffer,
-        std::function<void(std::size_t)> progress)
-        : byte_writer(buffer)
-        , inner_(inner)
-        , progress_(std::move(progress))
-    {}
-
-    metered_byte_sink(
-        byte_writer & inner,
-        std::function<void(std::size_t)> progress,
-        std::size_t buffer_size = 4096)
-        : byte_writer(buffer_size)
-        , inner_(inner)
-        , progress_(std::move(progress))
-    {}
-
-private:
-    hope<std::size_t>
-    drain_more(
-        std::span<const std::span<const std::byte>> chunks,
-        std::size_t splat) override
-    {
-        return drain_more_task(chunks, splat);
-    }
-
-    task<std::size_t>
-    drain_more_task(
-        std::span<const std::span<const std::byte>> chunks,
-        std::size_t splat)
-    {
-        if (chunks.empty())
-            co_return std::size_t{0};
-        auto total = detail::byte_size(chunks, splat);
-        for (auto chunk : chunks.first(chunks.size() - 1))
-            co_await inner_.write(chunk);
-        for (auto i = std::size_t{0}; i < splat; ++i)
-            co_await inner_.write(chunks.back());
-        co_await inner_.flush();
-        if (total != 0)
-            progress_(total);
-        co_return total;
-    }
-
-    byte_writer & inner_;
     std::function<void(std::size_t)> progress_;
 };
-
-inline metered_byte_sink meter_sink(
-    byte_writer & inner,
-    std::function<void(std::size_t)> progress,
-    std::size_t buffer_size = 4096)
-{
-    return metered_byte_sink{inner, std::move(progress), buffer_size};
-}
 
 template<typename Chunks>
     requires detail::byte_writer_chunk<Chunks>

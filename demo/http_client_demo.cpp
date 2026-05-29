@@ -76,8 +76,7 @@ void report_head(const nxtrt::http::response_head & head)
 nxtrt::task<std::size_t> drain_to_stdout(nxtrt::byte_reader & body)
 {
     auto out = nxtrt::standard_output(64 * 1024);
-    co_await nxtrt::stream_all(body, out);
-    co_return out.written_size();
+    co_return co_await nxtrt::stream_all(body, out);
 }
 
 nxtrt::task<void> fetch(nxtrt::http::url url)

@@ -226,13 +226,22 @@ nxtrt::task<void> write_to_fd(int fd, std::string_view text)
         throw std::runtime_error{"short write wish"};
 }
 
-nxtrt::task<std::size_t> write_with_fd_sink_count(int fd, std::string_view text)
+nxtrt::task<std::size_t> write_with_socket_sink_progress(
+    int fd,
+    std::string_view text)
 {
-    auto sink = nxtrt::fd_sink{fd, std::size_t{4}};
+    auto progress = std::size_t{0};
+    auto sink = nxtrt::socket_sink{
+        fd,
+        0,
+        std::size_t{4},
+        [&](std::size_t bytes) {
+            progress += bytes;
+        }};
     co_await sink.write(text);
     co_await sink.write(std::string_view{"!"});
     co_await sink.flush();
-    co_return sink.written_size();
+    co_return progress;
 }
 
 nxtrt::task<nxtai::tool_process::result> capture_shell(
@@ -543,17 +552,17 @@ static suite uring_wand_tests{
                     == "wishful stdout");
             };
 
-            "fd sinks count flushed bytes"_test = [] {
+            "socket sinks report sent progress"_test = [] {
                 auto fds = std::array<int, 2>{-1, -1};
-                if (::pipe(fds.data()) != 0)
-                    throw std::runtime_error{"pipe failed"};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()) != 0)
+                    throw std::runtime_error{"socketpair failed"};
 
                 auto rx = nxt::unique_fd{fds[0]};
                 auto tx = nxt::unique_fd{fds[1]};
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = write_with_fd_sink_count(tx.get(), "counted");
+                auto task = write_with_socket_sink_progress(tx.get(), "counted");
 
                 deck.start(task);
                 auto counted = pump_until_done(deck, wand, task);
@@ -561,7 +570,7 @@ static suite uring_wand_tests{
                 auto buffer = std::array<char, 32>{};
                 auto n = ::read(rx.get(), buffer.data(), buffer.size());
                 if (n < 0)
-                    throw std::runtime_error{"pipe read failed"};
+                    throw std::runtime_error{"socket read failed"};
 
                 expect(counted == std::size_t{8});
                 expect(std::string_view{buffer.data(), static_cast<std::size_t>(n)}
