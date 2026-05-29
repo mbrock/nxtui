@@ -47,6 +47,7 @@ inline constexpr bool has_liburing_wand = NXT_RT_HAS_LIBURING != 0;
 
 class uring_wand;
 
+/// Per-wish staging context handed to `op::*::stage_uring`.
 class uring_submission
 {
 public:
@@ -74,34 +75,41 @@ private:
     wait_token token_;
 };
 
-/// Minimal io_uring-backed wand.
+/// io_uring-backed wand for Linux runtime wishes.
 ///
-/// This early version turns closed wish objects into staged SQEs. `wave()`
-/// submits staged work, and `poll()` drains completions, stores typed results,
-/// and requeues fulfilled tasks onto the deck.
+/// Each awaited wish becomes one hub-stored execution record. SQE/CQE
+/// `user_data` points at that record while variant phases make the legal
+/// prepared, parked, settled, and retired states explicit.
 class uring_wand final : public wand
 {
 private:
     using uring_wish = wish_variant;
 
+    /// Allocated by `prepare_wish`; not yet parked by the awaiter.
     struct prepared
     {};
 
+    /// Parked and waiting for submission queue space.
     struct queued
     {};
 
+    /// Main operation SQE has been submitted; an op CQE may arrive.
     struct submitted
     {};
 
+    /// Cancellation has been requested but not submitted to io_uring.
     struct cancel_queued
     {};
 
+    /// Cancel SQE has been submitted; op and cancel CQEs may both arrive.
     struct cancel_submitted
     {};
 
+    /// Cancel CQE arrived before the op CQE.
     struct cancel_drained
     {};
 
+    /// Phases that still own a parked coroutine continuation.
     using parked_phase = std::variant<
         queued,
         submitted,
@@ -109,30 +117,39 @@ private:
         cancel_submitted,
         cancel_drained>;
 
+    /// Suspended task plus the submission/cancellation phase of its wish.
     struct parked
     {
+        /// Coroutine to requeue when the wish settles.
         parked_task continuation;
+        /// Current phase while the continuation is still parked.
         parked_phase phase = queued{};
     };
 
+    /// No more CQEs are needed before the hub slot can be reused.
     struct ready_to_retire
     {};
 
+    /// The op CQE arrived first; keep the slot until cancel CQE drains.
     struct waiting_cancel_cqe
     {};
 
+    /// Phases after the waiting task has been fulfilled.
     using settled_phase = std::variant<
         ready_to_retire,
         waiting_cancel_cqe>;
 
+    /// Fulfilled execution waiting for a compaction sync point.
     struct settled
     {
         settled_phase phase = ready_to_retire{};
     };
 
+    /// Tombstone used during hub compaction.
     struct retired
     {};
 
+    /// Full lifecycle of one wish execution.
     using exec_state = std::variant<prepared, parked, settled, retired>;
 
     struct exec;
@@ -297,12 +314,14 @@ protected:
 private:
     friend class uring_submission;
 
+    /// Low-bit tag stored next to the exec pointer in CQE user data.
     enum class cqe_kind : std::uintptr_t
     {
         op = 0,
         cancel = 1,
     };
 
+    /// Decoded SQE/CQE user data.
     struct cqe_key
     {
         exec * execution = nullptr;
@@ -338,11 +357,14 @@ private:
     {
     public:
         virtual ~completion_base() = default;
+
+        /// Transfer an io_uring result into the typed waiter state.
         virtual void complete(
             uring_wish & request,
             int result,
             bool cancelled) = 0;
 
+        /// Human-readable wish name for diagnostics.
         [[nodiscard]] static std::string describe(uring_wish const & request)
         {
             return std::visit(
@@ -459,6 +481,7 @@ private:
         std::shared_ptr<wait_state<T>> state_;
     };
 
+    /// Immutable wish recipe plus the typed completion sink for an exec.
     struct spec
     {
         spec(
@@ -468,10 +491,13 @@ private:
             , completion(std::move(completion))
         {}
 
+        /// Closed wish that knows how to stage its SQE.
         uring_wish request;
+        /// Type-erased bridge to the awaiter's result state.
         std::unique_ptr<completion_base> completion;
     };
 
+    /// Address-stable execution record used directly as wait token/user data.
     struct exec
     {
         exec(
@@ -481,7 +507,9 @@ private:
             , state(std::move(state))
         {}
 
+        /// The operation being realized by this execution.
         spec specification;
+        /// Current lifecycle state.
         exec_state state = prepared{};
     };
 
@@ -538,6 +566,7 @@ private:
             request);
     }
 
+    /// Return the public wait token for a live hub execution.
     static wait_token token_for(exec & execution) noexcept
     {
         static_assert(sizeof(std::uintptr_t) <= sizeof(wait_token));
@@ -546,12 +575,14 @@ private:
             reinterpret_cast<std::uintptr_t>(&execution));
     }
 
+    /// Decode a wait token back to the live hub execution it names.
     static exec * exec_from_token(wait_token token) noexcept
     {
         return reinterpret_cast<exec *>(
             static_cast<std::uintptr_t>(token));
     }
 
+    /// Pack an exec pointer and CQE kind into io_uring user data.
     static std::uint64_t encode_user_data(
         exec & execution,
         cqe_kind kind) noexcept
@@ -561,6 +592,7 @@ private:
             bits | static_cast<std::uintptr_t>(kind));
     }
 
+    /// Unpack io_uring user data into an exec pointer and CQE kind.
     static cqe_key decode_user_data(std::uint64_t data) noexcept
     {
         auto bits = static_cast<std::uintptr_t>(data);
@@ -580,6 +612,7 @@ private:
         io_uring_sqe_set_data64(sqe, encode_user_data(execution, kind));
     }
 
+    /// Stage queued executions, deferring those that need more SQE space.
     void stage_submissions(deck & d)
     {
         auto executions = std::vector<exec *>{};
@@ -634,6 +667,7 @@ private:
             execution.specification.request);
     }
 
+    /// Stage cancel SQEs for submitted executions that were stopped.
     void stage_cancellations()
     {
         auto executions = std::vector<exec *>{};
@@ -667,6 +701,7 @@ private:
         pending_cancellations_ = std::move(deferred);
     }
 
+    /// Complete the main operation CQE and fulfill the parked task.
     void handle_op_cqe(deck & d, exec & execution, int result)
     {
         auto * state = std::get_if<parked>(&execution.state);
@@ -696,6 +731,7 @@ private:
         }
     }
 
+    /// Mark cancel CQE drain progress without touching the fulfilled task.
     void handle_cancel_cqe(exec & execution)
     {
         if (auto * state = std::get_if<parked>(&execution.state);
@@ -711,6 +747,7 @@ private:
             state->phase = ready_to_retire{};
     }
 
+    /// Store the typed result, move to a settled phase, and requeue the task.
     template<typename Phase>
     void settle(
         deck & d,
@@ -759,6 +796,7 @@ private:
             && std::holds_alternative<ready_to_retire>(settled_state->phase);
     }
 
+    /// Erase retired hub records at sync points after pointer users are gone.
     void compact_execs()
     {
         std::erase_if(pending_submissions_, [](exec * execution) {

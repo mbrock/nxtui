@@ -196,9 +196,12 @@ inline void waiter<void>::await_resume()
     state_->take();
 }
 
+/// Result of waiting for file-descriptor readiness until a deadline.
 struct poll_until_result
 {
+    /// Poll revents when readiness wins; zero when the deadline wins.
     int events = 0;
+    /// True when the deadline completed before fd readiness.
     bool timed_out = false;
 };
 
@@ -477,6 +480,10 @@ struct timeout
     waiter<void> operator co_await() const;
 };
 
+/// Backend-specific fused poll/deadline wish.
+///
+/// Portable runtime code should prefer `poll_until_after`, which composes a
+/// poll wish and timeout wish and lets ordinary task racing choose the winner.
 struct poll_until
 {
     using result_type = poll_until_result;

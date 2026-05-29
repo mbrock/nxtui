@@ -1899,6 +1899,11 @@ inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
 
 } // namespace detail
 
+/// Wait until an fd is ready or a timeout expires.
+///
+/// This composes ordinary `op::poll` and `op::timeout` wishes in a child zone.
+/// The winning child stops the zone, so the losing wish is cancelled through
+/// the same path as any other task race.
 [[nodiscard]] inline task<poll_until_result> poll_until_after(
     int fd,
     short events,
