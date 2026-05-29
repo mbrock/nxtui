@@ -16,23 +16,6 @@ def fmt_seconds(value: float) -> str:
     return f"{value:.3f}s"
 
 
-def panel(title: str, text: str) -> str:
-    lines = []
-    for paragraph in text.splitlines():
-        while len(paragraph) > 74:
-            split = paragraph.rfind(" ", 0, 74)
-            if split <= 0:
-                split = 74
-            lines.append(paragraph[:split])
-            paragraph = paragraph[split:].lstrip()
-        lines.append(paragraph)
-    width = max(len(title) + 2, *(len(line) for line in lines))
-    top = "╭" + f" {title} ".center(width, "─") + "╮"
-    body = [f"│ {line:<{width}} │" for line in lines]
-    bottom = "╰" + "─" * (width + 2) + "╯"
-    return "\n".join([top, *body, bottom])
-
-
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: scripts/bench-residency COMMAND [ARG...]", file=sys.stderr)
@@ -89,7 +72,8 @@ def main() -> int:
         f"Context switches: {voluntary:,} voluntary, {involuntary:,} involuntary."
     )
 
-    print(panel("CPU residency", text))
+    print("CPU residency")
+    print(text)
     return 0
 
 

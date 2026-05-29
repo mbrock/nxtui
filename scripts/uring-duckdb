@@ -2,7 +2,6 @@
 # /// script
 # dependencies = [
 #   "duckdb>=1.1",
-#   "rich>=13.7",
 # ]
 # ///
 from __future__ import annotations
@@ -14,9 +13,6 @@ import subprocess
 from pathlib import Path
 
 import duckdb
-from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 
 
 def parse_args() -> argparse.Namespace:
@@ -141,7 +137,7 @@ def count_field(con: duckdb.DuckDBPyConnection, fields: set[str], field: str) ->
     return count_where(con, f"sample.{field} is not null")
 
 
-def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Panel:
+def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> str:
     fields = sample_fields(con)
     total = count_where(con, "true")
     submits = count_field(con, fields, "sq_thread")
@@ -160,7 +156,8 @@ def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Panel:
     ).fetchone()[0]
     avg_submit = submits / enters if enters else 0.0
     avg_complete = completes / exits if exits else 0.0
-    summary = (
+    return (
+        "io_uring trace\n"
         f"Read {n(total)} io_uring trace events from {json_path}.\n"
         f"The benchmark used {n(rings)} ring"
         f"{'' if rings == 1 else 's'}, submitted {n(submits)} SQEs, "
@@ -171,11 +168,7 @@ def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Panel:
         f"The ring armed poll {n(poll_arms)} times, waited on the CQ ring "
         f"{n(cq_waits)} times, and queued async work {n(async_work)} times."
     )
-    return Panel.fit(
-        summary,
-        title="io_uring trace",
-        border_style="green",
-    )
+    return summary
 
 
 def count_lines(
@@ -185,16 +178,13 @@ def count_lines(
     *,
     key_prefix: str = "",
     min_pct: float,
-) -> Text:
-    out = Text(title, style="bold")
+) -> str:
+    lines = [title]
     for key, count in rows:
         if 100.0 * count / max(total, 1) < min_pct:
             continue
-        out.append("\n")
-        out.append(f"{pct(count, total)}%  ", style="bold cyan")
-        out.append(f"n={row_n(count)}  ", style="dim")
-        out.append(f"{key_prefix}{key}")
-    return out
+        lines.append(f"{pct(count, total)}%  n={row_n(count)}  {key_prefix}{key}")
+    return "\n".join(lines)
 
 
 def fetch_counts(
@@ -228,7 +218,7 @@ def numeric_counts(
     return [(as_int(key), count) for key, count in rows], total
 
 
-def latency_lines(con: duckdb.DuckDBPyConnection) -> Text:
+def latency_lines(con: duckdb.DuckDBPyConnection) -> str:
     row = con.execute(
         """
         with enters as (
@@ -268,15 +258,14 @@ def latency_lines(con: duckdb.DuckDBPyConnection) -> Text:
         from paired;
         """
     ).fetchone()
-    out = Text("io_uring_enter latency", style="bold")
+    lines = ["io_uring_enter latency"]
     if row and row[0]:
         calls, min_us, p50, p90, p99, max_us, avg = row
-        out.append("\n")
-        out.append(f"n={n(calls)}  ", style="dim")
-        out.append(
+        lines.append(
+            f"n={n(calls)}  "
             f"min={min_us:.1f}us  p50={p50:.1f}us  p90={p90:.1f}us  "
             f"p99={p99:.1f}us  max={max_us:.1f}us  avg={avg:.1f}us")
-    return out
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -289,8 +278,7 @@ def main() -> int:
     if count_where(con, "true") == 0:
         raise SystemExit(f"no trace events found for comm {args.comm!r}")
 
-    console = Console()
-    console.print(event_summary(con, json_path))
+    print(event_summary(con, json_path))
 
     rows, total = fetch_counts(
         con,
@@ -298,7 +286,7 @@ def main() -> int:
         "sample.sq_thread is not null",
         args.lines,
     )
-    console.print(count_lines(
+    print(count_lines(
         "submitted SQEs by opcode",
         rows,
         total,
@@ -311,7 +299,7 @@ def main() -> int:
         "sample.to_submit is not null",
         args.lines,
     )
-    console.print(count_lines(
+    print(count_lines(
         "number of SQEs submitted per enter",
         rows,
         total,
@@ -324,14 +312,14 @@ def main() -> int:
         "sample.ret is not null",
         args.lines,
     )
-    console.print(count_lines(
+    print(count_lines(
         "number of SQEs accepted per enter",
         rows,
         total,
         min_pct=args.min_pct,
     ))
 
-    console.print(latency_lines(con))
+    print(latency_lines(con))
 
     rows, total = numeric_counts(
         con,
@@ -339,7 +327,7 @@ def main() -> int:
         "sample.res is not null",
         args.lines,
     )
-    console.print(count_lines(
+    print(count_lines(
         "completion results",
         rows,
         total,
@@ -354,7 +342,7 @@ def main() -> int:
         args.lines,
     )
     if total:
-        console.print(count_lines(
+        print(count_lines(
             "poll arms by opcode",
             rows,
             total,
