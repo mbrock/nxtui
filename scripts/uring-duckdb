@@ -1,0 +1,316 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = [
+#   "duckdb>=1.1",
+#   "rich>=13.7",
+# ]
+# ///
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import duckdb
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Render an io_uring tracepoint report from perf JSON data.")
+    parser.add_argument(
+        "data",
+        nargs="?",
+        default="build-bench-release/nxt-echo.uring.perf.data",
+        help="perf.data file to convert when JSON is missing or stale")
+    parser.add_argument(
+        "json",
+        nargs="?",
+        help="perf JSON file, defaults to DATA with .json suffix")
+    parser.add_argument(
+        "--comm",
+        default=os.environ.get("BENCH_PERF_COMM", "nxt-echo-bench"),
+        help="process command name to analyze")
+    parser.add_argument(
+        "--lines",
+        type=int,
+        default=int(os.environ.get("BENCH_PERF_DUCK_LINES", "20")),
+        help="rows shown in each table")
+    return parser.parse_args()
+
+
+def convert_perf_data(data: Path, json_path: Path) -> None:
+    if not data.exists():
+        raise SystemExit(f"perf data not found: {data}")
+
+    if json_path.exists() and json_path.stat().st_mtime >= data.stat().st_mtime:
+        return
+
+    subprocess.run(
+        [
+            "sudo",
+            "perf",
+            "data",
+            "convert",
+            "--force",
+            "-i",
+            str(data),
+            "--to-json",
+            str(json_path),
+        ],
+        check=True,
+    )
+    subprocess.run(["sudo", "chmod", "a+r", str(json_path)], check=True)
+
+
+def connect(json_path: Path, comm: str) -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect()
+    con.execute(
+        """
+        create temp table raw as
+            select row_number() over () as eid, unnest(samples) as sample
+            from read_json(?, maximum_object_size = 10000000, union_by_name = true);
+        """,
+        [str(json_path)],
+    )
+    con.execute(
+        """
+        create temp table events as
+            select eid, sample
+            from raw
+            where sample.comm = ?;
+        """,
+        [comm],
+    )
+    return con
+
+
+def sample_fields(con: duckdb.DuckDBPyConnection) -> set[str]:
+    row = con.execute("select typeof(sample) from events limit 1").fetchone()
+    if row is None:
+        return set()
+    return set(re.findall(r'(?:^STRUCT\(|, )"?([A-Za-z_][A-Za-z0-9_]*)"? [A-Z]', row[0]))
+
+
+def as_int(raw: object) -> int:
+    if raw is None:
+        return 0
+    if isinstance(raw, int):
+        return raw
+    text = str(raw)
+    return int(text, 16) if text.startswith("0x") else int(text)
+
+
+def pct(part: int, total: int) -> str:
+    return f"{100.0 * part / max(total, 1):3.0f}"
+
+
+def count_where(con: duckdb.DuckDBPyConnection, where: str) -> int:
+    return con.execute(f"select count(*)::int from events where {where}").fetchone()[0]
+
+
+def count_field(con: duckdb.DuckDBPyConnection, fields: set[str], field: str) -> int:
+    if field not in fields:
+        return 0
+    return count_where(con, f"sample.{field} is not null")
+
+
+def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Panel:
+    fields = sample_fields(con)
+    total = count_where(con, "true")
+    submits = count_field(con, fields, "sq_thread")
+    completes = count_field(con, fields, "res")
+    enters = count_field(con, fields, "to_submit")
+    exits = count_field(con, fields, "ret")
+    poll_arms = count_field(con, fields, "mask")
+    cq_waits = count_field(con, fields, "min_events")
+    async_work = count_field(con, fields, "work")
+    rings = con.execute(
+        """
+        select count(distinct sample.ctx)::int
+        from events
+        where sample.ctx is not null;
+        """
+    ).fetchone()[0]
+    avg_submit = submits / enters if enters else 0.0
+    avg_complete = completes / exits if exits else 0.0
+    return Panel.fit(
+        "\n".join([
+            f"json: {json_path}",
+            f"events: {total}  rings: {rings}",
+            f"submits: {submits}  completes: {completes}",
+            f"io_uring_enter: {enters} enter / {exits} exit",
+            f"avg submit per enter: {avg_submit:.2f}",
+            f"avg complete per enter exit: {avg_complete:.2f}",
+            f"poll arms: {poll_arms}  cq waits: {cq_waits}  async work: {async_work}",
+        ]),
+        title="io_uring trace",
+        border_style="green",
+    )
+
+
+def count_table(
+    title: str,
+    rows: list[tuple[object, int]],
+    total: int,
+    key_name: str,
+) -> Table:
+    table = Table(title=title, box=box.SIMPLE_HEAVY)
+    table.add_column("%", justify="right", no_wrap=True)
+    table.add_column("count", justify="right", no_wrap=True)
+    table.add_column(key_name, no_wrap=True)
+    for key, count in rows:
+        table.add_row(pct(count, total), str(count), str(key))
+    return table
+
+
+def fetch_counts(
+    con: duckdb.DuckDBPyConnection,
+    expr: str,
+    where: str,
+    limit: int,
+) -> tuple[list[tuple[object, int]], int]:
+    rows = con.execute(
+        f"""
+        select {expr}, count(*)::int as count
+        from events
+        where {where}
+        group by 1
+        order by 2 desc, 1
+        limit ?;
+        """,
+        [limit],
+    ).fetchall()
+    total = count_where(con, where)
+    return rows, total
+
+
+def numeric_counts(
+    con: duckdb.DuckDBPyConnection,
+    expr: str,
+    where: str,
+    limit: int,
+) -> tuple[list[tuple[int, int]], int]:
+    rows, total = fetch_counts(con, expr, where, limit)
+    return [(as_int(key), count) for key, count in rows], total
+
+
+def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
+    row = con.execute(
+        """
+        with enters as (
+            select
+                sample.tid as tid,
+                row_number() over (
+                    partition by sample.tid order by sample.timestamp
+                ) as seq,
+                sample.timestamp as enter_ts
+            from events
+            where sample.to_submit is not null
+        ),
+        exits as (
+            select
+                sample.tid as tid,
+                row_number() over (
+                    partition by sample.tid order by sample.timestamp
+                ) as seq,
+                sample.timestamp as exit_ts
+            from events
+            where sample.ret is not null
+        ),
+        paired as (
+            select (exit_ts - enter_ts) / 1000.0 as us
+            from enters
+            join exits using (tid, seq)
+            where exit_ts >= enter_ts
+        )
+        select
+            count(*)::int,
+            min(us),
+            quantile_cont(us, 0.50),
+            quantile_cont(us, 0.90),
+            quantile_cont(us, 0.99),
+            max(us),
+            avg(us)
+        from paired;
+        """
+    ).fetchone()
+    table = Table(title="io_uring_enter latency (us)", box=box.SIMPLE_HEAVY)
+    table.add_column("calls", justify="right")
+    table.add_column("min", justify="right")
+    table.add_column("p50", justify="right")
+    table.add_column("p90", justify="right")
+    table.add_column("p99", justify="right")
+    table.add_column("max", justify="right")
+    table.add_column("avg", justify="right")
+    if row and row[0]:
+        table.add_row(str(row[0]), *(f"{value:.1f}" for value in row[1:]))
+    return table
+
+
+def main() -> int:
+    args = parse_args()
+    data = Path(args.data)
+    json_path = Path(args.json) if args.json else data.with_suffix(".json")
+    convert_perf_data(data, json_path)
+
+    con = connect(json_path, args.comm)
+    if count_where(con, "true") == 0:
+        raise SystemExit(f"no trace events found for comm {args.comm!r}")
+
+    console = Console()
+    console.print(event_summary(con, json_path))
+
+    rows, total = fetch_counts(
+        con,
+        "sample.op_str",
+        "sample.sq_thread is not null",
+        args.lines,
+    )
+    console.print(count_table("Submitted opcodes", rows, total, "opcode"))
+
+    rows, total = numeric_counts(
+        con,
+        "sample.to_submit",
+        "sample.to_submit is not null",
+        args.lines,
+    )
+    console.print(count_table("io_uring_enter to_submit", rows, total, "to_submit"))
+
+    rows, total = numeric_counts(
+        con,
+        "sample.ret",
+        "sample.ret is not null",
+        args.lines,
+    )
+    console.print(count_table("io_uring_enter return", rows, total, "ret"))
+
+    console.print(latency_table(con))
+
+    rows, total = numeric_counts(
+        con,
+        "sample.res",
+        "sample.res is not null",
+        args.lines,
+    )
+    console.print(count_table("Completion results", rows, total, "res"))
+
+    rows, total = fetch_counts(
+        con,
+        "sample.op_str",
+        "sample.mask is not null",
+        args.lines,
+    )
+    if total:
+        console.print(count_table("Poll arms", rows, total, "opcode"))
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

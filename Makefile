@@ -1,4 +1,4 @@
-.PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-trace spec docs docs-publish clean traces
+.PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
 
 BENCH_CLIENTS ?= 16
 BENCH_MESSAGES ?= 512
@@ -21,6 +21,8 @@ BENCH_PERF_MIN_PCT ?= 3.0
 BENCH_URING_CLIENTS ?= 16
 BENCH_URING_MESSAGES ?= 512
 BENCH_URING_PAYLOAD ?= 64
+BENCH_URING_DATA ?= build-bench-release/nxt-echo.uring.perf.data
+BENCH_URING_JSON ?= build-bench-release/nxt-echo.uring.perf.json
 
 all: build
 
@@ -78,6 +80,12 @@ bench-perf-duck:
 
 bench-uring-stat: bench-build
 	sudo perf stat -e io_uring:io_uring_submit_req,io_uring:io_uring_complete,io_uring:io_uring_cqring_wait,io_uring:io_uring_poll_arm,io_uring:io_uring_queue_async_work,syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter -- build-bench-release/nxt-echo-bench --clients $(BENCH_URING_CLIENTS) --messages $(BENCH_URING_MESSAGES) --payload $(BENCH_URING_PAYLOAD)
+
+bench-uring-record: bench-build
+	sudo perf record -o $(BENCH_URING_DATA) -e io_uring:io_uring_submit_req,io_uring:io_uring_complete,io_uring:io_uring_cqring_wait,io_uring:io_uring_poll_arm,io_uring:io_uring_queue_async_work,syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter -- build-bench-release/nxt-echo-bench --clients $(BENCH_URING_CLIENTS) --messages $(BENCH_URING_MESSAGES) --payload $(BENCH_URING_PAYLOAD)
+
+bench-uring-duck:
+	scripts/uring-duckdb $(BENCH_URING_DATA) $(BENCH_URING_JSON)
 
 bench-uring-trace: bench-build
 	scripts/uring-bpftrace build-bench-release/nxt-echo-bench --clients $(BENCH_URING_CLIENTS) --messages $(BENCH_URING_MESSAGES) --payload $(BENCH_URING_PAYLOAD)
