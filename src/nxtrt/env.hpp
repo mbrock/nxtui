@@ -2,6 +2,7 @@
 
 #include "nxtrt/exceptions.hpp"
 
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,7 @@ namespace detail {
 struct promise_base;
 }
 
+/// Stable process-local identity for an ambient environment key type.
 template<typename Key>
 inline const void * env_key_id() noexcept
 {
@@ -26,62 +28,38 @@ inline const void * env_key_id() noexcept
     return &key;
 }
 
-struct env_binding_base
+/// Type-erased owned value in a task runtime environment.
+struct env_entry_base
 {
-    env_binding_base() = default;
-
-    env_binding_base(env_binding_base * parent, const void * key) noexcept
-        : parent(parent)
-        , key(key)
+    explicit env_entry_base(const void * key) noexcept
+        : key(key)
     {}
 
-    virtual ~env_binding_base() = default;
+    virtual ~env_entry_base() = default;
 
-    [[nodiscard]] virtual std::unique_ptr<env_binding_base>
-    clone_with_parent(env_binding_base * parent) const = 0;
+    /// Copy this entry when a coroutine inherits ambient state.
+    [[nodiscard]] virtual std::unique_ptr<env_entry_base> clone() const = 0;
 
-    env_binding_base * parent = nullptr;
     const void * key = nullptr;
 };
 
 template<typename Key>
-struct env_binding : env_binding_base
+struct env_entry : env_entry_base
 {
     using value_type = std::remove_cv_t<typename Key::value_type>;
 
-    env_binding(env_binding_base * parent, value_type value)
-        : env_binding_base(parent, env_key_id<Key>())
+    explicit env_entry(value_type value)
+        : env_entry_base(env_key_id<Key>())
         , value(std::move(value))
     {}
 
-    [[nodiscard]] std::unique_ptr<env_binding_base>
-    clone_with_parent(env_binding_base * parent) const override
+    [[nodiscard]] std::unique_ptr<env_entry_base> clone() const override
     {
-        return std::make_unique<env_binding<Key>>(parent, value);
+        return std::make_unique<env_entry<Key>>(value);
     }
 
     value_type value;
 };
-
-inline env_binding_base * clone_env_bindings(
-    env_binding_base * bindings,
-    std::vector<std::unique_ptr<env_binding_base>> & storage)
-{
-    storage.clear();
-
-    auto chain = std::vector<const env_binding_base *>{};
-    for (auto * binding = bindings; binding != nullptr;
-         binding = binding->parent)
-        chain.push_back(binding);
-
-    auto * parent = static_cast<env_binding_base *>(nullptr);
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        auto cloned = (*it)->clone_with_parent(parent);
-        parent = cloned.get();
-        storage.push_back(std::move(cloned));
-    }
-    return parent;
-}
 
 struct missing_env : runtime_error
 {
@@ -91,19 +69,55 @@ struct missing_env : runtime_error
     {}
 };
 
+/// Promise-owned ambient environment for the currently running task.
+///
+/// Entries are flat rather than parent-linked: binding a key replaces exactly
+/// that key for this task, and restoring the binding reinstates the previous
+/// entry if one existed.
 struct runtime_env
 {
     deck * current_deck = nullptr;
     detail::promise_base * current_promise = nullptr;
-    env_binding_base * bindings = nullptr;
+    std::vector<std::unique_ptr<env_entry_base>> entries;
+
+    runtime_env() = default;
+
+    runtime_env(const runtime_env & other)
+    {
+        copy_entries_from(other);
+    }
+
+    runtime_env & operator=(const runtime_env & other)
+    {
+        copy_entries_from(other);
+        return *this;
+    }
+
+    runtime_env(runtime_env &&) noexcept = default;
+    runtime_env & operator=(runtime_env &&) noexcept = default;
+
+    /// Replace this environment's entries with cloned entries from `other`.
+    void copy_entries_from(const runtime_env & other)
+    {
+        if (this == &other)
+            return;
+
+        auto next = std::vector<std::unique_ptr<env_entry_base>>{};
+        next.reserve(other.entries.size());
+        for (auto const & entry : other.entries)
+            next.push_back(entry->clone());
+
+        entries = std::move(next);
+        current_deck = nullptr;
+        current_promise = nullptr;
+    }
 
     template<typename Key>
     typename Key::value_type * get() const noexcept
     {
-        for (auto * binding = bindings; binding != nullptr;
-             binding = binding->parent) {
-            if (binding->key == env_key_id<Key>())
-                return &static_cast<env_binding<Key> *>(binding)->value;
+        for (auto const & entry : entries) {
+            if (entry->key == env_key_id<Key>())
+                return &static_cast<env_entry<Key> *>(entry.get())->value;
         }
         return nullptr;
     }
@@ -115,6 +129,42 @@ struct runtime_env
             return *value;
         throw missing_env{Key::name};
     }
+
+    /// Bind `Key` to `value`, returning the previous entry for RAII restore.
+    template<typename Key>
+    [[nodiscard]] std::unique_ptr<env_entry_base>
+    replace(typename Key::value_type value)
+    {
+        auto next = std::make_unique<env_entry<Key>>(std::move(value));
+        for (auto & entry : entries) {
+            if (entry->key != env_key_id<Key>())
+                continue;
+            auto previous = std::move(entry);
+            entry = std::move(next);
+            return previous;
+        }
+
+        entries.push_back(std::move(next));
+        return nullptr;
+    }
+
+    /// Restore the entry returned by `replace<Key>()`.
+    template<typename Key>
+    void restore(std::unique_ptr<env_entry_base> previous) noexcept
+    {
+        for (auto it = entries.begin(); it != entries.end(); ++it) {
+            if ((*it)->key != env_key_id<Key>())
+                continue;
+
+            if (previous)
+                *it = std::move(previous);
+            else
+                entries.erase(it);
+            return;
+        }
+
+        std::terminate();
+    }
 };
 
 namespace detail {
@@ -124,22 +174,36 @@ inline thread_local runtime_env * current_env = nullptr;
 class env_guard
 {
 public:
-    explicit env_guard(runtime_env & env) noexcept
+    /// Make `env` the current running environment for one coroutine resume.
+    env_guard(
+        runtime_env & env,
+        deck * current_deck,
+        promise_base * current_promise) noexcept
         : previous_(current_env)
+        , env_(env)
+        , previous_deck_(env.current_deck)
+        , previous_promise_(env.current_promise)
     {
+        env_.current_deck = current_deck;
+        env_.current_promise = current_promise;
         current_env = &env;
     }
 
     env_guard(const env_guard &) = delete;
     env_guard & operator=(const env_guard &) = delete;
 
-    ~env_guard()
+    ~env_guard() noexcept
     {
+        env_.current_deck = previous_deck_;
+        env_.current_promise = previous_promise_;
         current_env = previous_;
     }
 
 private:
     runtime_env * previous_ = nullptr;
+    runtime_env & env_;
+    deck * previous_deck_ = nullptr;
+    promise_base * previous_promise_ = nullptr;
 };
 
 } // namespace detail

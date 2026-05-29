@@ -70,11 +70,11 @@ struct promise_base
         void await_resume() const noexcept {}
     };
 
-    promise_base() noexcept
+    promise_base()
         : id(task_ids.next())
     {
         if (auto * current = detail::current_env)
-            env.bindings = current->bindings;
+            env.copy_entries_from(*current);
     }
 
     /// Called by the compiler before running the coroutine body.
@@ -175,10 +175,8 @@ struct promise_base
     std::coroutine_handle<> continuation;
     /// Awaiting task promise, used to restore ambient context when continuation runs.
     promise_base * continuation_promise = nullptr;
-    /// Inheritable runtime environment captured by this coroutine frame.
+    /// Promise-owned ambient environment captured by this coroutine frame.
     runtime_env env;
-    /// Owned ambient bindings used when a task is forked from a scoped env.
-    std::vector<std::unique_ptr<env_binding_base>> owned_env_bindings;
     /// Propagates stop from the task awaiting this task.
     std::unique_ptr<stop_callback_type> parent_stop_callback;
     /// Cancels the current parked wish when this task is stopped.
@@ -317,7 +315,7 @@ public:
                     "nxtrt task awaited without a running deck"};
 
             auto & promise = coroutine_.promise();
-            promise.env.bindings = current->bindings;
+            promise.env.copy_entries_from(*current);
             promise.set_continuation(awaiting, awaiting_promise);
             if (follow_parent_stop_)
                 promise.follow_stop(*awaiting_promise);
@@ -467,25 +465,19 @@ with_env_bound(typename Key::value_type value, Fn fn)
     struct binding_guard
     {
         detail::promise_base * promise = nullptr;
-        env_binding_base * previous = nullptr;
+        std::unique_ptr<env_entry_base> previous;
 
-        ~binding_guard()
+        ~binding_guard() noexcept
         {
             if (promise != nullptr)
-                promise->env.bindings = previous;
-            auto * current = detail::current_env;
-            if (current != nullptr && current->current_promise == promise)
-                current->bindings = previous;
+                promise->env.template restore<Key>(std::move(previous));
         }
     };
 
-    auto binding = env_binding<Key>{promise->env.bindings, std::move(value)};
     auto restore = binding_guard{
         .promise = promise,
-        .previous = promise->env.bindings,
+        .previous = promise->env.template replace<Key>(std::move(value)),
     };
-    promise->env.bindings = &binding;
-    current->bindings = &binding;
     auto child = std::invoke(fn);
 
     if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
@@ -994,9 +986,7 @@ public:
         auto record = std::shared_ptr<detail::child_record<T>>{};
         try {
             auto & promise = handle.promise();
-            promise.env.bindings = clone_env_bindings(
-                current->bindings,
-                promise.owned_env_bindings);
+            promise.env.copy_entries_from(*current);
             record = std::make_shared<detail::child_record<T>>(handle);
         } catch (...) {
             handle.destroy();
@@ -1997,10 +1987,7 @@ inline void deck::ready_item::resume_if_ready(deck & d) const
         return;
 
     trace("deck resume task");
-    auto env = promise->env;
-    env.current_deck = &d;
-    env.current_promise = promise;
-    auto env_guard = detail::env_guard{env};
+    auto env_guard = detail::env_guard{promise->env, &d, promise};
     handle.resume();
 }
 

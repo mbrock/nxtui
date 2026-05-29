@@ -918,7 +918,7 @@ static suite runtime_tests{
                 expect(result == 41_i);
             };
 
-            "restores outer bindings"_test = [&] {
+            "restores outer env values"_test = [&] {
                 auto result = deck.sync_wait([]() -> nxtrt::task<int> {
                     co_return co_await nxtrt::with_env<ambient_int_key>(
                         10, []() -> nxtrt::task<int> {
@@ -933,6 +933,33 @@ static suite runtime_tests{
                 });
 
                 expect(result == 1210_i);
+            };
+
+            "forked tasks keep env after binder exits"_test = [&] {
+                auto child =
+                    deck.sync_wait([]()
+                        -> nxtrt::task<nxtrt::catching_deed<int>> {
+                        co_return co_await nxtrt::with_zone(
+                            []()
+                                -> nxtrt::task<
+                                    nxtrt::catching_deed<int>> {
+                                co_return co_await nxtrt::with_env<
+                                    ambient_int_key>(
+                                    99, []()
+                                        -> nxtrt::task<
+                                            nxtrt::catching_deed<int>> {
+                                        auto child =
+                                            nxtrt::fork(
+                                                read_ambient_int_after_yield())
+                                                .cope();
+                                        co_return std::move(child);
+                                    });
+                            });
+                    });
+
+                auto result = std::move(child).get();
+                expect(result.has_value());
+                expect(*result == 99_i);
             };
 
             "trace context is inherited by forked tasks"_test = [&] {
