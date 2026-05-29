@@ -10,6 +10,9 @@ BENCH_PERF_CALLGRAPH ?= fp
 BENCH_PERF_CLIENTS ?= 64
 BENCH_PERF_MESSAGES ?= 2048
 BENCH_PERF_PAYLOAD ?= 64
+BENCH_PERF_HOT_LIMIT ?= 0.5
+BENCH_PERF_HOT_LINES ?= 40
+BENCH_PERF_SYMBOL_WIDTH ?= 96
 
 all: build
 
@@ -46,7 +49,21 @@ bench-perf-report:
 	sudo perf report -i $(BENCH_PERF_DATA)
 
 bench-perf-hot:
-	sudo perf report -i $(BENCH_PERF_DATA) --stdio --no-children --no-call-graph --sort dso,symbol | head -80
+	@sudo perf report -i $(BENCH_PERF_DATA) --stdio --stdio-color never \
+		--no-children --no-call-graph --fields overhead,dso,symbol \
+		--percent-limit $(BENCH_PERF_HOT_LIMIT) -t '|' 2>/dev/null \
+		| awk -F'|' 'BEGIN { \
+			printf "%-8s %-18s %s\n", "Overhead", "DSO", "Symbol"; \
+			printf "%-8s %-18s %s\n", "--------", "---", "------" \
+		} /^[[:space:]]*[0-9]/ { \
+			gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$1); \
+			gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$2); \
+			gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$3); \
+			if (length($$3) > $(BENCH_PERF_SYMBOL_WIDTH)) \
+				$$3 = substr($$3, 1, $(BENCH_PERF_SYMBOL_WIDTH) - 3) "..."; \
+			printf "%-8s %-18s %s\n", $$1, $$2, $$3 \
+		}' \
+		| head -$(BENCH_PERF_HOT_LINES)
 
 spec:
 	racket nxtrt/model.rkt --run-all
