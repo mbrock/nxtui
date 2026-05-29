@@ -4,9 +4,11 @@
 
 #include "test.hpp"
 
+#include <arpa/inet.h>
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <netinet/in.h>
 #include <poll.h>
 #include <stdexcept>
 #include <string_view>
@@ -74,6 +76,36 @@ nxtrt::task<void> native_poll_until_timeout(int rx)
     auto result = co_await nxtrt::op::poll_until::after(rx, POLLIN, 1ms);
     if (!result.timed_out)
         throw std::runtime_error{"native poll-until did not time out"};
+}
+
+nxtrt::task<nxt::unique_fd> accept_one(int listener)
+{
+    co_return nxt::unique_fd{co_await nxtrt::op::accept{.fd = listener}};
+}
+
+sockaddr_in loopback_listener_address(int fd)
+{
+    auto address = sockaddr_in{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+
+    if (::bind(
+            fd,
+            reinterpret_cast<sockaddr const *>(&address),
+            sizeof(address)) != 0)
+        throw std::runtime_error{"bind failed"};
+    if (::listen(fd, 1) != 0)
+        throw std::runtime_error{"listen failed"};
+
+    auto size = socklen_t{sizeof(address)};
+    if (::getsockname(
+            fd,
+            reinterpret_cast<sockaddr *>(&address),
+            &size) != 0)
+        throw std::runtime_error{"getsockname failed"};
+
+    return address;
 }
 
 nxtrt::task<void> repeat_native_poll_until(int tx, int rx)
@@ -192,6 +224,31 @@ static suite kqueue_wand_tests{
             pump_until_done(deck, wand, task);
 
             expect(task.done());
+        };
+
+        "loopback listeners accept connected clients"_test = [] {
+            auto listener = nxt::unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+            if (listener.get() < 0)
+                throw std::runtime_error{"listener socket failed"};
+            auto address = loopback_listener_address(listener.get());
+
+            auto client = nxt::unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};
+            if (client.get() < 0)
+                throw std::runtime_error{"client socket failed"};
+
+            auto wand = nxtrt::kqueue_wand{};
+            auto deck = nxtrt::deck{&wand};
+            auto task = accept_one(listener.get());
+
+            deck.start(task);
+            if (::connect(
+                    client.get(),
+                    reinterpret_cast<sockaddr const *>(&address),
+                    sizeof(address)) != 0)
+                throw std::runtime_error{"client connect failed"};
+
+            auto accepted = pump_until_done(deck, wand, task);
+            expect(accepted.get() >= 0);
         };
 
         "native poll-until slots are reusable after sibling deletes"_test = [] {

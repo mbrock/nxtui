@@ -243,6 +243,31 @@ private:
             (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     }
 
+    static void set_close_on_exec(int fd)
+    {
+        auto flags = ::fcntl(fd, F_GETFD, 0);
+        if (flags < 0)
+            return;
+        (void)::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+    }
+
+    static int accept_once(op::accept const & op)
+    {
+        auto accepted = ::accept(op.fd, nullptr, nullptr);
+        if (accepted < 0)
+            return accepted;
+
+#ifdef SOCK_CLOEXEC
+        if ((op.flags & SOCK_CLOEXEC) != 0)
+            set_close_on_exec(accepted);
+#endif
+#ifdef SOCK_NONBLOCK
+        if ((op.flags & SOCK_NONBLOCK) != 0)
+            set_nonblocking(accepted);
+#endif
+        return accepted;
+    }
+
     static bool would_block(int err) noexcept
     {
         return err == EAGAIN || err == EWOULDBLOCK;
@@ -533,6 +558,23 @@ private:
             deck &,
             wait_token token,
             std::vector<kqueue_event> & changes,
+            op::accept & op)
+        {
+            set_nonblocking(op.fd);
+            auto result = accept_once(op);
+            return finish_or_wait(
+                token,
+                changes,
+                result,
+                op.fd,
+                EVFILT_READ);
+        }
+
+        bool submit_op(
+            kqueue_wand &,
+            deck &,
+            wait_token token,
+            std::vector<kqueue_event> & changes,
             op::poll & op)
         {
             if ((op.events & POLLIN) != 0) {
@@ -702,6 +744,17 @@ private:
 
         bool event_op(
             kqueue_wand & wand,
+            deck & d,
+            wait_token token,
+            kqueue_event const &,
+            op::accept & op)
+        {
+            auto result = accept_once(op);
+            return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_READ);
+        }
+
+        bool event_op(
+            kqueue_wand & wand,
             deck &,
             wait_token token,
             kqueue_event const & event,
@@ -809,6 +862,14 @@ private:
             op::connect & op)
         {
             set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+        }
+
+        void delete_op_events(
+            wait_token token,
+            std::vector<kqueue_event> & changes,
+            op::accept & op)
+        {
+            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
         }
 
         void delete_op_events(

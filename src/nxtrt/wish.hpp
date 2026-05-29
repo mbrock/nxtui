@@ -450,6 +450,22 @@ struct connect
     waiter<void> operator co_await() const;
 };
 
+/// Accept one connection from a listening socket.
+///
+/// The accepted file descriptor is returned as the wish result. The caller owns
+/// it immediately and should wrap it in an RAII file descriptor type.
+struct accept
+{
+    using result_type = int;
+    static constexpr std::string_view name = "accept";
+
+    int fd = -1;
+    int flags = 0;
+
+    bool stage_uring(uring_submission & submission);
+    waiter<int> operator co_await() const;
+};
+
 struct poll
 {
     using result_type = int;
@@ -527,6 +543,7 @@ using wish_variant = std::variant<
     op::recv_some,
     op::send_some,
     op::connect,
+    op::accept,
     op::poll,
     op::timeout,
     op::poll_until>;
@@ -614,6 +631,11 @@ inline std::string describe_wish(const op::send_some & wish)
 inline std::string describe_wish(const op::connect & wish)
 {
     return "connect fd " + std::to_string(wish.fd);
+}
+
+inline std::string describe_wish(const op::accept & wish)
+{
+    return "accept fd " + std::to_string(wish.fd);
 }
 
 inline std::string describe_wish(const op::poll & wish)

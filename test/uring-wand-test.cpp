@@ -168,6 +168,11 @@ nxtrt::task<void> connect_to(int fd, sockaddr_in address)
         sizeof(address));
 }
 
+nxtrt::task<nxt::unique_fd> accept_one(int listener)
+{
+    co_return nxt::unique_fd{co_await nxtrt::op::accept{.fd = listener}};
+}
+
 nxtrt::task<struct statx> stat_current_directory()
 {
     co_return co_await nxtrt::op::statx{
@@ -449,13 +454,16 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = connect_to(client.get(), address);
+                auto task = accept_one(listener.get());
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                if (::connect(
+                        client.get(),
+                        reinterpret_cast<sockaddr const *>(&address),
+                        sizeof(address)) != 0)
+                    throw std::runtime_error{"client connect failed"};
 
-                auto accepted =
-                    nxt::unique_fd{::accept(listener.get(), nullptr, nullptr)};
+                auto accepted = pump_until_done(deck, wand, task);
                 expect(accepted.get() >= 0);
             };
         };

@@ -1284,6 +1284,19 @@ inline bool op::connect::stage_uring(uring_submission & submission)
     return true;
 }
 
+inline bool op::accept::stage_uring(uring_submission & submission)
+{
+    auto * sqe = submission.get_sqe();
+    io_uring_prep_accept(
+        sqe,
+        fd,
+        nullptr,
+        nullptr,
+        flags);
+    submission.attach(sqe);
+    return true;
+}
+
 inline bool op::poll::stage_uring(uring_submission & submission)
 {
     auto * sqe = submission.get_sqe();

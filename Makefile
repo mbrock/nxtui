@@ -1,4 +1,8 @@
-.PHONY: all setup build full test freebsd-test spec docs docs-publish clean traces
+.PHONY: all setup build full test freebsd-test bench spec docs docs-publish clean traces
+
+BENCH_CLIENTS ?= 16
+BENCH_MESSAGES ?= 512
+BENCH_PAYLOAD ?= 64
 
 all: build
 
@@ -18,6 +22,15 @@ test:
 freebsd-test:
 	scripts/freebsd-vm test
 
+bench:
+	@if [ ! -d build-bench-release ]; then \
+		meson setup build-bench-release --buildtype=release -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false; \
+	else \
+		meson setup build-bench-release --reconfigure -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false; \
+	fi
+	meson compile -C build-bench-release nxt-echo-bench
+	build-bench-release/nxt-echo-bench --clients $(BENCH_CLIENTS) --messages $(BENCH_MESSAGES) --payload $(BENCH_PAYLOAD)
+
 spec:
 	racket nxtrt/model.rkt --run-all
 
@@ -33,4 +46,4 @@ docs-publish: docs
 	fi
 
 clean:
-	rm -rf build
+	rm -rf build build-bench-release

@@ -186,6 +186,35 @@ if get_option('llm_tool')
   )
 endif
 
+if get_option('benchmarks')
+  nxt_bench_deps = [nxt_core_dep]
+  nxt_bench_deps += nxt_stacktrace_deps
+
+  if host_machine.system() == 'linux'
+    nxt_bench_liburing_dep = dependency(
+      'liburing',
+      fallback : ['liburing', 'uring'],
+      required : false,
+    )
+
+    if nxt_bench_liburing_dep.found()
+      nxt_bench_deps += nxt_bench_liburing_dep
+    else
+      error('benchmarks require liburing on Linux')
+    endif
+
+    nxt_bench_cares_dep = dependency('libcares', required : true)
+    nxt_bench_deps += nxt_bench_cares_dep
+  endif
+
+  executable('nxt-echo-bench',
+    'bench/nxtrt-echo-bench.cpp',
+    include_directories : nxt_inc,
+    dependencies : nxt_bench_deps,
+    cpp_args : nxt_stacktrace_cpp_args,
+  )
+endif
+
 if get_option('tests')
   nxt_test_inc = include_directories('test')
 
