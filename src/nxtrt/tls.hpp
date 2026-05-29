@@ -245,19 +245,23 @@ public:
     }
 
 private:
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
         require_handshake();
-        if (unused_capacity().empty())
-            throw buffer_error{"reader buffer is full"};
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
 
         if (pending_offset_ < pending_.size())
-            return hope<read_result>::ready(copy_pending());
+            return copy_pending(writer, limit);
 
-        return read_more_task();
+        return stream_more_task(writer, limit);
     }
 
-    task<read_result> read_more_task()
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
     {
         pending_.clear();
         pending_offset_ = 0;
@@ -269,18 +273,35 @@ private:
             }
         } while (pending_.empty());
 
-        co_return copy_pending();
+        co_return co_await copy_pending(writer, limit);
     }
 
-    read_result copy_pending()
+    hope<read_result> copy_pending(
+        byte_writer & writer,
+        std::size_t limit)
     {
-        auto dst = unused_capacity();
         auto pending = std::span{pending_}.subspan(pending_offset_);
-        auto n = std::min(dst.size(), pending.size());
-        std::memcpy(dst.data(), pending.data(), n);
+        auto n = std::min(limit, pending.size());
+        auto dst = writer.unused_capacity();
+        if (!dst.empty())
+            n = std::min(n, dst.size());
+
+        auto write = writer.write(pending.first(n));
+        if (write.is_ready()) {
+            pending_offset_ += n;
+            return hope<read_result>::ready(
+                read_result{.bytes = n, .eof = false});
+        }
+        return copy_pending_slow(std::move(write), n);
+    }
+
+    task<read_result> copy_pending_slow(
+        hope<void> write,
+        std::size_t n)
+    {
+        co_await std::move(write);
         pending_offset_ += n;
-        append_read_bytes(n);
-        return read_result{.bytes = n, .eof = false};
+        co_return read_result{.bytes = n, .eof = false};
     }
 
     void require_handshake() const

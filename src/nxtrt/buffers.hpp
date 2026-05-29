@@ -206,6 +206,13 @@ public:
         return buffer_.subspan(end_);
     }
 
+    void advance(std::size_t n)
+    {
+        if (n > unused_capacity().size())
+            throw buffer_error{"writer advanced past buffer capacity"};
+        end_ += n;
+    }
+
     hope<void> flush()
     {
         if (buffered_size() == 0) {
@@ -262,7 +269,7 @@ private:
     void append_to_buffer(std::span<const std::byte> bytes)
     {
         std::memcpy(buffer_.data() + end_, bytes.data(), bytes.size());
-        end_ += bytes.size();
+        advance(bytes.size());
     }
 
     void reset_if_empty() noexcept
@@ -335,7 +342,7 @@ private:
 
             auto n = std::min(unused_capacity().size(), remaining.size());
             std::memcpy(buffer_.data() + end_, remaining.data(), n);
-            end_ += n;
+            advance(n);
             remaining = remaining.subspan(n);
         }
     }
@@ -344,6 +351,38 @@ private:
     std::span<std::byte> buffer_;
     std::size_t seek_ = 0;
     std::size_t end_ = 0;
+};
+
+/// Writer that stores bytes in a fixed caller-owned span.
+class fixed_byte_writer final : public byte_writer
+{
+public:
+    explicit fixed_byte_writer(std::span<std::byte> buffer)
+        : byte_writer(buffer)
+    {}
+
+private:
+    hope<std::size_t>
+    drain_more(std::span<const std::span<const std::byte>>) override
+    {
+        throw buffer_error{"fixed writer is full"};
+    }
+};
+
+/// Writer that accepts and ignores all bytes.
+class discarding_byte_writer final : public byte_writer
+{
+public:
+    explicit discarding_byte_writer(std::span<std::byte> buffer = {})
+        : byte_writer(buffer)
+    {}
+
+private:
+    hope<std::size_t>
+    drain_more(std::span<const std::span<const std::byte>> chunks) override
+    {
+        return hope<std::size_t>::ready(detail::byte_size(chunks));
+    }
 };
 
 /// Writer for a file descriptor.
@@ -555,14 +594,21 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 // and that property is viral, so an async parser must be a coroutine and reads
 // must be awaited -- we cannot make suspension invisible the way fibers do.
 //
-// So the mandatory cold path here remains `read_more()`, and it is
-// REFILL-shaped (Zig's `readVec`-with-one-empty-slice), not `stream`-shaped:
-// source bytes must land in `buffer_` before the borrowed-span APIs
-// (`peek`/`take`) can expose them. We chose pull-first because these readers
-// mostly decrypt/de-frame -- they have to touch the bytes anyway, so the
-// zero-copy egress that `stream`-first buys is not yet worth making mandatory.
-// The cost: a reader needs at least one byte of storage even if every call
-// takes the cold path.
+// The mandatory source cold path is now `stream_more()`, the Zig-shaped verb:
+// push up to `limit` bytes into a `byte_writer`. Pull-shaped refill is derived
+// by pointing a fixed writer at the reader's unused capacity, so source bytes
+// still land in `buffer_` before borrowed-span APIs (`peek`/`take`) expose
+// them. This gives us the structure of Zig's "stream into a writer, and refill
+// is just streaming into my own buffer" without yet caring about fd-to-fd
+// sendfile-style optimization.
+//
+// The remaining divergence is that nxt readers still require at least one byte
+// of storage. Zig can express "fill my Reader.buffer" through `readVec`'s
+// special empty-slice convention; our concrete refill has nowhere to put source
+// bytes unless the reader owns or borrows a real span, even if it is only one
+// byte. A zero-buffer reader can make sense once the cold surface is rich
+// enough to avoid pull-shaped refill entirely, but today's `peek`/`take` APIs
+// need a place to park bytes.
 //
 // The hot/cold split is mirrored by `hope<T>` (see task.hpp). The buffered case
 // returns `hope<...>::ready(span)` -- a synchronous value, no coroutine frame,
@@ -573,17 +619,17 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 // `await_ready`), which is exactly the per-field trampoline this design exists
 // to kill.
 //
-// `read_more()` itself returns `hope<read_result>`, not `task<read_result>`.
+// `stream_more()` itself returns `hope<read_result>`, not `task<read_result>`.
 // That is the payoff lever: a layer that already holds bytes (decrypted TLS
-// plaintext, an in-memory span) refills SYNCHRONOUSLY, so a fully-buffered read
-// composes with zero suspensions through a whole stack of readers
-// (socket -> tls -> http_body -> sse). It is the "eager wish" idea applied to
-// the refill verb, achieved without any wand change.
+// plaintext, an in-memory span) streams or refills SYNCHRONOUSLY, so a
+// fully-buffered read composes with zero suspensions through a whole stack of
+// readers (socket -> tls -> http_body -> sse). It is the "eager wish" idea
+// applied to the cold verb, achieved without any wand change.
 //
-// The wider Zig vocabulary is present as defaults: `stream()` is currently
-// defined in terms of refill + writer writes, and `discard()` in terms of
-// refill + `toss()`. They give protocols the right verbs now, while leaving
-// room for later source-specific cold overrides.
+// The wider Zig vocabulary is now structural: `stream()` uses buffered bytes
+// when it has them and otherwise calls `stream_more()` directly; `discard()`
+// uses buffered bytes when it has them and otherwise streams into a discarding
+// writer. Refill is just `stream_more(fixed_writer{unused_capacity()}, limit)`.
 //
 // On the writer side we intentionally one-up Zig a little: `byte_writer` has a
 // reader-like `seek_` as well as `end_`, so partially drained buffered output
@@ -593,33 +639,33 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 //
 // --- What we still owe to fully adopt the paradigm --------------------------
 //
-// TODO(zig-stream): add optimized `stream`/`sendFile`-shaped egress overrides
-//   so a file or socket reader can splice into a `byte_writer`'s fd without
-//   copying through `buffer_`. The generic default exists but is still derived
-//   from refill + write.
-// TODO(zig-readvec): a vectored `read_more` that can fill caller-provided
+// TODO(zig-stream): teach concrete fd/socket readers and writers about each
+//   other so `stream_more()` can eventually use sendfile/readv/writev-shaped
+//   paths. Today it has the right API shape but still moves ordinary spans.
+// TODO(zig-readvec): a vectored refill/read API that can fill caller-provided
 //   scatter buffers directly (not just `buffer_`), to avoid a copy on large
 //   `take(n)` where the caller already owns the destination.
 // TODO(zig-discard): optimized `discard(limit)` overrides so protocols can skip
 //   bytes (chunked trailers, body skip-to-end) without buffering and copying
-//   them. The generic default exists but refills first.
+//   them through a writer-shaped shim.
 // TODO(zig-rebase): make `rebase` virtual (Zig keeps it in the vtable with a
 //   memmove default) so a ring- or mmap-backed reader can make room differently.
-// TODO(eager-wand): push the synchronous-completion idea of `read_more()` down
+// TODO(eager-wand): push the synchronous-completion idea of `stream_more()` down
 //   to the wish layer -- an honest `waiter::await_ready()` plus a sync path in
-//   `wand::prepare` -- so a warm `read_some` on the fd also skips the round-trip.
-//   At that point the buffered reader can BE a wand and `hope` dissolves into a
-//   single "maybe already here, else suspends" awaitable shared by wishes and
-//   readers alike. That is the endgame this whole family is shaped toward.
+//   `wand::prepare` -- so a warm `read_some` on the fd also skips the
+//   round-trip. At that point the buffered reader can BE a wand and `hope`
+//   dissolves into a single "maybe already here, else suspends" awaitable
+//   shared by wishes and readers alike. That is the endgame this whole family
+//   is shaped toward.
 
 /// Buffered asynchronous reader base.
 ///
 /// The hot-path methods are non-virtual and operate directly on `buffer_`,
 /// `seek_`, and `end_`, returning `hope<...>` so the buffered case never
-/// suspends. Derived readers implement only `read_more()`, the refill cold path
-/// that appends bytes to `unused_capacity()` and advances `end_` by the
-/// returned byte count. See the design note above for why the boundary is
-/// refill-style rather than Zig's `stream`/`readVec`-style.
+/// suspends. Derived readers implement only `stream_more()`, the cold path that
+/// pushes source bytes into a writer. Refill is derived by streaming into a
+/// fixed writer over `unused_capacity()`, which then advances `end_` by the
+/// returned byte count.
 class byte_reader
 {
 public:
@@ -802,10 +848,6 @@ public:
     }
 
     /// Transfer one available chunk to `writer`, up to `limit` bytes.
-    ///
-    /// The default implementation is defined in terms of this reader's
-    /// buffered/refill path and the writer's write path. Specialized readers
-    /// can later override a cold stream verb when they can splice more directly.
     hope<read_result> stream(
         byte_writer & writer,
         std::size_t limit = std::numeric_limits<std::size_t>::max())
@@ -813,17 +855,10 @@ public:
         if (limit == 0)
             return hope<read_result>::ready(read_result{});
 
-        if (buffered_size() == 0) {
-            auto read = fill_more();
-            if (!read.is_ready())
-                return stream_after_fill_slow(writer, std::move(read), limit);
-            auto result = read.take_ready();
-            if (result.bytes == 0)
-                return hope<read_result>::ready(result);
-            return stream_buffered(writer, limit, result.eof);
-        }
+        if (buffered_size() == 0)
+            return stream_more(writer, limit);
 
-        return stream_buffered(writer, limit, false);
+        return stream_buffered(writer, limit);
     }
 
     /// Discard one available chunk, up to `limit` bytes.
@@ -833,20 +868,8 @@ public:
         if (limit == 0)
             return hope<read_result>::ready(read_result{});
 
-        if (buffered_size() == 0) {
-            auto read = fill_more();
-            if (!read.is_ready())
-                return discard_after_fill_slow(std::move(read), limit);
-            auto result = read.take_ready();
-            if (result.bytes == 0)
-                return hope<read_result>::ready(result);
-
-            auto n = std::min(limit, buffered_size());
-            auto eof = result.eof && n == buffered_size();
-            toss(n);
-            return hope<read_result>::ready(
-                read_result{.bytes = n, .eof = eof});
-        }
+        if (buffered_size() == 0)
+            return discard_more(limit);
 
         auto n = std::min(limit, buffered_size());
         toss(n);
@@ -859,6 +882,11 @@ protected:
         return buffer_;
     }
 
+    virtual hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) = 0;
+
+private:
     void append_read_bytes(std::size_t n)
     {
         if (n > unused_capacity().size())
@@ -866,26 +894,54 @@ protected:
         end_ += n;
     }
 
-private:
-    virtual hope<read_result> read_more() = 0;
-
     hope<read_result> stream_buffered(
         byte_writer & writer,
-        std::size_t limit,
-        bool source_eof)
+        std::size_t limit)
     {
         auto n = std::min(limit, buffered_size());
-        auto eof = source_eof && n == buffered_size();
         if (n == 0)
-            return hope<read_result>::ready(read_result{.eof = eof});
+            return hope<read_result>::ready(read_result{});
 
         auto write = writer.write(buffered().first(n));
         if (write.is_ready()) {
             toss(n);
-            return hope<read_result>::ready(
-                read_result{.bytes = n, .eof = eof});
+            return hope<read_result>::ready(read_result{.bytes = n});
         }
-        return stream_buffered_slow(std::move(write), n, eof);
+        return stream_buffered_slow(std::move(write), n);
+    }
+
+    hope<read_result> discard_more(std::size_t limit)
+    {
+        auto writer = discarding_byte_writer{buffer_};
+        auto result = stream_more(writer, limit);
+        if (result.is_ready())
+            return hope<read_result>::ready(result.take_ready());
+        return discard_more_slow(limit);
+    }
+
+    hope<read_result> read_more()
+    {
+        auto dst = unused_capacity();
+        if (dst.empty())
+            throw buffer_error{"reader buffer is full"};
+
+        auto writer = fixed_byte_writer{dst};
+        auto result = stream_more(writer, dst.size());
+        if (result.is_ready())
+            return hope<read_result>::ready(
+                finish_stream_read(writer, result.take_ready()));
+        return read_more_slow(dst.size());
+    }
+
+    read_result finish_stream_read(
+        fixed_byte_writer & writer,
+        read_result result)
+    {
+        auto written = writer.buffered_size();
+        if (written != result.bytes)
+            throw buffer_error{"reader stream byte count mismatch"};
+        append_read_bytes(written);
+        return result;
     }
 
     hope<read_result> fill_more_without_rebase()
@@ -905,39 +961,26 @@ private:
         }
     }
 
-    task<read_result> stream_after_fill_slow(
-        byte_writer & writer,
-        hope<read_result> first_read,
-        std::size_t limit)
+    task<read_result> read_more_slow(std::size_t limit)
     {
-        auto result = co_await std::move(first_read);
-        if (result.bytes == 0)
-            co_return result;
-        co_return co_await stream_buffered(writer, limit, result.eof);
+        auto writer = fixed_byte_writer{unused_capacity().first(limit)};
+        auto result = co_await stream_more(writer, limit);
+        co_return finish_stream_read(writer, result);
     }
 
     task<read_result> stream_buffered_slow(
         hope<void> write,
-        std::size_t n,
-        bool eof)
+        std::size_t n)
     {
         co_await std::move(write);
         toss(n);
-        co_return read_result{.bytes = n, .eof = eof};
+        co_return read_result{.bytes = n};
     }
 
-    task<read_result> discard_after_fill_slow(
-        hope<read_result> first_read,
-        std::size_t limit)
+    task<read_result> discard_more_slow(std::size_t limit)
     {
-        auto result = co_await std::move(first_read);
-        if (result.bytes == 0)
-            co_return result;
-
-        auto n = std::min(limit, buffered_size());
-        auto eof = result.eof && n == buffered_size();
-        toss(n);
-        co_return read_result{.bytes = n, .eof = eof};
+        auto writer = discarding_byte_writer{buffer_};
+        co_return co_await stream_more(writer, limit);
     }
 
     task<std::span<const std::byte>> peek_slow(std::size_t n)
@@ -1056,29 +1099,53 @@ public:
     {}
 
 private:
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
-        return read_more_task();
+        return stream_more_task(writer, limit);
     }
 
-    task<read_result> read_more_task()
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
     {
-        auto dst = unused_capacity();
-        if (dst.empty())
-            throw buffer_error{"reader buffer is full"};
+        if (limit == 0)
+            co_return read_result{};
 
-        auto result = co_await std::invoke(read_, dst);
-        auto out = read_result{};
-        if constexpr (std::same_as<decltype(result), read_result>) {
-            out = result;
+        auto dst = writer.unused_capacity();
+        if (!dst.empty()) {
+            auto result = co_await std::invoke(
+                read_,
+                dst.first(std::min(dst.size(), limit)));
+            auto out = normalize_result(result);
+            if (out.bytes > dst.size())
+                throw buffer_error{"source overfilled writer buffer"};
+            writer.advance(out.bytes);
+            co_return out;
+        }
+
+        auto storage = std::vector<std::byte>(std::min(limit, std::size_t{4096}));
+        auto result = co_await std::invoke(read_, std::span{storage});
+        auto out = normalize_result(result);
+        if (out.bytes > storage.size())
+            throw buffer_error{"source overfilled temporary buffer"};
+        if (out.bytes != 0)
+            co_await writer.write(std::span{storage}.first(out.bytes));
+        co_return out;
+    }
+
+    template<typename Result>
+    static read_result normalize_result(Result result)
+    {
+        if constexpr (std::same_as<Result, read_result>) {
+            return result;
         } else {
-            out = read_result{
+            return read_result{
                 .bytes = result,
                 .eof = result == 0,
             };
         }
-        append_read_bytes(out.bytes);
-        co_return out;
     }
 
     Read read_;
@@ -1117,33 +1184,65 @@ public:
     {}
 
 private:
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
-        auto dst = unused_capacity();
-        if (dst.empty())
-            throw buffer_error{"reader buffer is full"};
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
 
-        auto written = std::size_t{0};
-        while (written < dst.size() && chunk_ != end_) {
+        auto total = std::size_t{0};
+        auto remaining = limit;
+        while (chunk_ != end_) {
             auto chunk = detail::reader_chunk_bytes(*chunk_);
             auto rest = chunk.subspan(offset_);
-            auto n = std::min(dst.size() - written, rest.size());
-            std::memcpy(dst.data() + written, rest.data(), n);
-
-            written += n;
-            offset_ += n;
-            if (offset_ == chunk.size()) {
+            if (rest.empty()) {
                 ++chunk_;
                 offset_ = 0;
+                continue;
             }
+
+            auto n = std::min(remaining, rest.size());
+            auto dst = writer.unused_capacity();
+            if (!dst.empty())
+                n = std::min(n, dst.size());
+
+            auto write = writer.write(rest.first(n));
+            if (write.is_ready()) {
+                advance_chunk(n, chunk.size());
+                total += n;
+                remaining -= n;
+                if (remaining == 0 || writer.unused_capacity().empty())
+                    return hope<read_result>::ready(
+                        read_result{.bytes = total, .eof = chunk_ == end_});
+                continue;
+            }
+
+            return stream_write_slow(std::move(write), n, chunk.size(), total);
         }
 
-        append_read_bytes(written);
         return hope<read_result>::ready(
-            read_result{
-                .bytes = written,
-                .eof = chunk_ == end_,
-            });
+            read_result{.bytes = total, .eof = true});
+    }
+
+    task<read_result> stream_write_slow(
+        hope<void> write,
+        std::size_t n,
+        std::size_t chunk_size,
+        std::size_t prefix)
+    {
+        co_await std::move(write);
+        advance_chunk(n, chunk_size);
+        co_return read_result{.bytes = prefix + n, .eof = chunk_ == end_};
+    }
+
+    void advance_chunk(std::size_t n, std::size_t chunk_size)
+    {
+        offset_ += n;
+        if (offset_ == chunk_size) {
+            ++chunk_;
+            offset_ = 0;
+        }
     }
 
     Chunks chunks_;
@@ -1182,34 +1281,50 @@ public:
     {}
 
 private:
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
-        return read_more_task();
+        return stream_more_task(writer, limit);
     }
 
-    task<read_result> read_more_task()
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
     {
-        auto dst = unused_capacity();
-        if (dst.empty())
-            throw buffer_error{"reader buffer is full"};
+        if (limit == 0)
+            co_return read_result{};
 
-        auto n = std::size_t{0};
-        while (true) {
-            try {
-                n = co_await op::read_some{
-                    .fd = fd_,
-                    .buffer = dst,
-                    .offset = -1,
-                };
-                break;
-            } catch (const interrupted_system_call &) {
-            }
+        auto dst = writer.unused_capacity();
+        if (dst.empty()) {
+            auto storage =
+                std::vector<std::byte>(std::min(limit, std::size_t{4096}));
+            auto n = co_await read_some(std::span{storage});
+            if (n != 0)
+                co_await writer.write(std::span{storage}.first(n));
+            co_return read_result{.bytes = n, .eof = n == 0};
         }
-        append_read_bytes(n);
+
+        auto n = co_await read_some(dst.first(std::min(dst.size(), limit)));
+        writer.advance(n);
         co_return read_result{
             .bytes = n,
             .eof = n == 0,
         };
+    }
+
+    task<std::size_t> read_some(std::span<std::byte> dst)
+    {
+        while (true) {
+            try {
+                co_return co_await op::read_some{
+                    .fd = fd_,
+                    .buffer = dst,
+                    .offset = -1,
+                };
+            } catch (const interrupted_system_call &) {
+            }
+        }
     }
 
     int fd_ = -1;
@@ -1238,34 +1353,50 @@ public:
     {}
 
 private:
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
-        return read_more_task();
+        return stream_more_task(writer, limit);
     }
 
-    task<read_result> read_more_task()
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
     {
-        auto dst = unused_capacity();
-        if (dst.empty())
-            throw buffer_error{"reader buffer is full"};
+        if (limit == 0)
+            co_return read_result{};
 
-        auto n = std::size_t{0};
-        while (true) {
-            try {
-                n = co_await op::recv_some{
-                    .fd = fd_,
-                    .buffer = dst,
-                    .flags = flags_,
-                };
-                break;
-            } catch (const interrupted_system_call &) {
-            }
+        auto dst = writer.unused_capacity();
+        if (dst.empty()) {
+            auto storage =
+                std::vector<std::byte>(std::min(limit, std::size_t{4096}));
+            auto n = co_await recv_some(std::span{storage});
+            if (n != 0)
+                co_await writer.write(std::span{storage}.first(n));
+            co_return read_result{.bytes = n, .eof = n == 0};
         }
-        append_read_bytes(n);
+
+        auto n = co_await recv_some(dst.first(std::min(dst.size(), limit)));
+        writer.advance(n);
         co_return read_result{
             .bytes = n,
             .eof = n == 0,
         };
+    }
+
+    task<std::size_t> recv_some(std::span<std::byte> dst)
+    {
+        while (true) {
+            try {
+                co_return co_await op::recv_some{
+                    .fd = fd_,
+                    .buffer = dst,
+                    .flags = flags_,
+                };
+            } catch (const interrupted_system_call &) {
+            }
+        }
     }
 
     int fd_ = -1;
@@ -1294,32 +1425,26 @@ public:
     {}
 
 private:
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
-        auto chunk = inner_.take_some(unused_capacity().size());
-        if (chunk.is_ready())
-            return hope<read_result>::ready(copy_chunk(chunk.take_ready()));
-        return read_more_slow(std::move(chunk));
+        auto streamed = inner_.stream(writer, limit);
+        if (streamed.is_ready())
+            return hope<read_result>::ready(meter(streamed.take_ready()));
+        return stream_more_slow(std::move(streamed));
     }
 
-    task<read_result> read_more_slow(
-        hope<std::optional<std::span<const std::byte>>> chunk)
+    task<read_result> stream_more_slow(hope<read_result> streamed)
     {
-        co_return copy_chunk(co_await std::move(chunk));
+        co_return meter(co_await std::move(streamed));
     }
 
-    read_result copy_chunk(std::optional<std::span<const std::byte>> chunk)
+    read_result meter(read_result result)
     {
-        if (!chunk)
-            return read_result{.bytes = 0, .eof = true};
-        auto dst = unused_capacity();
-        if (chunk->size() > dst.size())
-            throw buffer_error{"metered reader overfilled buffer"};
-        std::memcpy(dst.data(), chunk->data(), chunk->size());
-        append_read_bytes(chunk->size());
-        if (chunk->size() > 0)
-            progress_(chunk->size());
-        return read_result{.bytes = chunk->size(), .eof = false};
+        if (result.bytes != 0)
+            progress_(result.bytes);
+        return result;
     }
 
     byte_reader & inner_;

@@ -352,27 +352,31 @@ private:
         until_eof,
     };
 
-    hope<read_result> read_more() override
+    hope<read_result> stream_more(
+        byte_writer & writer,
+        std::size_t limit) override
     {
-        if (unused_capacity().empty())
-            throw buffer_error{"reader buffer is full"};
-        return read_more_task();
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
+        return stream_more_task(writer, limit);
     }
 
-    task<read_result> read_more_task()
+    task<read_result> stream_more_task(
+        byte_writer & writer,
+        std::size_t limit)
     {
         if (done_)
             co_return read_result{.bytes = 0, .eof = true};
 
-        auto chunk = co_await next(unused_capacity().size());
+        if (auto dst = writer.unused_capacity(); !dst.empty())
+            limit = std::min(limit, dst.size());
+
+        auto chunk = co_await next(limit);
         if (!chunk)
             co_return read_result{.bytes = 0, .eof = true};
 
-        auto dst = unused_capacity();
-        if (chunk->size() > dst.size())
-            throw buffer_error{"HTTP body reader overfilled buffer"};
-        std::memcpy(dst.data(), chunk->data(), chunk->size());
-        append_read_bytes(chunk->size());
+        co_await writer.write(*chunk);
+
         co_return read_result{
             .bytes = chunk->size(),
             .eof = done_ && chunk->empty(),

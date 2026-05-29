@@ -122,9 +122,13 @@ struct empty_then_string_source final : nxtrt::byte_reader
     {}
 
 private:
-    nxtrt::hope<nxtrt::read_result> read_more() override
+    nxtrt::hope<nxtrt::read_result> stream_more(
+        nxtrt::byte_writer & writer,
+        std::size_t limit) override
     {
-        auto dst = unused_capacity();
+        if (limit == 0)
+            return nxtrt::hope<nxtrt::read_result>::ready(
+                nxtrt::read_result{});
         if (!returned_empty) {
             returned_empty = true;
             return nxtrt::hope<nxtrt::read_result>::ready(
@@ -143,15 +147,31 @@ private:
         }
 
         auto rest = std::string_view{text}.substr(offset);
-        auto n = std::min(dst.size(), rest.size());
-        std::memcpy(dst.data(), rest.data(), n);
+        auto n = std::min(limit, rest.size());
+        auto dst = writer.unused_capacity();
+        if (!dst.empty())
+            n = std::min(n, dst.size());
+        auto write = writer.write(rest.substr(0, n));
+        if (!write.is_ready())
+            return stream_write_slow(std::move(write), n);
         offset += n;
-        append_read_bytes(n);
         return nxtrt::hope<nxtrt::read_result>::ready(
             nxtrt::read_result{
             .bytes = n,
             .eof = offset == text.size(),
         });
+    }
+
+    nxtrt::task<nxtrt::read_result> stream_write_slow(
+        nxtrt::hope<void> write,
+        std::size_t n)
+    {
+        co_await std::move(write);
+        offset += n;
+        co_return nxtrt::read_result{
+            .bytes = n,
+            .eof = offset == text.size(),
+        };
     }
 
 public:
@@ -2309,7 +2329,7 @@ static suite runtime_tests{
 
                 expect(streamed == std::size_t{3});
                 expect(writer.text == "abc");
-                expect(reader.buffered_size() == std::size_t{1});
+                expect(reader.buffered_size() == std::size_t{0});
             };
 
             "byte_reader discards without exposing bytes"_test = [] {
