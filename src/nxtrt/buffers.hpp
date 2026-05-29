@@ -7,6 +7,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -309,6 +310,12 @@ public:
         return write(as_bytes(text));
     }
 
+    template<typename... Args>
+    task<void> print(std::format_string<Args...> fmt, Args &&... args)
+    {
+        co_await write(std::format(fmt, std::forward<Args>(args)...));
+    }
+
     template<detail::byte_writer_chunk_range Chunks>
     task<void> write(Chunks && chunks)
     {
@@ -322,6 +329,13 @@ public:
     task<void> write_all(Chunks && chunks)
     {
         co_await write(std::forward<Chunks>(chunks));
+        co_await flush();
+    }
+
+    template<typename... Args>
+    task<void> print_all(std::format_string<Args...> fmt, Args &&... args)
+    {
+        co_await print(fmt, std::forward<Args>(args)...);
         co_await flush();
     }
 

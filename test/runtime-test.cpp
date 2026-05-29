@@ -2672,6 +2672,31 @@ static suite runtime_tests{
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 
+                    "prints formatted text"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{64, std::size_t{16}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.print("{}={:02}", "n", 7);
+                            expect(writer.text.empty());
+                            co_await writer.flush();
+                        });
+
+                        expect(writer.text == "n=07");
+                    };
+
+                    "prints and flushes formatted text"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{64, std::size_t{16}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.print_all("{} {}", "hello", 42);
+                        });
+
+                        expect(writer.text == "hello 42");
+                        expect(writer.buffered_size() == std::size_t{0});
+                    };
+
                     "drains buffered prefix before direct bytes"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto writer = chunking_string_sink{3, std::size_t{4}};
