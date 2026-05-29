@@ -178,10 +178,19 @@ struct chunking_string_sink final : nxtrt::byte_writer
 
 private:
     nxtrt::hope<std::size_t>
-    write_more(std::span<const std::byte> src) override
+    drain_more(
+        std::span<const std::span<const std::byte>> chunks) override
     {
-        auto n = std::min(limit, src.size());
-        text += nxtrt::as_string_view(src.first(n));
+        auto remaining = limit;
+        auto n = std::size_t{0};
+        for (auto chunk : chunks) {
+            auto take = std::min(remaining, chunk.size());
+            text += nxtrt::as_string_view(chunk.first(take));
+            n += take;
+            remaining -= take;
+            if (remaining == 0)
+                break;
+        }
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -212,10 +221,19 @@ struct shared_string_sink final : nxtrt::byte_writer
 
 private:
     nxtrt::hope<std::size_t>
-    write_more(std::span<const std::byte> src) override
+    drain_more(
+        std::span<const std::span<const std::byte>> chunks) override
     {
-        auto n = std::min(limit, src.size());
-        *text += nxtrt::as_string_view(src.first(n));
+        auto remaining = limit;
+        auto n = std::size_t{0};
+        for (auto chunk : chunks) {
+            auto take = std::min(remaining, chunk.size());
+            *text += nxtrt::as_string_view(chunk.first(take));
+            n += take;
+            remaining -= take;
+            if (remaining == 0)
+                break;
+        }
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -2277,6 +2295,47 @@ static suite runtime_tests{
                 expect(parts == std::vector<std::string>{"", "abc"});
             };
 
+            "byte_reader streams one chunk into a writer"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"abcdef"sv};
+                auto source_storage = std::array<std::byte, 4>{};
+                auto reader = text_source(chunks, std::span{source_storage});
+                auto writer = chunking_string_sink{64, std::size_t{0}};
+
+                auto streamed =
+                    deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
+                    co_return (co_await reader.stream(writer, 3)).bytes;
+                });
+
+                expect(streamed == std::size_t{3});
+                expect(writer.text == "abc");
+                expect(reader.buffered_size() == std::size_t{1});
+            };
+
+            "byte_reader discards without exposing bytes"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"abcd"sv};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader = text_source(chunks, std::span{storage});
+
+                auto discarded =
+                    deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
+                    co_return (co_await reader.discard(2)).bytes;
+                });
+                auto rest = deck.sync_wait([&]() -> nxtrt::task<std::string> {
+                    co_return std::string{
+                        nxtrt::as_string_view(co_await reader.take(2))};
+                });
+                auto eof = deck.sync_wait([&]() -> nxtrt::task<nxtrt::read_result> {
+                    co_return co_await reader.discard();
+                });
+
+                expect(discarded == std::size_t{2});
+                expect(rest == "cd");
+                expect(eof.bytes == std::size_t{0});
+                expect(eof.eof);
+            };
+
             "write_all drains borrowed bytes into sinks"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto sink = chunking_string_sink{2};
@@ -2532,6 +2591,20 @@ static suite runtime_tests{
                         });
 
                         expect(writer.text == "abcde");
+                        expect(writer.buffered_size() == std::size_t{0});
+                    };
+
+                    "drains buffered prefix before direct bytes"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{3, std::size_t{4}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.write("ab"sv);
+                            expect(writer.text.empty());
+                            co_await writer.write("cdef"sv);
+                        });
+
+                        expect(writer.text == "abcdef");
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 

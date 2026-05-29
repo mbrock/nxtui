@@ -3,6 +3,7 @@
 #include "nxtrt/task.hpp"
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstring>
@@ -139,14 +140,36 @@ std::span<const std::byte> reader_chunk_bytes(Chunk && chunk) noexcept
     }
 }
 
+inline std::size_t byte_size(
+    std::span<const std::span<const std::byte>> chunks) noexcept
+{
+    auto total = std::size_t{0};
+    for (auto chunk : chunks)
+        total += chunk.size();
+    return total;
+}
+
+inline std::span<const std::byte> first_nonempty(
+    std::span<const std::span<const std::byte>> chunks) noexcept
+{
+    for (auto chunk : chunks) {
+        if (!chunk.empty())
+            return chunk;
+    }
+    return {};
+}
+
 } // namespace detail
 
 /// Buffered asynchronous writer base.
 ///
 /// The hot-path methods are non-virtual and copy into `buffer_` when there is
 /// capacity. An empty buffer is valid and means unbuffered writes: non-empty
-/// writes always go through the slow path. Derived writers implement
-/// `write_more()`, the slow-path operation that drains bytes to the concrete
+/// writes always go through the slow path.
+///
+/// Pending output is `buffer_[seek_..end_]`; bytes before `seek_` have already
+/// been consumed by the sink. Derived writers implement `drain_more()`, the
+/// slow-path operation that drains a vector of byte spans to the concrete
 /// backend.
 class byte_writer
 {
@@ -170,12 +193,12 @@ public:
 
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
-        return std::span<const std::byte>{buffer_}.first(end_);
+        return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
     }
 
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
-        return end_;
+        return end_ - seek_;
     }
 
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
@@ -185,8 +208,10 @@ public:
 
     hope<void> flush()
     {
-        if (end_ == 0)
+        if (buffered_size() == 0) {
+            reset_if_empty();
             return hope<void>::ready();
+        }
         return flush_slow();
     }
 
@@ -230,8 +255,8 @@ public:
     }
 
 protected:
-    virtual hope<std::size_t> write_more(
-        std::span<const std::byte> src) = 0;
+    virtual hope<std::size_t> drain_more(
+        std::span<const std::span<const std::byte>> chunks) = 0;
 
 private:
     void append_to_buffer(std::span<const std::byte> bytes)
@@ -240,27 +265,56 @@ private:
         end_ += bytes.size();
     }
 
-    task<void> flush_slow()
+    void reset_if_empty() noexcept
     {
-        auto remaining = buffered();
-        while (!remaining.empty()) {
-            auto written = co_await write_more(remaining);
-            if (written == 0)
-                throw buffer_error{"writer made no progress"};
-            if (written > remaining.size())
-                throw buffer_error{"writer overreported written bytes"};
-            remaining = remaining.subspan(written);
-        }
-        end_ = 0;
+        if (seek_ == end_)
+            seek_ = end_ = 0;
     }
 
-    task<void> write_direct(std::span<const std::byte> bytes)
+    void consume_buffered(std::size_t n)
+    {
+        if (n > buffered_size())
+            throw buffer_error{"writer overreported drained bytes"};
+        seek_ += n;
+        reset_if_empty();
+    }
+
+    static void require_progress(
+        std::size_t written,
+        std::size_t available)
+    {
+        if (written == 0)
+            throw buffer_error{"writer made no progress"};
+        if (written > available)
+            throw buffer_error{"writer overreported written bytes"};
+    }
+
+    task<void> flush_slow()
+    {
+        while (buffered_size() != 0) {
+            auto pending = buffered();
+            auto chunks = std::array{pending};
+            auto written = co_await drain_more(std::span{chunks});
+            require_progress(written, pending.size());
+            consume_buffered(written);
+        }
+    }
+
+    task<void> drain_pending_and_direct(std::span<const std::byte> bytes)
     {
         auto remaining = bytes;
-        while (!remaining.empty()) {
-            auto written = co_await write_more(remaining);
-            if (written == 0)
-                throw buffer_error{"writer made no progress"};
+        while (buffered_size() != 0 || !remaining.empty()) {
+            auto pending = buffered();
+            auto chunks = pending.empty()
+                ? std::array{remaining, std::span<const std::byte>{}}
+                : std::array{pending, remaining};
+            auto count = pending.size() + remaining.size();
+            auto written = co_await drain_more(std::span{chunks});
+            require_progress(written, count);
+
+            auto from_pending = std::min(written, pending.size());
+            consume_buffered(from_pending);
+            written -= from_pending;
             if (written > remaining.size())
                 throw buffer_error{"writer overreported written bytes"};
             remaining = remaining.subspan(written);
@@ -272,8 +326,7 @@ private:
         auto remaining = bytes;
         while (!remaining.empty()) {
             if (remaining.size() >= buffer_.size()) {
-                co_await flush();
-                co_await write_direct(remaining);
+                co_await drain_pending_and_direct(remaining);
                 co_return;
             }
 
@@ -289,6 +342,7 @@ private:
 
     std::vector<std::byte> owned_buffer_;
     std::span<std::byte> buffer_;
+    std::size_t seek_ = 0;
     std::size_t end_ = 0;
 };
 
@@ -307,13 +361,16 @@ public:
     {}
 
 private:
-    hope<std::size_t> write_more(std::span<const std::byte> src) override
+    hope<std::size_t>
+    drain_more(std::span<const std::span<const std::byte>> chunks) override
     {
-        return write_more_task(src);
+        return drain_more_task(chunks);
     }
 
-    task<std::size_t> write_more_task(std::span<const std::byte> src)
+    task<std::size_t>
+    drain_more_task(std::span<const std::span<const std::byte>> chunks)
     {
+        auto src = detail::first_nonempty(chunks);
         while (true) {
             try {
                 co_return co_await op::write_some{
@@ -362,13 +419,16 @@ public:
     {}
 
 private:
-    hope<std::size_t> write_more(std::span<const std::byte> src) override
+    hope<std::size_t>
+    drain_more(std::span<const std::span<const std::byte>> chunks) override
     {
-        return write_more_task(src);
+        return drain_more_task(chunks);
     }
 
-    task<std::size_t> write_more_task(std::span<const std::byte> src)
+    task<std::size_t>
+    drain_more_task(std::span<const std::span<const std::byte>> chunks)
     {
+        auto src = detail::first_nonempty(chunks);
         while (true) {
             try {
                 co_return co_await op::send_some{
@@ -407,18 +467,22 @@ public:
     {}
 
 private:
-    hope<std::size_t> write_more(std::span<const std::byte> src) override
+    hope<std::size_t>
+    drain_more(std::span<const std::span<const std::byte>> chunks) override
     {
-        return write_more_task(src);
+        return drain_more_task(chunks);
     }
 
-    task<std::size_t> write_more_task(std::span<const std::byte> src)
+    task<std::size_t>
+    drain_more_task(std::span<const std::span<const std::byte>> chunks)
     {
-        co_await inner_.write(src);
+        auto total = detail::byte_size(chunks);
+        for (auto chunk : chunks)
+            co_await inner_.write(chunk);
         co_await inner_.flush();
-        if (!src.empty())
-            progress_(src.size());
-        co_return src.size();
+        if (total != 0)
+            progress_(total);
+        co_return total;
     }
 
     byte_writer & inner_;
@@ -441,18 +505,121 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
     co_await writer.write_all(std::forward<Chunks>(chunks));
 }
 
+// ===========================================================================
+// Design note: the Zig std.Io paradigm and how nxt adapts it
+// ===========================================================================
+//
+// This reader/writer family is a deliberate port of Zig's post-0.15
+// `std.Io.Reader`/`std.Io.Writer` design, adapted to C++ stackless coroutines.
+// The Zig API looks idiosyncratic at first; the shape is load-bearing, so it
+// is worth recording why, and which parts we adopted, diverged from, or still
+// owe.
+//
+// --- What Zig actually does -------------------------------------------------
+//
+// `std.Io.Reader` is a *struct that contains the buffer*:
+//
+//     vtable: *const VTable,  buffer: []u8,  seek: usize,  end: usize
+//
+// "Buffered reader" is therefore not a wrapper you compose around a reader --
+// the reader *is* the buffer. The vtable is small and is the COLD path:
+//
+//     stream(r, w, limit)   -- mandatory; push bytes into a Writer
+//     discard(r, limit)     -- default; skip bytes without exposing them
+//     readVec(r, [][]u8)    -- default; vectored pull into caller slices
+//     rebase(r, capacity)   -- default; make room (memmove) for `capacity`
+//
+// The "obvious" primitive is `stream` (push into a Writer), not a pull, because
+// that is what lets a file reader splice straight into a socket writer via
+// `sendFile`/`copy_file_range` without the bytes ever touching `buffer`. The
+// pull APIs are *derived*: `readVec` defaults to calling `stream`, and "fill my
+// own buffer" is just `readVec` with a single zero-length destination slice --
+// the convention "data[0].len == 0 => write into Reader.buffer".
+//
+// The hot path (`take`, `peek`, `takeInt`, ...) is concrete and inline; it only
+// calls the vtable when the buffer runs dry. Zig splits `fill` from
+// `fillUnbuffered` *specifically* so the "already buffered?" check inlines with
+// a branch hint; their own comment notes that merging them regressed hot
+// parsers by 5x, because callers paid a real function call just to discover the
+// byte was already in the buffer. The whole design is "make the buffered case
+// free; pay the vtable only on a refill."
+//
+// Crucially, in Zig this is all SYNCHRONOUS. There is no function coloring,
+// because Zig's concurrency is *stackful* (fibers in the `Io` implementation):
+// a blocking op swaps the whole stack out at the bottom, invisibly, so the
+// Reader and the parser above it are ordinary synchronous code.
+//
+// --- Where C++ forces us to diverge ----------------------------------------
+//
+// We are *stackless*. A `co_await` can only suspend the frame it is written in,
+// and that property is viral, so an async parser must be a coroutine and reads
+// must be awaited -- we cannot make suspension invisible the way fibers do.
+//
+// So the mandatory cold path here remains `read_more()`, and it is
+// REFILL-shaped (Zig's `readVec`-with-one-empty-slice), not `stream`-shaped:
+// source bytes must land in `buffer_` before the borrowed-span APIs
+// (`peek`/`take`) can expose them. We chose pull-first because these readers
+// mostly decrypt/de-frame -- they have to touch the bytes anyway, so the
+// zero-copy egress that `stream`-first buys is not yet worth making mandatory.
+// The cost: a reader needs at least one byte of storage even if every call
+// takes the cold path.
+//
+// The hot/cold split is mirrored by `hope<T>` (see task.hpp). The buffered case
+// returns `hope<...>::ready(span)` -- a synchronous value, no coroutine frame,
+// no deck round-trip -- and only a miss builds a `*_slow` task that is spliced
+// as the awaiter's continuation. This is the C++ stackless answer to Zig's
+// `fill`/`fillUnbuffered` inlining trick: without it, `co_await reader.take(n)`
+// on already-buffered data would still bounce the deck (lazy `task<T>` is never
+// `await_ready`), which is exactly the per-field trampoline this design exists
+// to kill.
+//
+// `read_more()` itself returns `hope<read_result>`, not `task<read_result>`.
+// That is the payoff lever: a layer that already holds bytes (decrypted TLS
+// plaintext, an in-memory span) refills SYNCHRONOUSLY, so a fully-buffered read
+// composes with zero suspensions through a whole stack of readers
+// (socket -> tls -> http_body -> sse). It is the "eager wish" idea applied to
+// the refill verb, achieved without any wand change.
+//
+// The wider Zig vocabulary is present as defaults: `stream()` is currently
+// defined in terms of refill + writer writes, and `discard()` in terms of
+// refill + `toss()`. They give protocols the right verbs now, while leaving
+// room for later source-specific cold overrides.
+//
+// On the writer side we intentionally one-up Zig a little: `byte_writer` has a
+// reader-like `seek_` as well as `end_`, so partially drained buffered output
+// is represented honestly as `buffer_[seek_..end_]`. Zig's writer source has a
+// TODO wishing for this because its default rebase logic temporarily hides
+// preserved bytes by mutating `end`.
+//
+// --- What we still owe to fully adopt the paradigm --------------------------
+//
+// TODO(zig-stream): add optimized `stream`/`sendFile`-shaped egress overrides
+//   so a file or socket reader can splice into a `byte_writer`'s fd without
+//   copying through `buffer_`. The generic default exists but is still derived
+//   from refill + write.
+// TODO(zig-readvec): a vectored `read_more` that can fill caller-provided
+//   scatter buffers directly (not just `buffer_`), to avoid a copy on large
+//   `take(n)` where the caller already owns the destination.
+// TODO(zig-discard): optimized `discard(limit)` overrides so protocols can skip
+//   bytes (chunked trailers, body skip-to-end) without buffering and copying
+//   them. The generic default exists but refills first.
+// TODO(zig-rebase): make `rebase` virtual (Zig keeps it in the vtable with a
+//   memmove default) so a ring- or mmap-backed reader can make room differently.
+// TODO(eager-wand): push the synchronous-completion idea of `read_more()` down
+//   to the wish layer -- an honest `waiter::await_ready()` plus a sync path in
+//   `wand::prepare` -- so a warm `read_some` on the fd also skips the round-trip.
+//   At that point the buffered reader can BE a wand and `hope` dissolves into a
+//   single "maybe already here, else suspends" awaitable shared by wishes and
+//   readers alike. That is the endgame this whole family is shaped toward.
+
 /// Buffered asynchronous reader base.
 ///
 /// The hot-path methods are non-virtual and operate directly on `buffer_`,
-/// `seek_`, and `end_`. Derived readers only implement `read_more()`, the
-/// slow-path operation that appends bytes to `unused_capacity()` and advances
-/// `end_` by the returned byte count.
-///
-/// Unlike Zig's `std.Io.Reader`, this reader's virtual boundary is refill-style
-/// rather than stream/readv-style: source bytes must first land in `buffer_`
-/// before borrowed-span APIs such as `peek()` and `take()` can expose them.
-/// That means a reader needs at least one byte of storage, even if the caller
-/// wants every operation to use the cold path.
+/// `seek_`, and `end_`, returning `hope<...>` so the buffered case never
+/// suspends. Derived readers implement only `read_more()`, the refill cold path
+/// that appends bytes to `unused_capacity()` and advances `end_` by the
+/// returned byte count. See the design note above for why the boundary is
+/// refill-style rather than Zig's `stream`/`readVec`-style.
 class byte_reader
 {
 public:
@@ -634,6 +801,58 @@ public:
         return take_until(as_bytes(delimiter));
     }
 
+    /// Transfer one available chunk to `writer`, up to `limit` bytes.
+    ///
+    /// The default implementation is defined in terms of this reader's
+    /// buffered/refill path and the writer's write path. Specialized readers
+    /// can later override a cold stream verb when they can splice more directly.
+    hope<read_result> stream(
+        byte_writer & writer,
+        std::size_t limit = std::numeric_limits<std::size_t>::max())
+    {
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
+
+        if (buffered_size() == 0) {
+            auto read = fill_more();
+            if (!read.is_ready())
+                return stream_after_fill_slow(writer, std::move(read), limit);
+            auto result = read.take_ready();
+            if (result.bytes == 0)
+                return hope<read_result>::ready(result);
+            return stream_buffered(writer, limit, result.eof);
+        }
+
+        return stream_buffered(writer, limit, false);
+    }
+
+    /// Discard one available chunk, up to `limit` bytes.
+    hope<read_result> discard(
+        std::size_t limit = std::numeric_limits<std::size_t>::max())
+    {
+        if (limit == 0)
+            return hope<read_result>::ready(read_result{});
+
+        if (buffered_size() == 0) {
+            auto read = fill_more();
+            if (!read.is_ready())
+                return discard_after_fill_slow(std::move(read), limit);
+            auto result = read.take_ready();
+            if (result.bytes == 0)
+                return hope<read_result>::ready(result);
+
+            auto n = std::min(limit, buffered_size());
+            auto eof = result.eof && n == buffered_size();
+            toss(n);
+            return hope<read_result>::ready(
+                read_result{.bytes = n, .eof = eof});
+        }
+
+        auto n = std::min(limit, buffered_size());
+        toss(n);
+        return hope<read_result>::ready(read_result{.bytes = n});
+    }
+
 protected:
     [[nodiscard]] std::span<std::byte> buffer_storage() noexcept
     {
@@ -650,6 +869,25 @@ protected:
 private:
     virtual hope<read_result> read_more() = 0;
 
+    hope<read_result> stream_buffered(
+        byte_writer & writer,
+        std::size_t limit,
+        bool source_eof)
+    {
+        auto n = std::min(limit, buffered_size());
+        auto eof = source_eof && n == buffered_size();
+        if (n == 0)
+            return hope<read_result>::ready(read_result{.eof = eof});
+
+        auto write = writer.write(buffered().first(n));
+        if (write.is_ready()) {
+            toss(n);
+            return hope<read_result>::ready(
+                read_result{.bytes = n, .eof = eof});
+        }
+        return stream_buffered_slow(std::move(write), n, eof);
+    }
+
     hope<read_result> fill_more_without_rebase()
     {
         if (unused_capacity().empty())
@@ -665,6 +903,41 @@ private:
             if (read.eof && read.bytes == 0)
                 throw end_of_stream{"unexpected end of input"};
         }
+    }
+
+    task<read_result> stream_after_fill_slow(
+        byte_writer & writer,
+        hope<read_result> first_read,
+        std::size_t limit)
+    {
+        auto result = co_await std::move(first_read);
+        if (result.bytes == 0)
+            co_return result;
+        co_return co_await stream_buffered(writer, limit, result.eof);
+    }
+
+    task<read_result> stream_buffered_slow(
+        hope<void> write,
+        std::size_t n,
+        bool eof)
+    {
+        co_await std::move(write);
+        toss(n);
+        co_return read_result{.bytes = n, .eof = eof};
+    }
+
+    task<read_result> discard_after_fill_slow(
+        hope<read_result> first_read,
+        std::size_t limit)
+    {
+        auto result = co_await std::move(first_read);
+        if (result.bytes == 0)
+            co_return result;
+
+        auto n = std::min(limit, buffered_size());
+        auto eof = result.eof && n == buffered_size();
+        toss(n);
+        co_return read_result{.bytes = n, .eof = eof};
     }
 
     task<std::span<const std::byte>> peek_slow(std::size_t n)
