@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import resource
+import subprocess
+import sys
+import time
+
+
+def fmt_seconds(value: float) -> str:
+    if value < 0.001:
+        return f"{value * 1_000_000:.0f}us"
+    if value < 1.0:
+        return f"{value * 1_000:.1f}ms"
+    return f"{value:.3f}s"
+
+
+def panel(title: str, text: str) -> str:
+    lines = []
+    for paragraph in text.splitlines():
+        while len(paragraph) > 74:
+            split = paragraph.rfind(" ", 0, 74)
+            if split <= 0:
+                split = 74
+            lines.append(paragraph[:split])
+            paragraph = paragraph[split:].lstrip()
+        lines.append(paragraph)
+    width = max(len(title) + 2, *(len(line) for line in lines))
+    top = "╭" + f" {title} ".center(width, "─") + "╮"
+    body = [f"│ {line:<{width}} │" for line in lines]
+    bottom = "╰" + "─" * (width + 2) + "╯"
+    return "\n".join([top, *body, bottom])
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("usage: scripts/bench-residency COMMAND [ARG...]", file=sys.stderr)
+        return 2
+
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    started = time.monotonic()
+    proc = subprocess.run(
+        sys.argv[1:],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    elapsed = time.monotonic() - started
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+
+    if proc.returncode != 0:
+        sys.stdout.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        return proc.returncode
+
+    user = after.ru_utime - before.ru_utime
+    system = after.ru_stime - before.ru_stime
+    active = user + system
+    waiting = max(0.0, elapsed - active)
+    active_pct = 100.0 * active / elapsed if elapsed else 0.0
+    waiting_pct = 100.0 * waiting / elapsed if elapsed else 0.0
+    involuntary = after.ru_nivcsw - before.ru_nivcsw
+    voluntary = after.ru_nvcsw - before.ru_nvcsw
+
+    try:
+        bench = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        bench = {}
+
+    throughput = bench.get("round_trips_per_second")
+    round_trips = bench.get("round_trips")
+    workload = ""
+    if round_trips is not None and throughput is not None:
+        workload = (
+            f"\nIt completed {round_trips:,} round trips at "
+            f"{throughput:,.0f} round trips/s."
+        )
+
+    text = (
+        f"The benchmark ran for {fmt_seconds(elapsed)} wall time. "
+        f"User code used {fmt_seconds(user)} and kernel work used "
+        f"{fmt_seconds(system)}, so the process was on CPU for about "
+        f"{active_pct:.0f}% of the run.\n"
+        f"The remaining {fmt_seconds(waiting)} ({waiting_pct:.0f}%) was "
+        f"off-CPU time: sleeping, blocked in the kernel, descheduled, or "
+        f"otherwise not executing on a CPU.{workload}\n"
+        f"Context switches: {voluntary:,} voluntary, {involuntary:,} involuntary."
+    )
+
+    print(panel("CPU residency", text))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

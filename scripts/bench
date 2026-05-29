@@ -79,6 +79,14 @@ run_plain() {
         --payload "$bench_payload"
 }
 
+run_residency() {
+    build_bench
+    scripts/bench-residency "$bench_bin" \
+        --clients "$bench_clients" \
+        --messages "$bench_messages" \
+        --payload "$bench_payload"
+}
+
 record_perf() {
     build_bench
     quiet sudo perf record \
@@ -173,7 +181,8 @@ usage: scripts/bench COMMAND
 Commands:
   build          build the release benchmark binary
   plain          run the tcp echo benchmark once
-  all            run CPU perf and io_uring trace reports
+  residency      show wall time versus user/system CPU time
+  all            run residency, CPU perf, and io_uring trace reports
   perf-record    record CPU samples with perf
   perf-report    open interactive perf report
   perf-hot       print compact perf stdio hot list
@@ -190,7 +199,9 @@ USAGE
 case "${1:-all}" in
     build) build_bench ;;
     plain) run_plain ;;
+    residency) run_residency ;;
     all)
+        run_residency
         run_perf
         run_uring
         ;;
