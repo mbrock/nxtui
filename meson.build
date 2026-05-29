@@ -189,6 +189,12 @@ endif
 if get_option('benchmarks')
   nxt_bench_deps = [nxt_core_dep]
   nxt_bench_deps += nxt_stacktrace_deps
+  nxt_bench_cpp_args = []
+  nxt_bench_cpp_args += nxt_stacktrace_cpp_args
+  nxt_bench_cpp_args += [
+    '-DNXT_RT_ENABLE_TRACE=0',
+    '-fno-omit-frame-pointer',
+  ]
 
   if host_machine.system() == 'linux'
     nxt_bench_liburing_dep = dependency(
@@ -202,16 +208,13 @@ if get_option('benchmarks')
     else
       error('benchmarks require liburing on Linux')
     endif
-
-    nxt_bench_cares_dep = dependency('libcares', required : true)
-    nxt_bench_deps += nxt_bench_cares_dep
   endif
 
   executable('nxt-echo-bench',
     'bench/nxtrt-echo-bench.cpp',
     include_directories : nxt_inc,
     dependencies : nxt_bench_deps,
-    cpp_args : nxt_stacktrace_cpp_args,
+    cpp_args : nxt_bench_cpp_args,
   )
 endif
 

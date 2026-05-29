@@ -1,4 +1,8 @@
-.PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
+.PHONY: all setup build full test freebsd-test bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
+
+BENCH_BUILD_DIR ?= build-bench-release
+BENCH_BIN ?= $(BENCH_BUILD_DIR)/nxt-echo-bench
+BENCH_CPP_ARGS ?=
 
 all: build
 
@@ -19,34 +23,56 @@ freebsd-test:
 	scripts/freebsd-vm test
 
 bench-build:
-	@scripts/bench build
+	@if [ ! -d "$(BENCH_BUILD_DIR)" ]; then \
+		meson setup "$(BENCH_BUILD_DIR)" \
+			--buildtype=release \
+			-Dbenchmarks=true \
+			-Dtests=false \
+			-Ddemo=false \
+			-Dllm_tool=false \
+			-Dcpp_args='$(BENCH_CPP_ARGS)'; \
+	else \
+		meson configure "$(BENCH_BUILD_DIR)" \
+			-Dbenchmarks=true \
+			-Dtests=false \
+			-Ddemo=false \
+			-Dllm_tool=false \
+			-Dcpp_args='$(BENCH_CPP_ARGS)'; \
+	fi
+	meson compile -C "$(BENCH_BUILD_DIR)" "$(notdir $(BENCH_BIN))"
 
-bench:
-	@scripts/bench all
+bench: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench all
 
-bench-perf:
-	@scripts/bench perf-record
+bench-plain: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench plain
 
-bench-perf-report:
-	@scripts/bench perf-report
+bench-residency: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench residency
 
-bench-perf-hot:
-	@scripts/bench perf-hot
+bench-perf: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench perf-record
 
-bench-perf-duck:
-	@scripts/bench perf-duck
+bench-perf-report: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench perf-report
 
-bench-uring-stat:
-	@scripts/bench uring-stat
+bench-perf-hot: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench perf-hot
 
-bench-uring-record:
-	@scripts/bench uring-record
+bench-perf-duck: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench perf-duck
 
-bench-uring-duck:
-	@scripts/bench uring-duck
+bench-uring-stat: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-stat
 
-bench-uring-trace:
-	@scripts/bench uring-trace
+bench-uring-record: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-record
+
+bench-uring-duck: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-duck
+
+bench-uring-trace: bench-build
+	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-trace
 
 spec:
 	racket nxtrt/model.rkt --run-all
@@ -63,4 +89,4 @@ docs-publish: docs
 	fi
 
 clean:
-	rm -rf build build-bench-release
+	rm -rf build "$(BENCH_BUILD_DIR)"

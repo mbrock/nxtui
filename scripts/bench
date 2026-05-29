@@ -2,12 +2,12 @@
 set -euo pipefail
 
 bench_bin="${BENCH_BIN:-build-bench-release/nxt-echo-bench}"
-build_dir="${BENCH_BUILD_DIR:-build-bench-release}"
-cpp_args="${BENCH_CPP_ARGS:--DNXT_RT_ENABLE_TRACE=0}"
 
 bench_clients="${BENCH_CLIENTS:-64}"
 bench_messages="${BENCH_MESSAGES:-512}"
 bench_payload="${BENCH_PAYLOAD:-64}"
+bench_timeout="${BENCH_TIMEOUT_MS:-30000}"
+bench_comm="${BENCH_PERF_COMM:-${BENCH_COMM:-$(basename "$bench_bin")}}"
 
 perf_data="${BENCH_PERF_DATA:-build-bench-release/nxt-echo.perf.data}"
 perf_json="${BENCH_PERF_DUCK_JSON:-build-bench-release/nxt-echo.perf.json}"
@@ -36,6 +36,13 @@ uring_events=(
     syscalls:sys_exit_io_uring_enter
 )
 
+bench_args=(
+    --clients "$bench_clients"
+    --messages "$bench_messages"
+    --payload "$bench_payload"
+    --timeout-ms "$bench_timeout"
+)
+
 section() {
     printf "\n== %s ==\n" "$1"
 }
@@ -52,6 +59,15 @@ quiet() {
     return 1
 }
 
+require_bench() {
+    if [[ -x "$bench_bin" ]]; then
+        return
+    fi
+    printf "benchmark binary not found: %s\n" "$bench_bin" >&2
+    printf "run 'make bench-build' first\n" >&2
+    exit 2
+}
+
 describe_bench() {
     local round_trips=$((bench_clients * bench_messages))
     local bytes_each_way=$((round_trips * bench_payload))
@@ -66,6 +82,7 @@ describe_bench() {
     printf "Benchmark: loopback TCP echo\n"
     printf "Workload: %s clients x %s messages x %s-byte payloads\n" \
         "$bench_clients" "$bench_messages" "$bench_payload"
+    printf "Timeout: %sms\n" "$bench_timeout"
     printf "Expected: %s round trips, %s each way\n" \
         "$round_trips" "$transfer_each_way"
     printf "Passes:\n"
@@ -75,39 +92,19 @@ describe_bench() {
     printf "\n"
 }
 
-build_bench() {
-    if [[ ! -d "$build_dir" ]]; then
-        quiet meson setup "$build_dir" \
-            --buildtype=release \
-            -Dbenchmarks=true \
-            -Dtests=false \
-            -Ddemo=false \
-            -Dllm_tool=false \
-            -Dcpp_args="$cpp_args"
-    fi
-    quiet meson configure "$build_dir" -Dcpp_args="$cpp_args"
-    quiet meson compile -C "$build_dir" "$(basename "$bench_bin")"
-}
-
 run_plain() {
-    build_bench
+    require_bench
     section "tcp echo benchmark"
-    "$bench_bin" \
-        --clients "$bench_clients" \
-        --messages "$bench_messages" \
-        --payload "$bench_payload"
+    "$bench_bin" "${bench_args[@]}"
 }
 
 run_residency() {
-    build_bench
-    scripts/bench-residency "$bench_bin" \
-        --clients "$bench_clients" \
-        --messages "$bench_messages" \
-        --payload "$bench_payload"
+    require_bench
+    scripts/bench-residency "$bench_bin" "${bench_args[@]}"
 }
 
 record_perf() {
-    build_bench
+    require_bench
     quiet sudo perf record \
         -F "$perf_freq" \
         -g \
@@ -118,9 +115,7 @@ record_perf() {
             --emit-json "$perf_residency" \
             --save-stdout "$perf_stdout" \
             "$bench_bin" \
-                --clients "$bench_clients" \
-                --messages "$bench_messages" \
-                --payload "$bench_payload"
+                "${bench_args[@]}"
     sudo chmod a+r "$perf_residency" "$perf_stdout" >/dev/null 2>&1 || true
 }
 
@@ -152,7 +147,7 @@ duck_perf() {
     BENCH_PERF_TREE_DEPTH="$tree_depth" \
     BENCH_PERF_TREE_CHILDREN="$tree_children" \
     BENCH_PERF_MIN_PCT="$min_pct" \
-        scripts/perf-duckdb "$perf_data" "$perf_json"
+        scripts/perf-duckdb --comm "$bench_comm" "$perf_data" "$perf_json"
 }
 
 run_perf() {
@@ -164,28 +159,24 @@ run_perf() {
 }
 
 uring_stat() {
-    build_bench
+    require_bench
     section "io_uring perf stat"
     sudo perf stat -e "$(IFS=,; echo "${uring_events[*]}")" \
         -- "$bench_bin" \
-            --clients "$bench_clients" \
-            --messages "$bench_messages" \
-            --payload "$bench_payload"
+            "${bench_args[@]}"
 }
 
 record_uring() {
-    build_bench
+    require_bench
     quiet sudo perf record \
         -o "$uring_data" \
         -e "$(IFS=,; echo "${uring_events[*]}")" \
         -- "$bench_bin" \
-            --clients "$bench_clients" \
-            --messages "$bench_messages" \
-            --payload "$bench_payload"
+            "${bench_args[@]}"
 }
 
 duck_uring() {
-    scripts/uring-duckdb "$uring_data" "$uring_json"
+    scripts/uring-duckdb --comm "$bench_comm" "$uring_data" "$uring_json"
 }
 
 run_uring() {
@@ -195,11 +186,8 @@ run_uring() {
 }
 
 trace_uring() {
-    build_bench
-    scripts/uring-bpftrace "$bench_bin" \
-        --clients "$bench_clients" \
-        --messages "$bench_messages" \
-        --payload "$bench_payload"
+    require_bench
+    scripts/uring-bpftrace --comm "$bench_comm" -- "$bench_bin" "${bench_args[@]}"
 }
 
 usage() {
@@ -207,7 +195,7 @@ usage() {
 usage: scripts/bench COMMAND
 
 Commands:
-  build          build the release benchmark binary
+  build          print the Makefile build command
   plain          run the tcp echo benchmark once
   residency      show wall time versus user/system CPU time
   all            run CPU perf/residency and io_uring trace reports
@@ -225,7 +213,9 @@ USAGE
 }
 
 case "${1:-all}" in
-    build) build_bench ;;
+    build)
+        printf "run 'make bench-build'\n"
+        ;;
     plain) run_plain ;;
     residency) run_residency ;;
     all)

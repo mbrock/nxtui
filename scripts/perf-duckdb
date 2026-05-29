@@ -8,13 +8,12 @@
 from __future__ import annotations
 
 import argparse
-import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
+from benchlib import convert_perf_data, default_comm, env_float_first, env_int
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -43,34 +42,34 @@ def parse_args() -> argparse.Namespace:
         help="perf JSON file, defaults to DATA with .json suffix")
     parser.add_argument(
         "--comm",
-        default=os.environ.get("BENCH_PERF_COMM", "nxt-echo-bench"),
+        default=default_comm(),
         help="process command name to analyze")
     parser.add_argument(
         "--lines",
         type=int,
-        default=int(os.environ.get("BENCH_PERF_DUCK_LINES", "20")),
+        default=env_int("BENCH_PERF_DUCK_LINES", 20),
         help="rows shown in each table")
     parser.add_argument(
         "--symbol-width",
         type=int,
-        default=int(os.environ.get("BENCH_PERF_SYMBOL_WIDTH", "96")),
+        default=env_int("BENCH_PERF_SYMBOL_WIDTH", 96),
         help="maximum rendered symbol width")
     parser.add_argument(
         "--tree-depth",
         type=int,
-        default=int(os.environ.get("BENCH_PERF_TREE_DEPTH", "9")),
+        default=env_int("BENCH_PERF_TREE_DEPTH", 9),
         help="maximum call tree depth")
     parser.add_argument(
         "--tree-children",
         type=int,
-        default=int(os.environ.get("BENCH_PERF_TREE_CHILDREN", "6")),
+        default=env_int("BENCH_PERF_TREE_CHILDREN", 6),
         help="maximum children per call tree node")
     parser.add_argument(
         "--min-pct",
         type=float,
-        default=float(os.environ.get(
-            "BENCH_PERF_MIN_PCT",
-            os.environ.get("BENCH_PERF_TREE_MIN_PCT", "3.0"))),
+        default=env_float_first(
+            ["BENCH_PERF_MIN_PCT", "BENCH_PERF_TREE_MIN_PCT"],
+            3.0),
         help="minimum percent for table rows and call tree nodes")
     parser.add_argument(
         "--tree-min-pct",
@@ -79,38 +78,6 @@ def parse_args() -> argparse.Namespace:
         default=argparse.SUPPRESS,
         help="deprecated alias for --min-pct")
     return parser.parse_args()
-
-
-def convert_perf_data(data: Path, json_path: Path) -> None:
-    if not data.exists():
-        raise SystemExit(f"perf data not found: {data}")
-
-    if json_path.exists() and json_path.stat().st_mtime >= data.stat().st_mtime:
-        return
-
-    subprocess.run(
-        [
-            "sudo",
-            "perf",
-            "data",
-            "convert",
-            "--force",
-            "-i",
-            str(data),
-            "--to-json",
-            str(json_path),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        ["sudo", "chmod", "a+r", str(json_path)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
 
 def dso_name(raw: str | None) -> str:
     if not raw:

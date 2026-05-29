@@ -2,7 +2,7 @@
 
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/http.hpp>
-#include <nxtrt/net.hpp>
+#include <nxtrt/net_dns.hpp>
 #include <nxtrt/sampling.hpp>
 #include <nxtrt/tls.hpp>
 #include <nxtrt/ui_runtime.hpp>

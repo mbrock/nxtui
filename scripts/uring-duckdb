@@ -8,12 +8,20 @@
 from __future__ import annotations
 
 import argparse
-import os
+import math
 import re
-import subprocess
 from pathlib import Path
 
 import duckdb
+from benchlib import (
+    as_int,
+    convert_perf_data,
+    default_comm,
+    env_float,
+    env_int,
+    n,
+    pct,
+)
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -33,50 +41,24 @@ def parse_args() -> argparse.Namespace:
         help="perf JSON file, defaults to DATA with .json suffix")
     parser.add_argument(
         "--comm",
-        default=os.environ.get("BENCH_PERF_COMM", "nxt-echo-bench"),
+        default=default_comm(),
         help="process command name to analyze")
     parser.add_argument(
         "--lines",
         type=int,
-        default=int(os.environ.get("BENCH_PERF_DUCK_LINES", "20")),
-        help="rows shown in each table")
+        default=env_int("BENCH_PERF_DUCK_LINES", 20),
+        help="rows shown in tables and buckets shown in histograms")
     parser.add_argument(
         "--min-pct",
         type=float,
-        default=float(os.environ.get("BENCH_PERF_MIN_PCT", "3.0")),
-        help="minimum percent for distribution rows")
+        default=env_float("BENCH_PERF_MIN_PCT", 3.0),
+        help="minimum percent for categorical distribution rows")
+    parser.add_argument(
+        "--hist-width",
+        type=int,
+        default=env_int("BENCH_PERF_HIST_WIDTH", 36),
+        help="character width for histogram bars")
     return parser.parse_args()
-
-
-def convert_perf_data(data: Path, json_path: Path) -> None:
-    if not data.exists():
-        raise SystemExit(f"perf data not found: {data}")
-
-    if json_path.exists() and json_path.stat().st_mtime >= data.stat().st_mtime:
-        return
-
-    subprocess.run(
-        [
-            "sudo",
-            "perf",
-            "data",
-            "convert",
-            "--force",
-            "-i",
-            str(data),
-            "--to-json",
-            str(json_path),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        ["sudo", "chmod", "a+r", str(json_path)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
 
 
 def connect(json_path: Path, comm: str) -> duckdb.DuckDBPyConnection:
@@ -84,8 +66,15 @@ def connect(json_path: Path, comm: str) -> duckdb.DuckDBPyConnection:
     con.execute(
         """
         create temp table raw as
-            select row_number() over () as eid, unnest(samples) as sample
-            from read_json(?, maximum_object_size = 1000000000, union_by_name = true);
+            select row_number() over () as eid, sample
+            from (
+                select unnest(samples) as sample
+                from read_json(
+                    ?,
+                    maximum_object_size = 1000000000,
+                    union_by_name = true
+                )
+            );
         """,
         [str(json_path)],
     )
@@ -106,29 +95,6 @@ def sample_fields(con: duckdb.DuckDBPyConnection) -> set[str]:
     if row is None:
         return set()
     return set(re.findall(r'(?:^STRUCT\(|, )"?([A-Za-z_][A-Za-z0-9_]*)"? [A-Z]', row[0]))
-
-
-def as_int(raw: object) -> int:
-    if raw is None:
-        return 0
-    if isinstance(raw, int):
-        return raw
-    text = str(raw)
-    return int(text, 16) if text.startswith("0x") else int(text)
-
-
-def pct(part: int, total: int) -> str:
-    return f"{100.0 * part / max(total, 1):3.0f}"
-
-
-def n(value: int | float) -> str:
-    if isinstance(value, float):
-        return f"{value:,.1f}"
-    return f"{value:,}"
-
-
-def row_n(value: int) -> str:
-    return str(value)
 
 
 def count_where(con: duckdb.DuckDBPyConnection, where: str) -> int:
@@ -178,135 +144,363 @@ def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Text:
     return out
 
 
+def create_analysis_tables(con: duckdb.DuckDBPyConnection) -> None:
+    con.execute(
+        """
+        create temp table ordered_events as
+            select
+                row_number() over (order by sample.timestamp, eid) as event_seq,
+                eid,
+                sample
+            from events;
+        """
+    )
+    con.execute(
+        """
+        create temp table enter_calls as
+            select
+                event_seq,
+                eid,
+                sample.tid as tid,
+                sample.timestamp::double as enter_ts,
+                sample.to_submit::bigint as to_submit
+            from ordered_events
+            where sample.to_submit is not null;
+        """
+    )
+    con.execute(
+        """
+        create temp table exit_calls as
+            select
+                event_seq,
+                eid,
+                sample.tid as tid,
+                sample.timestamp::double as exit_ts,
+                sample.ret::bigint as ret
+            from ordered_events
+            where sample.ret is not null;
+        """
+    )
+    con.execute(
+        """
+        create temp table completion_events as
+            select
+                event_seq,
+                eid,
+                sample.timestamp::double as completion_ts,
+                sample.res::bigint as res
+            from ordered_events
+            where sample.res is not null;
+        """
+    )
+    con.execute(
+        """
+        create temp table enter_latencies as
+            select
+                e.tid,
+                e.event_seq as enter_seq,
+                x.event_seq as exit_seq,
+                e.enter_ts,
+                x.exit_ts,
+                x.ret,
+                (x.exit_ts - e.enter_ts) / 1000.0 as us
+            from enter_calls e
+            asof join exit_calls x
+                 on e.tid = x.tid
+                and e.event_seq <= x.event_seq
+            where x.exit_ts >= e.enter_ts;
+        """
+    )
+    con.execute(
+        """
+        create temp table completion_batches as
+            with assigned as (
+                select enter_seq, count(*)::int as cqe_count
+                from (
+                    select
+                        c.event_seq as completion_seq,
+                        e.event_seq as enter_seq
+                    from completion_events c
+                    asof join enter_calls e
+                         on c.event_seq >= e.event_seq
+                )
+                group by 1
+            )
+            select coalesce(a.cqe_count, 0)::int as cqe_count
+            from enter_calls e
+            left join assigned a on a.enter_seq = e.event_seq;
+        """
+    )
+
+
+def bar_cell(count: int, max_count: int, width: int) -> Text:
+    if count <= 0 or max_count <= 0 or width <= 0:
+        return Text("")
+    filled = min(width, max(1, math.ceil(width * count / max_count)))
+    return Text("#" * filled, style="green")
+
+
+def bar_table(
+    rows: list[tuple[str, int]],
+    total: int,
+    *,
+    width: int,
+) -> Table:
+    max_count = max((count for _, count in rows), default=0)
+    table = Table.grid(padding=(0, 2))
+    table.add_column(justify="right", no_wrap=True)
+    table.add_column(justify="right", no_wrap=True)
+    table.add_column(justify="right", no_wrap=True)
+    table.add_column(no_wrap=True)
+    for label, count in rows:
+        table.add_row(
+            Text(label, style="cyan"),
+            Text(f"{pct(count, total)}%", style="cyan"),
+            Text(f"n={n(count)}", style="dim"),
+            bar_cell(count, max_count, max(1, width)),
+        )
+    return table
+
+
 def count_table(
     rows: list[tuple[object, int]],
     total: int,
     *,
     key_prefix: str = "",
     min_pct: float,
+    width: int,
 ) -> Table:
     filtered = [
-        (key, count)
+        (f"{key_prefix}{key}", count)
         for key, count in rows
         if 100.0 * count / max(total, 1) >= min_pct
     ]
-    table = Table.grid(padding=(0, 2))
-    table.add_column(justify="right", no_wrap=True)
-    table.add_column(justify="right", no_wrap=True)
-    table.add_column(no_wrap=True)
-    for key, count in filtered:
-        table.add_row(
-            Text(f"{pct(count, total)}%", style="cyan"),
-            Text(f"n={row_n(count)}", style="dim"),
-            f"{key_prefix}{key}",
+    return bar_table(filtered, total, width=width)
+
+
+def source_count(con: duckdb.DuckDBPyConnection, source_sql: str) -> int:
+    return con.execute(
+        f"select count(*)::int from ({source_sql}) source"
+    ).fetchone()[0]
+
+
+def exact_histogram_counts(
+    con: duckdb.DuckDBPyConnection,
+    source_sql: str,
+    *,
+    order_by: str,
+    limit: int | None = None,
+) -> tuple[list[tuple[object, int]], int]:
+    total = source_count(con, source_sql)
+    limit_clause = "limit ?" if limit is not None else ""
+    params = [limit] if limit is not None else []
+    rows = con.execute(
+        f"""
+        with source as ({source_sql}),
+        h as (
+            select histogram(value) as hist
+            from source
+        ),
+        rows as (
+            select e.key as value, e.value::int as count
+            from h, unnest(map_entries(hist)) as t(e)
         )
-    return table
+        select value, count
+        from rows
+        order by {order_by}
+        {limit_clause};
+        """,
+        params,
+    ).fetchall()
+    return rows, total
 
 
-def fetch_counts(
+def event_histogram_counts(
     con: duckdb.DuckDBPyConnection,
     expr: str,
     where: str,
     limit: int,
 ) -> tuple[list[tuple[object, int]], int]:
-    rows = con.execute(
+    return exact_histogram_counts(
+        con,
+        f"select {expr} as value from events where {where}",
+        order_by="count desc, value",
+        limit=limit,
+    )
+
+
+def exact_numeric_counts(
+    con: duckdb.DuckDBPyConnection,
+    source_sql: str,
+    *,
+    limit: int | None,
+    order_by: str = "value",
+) -> tuple[list[tuple[int, int]], int]:
+    rows, total = exact_histogram_counts(
+        con,
+        source_sql,
+        order_by=order_by,
+        limit=limit,
+    )
+    return [(as_int(value), count) for value, count in rows], total
+
+
+def numeric_stats(
+    con: duckdb.DuckDBPyConnection,
+    source_sql: str,
+) -> tuple[int, int, object, object]:
+    return con.execute(
         f"""
-        select {expr}, count(*)::int as count
-        from events
-        where {where}
-        group by 1
-        order by 2 desc, 1
-        limit ?;
-        """,
-        [limit],
-    ).fetchall()
-    total = count_where(con, where)
-    return rows, total
-
-
-def numeric_counts(
-    con: duckdb.DuckDBPyConnection,
-    expr: str,
-    where: str,
-    limit: int,
-) -> tuple[list[tuple[int, int]], int]:
-    rows, total = fetch_counts(con, expr, where, limit)
-    return [(as_int(key), count) for key, count in rows], total
-
-
-def completion_batch_counts(
-    con: duckdb.DuckDBPyConnection,
-    limit: int,
-) -> tuple[list[tuple[int, int]], int]:
-    rows = con.execute(
+        select
+            count(*)::int,
+            count(distinct value)::int,
+            min(value),
+            max(value)
+        from ({source_sql}) source;
         """
-        with ordered as (
-            select
-                eid,
-                sample.timestamp as timestamp,
-                sample.to_submit is not null as is_enter,
-                sample.res is not null as is_complete,
-                sum(case when sample.to_submit is not null then 1 else 0 end)
-                    over (order by sample.timestamp, eid) as enter_seq
-            from events
-        ),
-        enters as (
-            select enter_seq
-            from ordered
-            where is_enter
-        ),
-        completions as (
-            select enter_seq, count(*)::int as cqe_count
-            from ordered
-            where is_complete and enter_seq > 0
-            group by 1
-        ),
-        batches as (
-            select coalesce(cqe_count, 0)::int as cqe_count
-            from enters
-            left join completions using (enter_seq)
+    ).fetchone()
+
+
+def exact_numeric_labels(
+    rows: list[tuple[int | float, int]],
+    *,
+    value_kind: str,
+    unit: str = "",
+) -> list[tuple[str, int]]:
+    return [
+        (format_value(value, value_kind=value_kind, unit=unit), count)
+        for value, count in rows
+    ]
+
+
+def format_value(value: int | float, *, value_kind: str, unit: str = "") -> str:
+    if value_kind == "float":
+        return f"{float(value):.1f}{unit}"
+    return str(as_int(value))
+
+
+def format_range(
+    low: int | float,
+    high: int | float,
+    *,
+    value_kind: str,
+    unit: str = "",
+) -> str:
+    if value_kind == "float":
+        return f"{float(low):.1f}-{float(high):.1f}{unit}"
+    low_int = as_int(low)
+    high_int = as_int(high)
+    return str(low_int) if low_int == high_int else f"{low_int}-{high_int}"
+
+
+def labeled_histogram_bins(
+    rows: list[tuple[object, int]],
+    min_value: object,
+    *,
+    value_kind: str,
+    unit: str = "",
+) -> list[tuple[str, int]]:
+    out: list[tuple[str, int]] = []
+    previous_upper: object | None = None
+    for upper, count in rows:
+        if previous_upper is None:
+            low = min_value
+        elif value_kind == "float":
+            low = previous_upper
+        else:
+            low = as_int(previous_upper) + 1
+        out.append((
+            format_range(low, upper, value_kind=value_kind, unit=unit),
+            count,
+        ))
+        previous_upper = upper
+    return out
+
+
+def binned_histogram_counts(
+    con: duckdb.DuckDBPyConnection,
+    source_sql: str,
+    *,
+    max_buckets: int,
+) -> list[tuple[object, int]]:
+    return con.execute(
+        f"""
+        with source as ({source_sql}),
+        bounds as (
+            select min(value) as low, max(value) as high
+            from source
         )
-        select cqe_count, count(*)::int as count
-        from batches
-        group by 1
-        order by 2 desc, 1
-        limit ?;
+        select e.key as value, e.value::int as count
+        from (
+            select histogram(
+                value,
+                equi_width_bins(low, high, ?::bigint, false)
+            ) as hist
+            from source, bounds
+            group by low, high
+        ) h,
+        unnest(map_entries(hist)) as t(e)
+        order by value;
         """,
-        [limit],
+        [max(1, max_buckets)],
     ).fetchall()
-    total = count_where(con, "sample.to_submit is not null")
-    return rows, total
 
 
-def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
+def numeric_histogram_labels(
+    con: duckdb.DuckDBPyConnection,
+    source_sql: str,
+    *,
+    max_buckets: int,
+    value_kind: str,
+    unit: str = "",
+) -> tuple[list[tuple[str, int]], int]:
+    total, distinct_values, min_value, _ = numeric_stats(con, source_sql)
+    if total == 0:
+        return [], 0
+
+    max_buckets = max(1, max_buckets)
+    if distinct_values <= max_buckets:
+        rows, _ = exact_histogram_counts(
+            con,
+            source_sql,
+            order_by="value",
+        )
+        typed_rows = [
+            (
+                float(value) if value_kind == "float" else as_int(value),
+                count,
+            )
+            for value, count in rows
+        ]
+        return (
+            exact_numeric_labels(typed_rows, value_kind=value_kind, unit=unit),
+            total,
+        )
+
+    rows = binned_histogram_counts(
+        con,
+        source_sql,
+        max_buckets=max_buckets,
+    )
+    return (
+        labeled_histogram_bins(
+            rows,
+            min_value,
+            value_kind=value_kind,
+            unit=unit,
+        ),
+        total,
+    )
+
+
+def latency_table(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    max_buckets: int,
+    width: int,
+) -> Table:
     row = con.execute(
         """
-        with enters as (
-            select
-                sample.tid as tid,
-                row_number() over (
-                    partition by sample.tid order by sample.timestamp
-                ) as seq,
-                sample.timestamp as enter_ts
-            from events
-            where sample.to_submit is not null
-        ),
-        exits as (
-            select
-                sample.tid as tid,
-                row_number() over (
-                    partition by sample.tid order by sample.timestamp
-                ) as seq,
-                sample.timestamp as exit_ts
-            from events
-            where sample.ret is not null
-        ),
-        paired as (
-            select (exit_ts - enter_ts) / 1000.0 as us
-            from enters
-            join exits using (tid, seq)
-            where exit_ts >= enter_ts
-        )
         select
             count(*)::int,
             min(us),
@@ -314,20 +508,42 @@ def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
             quantile_cont(us, 0.90),
             quantile_cont(us, 0.99),
             max(us),
-            avg(us)
-        from paired;
+            avg(us),
+            stddev_samp(us),
+            mad(us)
+        from enter_latencies;
         """
     ).fetchone()
     table = Table.grid(padding=(0, 2))
     table.add_column()
     if row and row[0]:
-        calls, min_us, p50, p90, p99, max_us, avg = row
+        calls, min_us, p50, p90, p99, max_us, avg, stddev, mad = row
+        stddev = stddev or 0.0
+        mad = mad or 0.0
         table.add_row(
             (
                 f"n={n(calls)}  "
                 f"min={min_us:.1f}us  p50={p50:.1f}us  p90={p90:.1f}us  "
-                f"p99={p99:.1f}us  max={max_us:.1f}us  avg={avg:.1f}us"
+                f"p99={p99:.1f}us  max={max_us:.1f}us  avg={avg:.1f}us  "
+                f"stddev={stddev:.1f}us  mad={mad:.1f}us"
             )
+        )
+        cutoff = repr(float(p99))
+        rows, _ = numeric_histogram_labels(
+            con,
+            f"select us as value from enter_latencies where us <= {cutoff}",
+            max_buckets=max_buckets - 1,
+            value_kind="float",
+            unit="us",
+        )
+        overflow = con.execute(
+            "select count(*)::int from enter_latencies where us > ?",
+            [p99],
+        ).fetchone()[0]
+        if overflow:
+            rows.append((f">{p99:.1f}us", overflow))
+        table.add_row(
+            bar_table(rows, calls, width=width)
         )
     return table
 
@@ -350,8 +566,9 @@ def main() -> int:
 
     console = Console()
     console.print(event_summary(con, json_path), soft_wrap=True)
+    create_analysis_tables(con)
 
-    rows, total = fetch_counts(
+    rows, total = event_histogram_counts(
         con,
         "sample.op_str",
         "sample.sq_thread is not null",
@@ -360,55 +577,70 @@ def main() -> int:
     print_section(
         console,
         "submitted SQEs by opcode",
-        count_table(rows, total, min_pct=args.min_pct),
+        count_table(rows, total, min_pct=args.min_pct, width=args.hist_width),
     )
 
-    rows, total = numeric_counts(
+    rows, total = numeric_histogram_labels(
         con,
-        "sample.to_submit",
-        "sample.to_submit is not null",
-        args.lines,
+        "select to_submit as value from enter_calls",
+        max_buckets=args.lines,
+        value_kind="int",
     )
     print_section(
         console,
         "number of SQEs submitted per enter",
-        count_table(rows, total, min_pct=args.min_pct),
+        bar_table(rows, total, width=args.hist_width),
     )
 
-    rows, total = numeric_counts(
+    rows, total = numeric_histogram_labels(
         con,
-        "sample.ret",
-        "sample.ret is not null",
-        args.lines,
+        "select ret as value from exit_calls",
+        max_buckets=args.lines,
+        value_kind="int",
     )
     print_section(
         console,
         "number of SQEs accepted per enter",
-        count_table(rows, total, min_pct=args.min_pct),
+        bar_table(rows, total, width=args.hist_width),
     )
 
-    rows, total = completion_batch_counts(con, args.lines)
+    rows, total = numeric_histogram_labels(
+        con,
+        "select cqe_count as value from completion_batches",
+        max_buckets=args.lines,
+        value_kind="int",
+    )
     print_section(
         console,
         "CQEs completed after each enter",
-        count_table(rows, total, min_pct=args.min_pct),
+        bar_table(rows, total, width=args.hist_width),
     )
 
-    print_section(console, "io_uring_enter latency", latency_table(con))
+    print_section(
+        console,
+        "io_uring_enter latency",
+        latency_table(con, max_buckets=args.lines, width=args.hist_width),
+    )
 
-    rows, total = numeric_counts(
+    rows, total = exact_numeric_counts(
         con,
-        "sample.res",
-        "sample.res is not null",
-        args.lines,
+        "select res as value from completion_events",
+        limit=args.lines,
+        order_by="count desc, value",
     )
     print_section(
         console,
         "completion results",
-        count_table(rows, total, key_prefix="res=", min_pct=args.min_pct),
+        count_table(
+            rows,
+            total,
+            key_prefix="res=",
+            min_pct=args.min_pct,
+            width=args.hist_width,
+        ),
     )
 
-    rows, total = fetch_counts(
+    rows, total = event_histogram_counts(
         con,
         "sample.op_str",
         "sample.mask is not null",
@@ -418,7 +650,7 @@ def main() -> int:
         print_section(
             console,
             "poll arms by opcode",
-            count_table(rows, total, min_pct=args.min_pct),
+            count_table(rows, total, min_pct=args.min_pct, width=args.hist_width),
         )
 
     return 0

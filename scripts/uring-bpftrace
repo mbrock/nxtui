@@ -1,8 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+comm="${BENCH_PERF_COMM:-${BENCH_COMM:-}}"
+
+while (($# > 0)); do
+    case "$1" in
+        --comm)
+            if (($# < 2)); then
+                echo "scripts/uring-bpftrace: --comm needs a value" >&2
+                exit 2
+            fi
+            comm="$2"
+            shift 2
+            ;;
+        --comm=*)
+            comm="${1#--comm=}"
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -h|--help)
+            echo "usage: scripts/uring-bpftrace [--comm NAME] -- COMMAND [ARG...]" >&2
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
 if (($# == 0)); then
-    echo "usage: scripts/uring-bpftrace COMMAND [ARG...]" >&2
+    echo "usage: scripts/uring-bpftrace [--comm NAME] -- COMMAND [ARG...]" >&2
+    exit 2
+fi
+
+if [[ -z "$comm" ]]; then
+    comm="$(basename "$1")"
+fi
+if [[ ! "$comm" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "scripts/uring-bpftrace: unsafe comm name: $comm" >&2
     exit 2
 fi
 
@@ -12,13 +50,13 @@ for arg in "$@"; do
     command+="${quoted} "
 done
 
-exec sudo bpftrace -e '
+exec sudo bpftrace -e "
 BEGIN
 {
-    printf("Tracing io_uring for nxt-echo-bench...\n");
+    printf(\"Tracing io_uring for $comm...\n\");
 }
 
-tracepoint:syscalls:sys_enter_io_uring_enter /comm == "nxt-echo-bench"/
+tracepoint:syscalls:sys_enter_io_uring_enter /comm == \"$comm\"/
 {
     @enter_calls = count();
     @to_submit = hist(args->to_submit);
@@ -32,35 +70,35 @@ tracepoint:syscalls:sys_exit_io_uring_enter /@enter_start[tid]/
 {
     @enter_us = hist((nsecs - @enter_start[tid]) / 1000);
     @enter_ret[args->ret] = count();
-    $deleted = delete(@enter_start[tid]);
+    \$deleted = delete(@enter_start[tid]);
 }
 
-tracepoint:io_uring:io_uring_submit_req /comm == "nxt-echo-bench"/
+tracepoint:io_uring:io_uring_submit_req /comm == \"$comm\"/
 {
     @submitted = count();
     @opcode[str(args->op_str)] = count();
     @submit_flags[args->flags] = count();
 }
 
-tracepoint:io_uring:io_uring_complete /comm == "nxt-echo-bench"/
+tracepoint:io_uring:io_uring_complete /comm == \"$comm\"/
 {
     @completed = count();
     @result[args->res] = count();
     @cflags[args->cflags] = count();
 }
 
-tracepoint:io_uring:io_uring_cqring_wait /comm == "nxt-echo-bench"/
+tracepoint:io_uring:io_uring_cqring_wait /comm == \"$comm\"/
 {
     @cqring_wait = count();
     @cqring_wait_min[args->min_events] = count();
 }
 
-tracepoint:io_uring:io_uring_poll_arm /comm == "nxt-echo-bench"/
+tracepoint:io_uring:io_uring_poll_arm /comm == \"$comm\"/
 {
     @poll_arm = count();
 }
 
-tracepoint:io_uring:io_uring_queue_async_work /comm == "nxt-echo-bench"/
+tracepoint:io_uring:io_uring_queue_async_work /comm == \"$comm\"/
 {
     @async_work = count();
 }
@@ -69,4 +107,4 @@ END
 {
     clear(@enter_start);
 }
-' -c "$command"
+" -c "$command"

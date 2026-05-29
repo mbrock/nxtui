@@ -1,16 +1,18 @@
 #include <nxtrt/app.hpp>
 #include <nxtrt/buffers.hpp>
+#include <nxtrt/event.hpp>
 #include <nxtrt/net.hpp>
 #include <nxt/unique-fd.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <netinet/in.h>
 #include <span>
 #include <stdexcept>
@@ -32,10 +34,17 @@ struct bench_options
 
 struct bench_stats
 {
-    std::atomic<std::size_t> accepted = 0;
-    std::atomic<std::size_t> echoed_bytes = 0;
-    std::atomic<std::size_t> client_sent = 0;
-    std::atomic<std::size_t> client_received = 0;
+    std::size_t accepted = 0;
+    std::size_t echoed_bytes = 0;
+    std::size_t client_sent = 0;
+    std::size_t client_received = 0;
+};
+
+struct bench_state
+{
+    nxtrt::event done;
+    std::size_t clients_done = 0;
+    bool timed_out = false;
 };
 
 nxtrt::task<std::size_t> send_all_socket(
@@ -112,7 +121,7 @@ nxtrt::task<void> echo_connection(
         co_await send_all_socket(
             fd.get(),
             std::span<const std::byte>{buffer}.first(read));
-        stats->echoed_bytes.fetch_add(read, std::memory_order_relaxed);
+        stats->echoed_bytes += read;
     }
 }
 
@@ -126,7 +135,7 @@ nxtrt::task<void> echo_server(
     while (accepted < clients) {
         auto client = co_await nxtrt::net::accept(listener);
         ++accepted;
-        stats->accepted.fetch_add(1, std::memory_order_relaxed);
+        stats->accepted += 1;
         nxtrt::fork(echo_connection(
             std::move(client),
             payload_size,
@@ -145,15 +154,47 @@ nxtrt::task<void> echo_client(
     auto echoed = std::vector<std::byte>(payload.size());
     for (auto i = std::size_t{0}; i < messages; ++i) {
         auto sent = co_await send_all_socket(fd.get(), payload);
-        stats->client_sent.fetch_add(sent, std::memory_order_relaxed);
+        stats->client_sent += sent;
 
         co_await recv_exact_socket(fd.get(), std::span{echoed});
         if (!std::ranges::equal(payload, echoed))
             throw std::runtime_error{"echo payload mismatch"};
-        stats->client_received.fetch_add(
-            echoed.size(),
-            std::memory_order_relaxed);
+        stats->client_received += echoed.size();
     }
+}
+
+void mark_client_done(bench_state & state, std::size_t clients)
+{
+    ++state.clients_done;
+    if (state.clients_done >= clients)
+        state.done.set();
+}
+
+nxtrt::task<void> echo_client_tracked(
+    sockaddr_in address,
+    std::size_t messages,
+    std::span<const std::byte> payload,
+    bench_stats * stats,
+    std::shared_ptr<bench_state> state,
+    std::size_t clients)
+{
+    try {
+        co_await echo_client(address, messages, payload, stats);
+    } catch (...) {
+        mark_client_done(*state, clients);
+        throw;
+    }
+    mark_client_done(*state, clients);
+}
+
+nxtrt::task<void> timeout_load(
+    std::chrono::milliseconds timeout,
+    std::shared_ptr<bench_state> state)
+{
+    co_await nxtrt::op::timeout::after(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(timeout));
+    state->timed_out = true;
+    state->done.set();
 }
 
 nxtrt::task<void> run_echo_load(
@@ -163,6 +204,8 @@ nxtrt::task<void> run_echo_load(
     std::span<const std::byte> payload,
     bench_stats * stats)
 {
+    auto state = std::make_shared<bench_state>();
+
     nxtrt::fork(echo_server(
         listener,
         options.clients,
@@ -170,13 +213,21 @@ nxtrt::task<void> run_echo_load(
         stats));
 
     for (auto i = std::size_t{0}; i < options.clients; ++i)
-        nxtrt::fork(echo_client(
+        nxtrt::fork(echo_client_tracked(
             address,
             options.messages,
             payload,
-            stats));
+            stats,
+            state,
+            options.clients));
 
-    co_return;
+    nxtrt::fork(timeout_load(options.timeout, state));
+
+    co_await state->done;
+    if (state->timed_out)
+        throw nxtrt::timeout_error{};
+    if (auto * zone = nxtrt::current_zone())
+        zone->stop();
 }
 
 struct echo_load_factory
@@ -189,7 +240,6 @@ struct echo_load_factory
 
     nxtrt::task<void> operator()()
     {
-        (void)options.timeout;
         return run_echo_load(options, address, listener, payload, stats);
     }
 };
@@ -233,7 +283,7 @@ void print_usage(char const * program)
         << "  --clients N       concurrent loopback clients (default 128)\n"
         << "  --messages N      messages per client (default 256)\n"
         << "  --payload N       payload bytes per message (default 64)\n"
-        << "  --timeout-ms N    reserved for harness timeouts (default 30000)\n";
+        << "  --timeout-ms N    maximum benchmark runtime (default 30000)\n";
 }
 
 bench_options parse_options(int argc, char ** argv)
@@ -270,6 +320,8 @@ bench_options parse_options(int argc, char ** argv)
         throw std::runtime_error{"--messages must be greater than zero"};
     if (options.payload_size == 0)
         throw std::runtime_error{"--payload must be greater than zero"};
+    if (options.timeout.count() == 0)
+        throw std::runtime_error{"--timeout-ms must be greater than zero"};
 
     return options;
 }
@@ -292,8 +344,7 @@ void print_result(
     auto round_trips = options.clients * options.messages;
     auto payload_bytes = round_trips * options.payload_size;
     auto total_client_bytes =
-        stats.client_sent.load(std::memory_order_relaxed)
-        + stats.client_received.load(std::memory_order_relaxed);
+        stats.client_sent + stats.client_received;
     auto mib = static_cast<double>(total_client_bytes) / (1024.0 * 1024.0);
 
     std::cout
@@ -304,20 +355,42 @@ void print_result(
         << "  \"payload_bytes\": " << options.payload_size << ",\n"
         << "  \"round_trips\": " << round_trips << ",\n"
         << "  \"expected_payload_bytes_each_way\": " << payload_bytes << ",\n"
-        << "  \"accepted_connections\": "
-        << stats.accepted.load(std::memory_order_relaxed) << ",\n"
-        << "  \"client_sent_bytes\": "
-        << stats.client_sent.load(std::memory_order_relaxed) << ",\n"
-        << "  \"client_received_bytes\": "
-        << stats.client_received.load(std::memory_order_relaxed) << ",\n"
-        << "  \"server_echoed_bytes\": "
-        << stats.echoed_bytes.load(std::memory_order_relaxed) << ",\n"
+        << "  \"accepted_connections\": " << stats.accepted << ",\n"
+        << "  \"client_sent_bytes\": " << stats.client_sent << ",\n"
+        << "  \"client_received_bytes\": " << stats.client_received << ",\n"
+        << "  \"server_echoed_bytes\": " << stats.echoed_bytes << ",\n"
         << "  \"elapsed_seconds\": " << seconds << ",\n"
         << "  \"round_trips_per_second\": "
         << (static_cast<double>(round_trips) / seconds) << ",\n"
         << "  \"client_throughput_mib_per_second\": " << (mib / seconds)
         << "\n"
         << "}\n";
+}
+
+void print_exception_tree(
+    std::exception_ptr failure,
+    std::string indent = "  ")
+{
+    if (!failure)
+        return;
+
+    try {
+        nxtrt::rethrow(failure);
+    } catch (const nxtrt::exception_group & group) {
+        std::cerr << indent << group.what() << "\n";
+        auto const & exceptions = group.exceptions();
+        auto const shown = std::min(exceptions.size(), std::size_t{5});
+        for (auto i = std::size_t{0}; i < shown; ++i)
+            print_exception_tree(exceptions[i], indent + "  ");
+        if (exceptions.size() > shown)
+            std::cerr << indent << "  ... "
+                      << (exceptions.size() - shown)
+                      << " more failures\n";
+    } catch (const std::exception & e) {
+        std::cerr << indent << e.what() << "\n";
+    } catch (...) {
+        std::cerr << indent << "unknown exception\n";
+    }
 }
 
 } // namespace
@@ -344,8 +417,9 @@ int main(int argc, char ** argv)
 
         print_result(options, stats, elapsed);
         return 0;
-    } catch (const std::exception & e) {
-        std::cerr << "nxt-echo-bench: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "nxt-echo-bench:\n";
+        print_exception_tree(std::current_exception());
         return 1;
     }
 }
