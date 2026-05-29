@@ -306,21 +306,7 @@ public:
         /// child's continuation and enqueue the child for the pump.
         void await_suspend(std::coroutine_handle<> awaiting)
         {
-            auto * current = detail::current_env;
-            auto * active_deck =
-                current == nullptr ? nullptr : current->current_deck;
-            auto * awaiting_promise =
-                current == nullptr ? nullptr : current->current_promise;
-            if (active_deck == nullptr || awaiting_promise == nullptr)
-                throw runtime_error{
-                    "nxtrt task awaited without a running deck"};
-
-            auto & promise = coroutine_.promise();
-            promise.env.copy_entries_from(*current);
-            promise.set_continuation(awaiting, awaiting_promise);
-            if (follow_parent_stop_)
-                promise.follow_stop(*awaiting_promise);
-            active_deck->enqueue(coroutine_, &promise);
+            task::splice_handle(coroutine_, awaiting, follow_parent_stop_);
         }
 
         /// Called when the awaiting task resumes after the child reaches final suspend.
@@ -426,6 +412,26 @@ public:
         return awaiter{coroutine_};
     }
 
+    /// Schedule this task on the current deck so that `awaiting` resumes,
+    /// with this task's result available, once this task completes. The
+    /// continuation wiring (ambient env snapshot and stop propagation) is the
+    /// same as the one `co_await` performs.
+    ///
+    /// This is the splice primitive for custom awaitables. When a synchronous
+    /// fast path in `await_ready()` misses, store a delegate task in the
+    /// awaitable and call `splice_onto(awaiting)` from `await_suspend()`; the
+    /// delegate then resumes `awaiting` when it finishes. The delegate frame
+    /// must outlive the suspension, so the awaitable must own the task rather
+    /// than splice a temporary -- hence the lvalue-ref qualifier.
+    void splice_onto(
+        std::coroutine_handle<> awaiting,
+        bool follow_stop = true) &
+    {
+        if (!coroutine_)
+            throw runtime_error{"nxtrt splice_onto on an empty task"};
+        splice_handle(coroutine_, awaiting, follow_stop);
+    }
+
     /// Read the result from an already completed task.
     decltype(auto) result() &
     {
@@ -439,6 +445,32 @@ public:
     }
 
 private:
+    /// Shared continuation-splice used by both `co_await` (via `awaiter`) and
+    /// the public `splice_onto`. Wires `awaiting` as `child`'s continuation,
+    /// copies the ambient env into the child, optionally follows the awaiting
+    /// task's stop, and enqueues the child on the current deck.
+    static void splice_handle(
+        coroutine_handle child,
+        std::coroutine_handle<> awaiting,
+        bool follow_stop)
+    {
+        auto * current = detail::current_env;
+        auto * active_deck =
+            current == nullptr ? nullptr : current->current_deck;
+        auto * awaiting_promise =
+            current == nullptr ? nullptr : current->current_promise;
+        if (active_deck == nullptr || awaiting_promise == nullptr)
+            throw runtime_error{
+                "nxtrt task spliced without a running deck"};
+
+        auto & promise = child.promise();
+        promise.env.copy_entries_from(*current);
+        promise.set_continuation(awaiting, awaiting_promise);
+        if (follow_stop)
+            promise.follow_stop(*awaiting_promise);
+        active_deck->enqueue(child, &promise);
+    }
+
     bool destroy() noexcept
     {
         if (!coroutine_)
@@ -449,6 +481,99 @@ private:
     }
 
     coroutine_handle coroutine_{nullptr};
+};
+
+/// A hope is the sum of a synchronous result and a pending coroutine: it is
+/// `ready(T)` when the value is already available, or a `task<T>` when it is
+/// not. Awaiting a ready hope never suspends (the value is returned inline);
+/// awaiting a pending hope splices the task as the awaiter's continuation and
+/// resumes with its result.
+///
+/// This is the seam between functional (wish-like) and coroutine (task-like)
+/// composition: a reader's `take(n)` is a plain function that returns
+/// `hope<T>::ready(span)` on a buffer hit -- no frame, no suspension -- and a
+/// `task<T>` that loops over real reads on a miss, allocating a frame only
+/// then.
+template<typename T>
+class hope
+{
+public:
+    /// Pending: a coroutine that produces `T`, run only when awaited.
+    hope(task<T> pending, bool follow_stop = true)
+        : state_(std::in_place_type<task<T>>, std::move(pending))
+        , follow_stop_(follow_stop)
+    {}
+
+    /// Ready: the value is already available; awaiting will not suspend.
+    static hope ready(T value)
+    {
+        return hope{ready_tag{}, std::move(value)};
+    }
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return std::holds_alternative<T>(state_);
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting)
+    {
+        std::get<task<T>>(state_).splice_onto(awaiting, follow_stop_);
+    }
+
+    T await_resume()
+    {
+        if (auto * value = std::get_if<T>(&state_))
+            return std::move(*value);
+        return std::move(std::get<task<T>>(state_)).result();
+    }
+
+private:
+    struct ready_tag
+    {};
+
+    hope(ready_tag, T value)
+        : state_(std::in_place_type<T>, std::move(value))
+    {}
+
+    std::variant<T, task<T>> state_;
+    bool follow_stop_ = true;
+};
+
+template<>
+class hope<void>
+{
+public:
+    hope(task<void> pending, bool follow_stop = true)
+        : state_(std::in_place_type<task<void>>, std::move(pending))
+        , follow_stop_(follow_stop)
+    {}
+
+    static hope ready()
+    {
+        return hope{};
+    }
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return std::holds_alternative<std::monostate>(state_);
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting)
+    {
+        std::get<task<void>>(state_).splice_onto(awaiting, follow_stop_);
+    }
+
+    void await_resume()
+    {
+        if (auto * pending = std::get_if<task<void>>(&state_))
+            std::move(*pending).result();
+    }
+
+private:
+    hope() = default;
+
+    std::variant<std::monostate, task<void>> state_;
+    bool follow_stop_ = true;
 };
 
 namespace detail {
@@ -1176,6 +1301,117 @@ template<typename T, typename F>
             co_return std::invoke(fn, std::move(value));
         }
     }
+}
+
+namespace detail {
+
+/// Obtain the awaiter for any awaitable: use `operator co_await` when present,
+/// otherwise the value is already an awaiter.
+template<typename A>
+constexpr decltype(auto) get_awaiter(A && a)
+{
+    if constexpr (requires { static_cast<A &&>(a).operator co_await(); })
+        return static_cast<A &&>(a).operator co_await();
+    else
+        return static_cast<A &&>(a);
+}
+
+template<typename A>
+using awaiter_t = decltype(get_awaiter(std::declval<A>()));
+
+} // namespace detail
+
+/// Awaitable adaptor that applies a synchronous transform to the result of an
+/// inner awaitable, fused into `await_resume`. Readiness and suspension are
+/// forwarded unchanged, so the transform rides whatever the inner awaitable
+/// already does: a synchronously-ready source stays ready (no suspension), and
+/// a suspending source pays exactly its own one round-trip. This is `then`
+/// from the sender algebra, over any awaitable -- wishes, `hope`, tasks.
+///
+/// Unlike `then(task<T>, F)`, the result is a co-await-only awaitable, not a
+/// `task<U>`: it cannot be forked or stored as a task. It is coherent here
+/// because awaitables are single-shot (consumed at one `co_await`), unlike a
+/// multiply-observed task.
+template<typename Awaitable, typename F>
+class mapped
+{
+public:
+    mapped(Awaitable source, F fn)
+        : source_(std::move(source))
+        , fn_(std::move(fn))
+    {}
+
+    auto operator co_await() &&
+    {
+        struct awaiter
+        {
+            detail::awaiter_t<Awaitable> inner;
+            F fn;
+
+            [[nodiscard]] bool await_ready()
+            {
+                return inner.await_ready();
+            }
+
+            decltype(auto) await_suspend(std::coroutine_handle<> awaiting)
+            {
+                return inner.await_suspend(awaiting);
+            }
+
+            decltype(auto) await_resume()
+            {
+                if constexpr (std::is_void_v<
+                                  decltype(inner.await_resume())>) {
+                    inner.await_resume();
+                    return std::invoke(std::move(fn));
+                } else {
+                    return std::invoke(std::move(fn), inner.await_resume());
+                }
+            }
+        };
+
+        return awaiter{
+            detail::get_awaiter(std::move(source_)),
+            std::move(fn_),
+        };
+    }
+
+private:
+    Awaitable source_;
+    F fn_;
+};
+
+/// Map an awaitable's result through a synchronous `fn`.
+template<typename Awaitable, typename F>
+[[nodiscard]] auto map(Awaitable awaitable, F fn)
+{
+    return mapped<Awaitable, F>{std::move(awaitable), std::move(fn)};
+}
+
+template<typename F>
+class map_closure
+{
+public:
+    explicit map_closure(F fn)
+        : fn_(std::move(fn))
+    {}
+
+    template<typename Awaitable>
+    [[nodiscard]] auto operator()(Awaitable && awaitable) &&
+    {
+        return map(
+            std::forward<Awaitable>(awaitable), std::move(fn_));
+    }
+
+private:
+    F fn_;
+};
+
+/// Closure form for the existing `task | adaptor` pipe: `bar() | map(f)`.
+template<typename F>
+[[nodiscard]] auto map(F fn)
+{
+    return map_closure<std::decay_t<F>>{std::move(fn)};
 }
 
 template<typename T, typename F>

@@ -506,6 +506,103 @@ nxtrt::task<bool> run_print_after_stop_check(
     co_return co_await nxtrt::with_zone(body);
 }
 
+// A custom awaitable exercising task::splice_onto. When `ready` holds it
+// resolves through await_ready() and never suspends; on a miss it delegates
+// its slow path to a real task spliced as the awaiter's continuation. This is
+// the buffered-reader fast/slow split in miniature: a buffered read takes the
+// ready path with no deck round-trip, a miss runs a refill coroutine.
+inline nxtrt::task<void> splice_probe_fill(std::vector<int> & events)
+{
+    events.push_back(10);
+    co_await nxtrt::yield();
+    events.push_back(11);
+}
+
+struct splice_probe
+{
+    bool ready = false;
+    int value = 0;
+    std::vector<int> & events;
+    int & suspends;
+    nxtrt::task<void> slow_{};
+
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return ready;
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting)
+    {
+        ++suspends;
+        slow_ = splice_probe_fill(events);
+        slow_.splice_onto(awaiting);
+    }
+
+    int await_resume()
+    {
+        if (slow_.handle())
+            slow_.handle().promise().result();
+        return value;
+    }
+};
+
+inline nxtrt::task<int>
+run_splice_probe(std::vector<int> & events, int & suspends, bool ready)
+{
+    auto value = co_await splice_probe{
+        .ready = ready,
+        .value = 42,
+        .events = events,
+        .suspends = suspends,
+    };
+    events.push_back(99);
+    co_return value;
+}
+
+// The fast/slow split with `hope`: a ready hope returns its value inline,
+// while the pending arm is a task that loops before producing the value.
+inline nxtrt::task<int> hope_refill(std::vector<int> & events)
+{
+    events.push_back(10);
+    co_await nxtrt::yield();
+    events.push_back(11);
+    co_return 42;
+}
+
+inline nxtrt::task<int>
+run_hope(std::vector<int> & events, int & suspends, bool ready)
+{
+    auto pick = [&]() -> nxtrt::hope<int> {
+        if (ready)
+            return nxtrt::hope<int>::ready(42);
+        ++suspends;
+        return nxtrt::hope<int>{hope_refill(events)};
+    };
+    auto value = co_await pick();
+    events.push_back(99);
+    co_return value;
+}
+
+// `map` over the three awaitable shapes: a plain task, a synchronously-ready
+// hope, and a real wand wish.
+inline nxtrt::task<int> map_over_task()
+{
+    co_return co_await (
+        value_after_yield(21) | nxtrt::map([](int x) { return x + 1; }));
+}
+
+inline nxtrt::task<int> map_over_ready_hope()
+{
+    co_return co_await nxtrt::map(
+        nxtrt::hope<int>::ready(21), [](int x) { return x * 2; });
+}
+
+inline nxtrt::task<int> map_over_manual_wish(nxtrt::wait_token token)
+{
+    co_return co_await nxtrt::map(
+        nxtrt::op::manual{.token = token}, [] { return 7; });
+}
+
 static suite runtime_tests{
     "Runtime", [] {
         "charting"_test = [] {
@@ -757,6 +854,115 @@ static suite runtime_tests{
                 task.request_stop();
 
                 expect(deck.sync_wait(std::move(task)));
+            };
+
+            "ready awaitable resolves without suspending"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto suspends = 0;
+
+                auto task = run_splice_probe(events, suspends, true);
+                deck.start(task);
+                deck.run_ready();
+
+                expect(suspends == 0_i)
+                    << "ready fast path must not enter await_suspend";
+                expect(task.done())
+                    << "ready awaitable should finish in one pump round";
+                expect(deck.empty())
+                    << "ready awaitable should not queue any work";
+                expect(events == std::vector<int>{99})
+                    << "ready path should skip the delegate task entirely";
+                expect(std::move(task).result() == 42_i);
+            };
+
+            "missing awaitable delegates to a spliced task"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto suspends = 0;
+
+                auto value = deck.sync_wait(
+                    run_splice_probe(events, suspends, false));
+
+                expect(suspends == 1_i)
+                    << "miss path should enter await_suspend exactly once";
+                expect(value == 42_i);
+                expect(events == std::vector<int>{10, 11, 99})
+                    << "spliced delegate must finish before the continuation";
+            };
+
+            "hope resolves a ready value without a wish"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto suspends = 0;
+
+                auto task = run_hope(events, suspends, true);
+                deck.start(task);
+                deck.run_ready();
+
+                expect(suspends == 0_i)
+                    << "ready hope must not build a delegate task";
+                expect(task.done())
+                    << "ready hope should finish in one pump round";
+                expect(deck.empty());
+                expect(events == std::vector<int>{99});
+                expect(std::move(task).result() == 42_i);
+            };
+
+            "hope makes a wish and resumes after it"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto suspends = 0;
+
+                auto value =
+                    deck.sync_wait(run_hope(events, suspends, false));
+
+                expect(suspends == 1_i)
+                    << "miss path should build exactly one delegate task";
+                expect(value == 42_i);
+                expect(events == std::vector<int>{10, 11, 99})
+                    << "delegate wish must finish before the value is read";
+            };
+
+            "map transforms a task result"_test = [] {
+                auto deck = nxtrt::deck{};
+                expect(deck.sync_wait(map_over_task()) == 22_i);
+            };
+
+            "map over a ready hope stays synchronous"_test = [] {
+                auto deck = nxtrt::deck{};
+
+                auto task = map_over_ready_hope();
+                deck.start(task);
+                deck.run_ready();
+
+                expect(task.done())
+                    << "mapping a ready awaitable must not add a suspension";
+                expect(deck.empty());
+                expect(std::move(task).result() == 42_i);
+            };
+
+            "map transforms a wish result over one round-trip"_test = [] {
+                auto wand = manual_wand{};
+                auto deck = nxtrt::deck{&wand};
+
+                auto task = map_over_manual_wish(55);
+                deck.start(task);
+                deck.run_ready();
+
+                expect(!task.done())
+                    << "mapped wish should park, not complete synchronously";
+                expect(wand.prepared == std::vector<nxtrt::wait_token>{55})
+                    << "map must forward the wish's preparation to the wand";
+                expect(wand.parked.size() == std::size_t{1})
+                    << "map must forward the single suspension";
+
+                wand.fulfill(deck, 55);
+                deck.run_ready();
+
+                expect(task.done());
+                expect(std::move(task).result() == 7_i)
+                    << "transform must run in the resume after fulfillment";
             };
 
             "then transforms task values"_test = [] {
