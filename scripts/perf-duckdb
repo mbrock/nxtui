@@ -1,123 +1,515 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = [
+#   "duckdb>=1.1",
+#   "rich>=13.7",
+# ]
+# ///
+from __future__ import annotations
 
-data=${1:-build-bench-release/nxt-echo.perf.data}
-json=${2:-${data%.data}.json}
-lines=${BENCH_PERF_DUCK_LINES:-20}
-symbol_width=${BENCH_PERF_SYMBOL_WIDTH:-96}
-edge_symbol_width=$((symbol_width / 2))
+import argparse
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 
-if [[ ! -f "$data" ]]; then
-    echo "perf data not found: $data" >&2
-    exit 1
-fi
+import duckdb
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress_bar import ProgressBar
+from rich.table import Table
+from rich.text import Text
+from rich.tree import Tree
 
-if [[ ! -f "$json" || "$data" -nt "$json" ]]; then
-    sudo perf data convert -i "$data" --to-json "$json" >&2
-    sudo chmod a+r "$json"
-fi
 
-duckdb -table <<SQL
-create temp table raw as
-    select unnest(samples) as sample
-    from read_json('$json', maximum_object_size = 10000000);
+@dataclass
+class TreeNode:
+    label: str
+    samples: int = 0
+    children: dict[str, "TreeNode"] = field(default_factory=dict)
 
-create temp table samples as
-    select row_number() over () as sid, sample
-    from raw
-    where sample.comm = 'nxt-echo-bench';
 
-create temp table frames as
-    select
-        sid,
-        depth,
-        frame.dso as dso,
-        frame.symbol as symbol
-    from samples,
-        unnest(sample.callchain) with ordinality as u(frame, depth)
-    where frame.symbol is not null;
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Render a DuckDB/Rich report from perf JSON data.")
+    parser.add_argument(
+        "data",
+        nargs="?",
+        default="build-bench-release/nxt-echo.perf.data",
+        help="perf.data file to convert when JSON is missing or stale")
+    parser.add_argument(
+        "json",
+        nargs="?",
+        help="perf JSON file, defaults to DATA with .json suffix")
+    parser.add_argument(
+        "--comm",
+        default=os.environ.get("BENCH_PERF_COMM", "nxt-echo-bench"),
+        help="process command name to analyze")
+    parser.add_argument(
+        "--lines",
+        type=int,
+        default=int(os.environ.get("BENCH_PERF_DUCK_LINES", "20")),
+        help="rows shown in each table")
+    parser.add_argument(
+        "--symbol-width",
+        type=int,
+        default=int(os.environ.get("BENCH_PERF_SYMBOL_WIDTH", "96")),
+        help="maximum rendered symbol width")
+    parser.add_argument(
+        "--tree-depth",
+        type=int,
+        default=int(os.environ.get("BENCH_PERF_TREE_DEPTH", "9")),
+        help="maximum call tree depth")
+    parser.add_argument(
+        "--tree-children",
+        type=int,
+        default=int(os.environ.get("BENCH_PERF_TREE_CHILDREN", "6")),
+        help="maximum children per call tree node")
+    parser.add_argument(
+        "--tree-min-pct",
+        type=float,
+        default=float(os.environ.get("BENCH_PERF_TREE_MIN_PCT", "1.0")),
+        help="minimum percent for call tree nodes")
+    return parser.parse_args()
 
-create temp table total as
-    select count(*)::double as samples
-    from samples;
 
-.print Self samples
+def convert_perf_data(data: Path, json_path: Path) -> None:
+    if not data.exists():
+        raise SystemExit(f"perf data not found: {data}")
 
-with leaf as (
-    select
-        sample.callchain[1].dso as dso,
-        sample.callchain[1].symbol as symbol,
-        count(*) as samples
-    from samples
-    where sample.callchain[1].symbol is not null
-    group by 1, 2
-)
-select
-    printf('%5.2f%%', 100.0 * leaf.samples / total.samples) as pct,
-    leaf.samples,
-    leaf.dso,
-    case
-        when length(leaf.symbol) > $symbol_width
-            then substr(leaf.symbol, 1, $symbol_width - 3) || '...'
-        else leaf.symbol
-    end as symbol
-from leaf, total
-order by leaf.samples desc
-limit $lines;
+    if json_path.exists() and json_path.stat().st_mtime >= data.stat().st_mtime:
+        return
 
-.print Inclusive samples
+    subprocess.run(
+        [
+            "sudo",
+            "perf",
+            "data",
+            "convert",
+            "-i",
+            str(data),
+            "--to-json",
+            str(json_path),
+        ],
+        check=True,
+    )
+    subprocess.run(["sudo", "chmod", "a+r", str(json_path)], check=True)
 
-with inclusive as (
-    select
-        dso,
-        symbol,
-        count(distinct sid) as samples
-    from frames
-    group by 1, 2
-)
-select
-    printf('%5.2f%%', 100.0 * inclusive.samples / total.samples) as pct,
-    inclusive.samples,
-    inclusive.dso,
-    case
-        when length(inclusive.symbol) > $symbol_width
-            then substr(inclusive.symbol, 1, $symbol_width - 3) || '...'
-        else inclusive.symbol
-    end as symbol
-from inclusive, total
-order by inclusive.samples desc
-limit $lines;
 
-.print Hot call edges
+def dso_name(raw: str | None) -> str:
+    if not raw:
+        return "unknown"
+    if raw == "[kernel.kallsyms]":
+        return "kernel"
+    name = Path(raw).name
+    if name.startswith("nxt-echo-bench"):
+        return "bench"
+    if name.startswith("libstdc++"):
+        return "libstdc++"
+    if name.startswith("libc.so"):
+        return "libc"
+    return name
 
-with edges as (
-    select
-        child.dso as child_dso,
-        child.symbol as child,
-        parent.dso as parent_dso,
-        parent.symbol as parent,
-        count(*) as samples
-    from frames child
-    join frames parent
-        on parent.sid = child.sid
-        and parent.depth = child.depth + 1
-    group by 1, 2, 3, 4
-)
-select
-    printf('%5.2f%%', 100.0 * edges.samples / total.samples) as pct,
-    edges.samples,
-    edges.child_dso as dso,
-    case
-        when length(edges.child) > $edge_symbol_width
-            then substr(edges.child, 1, $edge_symbol_width - 3) || '...'
-        else edges.child
-    end as callee,
-    case
-        when length(edges.parent) > $edge_symbol_width
-            then substr(edges.parent, 1, $edge_symbol_width - 3) || '...'
-        else edges.parent
-    end as caller
-from edges, total
-order by edges.samples desc
-limit $lines;
-SQL
+
+def clean_symbol(raw: str | None) -> str:
+    if not raw:
+        return "unknown"
+    out = re.sub(r" \[clone [^\]]+\]", "", raw)
+    out = re.sub(
+        r"\(anonymous namespace\)::([A-Za-z0-9_]+)"
+        r"\(\(anonymous namespace\)::.*?\.Frame\*\)",
+        r"(anon)::\1",
+        out,
+    )
+    out = out.replace("std::__cxx11::", "std::")
+    out = out.replace("std::__n4861::", "std::")
+    out = out.replace("nxtrt::", "rt::")
+    return out
+
+
+def shorten(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."
+
+
+def connect(json_path: Path, comm: str) -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect()
+    con.execute(
+        """
+        create temp table raw as
+            select unnest(samples) as sample
+            from read_json(?, maximum_object_size = 10000000);
+        """,
+        [str(json_path)],
+    )
+    con.execute(
+        """
+        create temp table samples as
+            select row_number() over () as sid, sample
+            from raw
+            where sample.comm = ?;
+        """,
+        [comm],
+    )
+    con.execute(
+        """
+        create temp table frames as
+            select
+                sid,
+                depth,
+                frame.dso as dso,
+                frame.symbol as symbol
+            from samples,
+                unnest(sample.callchain) with ordinality as u(frame, depth)
+        where frame.symbol is not null;
+        """,
+    )
+    return con
+
+
+def metadata(con: duckdb.DuckDBPyConnection, json_path: Path) -> dict[str, object]:
+    row = con.execute(
+        """
+        select
+            count(*)::int as samples,
+            min(sample.timestamp) as first_ts,
+            max(sample.timestamp) as last_ts
+        from samples
+        """
+    ).fetchone()
+    comms = con.execute(
+        """
+        select sample.comm, count(*)::int
+        from raw
+        group by 1
+        order by 2 desc
+        """
+    ).fetchall()
+    return {
+        "json": json_path,
+        "samples": row[0],
+        "first_ts": row[1],
+        "last_ts": row[2],
+        "comms": comms,
+    }
+
+
+def bar(value: int, total: int) -> ProgressBar:
+    return ProgressBar(total=max(total, 1), completed=value, width=18)
+
+
+def samples_table(
+    title: str,
+    rows: list[tuple[str | None, str | None, int]],
+    total: int,
+    symbol_width: int,
+) -> Table:
+    table = Table(title=title, box=box.SIMPLE_HEAVY)
+    table.add_column("%", justify="right", no_wrap=True)
+    table.add_column("samples", justify="right", no_wrap=True)
+    table.add_column("hot", no_wrap=True)
+    table.add_column("where", no_wrap=True)
+    table.add_column("symbol")
+    for dso, symbol, count in rows:
+        pct = 100.0 * count / max(total, 1)
+        table.add_row(
+            f"{pct:5.2f}",
+            str(count),
+            bar(count, total),
+            dso_name(dso),
+            shorten(clean_symbol(symbol), symbol_width),
+        )
+    return table
+
+
+def edge_table(
+    rows: list[tuple[str | None, str | None, str | None, str | None, int]],
+    total: int,
+    symbol_width: int,
+) -> Table:
+    edge_width = max(24, symbol_width // 2)
+    table = Table(title="Hot call edges", box=box.SIMPLE_HEAVY)
+    table.add_column("%", justify="right", no_wrap=True)
+    table.add_column("samples", justify="right", no_wrap=True)
+    table.add_column("hot", no_wrap=True)
+    table.add_column("where", no_wrap=True)
+    table.add_column("caller")
+    table.add_column("callee")
+    for child_dso, child, parent_dso, parent, count in rows:
+        pct = 100.0 * count / max(total, 1)
+        where = dso_name(child_dso)
+        if dso_name(parent_dso) != where:
+            where = f"{dso_name(parent_dso)} -> {where}"
+        table.add_row(
+            f"{pct:5.2f}",
+            str(count),
+            bar(count, total),
+            where,
+            shorten(clean_symbol(parent), edge_width),
+            shorten(clean_symbol(child), edge_width),
+        )
+    return table
+
+
+def fetch_self(con: duckdb.DuckDBPyConnection, limit: int) -> list[tuple]:
+    return con.execute(
+        """
+        select
+            sample.callchain[1].dso as dso,
+            sample.callchain[1].symbol as symbol,
+            count(*)::int as samples
+        from samples
+        where sample.callchain[1].symbol is not null
+        group by 1, 2
+        order by 3 desc
+        limit ?
+        """,
+        [limit],
+    ).fetchall()
+
+
+def fetch_inclusive(con: duckdb.DuckDBPyConnection, limit: int) -> list[tuple]:
+    return con.execute(
+        """
+        select
+            dso,
+            symbol,
+            count(distinct sid)::int as samples
+        from frames
+        group by 1, 2
+        order by 3 desc
+        limit ?
+        """,
+        [limit],
+    ).fetchall()
+
+
+def fetch_edges(con: duckdb.DuckDBPyConnection, limit: int) -> list[tuple]:
+    return con.execute(
+        """
+        select
+            child.dso as child_dso,
+            child.symbol as child,
+            parent.dso as parent_dso,
+            parent.symbol as parent,
+            count(*)::int as samples
+        from frames child
+        join frames parent
+            on parent.sid = child.sid
+            and parent.depth = child.depth + 1
+        group by 1, 2, 3, 4
+        order by 5 desc
+        limit ?
+        """,
+        [limit],
+    ).fetchall()
+
+
+def fetch_callchains(con: duckdb.DuckDBPyConnection) -> list[list[tuple[str, str]]]:
+    rows = con.execute(
+        """
+        select sample.callchain
+        from samples
+        where sample.callchain is not null
+        """
+    ).fetchall()
+    chains = []
+    for (frames,) in rows:
+        chain = []
+        for frame in frames or []:
+            symbol = frame.get("symbol")
+            if symbol is None:
+                continue
+            chain.append((dso_name(frame.get("dso")), clean_symbol(symbol)))
+        if chain:
+            chains.append(chain)
+    return chains
+
+
+def compact_label(dso: str, symbol: str, width: int) -> str:
+    return f"[{dso}] {shorten(symbol, width)}"
+
+
+def build_call_tree(
+    chains: list[list[tuple[str, str]]],
+    *,
+    start_dso: str | None = None,
+) -> TreeNode:
+    root = TreeNode("samples")
+    for chain in chains:
+        frames = list(reversed(chain))
+        if start_dso is not None:
+            start = next(
+                (i for i, (dso, _) in enumerate(frames) if dso == start_dso),
+                None,
+            )
+            if start is None:
+                continue
+            frames = frames[start:]
+
+        root.samples += 1
+        node = root
+        for dso, symbol in frames:
+            key = f"{dso}\0{symbol}"
+            child = node.children.get(key)
+            if child is None:
+                child = TreeNode(compact_label(dso, symbol, 72))
+                node.children[key] = child
+            child.samples += 1
+            node = child
+    return root
+
+
+def add_tree_nodes(
+    rich_node: Tree,
+    node: TreeNode,
+    total: int,
+    *,
+    depth: int,
+    max_depth: int,
+    max_children: int,
+    min_pct: float,
+) -> None:
+    if depth >= max_depth:
+        return
+
+    children = sorted(
+        node.children.values(),
+        key=lambda item: item.samples,
+        reverse=True,
+    )
+    shown = 0
+    hidden_samples = 0
+    hidden_nodes = 0
+    for child in children:
+        pct = 100.0 * child.samples / max(total, 1)
+        if shown >= max_children or pct < min_pct:
+            hidden_samples += child.samples
+            hidden_nodes += 1
+            continue
+        label = Text()
+        label.append(f"{pct:5.1f}% ", style="bold cyan")
+        label.append(f"{child.samples:>5} ", style="dim")
+        label.append(child.label)
+        branch = rich_node.add(label)
+        add_tree_nodes(
+            branch,
+            child,
+            total,
+            depth=depth + 1,
+            max_depth=max_depth,
+            max_children=max_children,
+            min_pct=min_pct,
+        )
+        shown += 1
+
+    if hidden_nodes:
+        pct = 100.0 * hidden_samples / max(total, 1)
+        rich_node.add(
+            Text(
+                f"{pct:5.1f}% {hidden_samples:>5} "
+                f"... {hidden_nodes} colder branches",
+                style="dim",
+            )
+        )
+
+
+def call_tree_panel(
+    chains: list[list[tuple[str, str]]],
+    *,
+    title: str,
+    subtitle: str,
+    start_dso: str | None = None,
+    max_depth: int,
+    max_children: int,
+    min_pct: float,
+) -> Panel | None:
+    root = build_call_tree(chains, start_dso=start_dso)
+    if root.samples == 0:
+        return None
+
+    tree = Tree(Text(f"{subtitle} ({root.samples} samples, root -> leaf)", style="bold"))
+    add_tree_nodes(
+        tree,
+        root,
+        root.samples,
+        depth=0,
+        max_depth=max_depth,
+        max_children=max_children,
+        min_pct=min_pct,
+    )
+    return Panel(tree, title=title, border_style="cyan")
+
+
+def main() -> int:
+    args = parse_args()
+    data = Path(args.data)
+    json_path = Path(args.json) if args.json else data.with_suffix(".json")
+    convert_perf_data(data, json_path)
+
+    con = connect(json_path, args.comm)
+    meta = metadata(con, json_path)
+    total = int(meta["samples"])
+    if total == 0:
+        raise SystemExit(f"no samples found for comm {args.comm!r}")
+
+    console = Console()
+    comms = ", ".join(f"{comm}:{count}" for comm, count in meta["comms"])
+    console.print(
+        Panel.fit(
+            f"[bold]{args.comm}[/bold]  {total} samples\n"
+            f"json: {json_path}\n"
+            f"comm samples: {comms}",
+            title="perf json",
+            border_style="green",
+        )
+    )
+
+    console.print(samples_table(
+        "Self samples",
+        fetch_self(con, args.lines),
+        total,
+        args.symbol_width,
+    ))
+    console.print(samples_table(
+        "Inclusive samples",
+        fetch_inclusive(con, args.lines),
+        total,
+        args.symbol_width,
+    ))
+    console.print(edge_table(
+        fetch_edges(con, args.lines),
+        total,
+        args.symbol_width,
+    ))
+    chains = fetch_callchains(con)
+    console.print(call_tree_panel(
+        chains,
+        title="Full call tree",
+        subtitle="Full system call tree",
+        max_depth=args.tree_depth,
+        max_children=args.tree_children,
+        min_pct=args.tree_min_pct,
+    ))
+    program_tree = call_tree_panel(
+        chains,
+        title="Program call tree",
+        subtitle="Program subtree",
+        start_dso="bench",
+        max_depth=args.tree_depth,
+        max_children=args.tree_children,
+        min_pct=args.tree_min_pct,
+    )
+    if program_tree is not None:
+        console.print(program_tree)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
