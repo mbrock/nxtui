@@ -25,6 +25,7 @@ namespace nxtrt::cgroup {
 
 namespace detail {
 
+#if defined(__linux__)
 struct [[gnu::packed]] linux_dirent64_header
 {
     std::uint64_t d_ino;
@@ -71,6 +72,7 @@ inline task<std::vector<std::string>> list_names(std::filesystem::path path)
 
     co_return names;
 }
+#endif
 
 } // namespace detail
 
@@ -226,6 +228,7 @@ inline task<std::optional<std::filesystem::path>> find_unit_scope(
     std::string unit_name,
     std::filesystem::path root = "/sys/fs/cgroup")
 {
+#if defined(__linux__)
     auto needle = unit_name + ".scope";
     auto names = std::vector<std::string>{};
     try {
@@ -244,6 +247,11 @@ inline task<std::optional<std::filesystem::path>> find_unit_scope(
     }
 
     co_return std::nullopt;
+#else
+    (void) unit_name;
+    (void) root;
+    co_return std::nullopt;
+#endif
 }
 
 } // namespace nxtrt::cgroup

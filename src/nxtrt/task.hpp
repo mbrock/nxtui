@@ -177,6 +177,8 @@ struct promise_base
     promise_base * continuation_promise = nullptr;
     /// Inheritable runtime environment captured by this coroutine frame.
     runtime_env env;
+    /// Owned ambient bindings used when a task is forked from a scoped env.
+    std::vector<std::unique_ptr<env_binding_base>> owned_env_bindings;
     /// Propagates stop from the task awaiting this task.
     std::unique_ptr<stop_callback_type> parent_stop_callback;
     /// Cancels the current parked wish when this task is stopped.
@@ -989,9 +991,12 @@ public:
         if (!handle || handle.done())
             throw runtime_error{"nxtrt zone fork used with empty task"};
 
-        handle.promise().env.bindings = current->bindings;
         auto record = std::shared_ptr<detail::child_record<T>>{};
         try {
+            auto & promise = handle.promise();
+            promise.env.bindings = clone_env_bindings(
+                current->bindings,
+                promise.owned_env_bindings);
             record = std::make_shared<detail::child_record<T>>(handle);
         } catch (...) {
             handle.destroy();

@@ -2,11 +2,13 @@
 
 #include "nxtrt/exceptions.hpp"
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace nxtrt {
 
@@ -26,6 +28,18 @@ inline const void * env_key_id() noexcept
 
 struct env_binding_base
 {
+    env_binding_base() = default;
+
+    env_binding_base(env_binding_base * parent, const void * key) noexcept
+        : parent(parent)
+        , key(key)
+    {}
+
+    virtual ~env_binding_base() = default;
+
+    [[nodiscard]] virtual std::unique_ptr<env_binding_base>
+    clone_with_parent(env_binding_base * parent) const = 0;
+
     env_binding_base * parent = nullptr;
     const void * key = nullptr;
 };
@@ -36,15 +50,38 @@ struct env_binding : env_binding_base
     using value_type = std::remove_cv_t<typename Key::value_type>;
 
     env_binding(env_binding_base * parent, value_type value)
-        : env_binding_base{
-            .parent = parent,
-            .key = env_key_id<Key>(),
-        }
+        : env_binding_base(parent, env_key_id<Key>())
         , value(std::move(value))
     {}
 
+    [[nodiscard]] std::unique_ptr<env_binding_base>
+    clone_with_parent(env_binding_base * parent) const override
+    {
+        return std::make_unique<env_binding<Key>>(parent, value);
+    }
+
     value_type value;
 };
+
+inline env_binding_base * clone_env_bindings(
+    env_binding_base * bindings,
+    std::vector<std::unique_ptr<env_binding_base>> & storage)
+{
+    storage.clear();
+
+    auto chain = std::vector<const env_binding_base *>{};
+    for (auto * binding = bindings; binding != nullptr;
+         binding = binding->parent)
+        chain.push_back(binding);
+
+    auto * parent = static_cast<env_binding_base *>(nullptr);
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        auto cloned = (*it)->clone_with_parent(parent);
+        parent = cloned.get();
+        storage.push_back(std::move(cloned));
+    }
+    return parent;
+}
 
 struct missing_env : runtime_error
 {

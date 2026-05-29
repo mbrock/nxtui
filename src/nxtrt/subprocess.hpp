@@ -9,6 +9,7 @@
 
 namespace nxtrt::subprocess {
 
+#if defined(__linux__)
 using result = child_result;
 using piped_child = nxtrt::piped_child;
 using pty_child = nxtrt::pty_child;
@@ -82,5 +83,6 @@ inline task<result> terminate_and_wait(
 {
     co_return co_await shield(detail::terminate_and_wait_impl(child, grace));
 }
+#endif
 
 } // namespace nxtrt::subprocess

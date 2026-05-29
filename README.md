@@ -137,6 +137,19 @@ Regenerate local API docs with:
 make docs
 ```
 
+Run the portable test subset on a FreeBSD VM with:
+
+```sh
+scripts/freebsd-vm init
+scripts/freebsd-vm test
+```
+
+The helper uses libvirt, cloud-init, ssh, and rsync. It defaults to the official
+FreeBSD 15.0 amd64 `BASIC-CLOUDINIT-ufs.qcow2.xz` image, stores local state
+under `.cache/freebsd-vm`, and leaves the VM persistent for fast repeat runs.
+The guest installs GCC 15 and uses `gcc15`/`g++15` for the test build. The host
+needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
+
 [nxtrt]: https://swa.sh/nxt/namespacenxtrt.html
 [nxtrt-task]: https://swa.sh/nxt/classnxtrt_1_1task.html
 [nxtrt-deck]: https://swa.sh/nxt/classnxtrt_1_1deck.html

@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+vm_name="${NXT_FREEBSD_VM:-nxtui-freebsd}"
+vm_user="${NXT_FREEBSD_USER:-nxt}"
+remote_dir="${NXT_FREEBSD_REMOTE_DIR:-nxtui}"
+state_dir="${NXT_FREEBSD_STATE_DIR:-$root/.cache/freebsd-vm}"
+libvirt_uri="${NXT_FREEBSD_LIBVIRT_URI:-qemu:///system}"
+libvirt_image_dir="${NXT_FREEBSD_IMAGE_DIR:-/var/lib/libvirt/images/nxtui-freebsd}"
+
+version="${NXT_FREEBSD_VERSION:-15.0-RELEASE}"
+arch="${NXT_FREEBSD_ARCH:-amd64}"
+image_flavor="${NXT_FREEBSD_IMAGE_FLAVOR:-BASIC-CLOUDINIT-ufs}"
+image_file="${NXT_FREEBSD_IMAGE_FILE:-FreeBSD-${version}-${arch}-${image_flavor}.qcow2.xz}"
+image_base_url="${NXT_FREEBSD_IMAGE_BASE_URL:-https://download.freebsd.org/releases/VM-IMAGES/${version}/${arch}/Latest}"
+image_url="${NXT_FREEBSD_IMAGE_URL:-${image_base_url}/${image_file}}"
+checksum_url="${NXT_FREEBSD_CHECKSUM_URL:-${image_base_url}/CHECKSUM.SHA256}"
+
+memory="${NXT_FREEBSD_MEMORY:-4096}"
+vcpus="${NXT_FREEBSD_VCPUS:-4}"
+disk_size="${NXT_FREEBSD_DISK_SIZE:-40G}"
+os_variant="${NXT_FREEBSD_OS_VARIANT:-freebsd14.2}"
+test_command="${NXT_FREEBSD_TEST_COMMAND:-rm -rf build-freebsd && env CC=gcc15 CXX=g++15 meson setup build-freebsd -Dtests=true -Dllm_tool=false -Ddemo=false && meson compile -C build-freebsd nxt-tests && build-freebsd/nxt-tests}"
+
+ssh_key="$state_dir/id_ed25519"
+known_hosts="$state_dir/known_hosts"
+downloads="$state_dir/downloads"
+cloud_dir="$state_dir/cloud-init"
+base_xz="$downloads/$image_file"
+base_qcow2="$downloads/${image_file%.xz}"
+base_image="$libvirt_image_dir/${image_file%.xz}"
+disk_image="$libvirt_image_dir/${vm_name}.qcow2"
+seed_iso="$libvirt_image_dir/${vm_name}-seed.iso"
+
+say()
+{
+    printf 'freebsd-vm: %s\n' "$*" >&2
+}
+
+die()
+{
+    say "$*"
+    exit 1
+}
+
+need()
+{
+    command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+run_virsh()
+{
+    if virsh -c "$libvirt_uri" uri >/dev/null 2>&1; then
+        virsh -c "$libvirt_uri" "$@"
+    elif sudo -n virsh -c "$libvirt_uri" uri >/dev/null 2>&1; then
+        sudo virsh -c "$libvirt_uri" "$@"
+    else
+        virsh -c "$libvirt_uri" "$@"
+    fi
+}
+
+run_virt_install()
+{
+    if virsh -c "$libvirt_uri" uri >/dev/null 2>&1; then
+        virt-install --connect "$libvirt_uri" "$@"
+    elif sudo -n virsh -c "$libvirt_uri" uri >/dev/null 2>&1; then
+        sudo virt-install --connect "$libvirt_uri" "$@"
+    else
+        virt-install --connect "$libvirt_uri" "$@"
+    fi
+}
+
+domain_exists()
+{
+    run_virsh dominfo "$vm_name" >/dev/null 2>&1
+}
+
+domain_running()
+{
+    [[ "$(run_virsh domstate "$vm_name" 2>/dev/null || true)" == "running" ]]
+}
+
+ensure_tools()
+{
+    need curl
+    need xz
+    need sha256sum
+    need qemu-img
+    need virsh
+    need virt-install
+    need cloud-localds
+    need rsync
+    need ssh
+    need ssh-keygen
+}
+
+ensure_key()
+{
+    mkdir -p "$state_dir"
+    if [[ ! -f "$ssh_key" ]]; then
+        say "creating ssh key $ssh_key"
+        ssh-keygen -t ed25519 -N '' -C "${vm_name}" -f "$ssh_key" >/dev/null
+    fi
+}
+
+download_image()
+{
+    mkdir -p "$downloads"
+    if [[ ! -f "$base_xz" ]]; then
+        say "downloading $image_url"
+        curl -fL --retry 3 -o "$base_xz.tmp" "$image_url"
+        mv "$base_xz.tmp" "$base_xz"
+    fi
+
+    say "checking image checksum"
+    curl -fsSL "$checksum_url" -o "$downloads/CHECKSUM.SHA256"
+    local checksum
+    checksum="$(
+        awk -v file="$image_file" '$0 ~ "\\(" file "\\)" {print $4}' \
+            "$downloads/CHECKSUM.SHA256"
+    )"
+    [[ -n "$checksum" ]] || die "checksum not found for $image_file"
+    printf '%s  %s\n' "$checksum" "$base_xz" | sha256sum -c -
+
+    if [[ ! -f "$base_qcow2" ]]; then
+        say "decompressing ${base_xz##*/}"
+        xz -dc "$base_xz" > "$base_qcow2.tmp"
+        mv "$base_qcow2.tmp" "$base_qcow2"
+    fi
+}
+
+write_cloud_init()
+{
+    mkdir -p "$cloud_dir"
+    local public_key
+    public_key="$(<"${ssh_key}.pub")"
+
+    cat > "$cloud_dir/meta-data" <<EOF
+instance-id: ${vm_name}
+local-hostname: ${vm_name}
+EOF
+
+    cat > "$cloud_dir/user-data" <<EOF
+#cloud-config
+users:
+  - default
+  - name: ${vm_user}
+    gecos: nxtui test user
+    groups: wheel
+    shell: /bin/sh
+    lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${public_key}
+ssh_pwauth: false
+runcmd:
+  - pkg bootstrap -f -y
+  - pkg update
+  - pkg install -y bash cmake gcc15 git meson ninja pkgconf python3 rsync sudo
+  - sysrc sshd_enable=YES
+  - service sshd start
+EOF
+
+    say "building cloud-init seed image"
+    cloud-localds "$cloud_dir/seed.iso" "$cloud_dir/user-data" \
+        "$cloud_dir/meta-data"
+}
+
+install_images()
+{
+    sudo install -d -m 0755 "$libvirt_image_dir"
+    if [[ ! -f "$base_image" ]]; then
+        say "installing base image under $libvirt_image_dir"
+        sudo install -m 0644 "$base_qcow2" "$base_image"
+    fi
+    if [[ ! -f "$disk_image" ]]; then
+        say "creating overlay disk $disk_image"
+        sudo qemu-img create -f qcow2 -F qcow2 -b "$base_image" \
+            "$disk_image" "$disk_size" >/dev/null
+    fi
+    say "installing seed image"
+    sudo install -m 0644 "$cloud_dir/seed.iso" "$seed_iso"
+    if getent passwd libvirt-qemu >/dev/null; then
+        sudo chown libvirt-qemu:libvirt-qemu \
+            "$base_image" "$disk_image" "$seed_iso"
+    fi
+}
+
+ensure_default_network()
+{
+    run_virsh net-info default >/dev/null 2>&1 \
+        || die "libvirt default network is not defined"
+    local net_info
+    net_info="$(run_virsh net-info default)"
+    if ! grep -Eq '^Active: +yes$' <<< "$net_info"; then
+        say "starting libvirt default network"
+        run_virsh net-start default >/dev/null 2>&1 || {
+            net_info="$(run_virsh net-info default)"
+            grep -Eq '^Active: +yes$' <<< "$net_info" \
+                || die "failed to start libvirt default network"
+        }
+    fi
+    run_virsh net-autostart default >/dev/null || true
+}
+
+define_domain()
+{
+    if domain_exists; then
+        say "domain $vm_name already exists"
+        return
+    fi
+
+    say "defining and starting $vm_name"
+    run_virt_install \
+        --name "$vm_name" \
+        --memory "$memory" \
+        --vcpus "$vcpus" \
+        --os-variant "$os_variant" \
+        --import \
+        --disk "path=$disk_image,format=qcow2,bus=virtio" \
+        --disk "path=$seed_iso,device=cdrom,readonly=on" \
+        --network "network=default,model=virtio" \
+        --graphics none \
+        --console pty,target.type=serial \
+        --noautoconsole
+}
+
+vm_ip()
+{
+    local mac ip
+    mac="$(
+        run_virsh domiflist "$vm_name" 2>/dev/null \
+            | awk '$1 ~ /^vnet/ || $3 == "network" {print $5; exit}'
+    )"
+    if [[ -n "$mac" ]]; then
+        ip="$(
+            run_virsh net-dhcp-leases default --mac "$mac" 2>/dev/null \
+                | awk '/ipv4/ {sub("/.*", "", $5); print $5; exit}'
+        )"
+        if [[ -n "$ip" ]]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    fi
+    run_virsh domifaddr "$vm_name" --source lease 2>/dev/null \
+        | awk '/ipv4/ {sub("/.*", "", $4); print $4; exit}'
+}
+
+ssh_args()
+{
+    printf '%s\n' \
+        -i "$ssh_key" \
+        -o UserKnownHostsFile="$known_hosts" \
+        -o StrictHostKeyChecking=accept-new \
+        -o ConnectTimeout=5 \
+        -o ServerAliveInterval=10 \
+        -o ServerAliveCountMax=3
+}
+
+ssh_to_vm()
+{
+    local ip
+    ip="$(vm_ip)"
+    [[ -n "$ip" ]] || die "no DHCP lease for $vm_name yet"
+    ssh $(ssh_args) "${vm_user}@${ip}" "$@"
+}
+
+wait_ssh()
+{
+    say "waiting for ssh"
+    for _ in $(seq 1 120); do
+        if ip="$(vm_ip)" && [[ -n "$ip" ]] \
+            && ssh $(ssh_args) "${vm_user}@${ip}" true >/dev/null 2>&1; then
+            say "ssh ready at $ip"
+            return 0
+        fi
+        sleep 5
+    done
+    die "timed out waiting for ssh"
+}
+
+wait_ready()
+{
+    wait_ssh
+    say "waiting for build tools installed by cloud-init"
+    for _ in $(seq 1 180); do
+        if ssh_to_vm \
+            'PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin command -v meson >/dev/null && command -v ninja >/dev/null && command -v cmake >/dev/null && command -v gcc15 >/dev/null && command -v g++15 >/dev/null' \
+            >/dev/null 2>&1; then
+            say "guest build tools are ready"
+            return 0
+        fi
+        sleep 10
+    done
+    die "timed out waiting for FreeBSD package bootstrap"
+}
+
+start_domain()
+{
+    domain_exists || die "domain $vm_name does not exist; run init first"
+    if domain_running; then
+        say "$vm_name already running"
+    else
+        say "starting $vm_name"
+        run_virsh start "$vm_name" >/dev/null
+    fi
+}
+
+sync_repo()
+{
+    wait_ready
+    ssh_to_vm "mkdir -p '$remote_dir'"
+    local ip
+    ip="$(vm_ip)"
+    say "rsyncing repository to ${vm_user}@${ip}:${remote_dir}"
+    rsync -az --delete \
+        --exclude /.cache/ \
+        --exclude /.git/ \
+        --exclude /build/ \
+        --exclude /compiled/ \
+        --exclude /docs/generated/ \
+        --exclude /docs/html/ \
+        --exclude /docs/xml/ \
+        --exclude /docs2/out/ \
+        --exclude /node_modules/ \
+        --exclude /tmp/ \
+        --exclude /traces/ \
+        -e "ssh $(printf '%q ' $(ssh_args))" \
+        "$root/" "${vm_user}@${ip}:${remote_dir}/"
+}
+
+run_test()
+{
+    sync_repo
+    say "running FreeBSD test command"
+    ssh_to_vm "cd '$remote_dir' && PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $test_command"
+}
+
+usage()
+{
+    cat <<EOF
+usage: ${0##*/} <command>
+
+commands:
+  check       verify host tooling and libvirt access
+  init        download the FreeBSD cloud image and define the VM
+  start       start the VM
+  ip          print the VM IPv4 address from libvirt DHCP leases
+  wait        wait for ssh and build tools
+  ssh [cmd]   open ssh, or run cmd in the VM
+  sync        rsync this checkout into the VM
+  test        sync and run the FreeBSD Meson test build
+  stop        ask the VM to shut down
+  destroy     destroy and undefine the VM, keeping downloaded base images
+
+common overrides:
+  NXT_FREEBSD_VERSION=$version
+  NXT_FREEBSD_VM=$vm_name
+  NXT_FREEBSD_MEMORY=$memory
+  NXT_FREEBSD_VCPUS=$vcpus
+  NXT_FREEBSD_OS_VARIANT=$os_variant
+  NXT_FREEBSD_TEST_COMMAND='$test_command'
+EOF
+}
+
+cmd="${1:-}"
+if [[ -n "$cmd" ]]; then
+    shift
+fi
+
+case "$cmd" in
+    check)
+        ensure_tools
+        run_virsh uri
+        run_virsh net-list --all
+        ;;
+    init)
+        ensure_tools
+        ensure_key
+        download_image
+        write_cloud_init
+        install_images
+        ensure_default_network
+        define_domain
+        ;;
+    start)
+        start_domain
+        ;;
+    ip)
+        vm_ip
+        ;;
+    wait)
+        wait_ready
+        ;;
+    ssh)
+        wait_ssh
+        if (($#)); then
+            ssh_to_vm "$@"
+        else
+            ssh_to_vm
+        fi
+        ;;
+    sync)
+        sync_repo
+        ;;
+    test)
+        domain_exists || "$0" init
+        start_domain
+        run_test
+        ;;
+    stop)
+        domain_exists || exit 0
+        run_virsh shutdown "$vm_name" >/dev/null || true
+        ;;
+    destroy)
+        if domain_exists; then
+            run_virsh destroy "$vm_name" >/dev/null 2>&1 || true
+            run_virsh undefine "$vm_name" >/dev/null
+        fi
+        sudo rm -f "$disk_image" "$seed_iso"
+        ;;
+    ""|-h|--help|help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

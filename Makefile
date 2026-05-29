@@ -1,4 +1,4 @@
-.PHONY: all setup build full test spec docs docs-publish clean traces
+.PHONY: all setup build full test freebsd-test spec docs docs-publish clean traces
 
 all: build
 
@@ -14,6 +14,9 @@ full:
 test:
 	meson compile -C build nxt-tests
 	meson test -C build
+
+freebsd-test:
+	scripts/freebsd-vm test
 
 spec:
 	racket nxtrt/model.rkt --run-all
