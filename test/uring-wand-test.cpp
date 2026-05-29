@@ -385,7 +385,7 @@ static suite uring_wand_tests{
                 expect(value == 42_i);
             };
 
-            "runtime owns a root zone and app channels"_test = [] {
+            "runtime owns a root zone and app wires"_test = [] {
                 auto rt = nxtrt::runtime{};
 
                 auto child = rt.run([]() -> nxtrt::task<nxtrt::deed<int>> {

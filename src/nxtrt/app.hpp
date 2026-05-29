@@ -1,8 +1,8 @@
 #pragma once
 
-#include "nxtrt/channel.hpp"
-#include "nxtrt/event.hpp"
+#include "nxtrt/bell.hpp"
 #include "nxtrt/task.hpp"
+#include "nxtrt/wire.hpp"
 
 #include <nxtui/input.hpp>
 #include <nxtui/units.hpp>
@@ -79,34 +79,34 @@ public:
         return wand_;
     }
 
-    [[nodiscard]] event & damage_event() noexcept
+    [[nodiscard]] bell & damage_bell() noexcept
     {
-        return damage_event_;
+        return damage_bell_;
     }
 
     void signal_damage()
     {
-        damage_event_.set();
+        damage_bell_.ring();
     }
 
-    [[nodiscard]] channel<term_size> & resize_channel() noexcept
+    [[nodiscard]] wire<term_size> & resize_wire() noexcept
     {
-        return resize_channel_;
+        return resize_wire_;
     }
 
-    [[nodiscard]] channel<input_event> & input_channel() noexcept
+    [[nodiscard]] wire<input_event> & input_wire() noexcept
     {
-        return input_channel_;
+        return input_wire_;
     }
 
     [[nodiscard]] task<std::optional<input_event>> next_input()
     {
-        co_return co_await input_channel_.next();
+        co_return co_await input_wire_.next();
     }
 
     [[nodiscard]] task<bool> publish_input_event(input_event event)
     {
-        auto published = co_await input_channel_.publish(std::move(event));
+        auto published = co_await input_wire_.send(std::move(event));
         if (published)
             signal_damage();
         co_return published;
@@ -114,7 +114,7 @@ public:
 
     [[nodiscard]] bool publish_resize(term_size size)
     {
-        auto published = resize_channel_.try_publish(size);
+        auto published = resize_wire_.try_send(size);
         if (published)
             signal_damage();
         return published;
@@ -122,7 +122,7 @@ public:
 
     [[nodiscard]] std::optional<term_size> next_resize_now()
     {
-        return resize_channel_.try_pop();
+        return resize_wire_.try_next();
     }
 
     template<typename Rep, typename Period>
@@ -159,23 +159,23 @@ public:
 
     void request_stop()
     {
-        input_channel_.cancel();
-        resize_channel_.cancel();
+        input_wire_.cancel();
+        resize_wire_.cancel();
         signal_damage();
     }
 
     [[nodiscard]] bool stop_requested() const noexcept
     {
-        return input_channel_.stop_requested()
-            || resize_channel_.stop_requested();
+        return input_wire_.stop_requested()
+            || resize_wire_.stop_requested();
     }
 
 private:
     platform_wand wand_;
     deck deck_;
-    event damage_event_;
-    channel<term_size> resize_channel_;
-    channel<input_event> input_channel_;
+    bell damage_bell_;
+    wire<term_size> resize_wire_;
+    wire<input_event> input_wire_;
 };
 #endif
 

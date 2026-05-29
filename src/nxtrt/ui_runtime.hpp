@@ -151,21 +151,21 @@ public:
         }};
     }
 
-    [[nodiscard]] event & damage_event() noexcept
+    [[nodiscard]] bell & damage_bell() noexcept
     {
-        return damage_event_;
+        return damage_bell_;
     }
 
     void signal_damage()
     {
         ++damage_generation_;
-        damage_event_.set();
+        damage_bell_.ring();
     }
 
     void request_shutdown()
     {
         stopping_ = true;
-        damage_event_.set();
+        damage_bell_.ring();
     }
 
     [[nodiscard]] bool stop_requested() const noexcept
@@ -186,7 +186,7 @@ public:
 
     [[nodiscard]] bool queue_print_block(std::string text)
     {
-        auto published = commands_.try_publish(
+        auto published = commands_.try_send(
             terminal_command{
                 .kind = terminal_command_kind::print_block,
                 .text = std::move(text),
@@ -255,7 +255,7 @@ public:
                     static_cast<std::size_t>(n)};
                 for (auto & event : parser.feed(bytes)) {
                     if (event.is_cursor_position_report()) {
-                        (void)cursor_reports_.try_publish(
+                        (void)cursor_reports_.try_send(
                             *event.cursor_position);
                         continue;
                     }
@@ -413,7 +413,7 @@ private:
 
     void discard_cursor_reports()
     {
-        while (cursor_reports_.try_pop()) {
+        while (cursor_reports_.try_next()) {
         }
     }
 
@@ -434,7 +434,7 @@ private:
             std::chrono::steady_clock::now()
             + std::chrono::milliseconds{100};
         while (!stop_requested()) {
-            if (auto report = cursor_reports_.try_pop())
+            if (auto report = cursor_reports_.try_next())
                 co_return report->y;
 
             auto now = std::chrono::steady_clock::now();
@@ -523,7 +523,7 @@ private:
 
     void drain_commands()
     {
-        while (auto command = commands_.try_pop()) {
+        while (auto command = commands_.try_next()) {
             switch (command->kind) {
             case terminal_command_kind::print_block:
                 output_queue_.push_back(
@@ -591,11 +591,11 @@ private:
 
             if (damage_generation_ != rendered_generation)
                 continue;
-            damage_event_.reset();
+            damage_bell_.reset();
             if (damage_generation_ != rendered_generation)
                 continue;
             try {
-                co_await damage_event_;
+                co_await damage_bell_;
             } catch (const operation_cancelled &) {
                 co_return;
             }
@@ -618,10 +618,10 @@ private:
     nxtui::Size size_;
     nxtui::tui::TerminalCompositor compositor_;
     widget_slot surface_;
-    event damage_event_;
+    bell damage_bell_;
     std::uint64_t damage_generation_ = 0;
-    channel<terminal_command> commands_;
-    channel<Pos> cursor_reports_;
+    wire<terminal_command> commands_;
+    wire<Pos> cursor_reports_;
     std::vector<queued_output> output_queue_;
     regional_tty::scrollback_append_state scrollback_;
     bool stopping_ = false;

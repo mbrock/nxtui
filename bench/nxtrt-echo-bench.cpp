@@ -1,6 +1,6 @@
 #include <nxtrt/app.hpp>
 #include <nxtrt/buffers.hpp>
-#include <nxtrt/event.hpp>
+#include <nxtrt/bell.hpp>
 #include <nxtrt/net.hpp>
 #include <nxt/unique-fd.hpp>
 
@@ -42,7 +42,7 @@ struct bench_stats
 
 struct bench_state
 {
-    nxtrt::event done;
+    nxtrt::bell done;
     std::size_t clients_done = 0;
     bool timed_out = false;
 };
@@ -167,7 +167,7 @@ void mark_client_done(bench_state & state, std::size_t clients)
 {
     ++state.clients_done;
     if (state.clients_done >= clients)
-        state.done.set();
+        state.done.ring();
 }
 
 nxtrt::task<void> echo_client_tracked(
@@ -194,7 +194,7 @@ nxtrt::task<void> timeout_load(
     co_await nxtrt::op::timeout::after(
         std::chrono::duration_cast<std::chrono::nanoseconds>(timeout));
     state->timed_out = true;
-    state->done.set();
+    state->done.ring();
 }
 
 nxtrt::task<void> run_echo_load(

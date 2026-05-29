@@ -34,8 +34,8 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::scheduler` | `nxtrt::deck` + `nxtrt::wand` | Keep the host pumpable so terminal and Emacs embeddings can own the event loop. |
 | `scheduler.yield_for(d)` | `nxtrt::op::timeout::after(d)` or `with_timeout` | Keep sleep/yield as runtime methods at the app boundary. |
 | `scheduler.poll(...)` | `nxtrt::op::poll*` | Convert call sites once they are inside an `nxtrt::task`. |
-| `nxt::queue<T>` | `nxtrt::channel<T>` | Done. Used for UI input, resize, and tool streams. |
-| `nxt::event` | `nxtrt::event` | Done. Used for damage notifications and small UI coordination points. |
+| `nxt::queue<T>` | `nxtrt::wire<T>` | Done. Used for UI input, resize, and tool streams. |
+| `nxt::event` | `nxtrt::bell` | Done. Used for damage notifications and small UI coordination points. |
 | `nxtio/input.hpp` | `nxtui/input.hpp` | Done. The compatibility include has been removed. |
 | `nxt::latch` | zone join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
 | `spawn_detached` | `nxtrt::fork` in a zone | Detached work should still be owned by a root zone. |
@@ -46,12 +46,12 @@ LLM stack has also been removed; the surviving LLM code lives in
 
 ## Completed Slices
 
-1. Add `nxtrt` channel and event primitives. Done as deck-local
-   `nxtrt::channel<T>` and manual-reset `nxtrt::event`.
+1. Add `nxtrt` wire and bell primitives. Done as bounded
+   `nxtrt::wire<T>` and manual-reset `nxtrt::bell`.
 
 2. Introduce a runtime facade beside terminal UI helpers. Done as
    `nxtrt::runtime`: it owns a `deck`, platform `wand`, root-zone run
-   entrypoint, damage event, input channel, resize channel, and `sleep`.
+   entrypoint, damage bell, input wire, resize wire, and `sleep`.
    `nxtrt::terminal_app` and the runtime demos layer terminal/compositor
    ownership on top of it.
 

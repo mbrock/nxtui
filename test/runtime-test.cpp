@@ -1,15 +1,15 @@
 #include <nxt/sparkline.hpp>
 #include <nxtui/tui_text.hpp>
 #include <nxtrt/buffers.hpp>
-#include <nxtrt/channel.hpp>
+#include <nxtrt/bell.hpp>
 #include <nxtrt/compression.hpp>
-#include <nxtrt/event.hpp>
 #include <nxtrt/http.hpp>
 #include <nxtrt/kqueue_wand.hpp>
 #include <nxtrt/sampling.hpp>
 #include <nxtrt/task.hpp>
 #include <nxtrt/terminal_app.hpp>
 #include <nxtrt/ui_runtime.hpp>
+#include <nxtrt/wire.hpp>
 #include <nxtai/tool_batch.hpp>
 
 #include "test.hpp"
@@ -424,8 +424,8 @@ nxtrt::task<void> record_after_yield(std::vector<int> & events, int value)
 }
 
 nxtrt::task<void>
-record_next_channel_value(
-    nxtrt::channel<int> & events,
+record_next_wire_value(
+    nxtrt::wire<int> & events,
     std::vector<int> & out)
 {
     auto value = co_await events.next();
@@ -434,7 +434,7 @@ record_next_channel_value(
 }
 
 nxtrt::task<void>
-record_closed_channel(nxtrt::channel<int> & events, bool & finished)
+record_closed_wire(nxtrt::wire<int> & events, bool & finished)
 {
     auto value = co_await events.next();
     expect(!value);
@@ -442,8 +442,8 @@ record_closed_channel(nxtrt::channel<int> & events, bool & finished)
 }
 
 nxtrt::task<void>
-record_after_event(
-    nxtrt::event & ready,
+record_after_bell(
+    nxtrt::bell & ready,
     std::vector<int> & out,
     int value)
 {
@@ -3094,13 +3094,13 @@ static suite runtime_tests{
             };
         };
 
-        "channels"_test = [] {
+        "wires"_test = [] {
             "buffer values until consumed"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto events = nxtrt::channel<int>{};
+                auto events = nxtrt::wire<int>{2};
 
-                expect(deck.sync_wait(events.publish(1)));
-                expect(deck.sync_wait(events.publish(2)));
+                expect(events.try_send(1));
+                expect(events.try_send(2));
 
                 auto values = deck.sync_wait([&]() -> nxtrt::task<
                     std::vector<int>> {
@@ -3114,30 +3114,25 @@ static suite runtime_tests{
             };
 
             "resumes a waiting consumer when a value is published"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto events = nxtrt::channel<int>{};
+                auto rt = nxtrt::runtime{};
+                auto events = nxtrt::wire<int>{};
                 auto seen = std::vector<int>{};
 
-                auto consumer = record_next_channel_value(events, seen);
-
-                deck.start(consumer);
-                deck.run_until_idle();
-
-                expect(seen.empty());
-                expect(!consumer.done());
-
-                expect(deck.sync_wait(events.publish(7)));
-                deck.run_until_idle();
+                rt.run([&]() -> nxtrt::task<void> {
+                    nxtrt::fork(record_next_wire_value(events, seen));
+                    co_await nxtrt::yield();
+                    expect(seen.empty());
+                    expect(co_await events.send(7));
+                });
 
                 expect(seen == std::vector<int>{7});
-                expect(consumer.done());
             };
 
             "close rejects publishers and drains consumers"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto events = nxtrt::channel<int>{};
+                auto events = nxtrt::wire<int>{};
 
-                expect(deck.sync_wait(events.publish(1)));
+                expect(events.try_send(1));
                 events.close();
 
                 auto first = deck.sync_wait(
@@ -3151,87 +3146,80 @@ static suite runtime_tests{
 
                 expect(first && *first == 1_i);
                 expect(!second);
-                expect(!deck.sync_wait(events.publish(2)));
+                expect(!events.try_send(2));
             };
 
             "cancel requests stop and wakes pending consumers"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto events = nxtrt::channel<int>{};
+                auto rt = nxtrt::runtime{};
+                auto events = nxtrt::wire<int>{};
                 auto finished = false;
 
-                auto consumer = record_closed_channel(events, finished);
-
-                deck.start(consumer);
-                deck.run_until_idle();
-
-                events.cancel();
-                deck.run_until_idle();
+                rt.run([&]() -> nxtrt::task<void> {
+                    nxtrt::fork(record_closed_wire(events, finished));
+                    co_await nxtrt::yield();
+                    events.cancel();
+                });
 
                 expect(events.stop_requested());
                 expect(finished);
-                expect(consumer.done());
-                expect(!deck.sync_wait(events.publish(1)));
+                expect(!events.try_send(1));
             };
 
-            "try_pop drains buffered values without awaiting"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto events = nxtrt::channel<int>{};
+            "try_next drains buffered values without awaiting"_test = [] {
+                auto events = nxtrt::wire<int>{};
 
-                expect(deck.sync_wait(events.push(3)));
-                auto value = events.try_pop();
+                expect(events.try_send(3));
+                auto value = events.try_next();
                 expect(value && *value == 3_i);
-                expect(!events.try_pop());
+                expect(!events.try_next());
+            };
+
+            "bounded queues reject immediate sends when full"_test = [] {
+                auto events = nxtrt::wire<int>{1};
+
+                expect(events.try_send(1));
+                expect(!events.try_send(2));
             };
         };
 
-        "events"_test = [] {
-            "set wakes all waiting tasks"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto ready = nxtrt::event{};
+        "bells"_test = [] {
+            "ring wakes waiting tasks"_test = [] {
+                auto rt = nxtrt::runtime{};
+                auto ready = nxtrt::bell{};
                 auto values = std::vector<int>{};
 
-                auto first = record_after_event(ready, values, 1);
-                auto second = record_after_event(ready, values, 2);
-                deck.start(first);
-                deck.start(second);
-                deck.run_until_idle();
-
-                expect(values.empty());
-
-                ready.set();
-                deck.run_until_idle();
+                rt.run([&]() -> nxtrt::task<void> {
+                    nxtrt::fork(record_after_bell(ready, values, 1));
+                    nxtrt::fork(record_after_bell(ready, values, 2));
+                    co_await nxtrt::yield();
+                    expect(values.empty());
+                    ready.ring();
+                });
 
                 expect(values == std::vector<int>{1, 2});
-                expect(first.done());
-                expect(second.done());
             };
 
             "reset makes future awaits suspend again"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto ready = nxtrt::event{};
+                auto rt = nxtrt::runtime{};
+                auto ready = nxtrt::bell{};
                 auto values = std::vector<int>{};
 
-                ready.set();
-                deck.sync_wait([&]() -> nxtrt::task<void> {
+                ready.ring();
+                rt.run([&]() -> nxtrt::task<void> {
                     co_await ready;
                     values.push_back(1);
                 });
 
                 ready.reset();
 
-                auto task = record_after_event(ready, values, 2);
-
-                deck.start(task);
-                deck.run_until_idle();
-
-                expect(values == std::vector<int>{1});
-                expect(!task.done());
-
-                ready.set();
-                deck.run_until_idle();
+                rt.run([&]() -> nxtrt::task<void> {
+                    nxtrt::fork(record_after_bell(ready, values, 2));
+                    co_await nxtrt::yield();
+                    expect(values == std::vector<int>{1});
+                    ready.ring();
+                });
 
                 expect(values == std::vector<int>{1, 2});
-                expect(task.done());
             };
         };
 
