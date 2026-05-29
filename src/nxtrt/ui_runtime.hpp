@@ -647,8 +647,8 @@ struct current_widget_slot_key
 
 inline ui_runtime * current_ui_runtime() noexcept
 {
-    auto * value = env_get<current_ui_runtime_key>();
-    if (value == nullptr)
+    auto value = env_get<current_ui_runtime_key>();
+    if (!value)
         return nullptr;
     return *value;
 }
@@ -663,7 +663,10 @@ inline ui_runtime & require_current_ui_runtime()
 
 inline const widget_slot * current_widget_slot() noexcept
 {
-    return env_get<current_widget_slot_key>();
+    auto slot = env_get<current_widget_slot_key>();
+    if (!slot)
+        return nullptr;
+    return &*slot;
 }
 
 inline const widget_slot & require_current_widget_slot()

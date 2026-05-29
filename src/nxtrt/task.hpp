@@ -470,12 +470,12 @@ with_env_bound(typename Key::value_type value, Fn fn)
     struct binding_guard
     {
         detail::promise_base * promise = nullptr;
-        std::unique_ptr<env_entry_base> previous;
+        runtime_env::entry_snapshot previous;
 
         ~binding_guard() noexcept
         {
             if (promise != nullptr)
-                promise->env.template restore<Key>(std::move(previous));
+                promise->env.restore(std::move(previous));
         }
     };
 
@@ -991,8 +991,8 @@ public:
         auto record = std::shared_ptr<detail::child_record<T>>{};
         try {
             auto & promise = handle.promise();
-            // Forked children outlive the call site, so they inherit owned
-            // clones of the current ambient environment.
+            // Forked children outlive the call site, so they inherit the
+            // current immutable environment snapshot.
             promise.env.copy_entries_from(*current);
             record = std::make_shared<detail::child_record<T>>(handle);
         } catch (...) {
@@ -1046,8 +1046,8 @@ struct task_zone_key
 
 inline task_zone * current_zone() noexcept
 {
-    auto * value = env_get<task_zone_key>();
-    if (value == nullptr)
+    auto value = env_get<task_zone_key>();
+    if (!value)
         return nullptr;
     return *value;
 }

@@ -313,14 +313,14 @@ struct trace_current_span_key
 
 inline std::shared_ptr<trace_context> current_trace_context()
 {
-    if (auto * context = env_get<trace_context_key>())
+    if (auto context = env_get<trace_context_key>())
         return *context;
     return {};
 }
 
 inline std::string current_trace_span_id()
 {
-    if (auto * span_id = env_get<trace_current_span_key>())
+    if (auto span_id = env_get<trace_current_span_key>())
         return *span_id;
     return {};
 }

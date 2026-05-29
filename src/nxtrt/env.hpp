@@ -2,7 +2,6 @@
 
 #include "nxtrt/exceptions.hpp"
 
-#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -27,6 +26,41 @@ inline const void * env_key_id() noexcept
     static const int key = 0;
     return &key;
 }
+
+/// Nullable reference used for optional read-only environment lookups.
+template<typename T>
+class optional_ref
+{
+public:
+    optional_ref() noexcept = default;
+
+    explicit optional_ref(T & value) noexcept
+        : value_(&value)
+    {}
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return value_ != nullptr;
+    }
+
+    [[nodiscard]] T & operator*() const noexcept
+    {
+        return *value_;
+    }
+
+    [[nodiscard]] T * operator->() const noexcept
+    {
+        return value_;
+    }
+
+    [[nodiscard]] T & get() const noexcept
+    {
+        return *value_;
+    }
+
+private:
+    T * value_ = nullptr;
+};
 
 /// Type-erased owned value in a task runtime environment.
 struct env_entry_base
@@ -71,14 +105,18 @@ struct missing_env : runtime_error
 
 /// Promise-owned ambient environment for the currently running task.
 ///
-/// Entries are flat rather than parent-linked: binding a key replaces exactly
-/// that key for this task, and restoring the binding reinstates the previous
-/// entry if one existed.
+/// Entries are flat immutable snapshots rather than parent-linked bindings:
+/// inheriting an environment shares the snapshot, while binding a key creates a
+/// new snapshot for this task and restoring the binding swaps the old snapshot
+/// back into place.
 struct runtime_env
 {
+    using entry_list = std::vector<std::unique_ptr<env_entry_base>>;
+    using entry_snapshot = std::shared_ptr<const entry_list>;
+
     deck * current_deck = nullptr;
     detail::promise_base * current_promise = nullptr;
-    std::vector<std::unique_ptr<env_entry_base>> entries;
+    entry_snapshot entries = empty_entries();
 
     runtime_env() = default;
 
@@ -96,77 +134,100 @@ struct runtime_env
     runtime_env(runtime_env &&) noexcept = default;
     runtime_env & operator=(runtime_env &&) noexcept = default;
 
-    /// Replace this environment's entries with cloned entries from `other`.
+    /// Replace this environment's entries with `other`'s shared snapshot.
     ///
-    /// Cloning gives child coroutine frames their own ambient values, so they
-    /// never borrow storage owned by a caller's scoped binding guard.
+    /// Snapshots are immutable, so child coroutine frames can inherit ambient
+    /// values by sharing a reference-counted snapshot. Later bindings install a
+    /// new snapshot instead of mutating storage that another task can observe.
     void copy_entries_from(const runtime_env & other)
     {
         if (this == &other)
             return;
 
-        auto next = std::vector<std::unique_ptr<env_entry_base>>{};
-        next.reserve(other.entries.size());
-        for (auto const & entry : other.entries)
-            next.push_back(entry->clone());
-
-        entries = std::move(next);
+        entries = other.entries == nullptr
+            ? empty_entries()
+            : other.entries;
         current_deck = nullptr;
         current_promise = nullptr;
     }
 
     template<typename Key>
-    typename Key::value_type * get() const noexcept
+    optional_ref<const std::remove_cv_t<typename Key::value_type>>
+    get() const noexcept
     {
-        for (auto const & entry : entries) {
-            if (entry->key == env_key_id<Key>())
-                return &static_cast<env_entry<Key> *>(entry.get())->value;
+        if (entries == nullptr)
+            return {};
+
+        for (auto const & entry : *entries) {
+            if (entry->key == env_key_id<Key>()) {
+                auto const * typed =
+                    static_cast<const env_entry<Key> *>(entry.get());
+                return optional_ref<
+                    const std::remove_cv_t<typename Key::value_type>>{
+                    typed->value};
+            }
         }
-        return nullptr;
+        return {};
     }
 
     template<typename Key>
-    typename Key::value_type & require() const
+    const std::remove_cv_t<typename Key::value_type> & require() const
     {
-        if (auto * value = get<Key>())
+        if (auto value = get<Key>())
             return *value;
         throw missing_env{Key::name};
     }
 
-    /// Bind `Key` to `value`, returning the previous entry for RAII restore.
+    /// Bind `Key` to `value`, returning the previous snapshot for restore.
     template<typename Key>
-    [[nodiscard]] std::unique_ptr<env_entry_base>
+    [[nodiscard]] entry_snapshot
     replace(typename Key::value_type value)
     {
-        auto next = std::make_unique<env_entry<Key>>(std::move(value));
-        for (auto & entry : entries) {
+        auto previous = entries == nullptr
+            ? empty_entries()
+            : entries;
+        auto next = clone_entries(previous);
+        auto replacement =
+            std::make_unique<env_entry<Key>>(std::move(value));
+        for (auto & entry : *next) {
             if (entry->key != env_key_id<Key>())
                 continue;
-            auto previous = std::move(entry);
-            entry = std::move(next);
+            entry = std::move(replacement);
+            entries = std::move(next);
             return previous;
         }
 
-        entries.push_back(std::move(next));
-        return nullptr;
+        next->push_back(std::move(replacement));
+        entries = std::move(next);
+        return previous;
     }
 
-    /// Restore the entry returned by `replace<Key>()`.
-    template<typename Key>
-    void restore(std::unique_ptr<env_entry_base> previous) noexcept
+    /// Restore the snapshot returned by `replace<Key>()`.
+    void restore(entry_snapshot previous) noexcept
     {
-        for (auto it = entries.begin(); it != entries.end(); ++it) {
-            if ((*it)->key != env_key_id<Key>())
-                continue;
+        entries = previous == nullptr
+            ? empty_entries()
+            : std::move(previous);
+    }
 
-            if (previous)
-                *it = std::move(previous);
-            else
-                entries.erase(it);
-            return;
-        }
+private:
+    [[nodiscard]] static entry_snapshot empty_entries()
+    {
+        static const auto empty = std::make_shared<const entry_list>();
+        return empty;
+    }
 
-        std::terminate();
+    [[nodiscard]] static std::shared_ptr<entry_list>
+    clone_entries(const entry_snapshot & source)
+    {
+        auto next = std::make_shared<entry_list>();
+        if (source == nullptr)
+            return next;
+
+        next->reserve(source->size());
+        for (auto const & entry : *source)
+            next->push_back(entry->clone());
+        return next;
     }
 };
 
@@ -225,16 +286,17 @@ inline runtime_env & require_current_env()
 }
 
 template<typename Key>
-typename Key::value_type * env_get() noexcept
+optional_ref<const std::remove_cv_t<typename Key::value_type>>
+env_get() noexcept
 {
     auto * env = current_env();
     if (env == nullptr)
-        return nullptr;
+        return {};
     return env->get<Key>();
 }
 
 template<typename Key>
-typename Key::value_type & env_require()
+const std::remove_cv_t<typename Key::value_type> & env_require()
 {
     return require_current_env().require<Key>();
 }
