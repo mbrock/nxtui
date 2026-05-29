@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bench_bin="${BENCH_BIN:-build-bench-release/nxt-echo-bench}"
+build_dir="${BENCH_BUILD_DIR:-build-bench-release}"
+cpp_args="${BENCH_CPP_ARGS:--DNXT_RT_ENABLE_TRACE=0}"
+
+bench_clients="${BENCH_CLIENTS:-16}"
+bench_messages="${BENCH_MESSAGES:-512}"
+bench_payload="${BENCH_PAYLOAD:-64}"
+
+perf_data="${BENCH_PERF_DATA:-build-bench-release/nxt-echo.perf.data}"
+perf_json="${BENCH_PERF_DUCK_JSON:-build-bench-release/nxt-echo.perf.json}"
+perf_freq="${BENCH_PERF_FREQ:-1999}"
+perf_callgraph="${BENCH_PERF_CALLGRAPH:-fp}"
+perf_clients="${BENCH_PERF_CLIENTS:-64}"
+perf_messages="${BENCH_PERF_MESSAGES:-4096}"
+perf_payload="${BENCH_PERF_PAYLOAD:-64}"
+perf_hot_limit="${BENCH_PERF_HOT_LIMIT:-0.5}"
+perf_hot_lines="${BENCH_PERF_HOT_LINES:-40}"
+symbol_width="${BENCH_PERF_SYMBOL_WIDTH:-96}"
+duck_lines="${BENCH_PERF_DUCK_LINES:-20}"
+tree_depth="${BENCH_PERF_TREE_DEPTH:-9}"
+tree_children="${BENCH_PERF_TREE_CHILDREN:-6}"
+min_pct="${BENCH_PERF_MIN_PCT:-3.0}"
+
+uring_clients="${BENCH_URING_CLIENTS:-16}"
+uring_messages="${BENCH_URING_MESSAGES:-512}"
+uring_payload="${BENCH_URING_PAYLOAD:-64}"
+uring_data="${BENCH_URING_DATA:-build-bench-release/nxt-echo.uring.perf.data}"
+uring_json="${BENCH_URING_JSON:-build-bench-release/nxt-echo.uring.perf.json}"
+
+uring_events=(
+    io_uring:io_uring_submit_req
+    io_uring:io_uring_complete
+    io_uring:io_uring_cqring_wait
+    io_uring:io_uring_poll_arm
+    io_uring:io_uring_queue_async_work
+    syscalls:sys_enter_io_uring_enter
+    syscalls:sys_exit_io_uring_enter
+)
+
+section() {
+    printf "\n== %s ==\n" "$1"
+}
+
+build_bench() {
+    if [[ ! -d "$build_dir" ]]; then
+        meson setup "$build_dir" \
+            --buildtype=release \
+            -Dbenchmarks=true \
+            -Dtests=false \
+            -Ddemo=false \
+            -Dllm_tool=false \
+            -Dcpp_args="$cpp_args"
+    fi
+    meson configure "$build_dir" -Dcpp_args="$cpp_args"
+    meson compile -C "$build_dir" "$(basename "$bench_bin")"
+}
+
+run_plain() {
+    build_bench
+    section "tcp echo benchmark"
+    "$bench_bin" \
+        --clients "$bench_clients" \
+        --messages "$bench_messages" \
+        --payload "$bench_payload"
+}
+
+record_perf() {
+    build_bench
+    section "cpu perf record"
+    sudo perf record \
+        -F "$perf_freq" \
+        -g \
+        --call-graph "$perf_callgraph" \
+        -o "$perf_data" \
+        -- "$bench_bin" \
+            --clients "$perf_clients" \
+            --messages "$perf_messages" \
+            --payload "$perf_payload"
+}
+
+report_perf() {
+    sudo perf report -i "$perf_data"
+}
+
+hot_perf() {
+    sudo perf report -i "$perf_data" --stdio --stdio-color never \
+        --no-children --no-call-graph --fields overhead,dso,symbol \
+        --percent-limit "$perf_hot_limit" -t '|' 2>/dev/null \
+        | awk -F'|' -v width="$symbol_width" 'BEGIN {
+            printf "%-8s %-18s %s\n", "Overhead", "DSO", "Symbol";
+            printf "%-8s %-18s %s\n", "--------", "---", "------"
+        } /^[[:space:]]*[0-9]/ {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1);
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2);
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3);
+            if (length($3) > width)
+                $3 = substr($3, 1, width - 3) "...";
+            printf "%-8s %-18s %s\n", $1, $2, $3
+        }' \
+        | head "-$perf_hot_lines"
+}
+
+duck_perf() {
+    BENCH_PERF_DUCK_LINES="$duck_lines" \
+    BENCH_PERF_SYMBOL_WIDTH="$symbol_width" \
+    BENCH_PERF_TREE_DEPTH="$tree_depth" \
+    BENCH_PERF_TREE_CHILDREN="$tree_children" \
+    BENCH_PERF_MIN_PCT="$min_pct" \
+        scripts/perf-duckdb "$perf_data" "$perf_json"
+}
+
+run_perf() {
+    record_perf
+    section "cpu perf report"
+    duck_perf
+}
+
+uring_stat() {
+    build_bench
+    section "io_uring perf stat"
+    sudo perf stat -e "$(IFS=,; echo "${uring_events[*]}")" \
+        -- "$bench_bin" \
+            --clients "$uring_clients" \
+            --messages "$uring_messages" \
+            --payload "$uring_payload"
+}
+
+record_uring() {
+    build_bench
+    section "io_uring perf record"
+    sudo perf record \
+        -o "$uring_data" \
+        -e "$(IFS=,; echo "${uring_events[*]}")" \
+        -- "$bench_bin" \
+            --clients "$uring_clients" \
+            --messages "$uring_messages" \
+            --payload "$uring_payload"
+}
+
+duck_uring() {
+    scripts/uring-duckdb "$uring_data" "$uring_json"
+}
+
+run_uring() {
+    record_uring
+    section "io_uring trace report"
+    duck_uring
+}
+
+trace_uring() {
+    build_bench
+    scripts/uring-bpftrace "$bench_bin" \
+        --clients "$uring_clients" \
+        --messages "$uring_messages" \
+        --payload "$uring_payload"
+}
+
+usage() {
+    cat <<'USAGE'
+usage: scripts/bench COMMAND
+
+Commands:
+  build          build the release benchmark binary
+  plain          run the tcp echo benchmark once
+  all            run plain benchmark, CPU perf report, and io_uring trace report
+  perf-record    record CPU samples with perf
+  perf-report    open interactive perf report
+  perf-hot       print compact perf stdio hot list
+  perf-duck      render CPU perf.data with DuckDB/Rich
+  perf           record CPU samples and render the DuckDB/Rich report
+  uring-stat     run quick io_uring tracepoint counters with perf stat
+  uring-record   record io_uring tracepoints with perf
+  uring-duck     render io_uring perf.data with DuckDB/Rich
+  uring          record io_uring tracepoints and render the DuckDB/Rich report
+  uring-trace    run the live bpftrace io_uring summary
+USAGE
+}
+
+case "${1:-all}" in
+    build) build_bench ;;
+    plain) run_plain ;;
+    all)
+        run_plain
+        run_perf
+        run_uring
+        ;;
+    perf-record) record_perf ;;
+    perf-report) report_perf ;;
+    perf-hot) hot_perf ;;
+    perf-duck) duck_perf ;;
+    perf) run_perf ;;
+    uring-stat) uring_stat ;;
+    uring-record) record_uring ;;
+    uring-duck) duck_uring ;;
+    uring) run_uring ;;
+    uring-trace) trace_uring ;;
+    -h|--help|help) usage ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

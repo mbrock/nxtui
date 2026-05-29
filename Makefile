@@ -1,29 +1,5 @@
 .PHONY: all setup build full test freebsd-test bench-build bench bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
 
-BENCH_CLIENTS ?= 16
-BENCH_MESSAGES ?= 512
-BENCH_PAYLOAD ?= 64
-BENCH_CPP_ARGS ?= -DNXT_RT_ENABLE_TRACE=0
-BENCH_PERF_DATA ?= build-bench-release/nxt-echo.perf.data
-BENCH_PERF_FREQ ?= 1999
-BENCH_PERF_CALLGRAPH ?= fp
-BENCH_PERF_CLIENTS ?= 64
-BENCH_PERF_MESSAGES ?= 4096
-BENCH_PERF_PAYLOAD ?= 64
-BENCH_PERF_HOT_LIMIT ?= 0.5
-BENCH_PERF_HOT_LINES ?= 40
-BENCH_PERF_SYMBOL_WIDTH ?= 96
-BENCH_PERF_DUCK_JSON ?= build-bench-release/nxt-echo.perf.json
-BENCH_PERF_DUCK_LINES ?= 20
-BENCH_PERF_TREE_DEPTH ?= 9
-BENCH_PERF_TREE_CHILDREN ?= 6
-BENCH_PERF_MIN_PCT ?= 3.0
-BENCH_URING_CLIENTS ?= 16
-BENCH_URING_MESSAGES ?= 512
-BENCH_URING_PAYLOAD ?= 64
-BENCH_URING_DATA ?= build-bench-release/nxt-echo.uring.perf.data
-BENCH_URING_JSON ?= build-bench-release/nxt-echo.uring.perf.json
-
 all: build
 
 setup:
@@ -43,52 +19,34 @@ freebsd-test:
 	scripts/freebsd-vm test
 
 bench-build:
-	@if [ ! -d build-bench-release ]; then \
-		meson setup build-bench-release --buildtype=release -Dbenchmarks=true -Dtests=false -Ddemo=false -Dllm_tool=false -Dcpp_args=$(BENCH_CPP_ARGS); \
-	fi
-	meson configure build-bench-release -Dcpp_args=$(BENCH_CPP_ARGS)
-	meson compile -C build-bench-release nxt-echo-bench
+	scripts/bench build
 
-bench: bench-build
-	build-bench-release/nxt-echo-bench --clients $(BENCH_CLIENTS) --messages $(BENCH_MESSAGES) --payload $(BENCH_PAYLOAD)
+bench:
+	scripts/bench all
 
-bench-perf: bench-build
-	sudo perf record -F $(BENCH_PERF_FREQ) -g --call-graph $(BENCH_PERF_CALLGRAPH) -o $(BENCH_PERF_DATA) -- build-bench-release/nxt-echo-bench --clients $(BENCH_PERF_CLIENTS) --messages $(BENCH_PERF_MESSAGES) --payload $(BENCH_PERF_PAYLOAD)
+bench-perf:
+	scripts/bench perf-record
 
 bench-perf-report:
-	sudo perf report -i $(BENCH_PERF_DATA)
+	scripts/bench perf-report
 
 bench-perf-hot:
-	@sudo perf report -i $(BENCH_PERF_DATA) --stdio --stdio-color never \
-		--no-children --no-call-graph --fields overhead,dso,symbol \
-		--percent-limit $(BENCH_PERF_HOT_LIMIT) -t '|' 2>/dev/null \
-		| awk -F'|' 'BEGIN { \
-			printf "%-8s %-18s %s\n", "Overhead", "DSO", "Symbol"; \
-			printf "%-8s %-18s %s\n", "--------", "---", "------" \
-		} /^[[:space:]]*[0-9]/ { \
-			gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$1); \
-			gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$2); \
-			gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$3); \
-			if (length($$3) > $(BENCH_PERF_SYMBOL_WIDTH)) \
-				$$3 = substr($$3, 1, $(BENCH_PERF_SYMBOL_WIDTH) - 3) "..."; \
-			printf "%-8s %-18s %s\n", $$1, $$2, $$3 \
-		}' \
-		| head -$(BENCH_PERF_HOT_LINES)
+	scripts/bench perf-hot
 
 bench-perf-duck:
-	@BENCH_PERF_DUCK_LINES=$(BENCH_PERF_DUCK_LINES) BENCH_PERF_SYMBOL_WIDTH=$(BENCH_PERF_SYMBOL_WIDTH) BENCH_PERF_TREE_DEPTH=$(BENCH_PERF_TREE_DEPTH) BENCH_PERF_TREE_CHILDREN=$(BENCH_PERF_TREE_CHILDREN) BENCH_PERF_MIN_PCT=$(BENCH_PERF_MIN_PCT) scripts/perf-duckdb $(BENCH_PERF_DATA) $(BENCH_PERF_DUCK_JSON)
+	scripts/bench perf-duck
 
-bench-uring-stat: bench-build
-	sudo perf stat -e io_uring:io_uring_submit_req,io_uring:io_uring_complete,io_uring:io_uring_cqring_wait,io_uring:io_uring_poll_arm,io_uring:io_uring_queue_async_work,syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter -- build-bench-release/nxt-echo-bench --clients $(BENCH_URING_CLIENTS) --messages $(BENCH_URING_MESSAGES) --payload $(BENCH_URING_PAYLOAD)
+bench-uring-stat:
+	scripts/bench uring-stat
 
-bench-uring-record: bench-build
-	sudo perf record -o $(BENCH_URING_DATA) -e io_uring:io_uring_submit_req,io_uring:io_uring_complete,io_uring:io_uring_cqring_wait,io_uring:io_uring_poll_arm,io_uring:io_uring_queue_async_work,syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter -- build-bench-release/nxt-echo-bench --clients $(BENCH_URING_CLIENTS) --messages $(BENCH_URING_MESSAGES) --payload $(BENCH_URING_PAYLOAD)
+bench-uring-record:
+	scripts/bench uring-record
 
 bench-uring-duck:
-	scripts/uring-duckdb $(BENCH_URING_DATA) $(BENCH_URING_JSON)
+	scripts/bench uring-duck
 
-bench-uring-trace: bench-build
-	scripts/uring-bpftrace build-bench-release/nxt-echo-bench --clients $(BENCH_URING_CLIENTS) --messages $(BENCH_URING_MESSAGES) --payload $(BENCH_URING_PAYLOAD)
+bench-uring-trace:
+	scripts/bench uring-trace
 
 spec:
 	racket nxtrt/model.rkt --run-all
