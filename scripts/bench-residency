@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import resource
 import subprocess
 import sys
@@ -16,15 +17,35 @@ def fmt_seconds(value: float) -> str:
     return f"{value:.3f}s"
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Report benchmark wall time, CPU time, and off-CPU time.")
+    parser.add_argument(
+        "--from-json",
+        help="render a saved residency JSON file instead of running a command")
+    parser.add_argument(
+        "--emit-json",
+        help="write residency measurements to this JSON file")
+    parser.add_argument(
+        "--save-stdout",
+        help="write the benchmark stdout to this file")
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="collect measurements without printing the report")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    return parser.parse_args()
+
+
+def measure(command: list[str]) -> tuple[dict[str, object], str, str, int]:
+    if not command:
         print("usage: scripts/bench-residency COMMAND [ARG...]", file=sys.stderr)
-        return 2
+        return {}, "", "", 2
 
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.monotonic()
     proc = subprocess.run(
-        sys.argv[1:],
+        command,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -34,27 +55,44 @@ def main() -> int:
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
 
     if proc.returncode != 0:
-        sys.stdout.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
-        return proc.returncode
+        return {}, proc.stdout, proc.stderr, proc.returncode
 
     user = after.ru_utime - before.ru_utime
     system = after.ru_stime - before.ru_stime
-    active = user + system
-    waiting = max(0.0, elapsed - active)
-    active_pct = 100.0 * active / elapsed if elapsed else 0.0
-    waiting_pct = 100.0 * waiting / elapsed if elapsed else 0.0
-    involuntary = after.ru_nivcsw - before.ru_nivcsw
-    voluntary = after.ru_nvcsw - before.ru_nvcsw
-
     try:
         bench = json.loads(proc.stdout)
     except json.JSONDecodeError:
         bench = {}
 
+    stats: dict[str, object] = {
+        "elapsed_seconds": elapsed,
+        "user_seconds": user,
+        "system_seconds": system,
+        "voluntary_context_switches": after.ru_nvcsw - before.ru_nvcsw,
+        "involuntary_context_switches": after.ru_nivcsw - before.ru_nivcsw,
+        "benchmark": bench,
+    }
+    return stats, proc.stdout, proc.stderr, 0
+
+
+def report(stats: dict[str, object]) -> str:
+    elapsed = float(stats["elapsed_seconds"])
+    user = float(stats["user_seconds"])
+    system = float(stats["system_seconds"])
+    voluntary = int(stats["voluntary_context_switches"])
+    involuntary = int(stats["involuntary_context_switches"])
+    bench = stats.get("benchmark")
+    if not isinstance(bench, dict):
+        bench = {}
+
+    active = user + system
+    waiting = max(0.0, elapsed - active)
+    active_pct = 100.0 * active / elapsed if elapsed else 0.0
+    waiting_pct = 100.0 * waiting / elapsed if elapsed else 0.0
+
+    workload = ""
     throughput = bench.get("round_trips_per_second")
     round_trips = bench.get("round_trips")
-    workload = ""
     if round_trips is not None and throughput is not None:
         workload = (
             f"\nIt completed {round_trips:,} round trips at "
@@ -72,8 +110,32 @@ def main() -> int:
         f"Context switches: {voluntary:,} voluntary, {involuntary:,} involuntary."
     )
 
-    print("CPU residency")
-    print(text)
+    return "CPU residency\n" + text
+
+
+def main() -> int:
+    args = parse_args()
+
+    if args.from_json:
+        with open(args.from_json, encoding="utf-8") as file:
+            print(report(json.load(file)))
+        return 0
+
+    stats, stdout, stderr, status = measure(args.command)
+    if status != 0:
+        sys.stdout.write(stdout)
+        sys.stderr.write(stderr)
+        return status
+
+    if args.save_stdout:
+        with open(args.save_stdout, "w", encoding="utf-8") as file:
+            file.write(stdout)
+    if args.emit_json:
+        with open(args.emit_json, "w", encoding="utf-8") as file:
+            json.dump(stats, file)
+            file.write("\n")
+    if not args.no_report:
+        print(report(stats))
     return 0
 
 

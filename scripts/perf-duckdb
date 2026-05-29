@@ -223,20 +223,11 @@ def metadata(con: duckdb.DuckDBPyConnection, json_path: Path) -> dict[str, objec
         from samples
         """
     ).fetchone()
-    comms = con.execute(
-        """
-        select sample.comm, count(*)::int
-        from raw
-        group by 1
-        order by 2 desc
-        """
-    ).fetchall()
     return {
         "json": json_path,
         "samples": row[0],
         "first_ts": row[1],
         "last_ts": row[2],
-        "comms": comms,
     }
 
 
@@ -504,12 +495,10 @@ def main() -> int:
         raise SystemExit(f"no samples found for comm {args.comm!r}")
 
     console = Console()
-    comms = ", ".join(f"{comm}:{count}" for comm, count in meta["comms"])
     console.print(
         Panel.fit(
             f"[bold]{args.comm}[/bold]  {total} samples\n"
-            f"json: {json_path}\n"
-            f"comm samples: {comms}",
+            f"json: {json_path}",
             title="perf json",
             border_style="green",
         )
