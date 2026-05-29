@@ -77,105 +77,6 @@ concept byte_read_task =
             task_result_t<std::invoke_result_t<Read &, std::span<std::byte>>>,
             std::size_t>);
 
-/// Runtime-polymorphic byte sink.
-class byte_sink
-{
-public:
-    virtual ~byte_sink() = default;
-
-    virtual task<std::size_t> write_some(std::span<const std::byte> src) = 0;
-};
-
-/// Byte sink for a file descriptor.
-class fd_sink final : public byte_sink
-{
-public:
-    explicit fd_sink(int fd) noexcept
-        : fd_(fd)
-    {}
-
-    task<std::size_t> write_some(std::span<const std::byte> src) override
-    {
-        while (true) {
-            try {
-                co_return co_await op::write_some{
-                    .fd = fd_,
-                    .buffer = src,
-                    .offset = -1,
-                };
-            } catch (const interrupted_system_call &) {
-            }
-        }
-    }
-
-private:
-    int fd_ = -1;
-};
-
-inline fd_sink standard_output() noexcept
-{
-    return fd_sink{STDOUT_FILENO};
-}
-
-/// Byte sink for a connected socket.
-class socket_sink final : public byte_sink
-{
-public:
-    explicit socket_sink(int fd, int flags = 0) noexcept
-        : fd_(fd)
-        , flags_(flags)
-    {}
-
-    task<std::size_t> write_some(std::span<const std::byte> src) override
-    {
-        while (true) {
-            try {
-                co_return co_await op::send_some{
-                    .fd = fd_,
-                    .buffer = src,
-                    .flags = flags_,
-                };
-            } catch (const interrupted_system_call &) {
-            }
-        }
-    }
-
-private:
-    int fd_ = -1;
-    int flags_ = 0;
-};
-
-class metered_byte_sink final : public byte_sink
-{
-public:
-    metered_byte_sink(
-        byte_sink & inner,
-        std::function<void(std::size_t)> progress)
-        : inner_(inner)
-        , progress_(std::move(progress))
-    {
-    }
-
-    task<std::size_t> write_some(std::span<const std::byte> src) override
-    {
-        auto written = co_await inner_.write_some(src);
-        if (written > 0)
-            progress_(written);
-        co_return written;
-    }
-
-private:
-    byte_sink & inner_;
-    std::function<void(std::size_t)> progress_;
-};
-
-inline metered_byte_sink meter_sink(
-    byte_sink & inner,
-    std::function<void(std::size_t)> progress)
-{
-    return metered_byte_sink{inner, std::move(progress)};
-}
-
 inline task<std::size_t> send_some(
     int fd,
     std::span<const std::byte> buffer,
@@ -200,26 +101,6 @@ inline task<std::size_t> write_some(
     };
 }
 
-inline task<void> write_all(
-    byte_sink & sink,
-    std::span<const std::byte> bytes)
-{
-    auto remaining = bytes;
-    while (!remaining.empty()) {
-        auto written = co_await sink.write_some(remaining);
-        if (written == 0)
-            throw buffer_error{"sink write made no progress"};
-        if (written > remaining.size())
-            throw buffer_error{"sink overreported written bytes"};
-        remaining = remaining.subspan(written);
-    }
-}
-
-inline task<void> write_all(byte_sink & sink, std::string text)
-{
-    co_await write_all(sink, as_bytes(std::string_view{text}));
-}
-
 namespace detail {
 
 template<typename T>
@@ -236,21 +117,23 @@ concept byte_writer_chunk_range =
 
 } // namespace detail
 
-/// Buffered asynchronous writer over a byte sink.
+/// Buffered asynchronous writer base.
+///
+/// The hot-path methods are non-virtual and only copy into `buffer_`.
+/// Derived writers implement `write_more()`, the slow-path operation that
+/// drains bytes to the concrete backend.
 class byte_writer
 {
 public:
-    byte_writer(byte_sink & sink, std::span<std::byte> buffer)
-        : sink_(&sink)
-        , buffer_(buffer)
+    explicit byte_writer(std::span<std::byte> buffer)
+        : buffer_(buffer)
     {
         if (buffer.empty())
             throw buffer_error{"writer buffer is empty"};
     }
 
-    byte_writer(byte_sink & sink, std::size_t buffer_size)
+    explicit byte_writer(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
-        , sink_(&sink)
         , buffer_(owned_buffer_)
     {
         if (owned_buffer_.empty())
@@ -260,35 +143,10 @@ public:
     byte_writer(const byte_writer &) = delete;
     byte_writer & operator=(const byte_writer &) = delete;
 
-    byte_writer(byte_writer && other) noexcept
-        : owned_buffer_(std::move(other.owned_buffer_))
-        , sink_(other.sink_)
-        , buffer_(owned_buffer_.empty()
-            ? other.buffer_
-            : std::span<std::byte>{owned_buffer_})
-        , end_(other.end_)
-    {
-        other.sink_ = nullptr;
-        other.buffer_ = {};
-        other.end_ = 0;
-    }
+    byte_writer(byte_writer &&) = delete;
+    byte_writer & operator=(byte_writer &&) = delete;
 
-    byte_writer & operator=(byte_writer && other) noexcept
-    {
-        if (this != &other) {
-            owned_buffer_ = std::move(other.owned_buffer_);
-            sink_ = other.sink_;
-            buffer_ = owned_buffer_.empty()
-                ? other.buffer_
-                : std::span<std::byte>{owned_buffer_};
-            end_ = other.end_;
-
-            other.sink_ = nullptr;
-            other.buffer_ = {};
-            other.end_ = 0;
-        }
-        return *this;
-    }
+    virtual ~byte_writer() = default;
 
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
@@ -305,30 +163,24 @@ public:
         return buffer_.subspan(end_);
     }
 
-    task<void> flush()
+    hope<void> flush()
     {
-        co_await nxtrt::write_all(*sink_, buffered());
-        end_ = 0;
+        if (end_ == 0)
+            return hope<void>::ready();
+        return flush_slow();
     }
 
-    task<void> write(std::span<const std::byte> bytes)
+    hope<void> write(std::span<const std::byte> bytes)
     {
-        auto remaining = bytes;
-        while (!remaining.empty()) {
-            if (remaining.size() >= buffer_.size()) {
-                co_await flush();
-                co_await nxtrt::write_all(*sink_, remaining);
-                co_return;
-            }
+        if (bytes.empty())
+            return hope<void>::ready();
 
-            if (unused_capacity().empty())
-                co_await flush();
-
-            auto n = std::min(unused_capacity().size(), remaining.size());
-            std::memcpy(buffer_.data() + end_, remaining.data(), n);
-            end_ += n;
-            remaining = remaining.subspan(n);
+        if (bytes.size() <= unused_capacity().size()) {
+            append_to_buffer(bytes);
+            return hope<void>::ready();
         }
+
+        return write_slow(bytes);
     }
 
     task<void> write(std::string text)
@@ -336,9 +188,9 @@ public:
         co_await write(as_bytes(std::string_view{text}));
     }
 
-    task<void> write(std::string_view text)
+    hope<void> write(std::string_view text)
     {
-        co_await write(as_bytes(text));
+        return write(as_bytes(text));
     }
 
     template<detail::byte_writer_chunk_range Chunks>
@@ -357,28 +209,215 @@ public:
         co_await flush();
     }
 
+protected:
+    virtual hope<std::size_t> write_more(
+        std::span<const std::byte> src) = 0;
+
 private:
+    void append_to_buffer(std::span<const std::byte> bytes)
+    {
+        std::memcpy(buffer_.data() + end_, bytes.data(), bytes.size());
+        end_ += bytes.size();
+    }
+
+    task<void> flush_slow()
+    {
+        auto remaining = buffered();
+        while (!remaining.empty()) {
+            auto written = co_await write_more(remaining);
+            if (written == 0)
+                throw buffer_error{"writer made no progress"};
+            if (written > remaining.size())
+                throw buffer_error{"writer overreported written bytes"};
+            remaining = remaining.subspan(written);
+        }
+        end_ = 0;
+    }
+
+    task<void> write_direct(std::span<const std::byte> bytes)
+    {
+        auto remaining = bytes;
+        while (!remaining.empty()) {
+            auto written = co_await write_more(remaining);
+            if (written == 0)
+                throw buffer_error{"writer made no progress"};
+            if (written > remaining.size())
+                throw buffer_error{"writer overreported written bytes"};
+            remaining = remaining.subspan(written);
+        }
+    }
+
+    task<void> write_slow(std::span<const std::byte> bytes)
+    {
+        auto remaining = bytes;
+        while (!remaining.empty()) {
+            if (remaining.size() >= buffer_.size()) {
+                co_await flush();
+                co_await write_direct(remaining);
+                co_return;
+            }
+
+            if (unused_capacity().empty())
+                co_await flush();
+
+            auto n = std::min(unused_capacity().size(), remaining.size());
+            std::memcpy(buffer_.data() + end_, remaining.data(), n);
+            end_ += n;
+            remaining = remaining.subspan(n);
+        }
+    }
+
     std::vector<std::byte> owned_buffer_;
-    byte_sink * sink_;
     std::span<std::byte> buffer_;
     std::size_t end_ = 0;
 };
 
-inline byte_writer standard_output_writer(std::size_t buffer_size = 4096)
+/// Writer for a file descriptor.
+class fd_sink final : public byte_writer
 {
-    static auto out = fd_sink{STDOUT_FILENO};
-    return byte_writer{out, buffer_size};
+public:
+    explicit fd_sink(int fd, std::span<std::byte> buffer)
+        : byte_writer(buffer)
+        , fd_(fd)
+    {}
+
+    explicit fd_sink(int fd, std::size_t buffer_size = 4096)
+        : byte_writer(buffer_size)
+        , fd_(fd)
+    {}
+
+private:
+    hope<std::size_t> write_more(std::span<const std::byte> src) override
+    {
+        return write_more_task(src);
+    }
+
+    task<std::size_t> write_more_task(std::span<const std::byte> src)
+    {
+        while (true) {
+            try {
+                co_return co_await op::write_some{
+                    .fd = fd_,
+                    .buffer = src,
+                    .offset = -1,
+                };
+            } catch (const interrupted_system_call &) {
+            }
+        }
+    }
+
+    int fd_ = -1;
+};
+
+inline fd_sink standard_output(std::size_t buffer_size = 4096)
+{
+    return fd_sink{STDOUT_FILENO, buffer_size};
+}
+
+inline fd_sink standard_output_writer(std::size_t buffer_size = 4096)
+{
+    return standard_output(buffer_size);
+}
+
+/// Writer for a connected socket.
+class socket_sink final : public byte_writer
+{
+public:
+    explicit socket_sink(
+        int fd,
+        std::span<std::byte> buffer,
+        int flags = 0)
+        : byte_writer(buffer)
+        , fd_(fd)
+        , flags_(flags)
+    {}
+
+    explicit socket_sink(
+        int fd,
+        int flags = 0,
+        std::size_t buffer_size = 4096)
+        : byte_writer(buffer_size)
+        , fd_(fd)
+        , flags_(flags)
+    {}
+
+private:
+    hope<std::size_t> write_more(std::span<const std::byte> src) override
+    {
+        return write_more_task(src);
+    }
+
+    task<std::size_t> write_more_task(std::span<const std::byte> src)
+    {
+        while (true) {
+            try {
+                co_return co_await op::send_some{
+                    .fd = fd_,
+                    .buffer = src,
+                    .flags = flags_,
+                };
+            } catch (const interrupted_system_call &) {
+            }
+        }
+    }
+
+    int fd_ = -1;
+    int flags_ = 0;
+};
+
+class metered_byte_sink final : public byte_writer
+{
+public:
+    metered_byte_sink(
+        byte_writer & inner,
+        std::span<std::byte> buffer,
+        std::function<void(std::size_t)> progress)
+        : byte_writer(buffer)
+        , inner_(inner)
+        , progress_(std::move(progress))
+    {}
+
+    metered_byte_sink(
+        byte_writer & inner,
+        std::function<void(std::size_t)> progress,
+        std::size_t buffer_size = 4096)
+        : byte_writer(buffer_size)
+        , inner_(inner)
+        , progress_(std::move(progress))
+    {}
+
+private:
+    hope<std::size_t> write_more(std::span<const std::byte> src) override
+    {
+        return write_more_task(src);
+    }
+
+    task<std::size_t> write_more_task(std::span<const std::byte> src)
+    {
+        co_await inner_.write(src);
+        co_await inner_.flush();
+        if (!src.empty())
+            progress_(src.size());
+        co_return src.size();
+    }
+
+    byte_writer & inner_;
+    std::function<void(std::size_t)> progress_;
+};
+
+inline metered_byte_sink meter_sink(
+    byte_writer & inner,
+    std::function<void(std::size_t)> progress,
+    std::size_t buffer_size = 4096)
+{
+    return metered_byte_sink{inner, std::move(progress), buffer_size};
 }
 
 template<typename Chunks>
     requires detail::byte_writer_chunk<Chunks>
         || detail::byte_writer_chunk_range<Chunks>
-inline task<void> write_all(
-    byte_sink & sink,
-    Chunks && chunks,
-    std::size_t buffer_size = 4096)
+inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 {
-    auto writer = byte_writer{sink, buffer_size};
     co_await writer.write_all(std::forward<Chunks>(chunks));
 }
 

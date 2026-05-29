@@ -128,7 +128,8 @@ Current concrete wands live at the implementation edge:
 
 The runtime also contains reusable async I/O utilities. Byte readers own the
 buffered hot path and expose small `hope<T>` read operations; concrete readers
-override the refill edge. Byte sinks are the runtime-polymorphic write boundary.
+override the refill edge. Byte writers mirror that shape for buffered writes,
+with concrete writers overriding the drain edge.
 
 Protocol helpers such as `nxtrt::fs` and `nxtrt::http` sit above the wish
 and byte-stream layers: they use runtime I/O, but they are not scheduler
@@ -136,7 +137,6 @@ primitives.
 
 Concrete API:
 
-- @ref nxtrt::byte_sink "nxtrt::byte_sink"
 - @ref nxtrt::byte_reader "nxtrt::byte_reader"
 - @ref nxtrt::byte_writer "nxtrt::byte_writer"
 - @ref nxtrt::fs "nxtrt::fs"

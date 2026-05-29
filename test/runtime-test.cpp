@@ -150,41 +150,66 @@ public:
     bool returned_empty = false;
 };
 
-struct chunking_string_sink final : nxtrt::byte_sink
+struct chunking_string_sink final : nxtrt::byte_writer
 {
-    explicit chunking_string_sink(std::size_t limit)
-        : limit(limit)
+    explicit chunking_string_sink(
+        std::size_t limit,
+        std::size_t buffer_size = 64)
+        : nxtrt::byte_writer(buffer_size)
+        , limit(limit)
     {}
 
-    nxtrt::task<std::size_t>
-    write_some(std::span<const std::byte> src) override
+    chunking_string_sink(
+        std::size_t limit,
+        std::span<std::byte> buffer)
+        : nxtrt::byte_writer(buffer)
+        , limit(limit)
+    {}
+
+private:
+    nxtrt::hope<std::size_t>
+    write_more(std::span<const std::byte> src) override
     {
         auto n = std::min(limit, src.size());
         text += nxtrt::as_string_view(src.first(n));
-        co_return n;
+        return nxtrt::hope<std::size_t>::ready(n);
     }
 
+public:
     std::string text;
     std::size_t limit = 1;
 };
 
-struct shared_string_sink final : nxtrt::byte_sink
+struct shared_string_sink final : nxtrt::byte_writer
 {
     explicit shared_string_sink(
         std::shared_ptr<std::string> text,
-        std::size_t limit = 64)
-        : text(std::move(text))
+        std::size_t limit = 64,
+        std::size_t buffer_size = 64)
+        : nxtrt::byte_writer(buffer_size)
+        , text(std::move(text))
         , limit(limit)
     {}
 
-    nxtrt::task<std::size_t>
-    write_some(std::span<const std::byte> src) override
+    shared_string_sink(
+        std::shared_ptr<std::string> text,
+        std::size_t limit,
+        std::span<std::byte> buffer)
+        : nxtrt::byte_writer(buffer)
+        , text(std::move(text))
+        , limit(limit)
+    {}
+
+private:
+    nxtrt::hope<std::size_t>
+    write_more(std::span<const std::byte> src) override
     {
         auto n = std::min(limit, src.size());
         *text += nxtrt::as_string_view(src.first(n));
-        co_return n;
+        return nxtrt::hope<std::size_t>::ready(n);
     }
 
+public:
     std::shared_ptr<std::string> text;
     std::size_t limit = 1;
 };
@@ -611,6 +636,23 @@ take_three_buffered_bytes(nxtrt::byte_reader & reader, std::vector<int> & events
     out += nxtrt::as_string_view(second);
     out += nxtrt::as_string_view(third);
     co_return out;
+}
+
+inline nxtrt::task<void>
+write_three_buffered_bytes(nxtrt::byte_writer & writer, std::vector<int> & events)
+{
+    events.push_back(1);
+    co_await writer.write("a"sv);
+    events.push_back(2);
+    co_await writer.write("b"sv);
+    events.push_back(3);
+    co_await writer.write("c"sv);
+    events.push_back(4);
+}
+
+inline nxtrt::task<void> flush_writer(nxtrt::byte_writer & writer)
+{
+    co_await writer.flush();
 }
 
 // `map` over the three awaitable shapes: a plain task, a synchronously-ready
@@ -2354,65 +2396,78 @@ static suite runtime_tests{
                 "with borrowed storage"_test = [] {
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
                         auto storage = std::array<std::byte, 4>{};
                         auto writer =
-                            nxtrt::byte_writer{sink, std::span{storage}};
+                            chunking_string_sink{64, std::span{storage}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(std::string{"ab"});
-                            expect(sink.text.empty());
+                            expect(writer.text.empty());
                             co_await writer.write(std::string{"cd"});
-                            expect(sink.text.empty());
+                            expect(writer.text.empty());
                             co_await writer.write(std::string{"e"});
-                            expect(sink.text == "abcd");
+                            expect(writer.text == "abcd");
                             co_await writer.flush();
                         });
 
-                        expect(sink.text == "abcde");
+                        expect(writer.text == "abcde");
+                    };
+
+                    "buffer hits do not add suspension"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto storage = std::array<std::byte, 4>{};
+                        auto writer =
+                            chunking_string_sink{64, std::span{storage}};
+                        auto events = std::vector<int>{};
+
+                        auto task = write_three_buffered_bytes(writer, events);
+                        deck.start(task);
+                        deck.run_ready();
+
+                        expect(task.done())
+                            << "three buffered write() calls must finish inline";
+                        expect(events == std::vector<int>{1, 2, 3, 4});
+                        expect(writer.text.empty());
+
+                        deck.sync_wait(flush_writer(writer));
+                        expect(writer.text == "abc");
                     };
                 };
 
                 "with owned storage"_test = [] {
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
-                        auto writer =
-                            nxtrt::byte_writer{sink, std::size_t{4}};
+                        auto writer = chunking_string_sink{64, std::size_t{4}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(std::string{"ab"});
-                            expect(sink.text.empty());
+                            expect(writer.text.empty());
                             co_await writer.write(std::string{"cd"});
-                            expect(sink.text.empty());
+                            expect(writer.text.empty());
                             co_await writer.flush();
                         });
 
-                        expect(sink.text == "abcd");
+                        expect(writer.text == "abcd");
                     };
 
                     "writes ranges of text chunks"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
-                        auto writer =
-                            nxtrt::byte_writer{sink, std::size_t{4}};
+                        auto writer = chunking_string_sink{64, std::size_t{4}};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
                             co_await writer.write(chunks);
-                            expect(sink.text == "abcd");
+                            expect(writer.text == "abcd");
                             co_await writer.flush();
                         });
 
-                        expect(sink.text == "abcde");
+                        expect(writer.text == "abcde");
                     };
 
                     "writes and flushes text chunks"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
-                        auto writer =
-                            nxtrt::byte_writer{sink, std::size_t{8}};
+                        auto writer = chunking_string_sink{64, std::size_t{8}};
                         auto chunks =
                             std::vector<std::string>{"ab", "cd", "e"};
 
@@ -2420,15 +2475,13 @@ static suite runtime_tests{
                             co_await writer.write_all(chunks);
                         });
 
-                        expect(sink.text == "abcde");
+                        expect(writer.text == "abcde");
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 
                     "writes lazy ranges of text chunks"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
-                        auto writer =
-                            nxtrt::byte_writer{sink, std::size_t{8}};
+                        auto writer = chunking_string_sink{64, std::size_t{8}};
                         auto numbers = std::views::iota(1, 4);
                         auto chunks = numbers
                             | std::views::transform([](int n) {
@@ -2440,14 +2493,12 @@ static suite runtime_tests{
                             co_await writer.flush();
                         });
 
-                        expect(sink.text == "123");
+                        expect(writer.text == "123");
                     };
 
                     "writes ranges of byte spans"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
-                        auto writer =
-                            nxtrt::byte_writer{sink, std::size_t{4}};
+                        auto writer = chunking_string_sink{64, std::size_t{4}};
                         auto chunks = std::array{
                             nxtrt::as_bytes("ab"sv),
                             nxtrt::as_bytes("cd"sv),
@@ -2459,14 +2510,12 @@ static suite runtime_tests{
                             co_await writer.flush();
                         });
 
-                        expect(sink.text == "abcdef");
+                        expect(writer.text == "abcdef");
                     };
 
                     "writes and flushes byte spans"_test = [] {
                         auto deck = nxtrt::deck{};
-                        auto sink = chunking_string_sink{64};
-                        auto writer =
-                            nxtrt::byte_writer{sink, std::size_t{8}};
+                        auto writer = chunking_string_sink{64, std::size_t{8}};
                         auto chunks = std::array{
                             nxtrt::as_bytes("ab"sv),
                             nxtrt::as_bytes("cd"sv),
@@ -2477,7 +2526,7 @@ static suite runtime_tests{
                             co_await writer.write_all(chunks);
                         });
 
-                        expect(sink.text == "abcdef");
+                        expect(writer.text == "abcdef");
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 
@@ -2488,10 +2537,7 @@ static suite runtime_tests{
                             std::vector<std::string>{"ab", "cd", "e"};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await nxtrt::write_all(
-                                sink,
-                                chunks,
-                                std::size_t{4});
+                            co_await nxtrt::write_all(sink, chunks);
                         });
 
                         expect(sink.text == "abcde");
@@ -2505,10 +2551,7 @@ static suite runtime_tests{
                             std::vector<std::string>{"ab", "cd", "e"};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await nxtrt::write_all(
-                                sink,
-                                chunks,
-                                std::size_t{4});
+                            co_await nxtrt::write_all(sink, chunks);
                         });
 
                         expect(*text == "abcde");
@@ -2519,9 +2562,9 @@ static suite runtime_tests{
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto text = std::make_shared<std::string>();
-                        auto sink = shared_string_sink{text};
-                        auto writer = nxtrt::byte_writer{
-                            sink,
+                        auto writer = shared_string_sink{
+                            text,
+                            std::size_t{64},
                             std::size_t{4},
                         };
 

@@ -156,8 +156,8 @@ nxtrt::task<void> probe_tls13(nxtrt::http::url url)
 
     std::cerr << "sending TLS 1.3 ClientHello (" << hello.record.size()
               << " bytes)\n";
-    auto sink = nxtrt::socket_sink{socket.get()};
-    auto socket_output = nxtrt::byte_writer{sink, 4096};
+    auto socket_output =
+        nxtrt::socket_sink{socket.get(), 0, std::size_t{4096}};
     co_await socket_output.write_all(hello.record);
 
     auto input_storage = std::vector<std::byte>(18 * 1024);
@@ -318,8 +318,8 @@ nxtrt::task<void> fetch(nxtrt::http::url url)
         .body = {},
     };
 
-    auto sink = nxtrt::socket_sink{socket.get()};
-    auto socket_output = nxtrt::byte_writer{sink, 4096};
+    auto socket_output =
+        nxtrt::socket_sink{socket.get(), 0, std::size_t{4096}};
     co_await socket_output.write_all(nxtrt::http::serialize(request));
 
     auto input_storage = std::vector<std::byte>(64 * 1024);

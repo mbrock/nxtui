@@ -963,14 +963,16 @@ nxtrt::task<stream_phase_result> stream_openai_response(
     auto socket = co_await nxtrt::net::connect_tcp("api.openai.com", "443");
     network.phase = "tcp connected";
     co_await publisher.publish(true);
-    auto socket_sink = nxtrt::socket_sink{socket.get()};
+    auto socket_sink =
+        nxtrt::socket_sink{socket.get(), 0, std::size_t{4096}};
     auto metered_sink = nxtrt::meter_sink(
         socket_sink,
         [&](std::size_t bytes) {
             network.socket_tx += bytes;
             publisher.request();
-        });
-    auto socket_output = nxtrt::byte_writer{metered_sink, 4096};
+        },
+        4096);
+    auto & socket_output = metered_sink;
 
     auto socket_source = nxtrt::socket_source{socket.get()};
     auto source = nxtrt::meter_source(
