@@ -356,15 +356,17 @@ public:
         : byte_reader(buffer_size)
         , reader_(&reader)
     {
-        if (is_chunked(head)) {
-            mode_ = mode::chunked;
-        } else if (auto length = content_length(head)) {
-            mode_ = mode::content_length;
-            remaining_ = *length;
-            done_ = remaining_ == 0;
-        } else {
-            mode_ = mode::until_eof;
-        }
+        configure(head);
+    }
+
+    http_body_reader(
+        byte_reader & reader,
+        const response_head & head,
+        std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , reader_(&reader)
+    {
+        configure(head);
     }
 
     task<std::optional<std::span<const std::byte>>>
@@ -392,6 +394,19 @@ private:
         chunked,
         until_eof,
     };
+
+    void configure(const response_head & head)
+    {
+        if (is_chunked(head)) {
+            mode_ = mode::chunked;
+        } else if (auto length = content_length(head)) {
+            mode_ = mode::content_length;
+            remaining_ = *length;
+            done_ = remaining_ == 0;
+        } else {
+            mode_ = mode::until_eof;
+        }
+    }
 
     hope<read_result> stream_more(
         byte_writer & writer,
@@ -501,6 +516,29 @@ public:
         , transfer_(reader, head, buffer_size)
         , active_(&transfer_)
     {
+        configure(head, buffer_size);
+    }
+
+    response_body_reader(
+        byte_reader & reader,
+        const response_head & head,
+        std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , transfer_(reader, head, buffer.size())
+        , active_(&transfer_)
+    {
+        configure(head, buffer.size());
+    }
+
+    task<std::optional<std::span<const std::byte>>>
+    next(std::size_t limit = std::numeric_limits<std::size_t>::max())
+    {
+        co_return co_await take_some(limit);
+    }
+
+private:
+    void configure(const response_head & head, std::size_t buffer_size)
+    {
         switch (response_content_encoding(head)) {
         case content_encoding::identity:
             break;
@@ -515,13 +553,6 @@ public:
         }
     }
 
-    task<std::optional<std::span<const std::byte>>>
-    next(std::size_t limit = std::numeric_limits<std::size_t>::max())
-    {
-        co_return co_await take_some(limit);
-    }
-
-private:
     hope<read_result> stream_more(
         byte_writer & writer,
         std::size_t limit) override
@@ -538,6 +569,14 @@ inline response_body_reader
 read_response_body(byte_reader & reader, const response_head & head)
 {
     return response_body_reader{reader, head};
+}
+
+inline response_body_reader read_response_body(
+    byte_reader & reader,
+    const response_head & head,
+    std::span<std::byte> buffer)
+{
+    return response_body_reader{reader, head, buffer};
 }
 
 inline task<std::optional<server_sent_event>>

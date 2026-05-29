@@ -2,6 +2,7 @@
 #include <nxtui/tui_text.hpp>
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/channel.hpp>
+#include <nxtrt/compression.hpp>
 #include <nxtrt/event.hpp>
 #include <nxtrt/http.hpp>
 #include <nxtrt/kqueue_wand.hpp>
@@ -2316,6 +2317,28 @@ static suite runtime_tests{
 
                 expect(total == std::size_t{6});
                 expect(visited == std::vector<std::string>{"abc", "def"});
+            };
+
+            "gzip reader accepts borrowed output storage"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto plain = "hello borrowed gzip buffer"sv;
+                auto compressed = gzip_text(plain);
+                auto chunks = std::array{std::string_view{compressed}};
+                auto source_storage = std::array<std::byte, 8>{};
+                auto inflate_storage = std::array<std::byte, 5>{};
+                auto source = text_source(chunks, std::span{source_storage});
+                auto reader =
+                    nxtrt::gzip_reader(source, std::span{inflate_storage});
+
+                auto result =
+                    deck.sync_wait([&]() -> nxtrt::task<std::string> {
+                        auto text = std::string{};
+                        while (auto chunk = co_await reader.take_some())
+                            text += nxtrt::as_string_view(*chunk);
+                        co_return text;
+                    });
+
+                expect(result == plain);
             };
 
             "protocol leftovers remain buffered"_test = [] {

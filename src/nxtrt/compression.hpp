@@ -43,10 +43,17 @@ public:
         : byte_reader(buffer_size)
         , reader_(&reader)
     {
-        auto rc = ::inflateInit2(&stream_, window_bits(format));
-        if (rc != Z_OK)
-            throw compression_error{zlib_message("zlib inflate init failed")};
-        initialized_ = true;
+        init(format);
+    }
+
+    explicit zlib_reader(
+        byte_reader & reader,
+        zlib_format format,
+        std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , reader_(&reader)
+    {
+        init(format);
     }
 
     ~zlib_reader() override
@@ -69,6 +76,14 @@ private:
             return MAX_WBITS + 32;
         }
         return MAX_WBITS;
+    }
+
+    void init(zlib_format format)
+    {
+        auto rc = ::inflateInit2(&stream_, window_bits(format));
+        if (rc != Z_OK)
+            throw compression_error{zlib_message("zlib inflate init failed")};
+        initialized_ = true;
     }
 
     std::string zlib_message(std::string_view fallback) const
@@ -181,11 +196,25 @@ inline zlib_reader gzip_reader(
     return zlib_reader{reader, zlib_format::gzip, buffer_size};
 }
 
+inline zlib_reader gzip_reader(
+    byte_reader & reader,
+    std::span<std::byte> buffer)
+{
+    return zlib_reader{reader, zlib_format::gzip, buffer};
+}
+
 inline zlib_reader deflate_reader(
     byte_reader & reader,
     std::size_t buffer_size = 4096)
 {
     return zlib_reader{reader, zlib_format::zlib, buffer_size};
+}
+
+inline zlib_reader deflate_reader(
+    byte_reader & reader,
+    std::span<std::byte> buffer)
+{
+    return zlib_reader{reader, zlib_format::zlib, buffer};
 }
 
 } // namespace nxtrt
