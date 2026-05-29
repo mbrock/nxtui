@@ -13,9 +13,11 @@ namespace nxtrt {
 
 /// Bounded single-receiver typed wire.
 ///
-/// Values are buffered up to `capacity`. Receives use a `hope` fast path when a
-/// value is already queued and otherwise block by awaiting bell readiness
-/// through the active wand. This is intentionally not a broadcast channel.
+/// Values are buffered up to `capacity`, clamped to at least one slot.
+/// `flush()` waits until accepted values have been consumed. Receives use a
+/// `hope` fast path when a value is already available and otherwise block by
+/// awaiting bell readiness through the active wand. This is intentionally not a
+/// broadcast channel.
 template<typename T>
 class wire
 {
@@ -71,19 +73,17 @@ public:
         if (values_.empty())
             return std::nullopt;
 
-        auto was_full = full();
         auto value = std::move(values_.front());
         values_.pop_front();
         if (values_.empty())
             data_.reset();
-        if (was_full)
-            space_.ring();
+        space_.ring();
         return value;
     }
 
     [[nodiscard]] bool try_send(T value)
     {
-        if (closed_ || stop_.stop_requested() || full())
+        if (!can_send_now())
             return false;
 
         push_ready(std::move(value));
@@ -94,11 +94,18 @@ public:
     {
         if (closed_ || stop_.stop_requested())
             return hope<bool>::ready(false);
-        if (!full()) {
+        if (can_send_now()) {
             push_ready(std::move(value));
             return hope<bool>::ready(true);
         }
         return send_slow(std::move(value));
+    }
+
+    [[nodiscard]] hope<void> flush()
+    {
+        if (values_.empty() || closed_ || stop_.stop_requested())
+            return hope<void>::ready();
+        return flush_slow();
     }
 
     [[nodiscard]] hope<std::optional<value_type>> next()
@@ -131,14 +138,28 @@ private:
         while (true) {
             if (closed_ || stop_.stop_requested())
                 co_return false;
-            if (!full()) {
+            if (can_send_now()) {
                 push_ready(std::move(value));
                 co_return true;
             }
 
             space_.reset();
+            if (can_send_now()) {
+                push_ready(std::move(value));
+                co_return true;
+            }
             if (closed_ || stop_.stop_requested())
                 co_return false;
+            co_await space_;
+        }
+    }
+
+    task<void> flush_slow()
+    {
+        while (!values_.empty() && !closed_ && !stop_.stop_requested()) {
+            space_.reset();
+            if (values_.empty() || closed_ || stop_.stop_requested())
+                co_return;
             co_await space_;
         }
     }
@@ -164,6 +185,13 @@ private:
     {
         values_.push_back(std::move(value));
         data_.ring();
+    }
+
+    [[nodiscard]] bool can_send_now() const noexcept
+    {
+        if (closed_ || stop_.stop_requested())
+            return false;
+        return !full();
     }
 
     std::deque<value_type> values_;

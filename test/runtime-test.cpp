@@ -442,6 +442,13 @@ record_closed_wire(nxtrt::wire<int> & events, bool & finished)
 }
 
 nxtrt::task<void>
+flush_wire(nxtrt::wire<int> & events, bool & flushed)
+{
+    co_await events.flush();
+    flushed = true;
+}
+
+nxtrt::task<void>
 record_after_bell(
     nxtrt::bell & ready,
     std::vector<int> & out,
@@ -3179,6 +3186,57 @@ static suite runtime_tests{
 
                 expect(events.try_send(1));
                 expect(!events.try_send(2));
+            };
+
+            "capacity is clamped to at least one slot"_test = [] {
+                auto events = nxtrt::wire<int>{0};
+
+                expect(events.capacity() == std::size_t{1});
+                expect(events.try_send(1));
+                expect(!events.try_send(2));
+            };
+
+            "flush waits until accepted values are consumed"_test = [] {
+                auto rt = nxtrt::runtime{};
+                auto events = nxtrt::wire<int>{2};
+                auto seen = std::vector<int>{};
+                auto flushed = false;
+
+                expect(events.try_send(3));
+
+                rt.run([&]() -> nxtrt::task<void> {
+                    nxtrt::fork(flush_wire(events, flushed));
+                    co_await nxtrt::yield();
+                    expect(!flushed);
+
+                    nxtrt::fork(record_next_wire_value(events, seen));
+                    while (!flushed)
+                        co_await nxtrt::yield();
+                });
+
+                expect(flushed);
+                expect(seen == std::vector<int>{3});
+            };
+
+            "send then flush acts like an unbuffered write"_test = [] {
+                auto rt = nxtrt::runtime{};
+                auto events = nxtrt::wire<int>{1};
+                auto seen = std::vector<int>{};
+                auto flushed = false;
+
+                rt.run([&]() -> nxtrt::task<void> {
+                    expect(co_await events.send(4));
+                    nxtrt::fork(flush_wire(events, flushed));
+                    co_await nxtrt::yield();
+                    expect(!flushed);
+
+                    nxtrt::fork(record_next_wire_value(events, seen));
+                    while (!flushed)
+                        co_await nxtrt::yield();
+                });
+
+                expect(flushed);
+                expect(seen == std::vector<int>{4});
             };
         };
 
