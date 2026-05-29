@@ -2776,6 +2776,59 @@ static suite runtime_tests{
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 
+                    "rebases while preserving recent buffered bytes"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{2, std::size_t{6}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.write("abcdef"sv);
+                            co_await writer.rebase(2, 3);
+                            expect(writer.text == "abcd");
+                            expect(nxtrt::as_string_view(writer.buffered()) == "ef");
+                            expect(writer.unused_capacity().size() >= std::size_t{3});
+
+                            co_await writer.write("XYZ"sv);
+                            co_await writer.flush();
+                        });
+
+                        expect(writer.text == "abcdefXYZ");
+                    };
+
+                    "reserves writable slices while preserving recent bytes"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{2, std::size_t{6}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.write("abcdef"sv);
+                            auto out =
+                                co_await writer.writable_slice_preserve(2, 3);
+                            std::memcpy(out.data(), "XYZ", out.size());
+                            expect(writer.text == "abcd");
+                            expect(
+                                nxtrt::as_string_view(writer.buffered())
+                                == "efXYZ");
+                            co_await writer.flush();
+                        });
+
+                        expect(writer.text == "abcdefXYZ");
+                    };
+
+                    "rejects impossible preserved writable capacity"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{64, std::size_t{4}};
+
+                        auto rejected = false;
+                        try {
+                            deck.sync_wait([&]() -> nxtrt::task<void> {
+                                co_await writer.rebase(3, 2);
+                            });
+                        } catch (const nxtrt::buffer_error &) {
+                            rejected = true;
+                        }
+
+                        expect(rejected);
+                    };
+
                     "writes lazy ranges of text chunks"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto writer = chunking_string_sink{64, std::size_t{8}};

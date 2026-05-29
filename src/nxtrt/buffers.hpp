@@ -268,6 +268,71 @@ public:
         end_ += n;
     }
 
+    /// Ensure `capacity` bytes can be appended while preserving recent output.
+    ///
+    /// This is the C++ mapping of Zig writer `rebase(w, preserve, capacity)`.
+    /// If there is already enough unused capacity, it returns ready. Otherwise
+    /// it may drain buffered output, but the most recent `preserve` bytes of the
+    /// currently buffered output remain staged. Because `byte_writer` has both
+    /// `seek_` and `end_`, this can honestly drain only the non-preserved prefix
+    /// instead of temporarily hiding the preserved suffix as Zig currently does.
+    hope<void> rebase(std::size_t preserve, std::size_t capacity)
+    {
+        require_preserved_capacity(preserve, capacity);
+        if (unused_capacity().size() >= capacity)
+            return hope<void>::ready();
+        if (can_compact_for(capacity)) {
+            compact_buffered();
+            return hope<void>::ready();
+        }
+        return rebase_slow(preserve, capacity);
+    }
+
+    /// Return writable capacity after preserving recent output if needed.
+    ///
+    /// The returned span is not advanced. It is invalidated by any later writer
+    /// operation. If `preserve` is zero this is equivalent to
+    /// `writable_slice_greedy(minimum)`.
+    hope<std::span<std::byte>>
+    writable_slice_greedy_preserve(std::size_t preserve, std::size_t minimum)
+    {
+        auto ready = rebase(preserve, minimum);
+        if (ready.is_ready())
+            return hope<std::span<std::byte>>::ready(unused_capacity());
+        return writable_slice_greedy_preserve_slow(std::move(ready));
+    }
+
+    /// Return writable capacity, draining or compacting if needed.
+    hope<std::span<std::byte>>
+    writable_slice_greedy(std::size_t minimum)
+    {
+        return writable_slice_greedy_preserve(0, minimum);
+    }
+
+    /// Reserve exactly `len` bytes while preserving recent output if needed.
+    ///
+    /// The returned span has length `len` and has already been committed with
+    /// `advance(len)`, matching Zig's `writableSlicePreserve`. The caller should
+    /// write to the returned span before any other writer operation observes the
+    /// newly committed bytes.
+    hope<std::span<std::byte>>
+    writable_slice_preserve(std::size_t preserve, std::size_t len)
+    {
+        auto slice = writable_slice_greedy_preserve(preserve, len);
+        if (slice.is_ready()) {
+            auto out = slice.take_ready().first(len);
+            advance(len);
+            return hope<std::span<std::byte>>::ready(out);
+        }
+        return writable_slice_preserve_slow(std::move(slice), len);
+    }
+
+    /// Reserve exactly `len` bytes.
+    hope<std::span<std::byte>> writable_slice(std::size_t len)
+    {
+        return writable_slice_preserve(0, len);
+    }
+
     /// Drain all currently buffered output to the concrete sink.
     ///
     /// Returns ready when there is no buffered data. Otherwise this repeatedly
@@ -444,6 +509,36 @@ private:
         return size * count;
     }
 
+    static void require_preserved_capacity(
+        std::size_t preserve,
+        std::size_t capacity,
+        std::size_t total)
+    {
+        if (preserve > total || capacity > total - preserve)
+            throw buffer_error{"writer buffer is too small"};
+    }
+
+    void require_preserved_capacity(
+        std::size_t preserve,
+        std::size_t capacity) const
+    {
+        require_preserved_capacity(preserve, capacity, buffer_.size());
+    }
+
+    bool can_compact_for(std::size_t capacity) const noexcept
+    {
+        return buffer_.size() - buffered_size() >= capacity;
+    }
+
+    void compact_buffered()
+    {
+        auto pending = buffered_size();
+        if (seek_ != 0 && pending != 0)
+            std::memmove(buffer_.data(), buffer_.data() + seek_, pending);
+        seek_ = 0;
+        end_ = pending;
+    }
+
     task<void> flush_slow()
     {
         while (buffered_size() != 0) {
@@ -545,6 +640,44 @@ private:
             advance(n);
             remaining = remaining.subspan(n);
         }
+    }
+
+    task<void> rebase_slow(std::size_t preserve, std::size_t capacity)
+    {
+        while (unused_capacity().size() < capacity) {
+            if (can_compact_for(capacity)) {
+                compact_buffered();
+                co_return;
+            }
+
+            auto preserved = std::min(preserve, buffered_size());
+            auto drainable = buffered_size() - preserved;
+            if (drainable == 0)
+                throw buffer_error{"writer buffer is too small"};
+
+            auto prefix = buffered().first(drainable);
+            auto chunks = std::array{prefix};
+            auto written = co_await drain_more(std::span{chunks}, 1);
+            require_progress(written, prefix.size());
+            consume_buffered(written);
+        }
+    }
+
+    task<std::span<std::byte>>
+    writable_slice_greedy_preserve_slow(hope<void> ready)
+    {
+        co_await std::move(ready);
+        co_return unused_capacity();
+    }
+
+    task<std::span<std::byte>>
+    writable_slice_preserve_slow(
+        hope<std::span<std::byte>> slice,
+        std::size_t len)
+    {
+        auto out = (co_await std::move(slice)).first(len);
+        advance(len);
+        co_return out;
     }
 
     task<void> write_splat_slow(
@@ -878,9 +1011,11 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 //
 // On the writer side we intentionally one-up Zig a little: `byte_writer` has a
 // reader-like `seek_` as well as `end_`, so partially drained buffered output
-// is represented honestly as `buffer_[seek_..end_]`. Zig's writer source has a
-// TODO wishing for this because its default rebase logic temporarily hides
-// preserved bytes by mutating `end`.
+// is represented honestly as `buffer_[seek_..end_]`. That makes Zig-style
+// `rebase(preserve, capacity)` direct: drain only the non-preserved prefix,
+// keep the recent suffix staged, and compact when contiguous capacity is needed.
+// Zig's writer source has a TODO wishing for this because its default rebase
+// logic temporarily hides preserved bytes by mutating `end`.
 //
 // --- What we still owe to fully adopt the paradigm --------------------------
 //
