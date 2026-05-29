@@ -14,10 +14,9 @@ import subprocess
 from pathlib import Path
 
 import duckdb
-from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
+from rich.text import Text
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=int(os.environ.get("BENCH_PERF_DUCK_LINES", "20")),
         help="rows shown in each table")
+    parser.add_argument(
+        "--min-pct",
+        type=float,
+        default=float(os.environ.get("BENCH_PERF_MIN_PCT", "3.0")),
+        help="minimum percent for distribution rows")
     return parser.parse_args()
 
 
@@ -64,8 +68,15 @@ def convert_perf_data(data: Path, json_path: Path) -> None:
             str(json_path),
         ],
         check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    subprocess.run(["sudo", "chmod", "a+r", str(json_path)], check=True)
+    subprocess.run(
+        ["sudo", "chmod", "a+r", str(json_path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def connect(json_path: Path, comm: str) -> duckdb.DuckDBPyConnection:
@@ -74,7 +85,7 @@ def connect(json_path: Path, comm: str) -> duckdb.DuckDBPyConnection:
         """
         create temp table raw as
             select row_number() over () as eid, unnest(samples) as sample
-            from read_json(?, maximum_object_size = 10000000, union_by_name = true);
+            from read_json(?, maximum_object_size = 1000000000, union_by_name = true);
         """,
         [str(json_path)],
     )
@@ -110,6 +121,16 @@ def pct(part: int, total: int) -> str:
     return f"{100.0 * part / max(total, 1):3.0f}"
 
 
+def n(value: int | float) -> str:
+    if isinstance(value, float):
+        return f"{value:,.1f}"
+    return f"{value:,}"
+
+
+def row_n(value: int) -> str:
+    return str(value)
+
+
 def count_where(con: duckdb.DuckDBPyConnection, where: str) -> int:
     return con.execute(f"select count(*)::int from events where {where}").fetchone()[0]
 
@@ -139,34 +160,41 @@ def event_summary(con: duckdb.DuckDBPyConnection, json_path: Path) -> Panel:
     ).fetchone()[0]
     avg_submit = submits / enters if enters else 0.0
     avg_complete = completes / exits if exits else 0.0
+    summary = (
+        f"Read {n(total)} io_uring trace events from {json_path}.\n"
+        f"The benchmark used {n(rings)} ring"
+        f"{'' if rings == 1 else 's'}, submitted {n(submits)} SQEs, "
+        f"and completed {n(completes)} CQEs.\n"
+        f"It entered the kernel {n(enters)} times and returned {n(exits)} "
+        f"times, averaging {avg_submit:.2f} SQEs submitted and "
+        f"{avg_complete:.2f} CQEs completed per enter.\n"
+        f"The ring armed poll {n(poll_arms)} times, waited on the CQ ring "
+        f"{n(cq_waits)} times, and queued async work {n(async_work)} times."
+    )
     return Panel.fit(
-        "\n".join([
-            f"json: {json_path}",
-            f"events: {total}  rings: {rings}",
-            f"submits: {submits}  completes: {completes}",
-            f"io_uring_enter: {enters} enter / {exits} exit",
-            f"avg submit per enter: {avg_submit:.2f}",
-            f"avg complete per enter exit: {avg_complete:.2f}",
-            f"poll arms: {poll_arms}  cq waits: {cq_waits}  async work: {async_work}",
-        ]),
+        summary,
         title="io_uring trace",
         border_style="green",
     )
 
 
-def count_table(
+def count_lines(
     title: str,
     rows: list[tuple[object, int]],
     total: int,
-    key_name: str,
-) -> Table:
-    table = Table(title=title, box=box.SIMPLE_HEAVY)
-    table.add_column("%", justify="right", no_wrap=True)
-    table.add_column("count", justify="right", no_wrap=True)
-    table.add_column(key_name, no_wrap=True)
+    *,
+    key_prefix: str = "",
+    min_pct: float,
+) -> Text:
+    out = Text(title, style="bold")
     for key, count in rows:
-        table.add_row(pct(count, total), str(count), str(key))
-    return table
+        if 100.0 * count / max(total, 1) < min_pct:
+            continue
+        out.append("\n")
+        out.append(f"{pct(count, total)}%  ", style="bold cyan")
+        out.append(f"n={row_n(count)}  ", style="dim")
+        out.append(f"{key_prefix}{key}")
+    return out
 
 
 def fetch_counts(
@@ -200,7 +228,7 @@ def numeric_counts(
     return [(as_int(key), count) for key, count in rows], total
 
 
-def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
+def latency_lines(con: duckdb.DuckDBPyConnection) -> Text:
     row = con.execute(
         """
         with enters as (
@@ -240,17 +268,15 @@ def latency_table(con: duckdb.DuckDBPyConnection) -> Table:
         from paired;
         """
     ).fetchone()
-    table = Table(title="io_uring_enter latency (us)", box=box.SIMPLE_HEAVY)
-    table.add_column("calls", justify="right")
-    table.add_column("min", justify="right")
-    table.add_column("p50", justify="right")
-    table.add_column("p90", justify="right")
-    table.add_column("p99", justify="right")
-    table.add_column("max", justify="right")
-    table.add_column("avg", justify="right")
+    out = Text("io_uring_enter latency", style="bold")
     if row and row[0]:
-        table.add_row(str(row[0]), *(f"{value:.1f}" for value in row[1:]))
-    return table
+        calls, min_us, p50, p90, p99, max_us, avg = row
+        out.append("\n")
+        out.append(f"n={n(calls)}  ", style="dim")
+        out.append(
+            f"min={min_us:.1f}us  p50={p50:.1f}us  p90={p90:.1f}us  "
+            f"p99={p99:.1f}us  max={max_us:.1f}us  avg={avg:.1f}us")
+    return out
 
 
 def main() -> int:
@@ -272,7 +298,12 @@ def main() -> int:
         "sample.sq_thread is not null",
         args.lines,
     )
-    console.print(count_table("Submitted opcodes", rows, total, "opcode"))
+    console.print(count_lines(
+        "submitted SQEs by opcode",
+        rows,
+        total,
+        min_pct=args.min_pct,
+    ))
 
     rows, total = numeric_counts(
         con,
@@ -280,7 +311,12 @@ def main() -> int:
         "sample.to_submit is not null",
         args.lines,
     )
-    console.print(count_table("io_uring_enter to_submit", rows, total, "to_submit"))
+    console.print(count_lines(
+        "number of SQEs submitted per enter",
+        rows,
+        total,
+        min_pct=args.min_pct,
+    ))
 
     rows, total = numeric_counts(
         con,
@@ -288,9 +324,14 @@ def main() -> int:
         "sample.ret is not null",
         args.lines,
     )
-    console.print(count_table("io_uring_enter return", rows, total, "ret"))
+    console.print(count_lines(
+        "number of SQEs accepted per enter",
+        rows,
+        total,
+        min_pct=args.min_pct,
+    ))
 
-    console.print(latency_table(con))
+    console.print(latency_lines(con))
 
     rows, total = numeric_counts(
         con,
@@ -298,7 +339,13 @@ def main() -> int:
         "sample.res is not null",
         args.lines,
     )
-    console.print(count_table("Completion results", rows, total, "res"))
+    console.print(count_lines(
+        "completion results",
+        rows,
+        total,
+        key_prefix="res=",
+        min_pct=args.min_pct,
+    ))
 
     rows, total = fetch_counts(
         con,
@@ -307,7 +354,12 @@ def main() -> int:
         args.lines,
     )
     if total:
-        console.print(count_table("Poll arms", rows, total, "opcode"))
+        console.print(count_lines(
+            "poll arms by opcode",
+            rows,
+            total,
+            min_pct=args.min_pct,
+        ))
 
     return 0
 

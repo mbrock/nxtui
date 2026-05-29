@@ -19,34 +19,34 @@ freebsd-test:
 	scripts/freebsd-vm test
 
 bench-build:
-	scripts/bench build
+	@scripts/bench build
 
 bench:
-	scripts/bench all
+	@scripts/bench all
 
 bench-perf:
-	scripts/bench perf-record
+	@scripts/bench perf-record
 
 bench-perf-report:
-	scripts/bench perf-report
+	@scripts/bench perf-report
 
 bench-perf-hot:
-	scripts/bench perf-hot
+	@scripts/bench perf-hot
 
 bench-perf-duck:
-	scripts/bench perf-duck
+	@scripts/bench perf-duck
 
 bench-uring-stat:
-	scripts/bench uring-stat
+	@scripts/bench uring-stat
 
 bench-uring-record:
-	scripts/bench uring-record
+	@scripts/bench uring-record
 
 bench-uring-duck:
-	scripts/bench uring-duck
+	@scripts/bench uring-duck
 
 bench-uring-trace:
-	scripts/bench uring-trace
+	@scripts/bench uring-trace
 
 spec:
 	racket nxtrt/model.rkt --run-all

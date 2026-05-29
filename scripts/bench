@@ -44,9 +44,21 @@ section() {
     printf "\n== %s ==\n" "$1"
 }
 
+quiet() {
+    local log
+    log="$(mktemp)"
+    if "$@" >"$log" 2>&1; then
+        rm -f "$log"
+        return 0
+    fi
+    cat "$log" >&2
+    rm -f "$log"
+    return 1
+}
+
 build_bench() {
     if [[ ! -d "$build_dir" ]]; then
-        meson setup "$build_dir" \
+        quiet meson setup "$build_dir" \
             --buildtype=release \
             -Dbenchmarks=true \
             -Dtests=false \
@@ -54,8 +66,8 @@ build_bench() {
             -Dllm_tool=false \
             -Dcpp_args="$cpp_args"
     fi
-    meson configure "$build_dir" -Dcpp_args="$cpp_args"
-    meson compile -C "$build_dir" "$(basename "$bench_bin")"
+    quiet meson configure "$build_dir" -Dcpp_args="$cpp_args"
+    quiet meson compile -C "$build_dir" "$(basename "$bench_bin")"
 }
 
 run_plain() {
@@ -69,8 +81,7 @@ run_plain() {
 
 record_perf() {
     build_bench
-    section "cpu perf record"
-    sudo perf record \
+    quiet sudo perf record \
         -F "$perf_freq" \
         -g \
         --call-graph "$perf_callgraph" \
@@ -114,7 +125,6 @@ duck_perf() {
 
 run_perf() {
     record_perf
-    section "cpu perf report"
     duck_perf
 }
 
@@ -130,8 +140,7 @@ uring_stat() {
 
 record_uring() {
     build_bench
-    section "io_uring perf record"
-    sudo perf record \
+    quiet sudo perf record \
         -o "$uring_data" \
         -e "$(IFS=,; echo "${uring_events[*]}")" \
         -- "$bench_bin" \
@@ -146,7 +155,6 @@ duck_uring() {
 
 run_uring() {
     record_uring
-    section "io_uring trace report"
     duck_uring
 }
 
@@ -165,7 +173,7 @@ usage: scripts/bench COMMAND
 Commands:
   build          build the release benchmark binary
   plain          run the tcp echo benchmark once
-  all            run plain benchmark, CPU perf report, and io_uring trace report
+  all            run CPU perf and io_uring trace reports
   perf-record    record CPU samples with perf
   perf-report    open interactive perf report
   perf-hot       print compact perf stdio hot list
@@ -183,7 +191,6 @@ case "${1:-all}" in
     build) build_bench ;;
     plain) run_plain ;;
     all)
-        run_plain
         run_perf
         run_uring
         ;;
