@@ -203,7 +203,7 @@ private:
                 continue;
 
             auto result = timeout != nullptr
-                ? co_await op::poll_until::after(
+                ? co_await poll_until_after(
                     fd,
                     events,
                     as_duration(*timeout))

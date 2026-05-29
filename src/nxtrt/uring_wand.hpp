@@ -2,6 +2,8 @@
 
 #include "nxtrt/task.hpp"
 
+#include <boost/container/hub.hpp>
+
 #if __has_include(<liburing.h>)
 #define NXT_RT_HAS_LIBURING 1
 #else
@@ -26,8 +28,6 @@
 #include <sys/pidfd.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
-#include <unordered_set>
-#include <unordered_map>
 #include <unistd.h>
 #include <utility>
 #include <variant>
@@ -81,6 +81,62 @@ private:
 /// and requeues fulfilled tasks onto the deck.
 class uring_wand final : public wand
 {
+private:
+    using uring_wish = wish_variant;
+
+    struct prepared
+    {};
+
+    struct queued
+    {};
+
+    struct submitted
+    {};
+
+    struct cancel_queued
+    {};
+
+    struct cancel_submitted
+    {};
+
+    struct cancel_drained
+    {};
+
+    using parked_phase = std::variant<
+        queued,
+        submitted,
+        cancel_queued,
+        cancel_submitted,
+        cancel_drained>;
+
+    struct parked
+    {
+        parked_task continuation;
+        parked_phase phase = queued{};
+    };
+
+    struct ready_to_retire
+    {};
+
+    struct waiting_cancel_cqe
+    {};
+
+    using settled_phase = std::variant<
+        ready_to_retire,
+        waiting_cancel_cqe>;
+
+    struct settled
+    {
+        settled_phase phase = ready_to_retire{};
+    };
+
+    struct retired
+    {};
+
+    using exec_state = std::variant<prepared, parked, settled, retired>;
+
+    struct exec;
+
 public:
     explicit uring_wand(unsigned queue_depth = 1024)
     {
@@ -103,18 +159,36 @@ public:
     void suspend(wait_token token, parked_task task) override
     {
         trace("uring park token=" + std::to_string(token));
-        waiters_.emplace(token, task);
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
+            return;
+        if (!std::holds_alternative<prepared>(execution->state))
+            return;
+        execution->state = parked{
+            .continuation = task,
+            .phase = queued{},
+        };
     }
 
     void cancel(wait_token token) override
     {
-        auto found = completions_.find(token);
-        if (found == completions_.end())
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
             return;
-        found->second->request_cancel();
-        if (found->second->submitted()
-            && !pending_cancellations_.insert(token).second)
+
+        auto * state = std::get_if<parked>(&execution->state);
+        if (state == nullptr)
             return;
+
+        if (std::holds_alternative<queued>(state->phase)) {
+            state->phase = cancel_queued{};
+        } else if (std::holds_alternative<submitted>(state->phase)) {
+            state->phase = cancel_queued{};
+            pending_cancellations_.push_back(execution);
+        } else {
+            return;
+        }
+
         trace("uring request cancel token=" + std::to_string(token));
     }
 
@@ -122,6 +196,7 @@ public:
     {
         stage_submissions(d);
         stage_cancellations();
+        compact_execs();
         trace("uring wave submit");
         auto rc = io_uring_submit(&ring_);
         if (rc < 0)
@@ -190,25 +265,18 @@ public:
 
     void complete(deck & d, wait_token token, int result)
     {
-        auto found = completions_.find(token);
-        if (found == completions_.end())
+        auto * execution = exec_from_token(token);
+        if (execution == nullptr)
             return;
 
-        found->second->complete(result);
-        completions_.erase(found);
-        fulfill(d, token);
+        handle_op_cqe(d, *execution, result);
+        compact_execs();
     }
 
     void fulfill(deck & d, wait_token token)
     {
-        auto found = waiters_.find(token);
-        if (found == waiters_.end())
-            return;
-
-        trace("uring fulfill token=" + std::to_string(token));
-        auto task = found->second;
-        waiters_.erase(found);
-        task.resume(d);
+        if (auto * execution = exec_from_token(token))
+            fulfill(d, *execution);
     }
 
 protected:
@@ -229,117 +297,90 @@ protected:
 private:
     friend class uring_submission;
 
+    enum class cqe_kind : std::uintptr_t
+    {
+        op = 0,
+        cancel = 1,
+    };
+
+    struct cqe_key
+    {
+        exec * execution = nullptr;
+        cqe_kind kind = cqe_kind::op;
+    };
+
     void handle_cqe(deck & d, io_uring_cqe * cqe)
     {
-        auto token =
-            static_cast<wait_token>(io_uring_cqe_get_data64(cqe));
+        auto key = decode_user_data(io_uring_cqe_get_data64(cqe));
         auto result = cqe->res;
         io_uring_cqe_seen(&ring_, cqe);
 
-        if (is_cancel_token(token)) {
+        if (key.execution == nullptr)
+            return;
+
+        if (key.kind == cqe_kind::cancel) {
             trace("uring cancel complete token="
-                + std::to_string(original_token(token))
+                + std::to_string(token_for(*key.execution))
                 + " result=" + std::to_string(result));
+            handle_cancel_cqe(*key.execution);
+            compact_execs();
             return;
         }
 
-        trace("uring complete token=" + std::to_string(token)
+        trace("uring complete token=" + std::to_string(token_for(*key.execution))
             + " result=" + std::to_string(result));
 
-        complete(d, token, result);
+        handle_op_cqe(d, *key.execution, result);
+        compact_execs();
     }
-
-    using uring_wish = wish_variant;
 
     class completion_base
     {
     public:
-        explicit completion_base(std::shared_ptr<uring_wish> request)
-            : request_(std::move(request))
-        {}
-
         virtual ~completion_base() = default;
-        virtual void complete(int result) = 0;
+        virtual void complete(
+            uring_wish & request,
+            int result,
+            bool cancelled) = 0;
 
-        [[nodiscard]] std::string describe() const
+        [[nodiscard]] static std::string describe(uring_wish const & request)
         {
             return std::visit(
                 [](auto const & wish) {
                     return detail::describe_wish(wish);
                 },
-                *request_);
+                request);
         }
-
-        void request_cancel() noexcept
-        {
-            cancel_requested_ = true;
-        }
-
-        void mark_submitted() noexcept
-        {
-            submitted_ = true;
-        }
-
-        [[nodiscard]] bool submitted() const noexcept
-        {
-            return submitted_;
-        }
-
-        [[nodiscard]] bool cancel_requested() const noexcept
-        {
-            return cancel_requested_;
-        }
-
-        [[nodiscard]] uring_wish & request() noexcept
-        {
-            return *request_;
-        }
-
-    protected:
-        std::shared_ptr<uring_wish> request_;
-        bool cancel_requested_ = false;
-        bool submitted_ = false;
     };
 
     template<typename T>
     class completion final : public completion_base
     {
     public:
-        completion(
-            std::shared_ptr<uring_wish> request,
-            std::shared_ptr<wait_state<T>> state)
-            : completion_base(std::move(request))
-            , state_(std::move(state))
+        explicit completion(std::shared_ptr<wait_state<T>> state)
+            : state_(std::move(state))
         {}
 
-        void complete(int result) override
+        void complete(
+            uring_wish & request,
+            int result,
+            bool cancelled) override
         {
-            if (this->cancel_requested_) {
+            if (cancelled) {
                 state_->set_exception(
                     std::make_exception_ptr(operation_cancelled{}));
                 return;
             }
 
             if constexpr (std::is_same_v<T, poll_until_result>) {
-                if (result > 0) {
-                    state_->set_value(poll_until_result{
-                        .events = result,
-                        .timed_out = false,
-                    });
-                } else if (result == 0 || result == -ETIME || result == -ECANCELED) {
-                    state_->set_value(poll_until_result{
-                        .events = 0,
-                        .timed_out = true,
-                    });
-                } else {
-                    state_->set_exception(
-                        std::make_exception_ptr(
-                            runtime_error{
-                                failure_message(result)}));
-                }
+                state_->set_exception(
+                    std::make_exception_ptr(
+                        runtime_error{
+                            "io_uring poll_until is implemented as a "
+                            "task-level race"}));
             } else {
                 if constexpr (std::is_void_v<T>) {
-                    if (std::holds_alternative<op::timeout>(*this->request_)
+                    if (std::holds_alternative<op::timeout>(request)
                         && result == -ETIME) {
                         state_->set_value();
                         return;
@@ -356,7 +397,7 @@ private:
                     state_->set_exception(
                         std::make_exception_ptr(
                             runtime_error{
-                                failure_message(result)}));
+                                failure_message(request, result)}));
                     return;
                 }
 
@@ -367,16 +408,16 @@ private:
                 } else if constexpr (std::is_same_v<T, std::size_t>) {
                     state_->set_value(static_cast<std::size_t>(result));
                 } else if constexpr (std::is_same_v<T, statx_result>) {
-                    state_->set_value(std::get<op::statx>(*this->request_).result);
+                    state_->set_value(std::get<op::statx>(request).result);
                 } else if constexpr (std::is_same_v<T, piped_child>) {
                     state_->set_value(std::move(
-                        *std::get<op::spawn_piped>(*this->request_).child));
+                        *std::get<op::spawn_piped>(request).child));
                 } else if constexpr (std::is_same_v<T, pty_child>) {
                     state_->set_value(std::move(
-                        *std::get<op::spawn_pty>(*this->request_).child));
+                        *std::get<op::spawn_pty>(request).child));
                 } else if constexpr (std::is_same_v<T, child_result>) {
                     state_->set_value(child_result_from(
-                        std::get<op::wait_child>(*this->request_).info));
+                        std::get<op::wait_child>(request).info));
                 } else {
                     static_assert(std::is_void_v<T>, "unsupported uring result");
                 }
@@ -400,11 +441,13 @@ private:
             };
         }
 
-        [[nodiscard]] std::string failure_message(int result) const
+        [[nodiscard]] static std::string failure_message(
+            uring_wish const & request,
+            int result)
         {
             auto code = -result;
             auto message = std::string{"io_uring "}
-                + this->describe()
+                + describe(request)
                 + " failed: "
                 + std::strerror(code)
                 + " ("
@@ -416,25 +459,48 @@ private:
         std::shared_ptr<wait_state<T>> state_;
     };
 
+    struct spec
+    {
+        spec(
+            uring_wish request,
+            std::unique_ptr<completion_base> completion)
+            : request(std::move(request))
+            , completion(std::move(completion))
+        {}
+
+        uring_wish request;
+        std::unique_ptr<completion_base> completion;
+    };
+
+    struct exec
+    {
+        exec(
+            spec specification,
+            exec_state state = prepared{})
+            : specification(std::move(specification))
+            , state(std::move(state))
+        {}
+
+        spec specification;
+        exec_state state = prepared{};
+    };
+
     template<typename Wish>
     wait_token prepare_uring_wish(
         Wish wish,
         std::shared_ptr<void> erased_state)
     {
-        auto token = wait_token{0};
-        if constexpr (std::is_same_v<Wish, op::manual>)
-            token = wish.token;
-        if (token == 0)
-            token = next_token_++;
-
         using result_type = typename Wish::result_type;
         auto state =
             std::static_pointer_cast<wait_state<result_type>>(erased_state);
-        auto request = std::make_shared<uring_wish>(std::move(wish));
-        completions_.emplace(
-            token,
-            std::make_unique<completion<result_type>>(request, state));
-        pending_submissions_.push_back(token);
+        auto iterator = execs_.emplace(
+            spec{
+                uring_wish{std::move(wish)},
+                std::make_unique<completion<result_type>>(state)},
+            prepared{});
+        auto & execution = *iterator;
+        pending_submissions_.push_back(&execution);
+        auto token = token_for(execution);
         trace("uring prepare " + std::string{Wish::name}
             + " token=" + std::to_string(token));
         return token;
@@ -465,8 +531,6 @@ private:
                     || std::is_same_v<op_type, op::spawn_pty>
                     || std::is_same_v<op_type, op::signal_child>) {
                     return 0;
-                } else if constexpr (std::is_same_v<op_type, op::poll_until>) {
-                    return 2;
                 } else {
                     return 1;
                 }
@@ -474,38 +538,84 @@ private:
             request);
     }
 
-    static void attach_token(io_uring_sqe * sqe, wait_token token) noexcept
+    static wait_token token_for(exec & execution) noexcept
     {
-        io_uring_sqe_set_data64(sqe, static_cast<std::uint64_t>(token));
+        static_assert(sizeof(std::uintptr_t) <= sizeof(wait_token));
+        static_assert(alignof(exec) >= 2);
+        return static_cast<wait_token>(
+            reinterpret_cast<std::uintptr_t>(&execution));
+    }
+
+    static exec * exec_from_token(wait_token token) noexcept
+    {
+        return reinterpret_cast<exec *>(
+            static_cast<std::uintptr_t>(token));
+    }
+
+    static std::uint64_t encode_user_data(
+        exec & execution,
+        cqe_kind kind) noexcept
+    {
+        auto bits = reinterpret_cast<std::uintptr_t>(&execution);
+        return static_cast<std::uint64_t>(
+            bits | static_cast<std::uintptr_t>(kind));
+    }
+
+    static cqe_key decode_user_data(std::uint64_t data) noexcept
+    {
+        auto bits = static_cast<std::uintptr_t>(data);
+        return cqe_key{
+            .execution = reinterpret_cast<exec *>(bits & ~std::uintptr_t{1}),
+            .kind = (bits & std::uintptr_t{1}) == 0
+                ? cqe_kind::op
+                : cqe_kind::cancel,
+        };
+    }
+
+    static void attach_exec(
+        io_uring_sqe * sqe,
+        exec & execution,
+        cqe_kind kind) noexcept
+    {
+        io_uring_sqe_set_data64(sqe, encode_user_data(execution, kind));
     }
 
     void stage_submissions(deck & d)
     {
-        auto tokens = std::vector<wait_token>{};
-        tokens.swap(pending_submissions_);
-        auto deferred = std::vector<wait_token>{};
+        auto executions = std::vector<exec *>{};
+        executions.swap(pending_submissions_);
+        auto deferred = std::vector<exec *>{};
 
-        for (auto token : tokens) {
-            auto found = completions_.find(token);
-            if (found == completions_.end())
+        for (auto * execution : executions) {
+            if (execution == nullptr)
                 continue;
 
-            auto & completion = *found->second;
-            if (completion.cancel_requested()) {
-                completion.complete(-ECANCELED);
-                completions_.erase(found);
-                fulfill(d, token);
+            auto * state = std::get_if<parked>(&execution->state);
+            if (state == nullptr)
+                continue;
+
+            if (std::holds_alternative<cancel_queued>(state->phase)) {
+                settle(
+                    d,
+                    *execution,
+                    -ECANCELED,
+                    true,
+                    ready_to_retire{});
                 continue;
             }
 
-            auto required = sqes_required(completion.request());
+            if (!std::holds_alternative<queued>(state->phase))
+                continue;
+
+            auto required = sqes_required(execution->specification.request);
             if (required > sq_space_left()) {
-                deferred.push_back(token);
+                deferred.push_back(execution);
                 continue;
             }
 
-            if (stage_submission(d, token, completion.request()))
-                completion.mark_submitted();
+            if (stage_submission(d, *execution)
+                && std::holds_alternative<parked>(execution->state))
+                std::get<parked>(execution->state).phase = submitted{};
         }
 
         pending_submissions_.insert(
@@ -514,60 +624,173 @@ private:
             deferred.end());
     }
 
-    bool stage_submission(deck & d, wait_token token, uring_wish & request)
+    bool stage_submission(deck & d, exec & execution)
     {
-        auto submission = uring_submission{*this, d, token};
+        auto submission = uring_submission{*this, d, token_for(execution)};
         return std::visit(
             [&submission](auto & op) {
                 return op.stage_uring(submission);
             },
-            request);
+            execution.specification.request);
     }
 
     void stage_cancellations()
     {
-        auto deferred = std::unordered_set<wait_token>{};
-        for (auto token : pending_cancellations_) {
+        auto executions = std::vector<exec *>{};
+        executions.swap(pending_cancellations_);
+        auto deferred = std::vector<exec *>{};
+
+        for (auto * execution : executions) {
+            if (execution == nullptr)
+                continue;
+
+            auto * state = std::get_if<parked>(&execution->state);
+            if (state == nullptr
+                || !std::holds_alternative<cancel_queued>(state->phase))
+                continue;
+
             if (sq_space_left() == 0) {
-                deferred.insert(token);
+                deferred.push_back(execution);
                 continue;
             }
 
             auto * sqe = get_sqe();
             io_uring_prep_cancel64(
                 sqe,
-                static_cast<std::uint64_t>(token),
+                encode_user_data(*execution, cqe_kind::op),
                 0);
-            attach_token(sqe, cancel_token(token));
-            trace("uring prepare cancel token=" + std::to_string(token));
+            attach_exec(sqe, *execution, cqe_kind::cancel);
+            state->phase = cancel_submitted{};
+            trace("uring prepare cancel token="
+                + std::to_string(token_for(*execution)));
         }
         pending_cancellations_ = std::move(deferred);
     }
 
-    static constexpr wait_token cancel_token_bit =
-        wait_token{1} << (sizeof(wait_token) * 8 - 1);
-
-    static wait_token cancel_token(wait_token token) noexcept
+    void handle_op_cqe(deck & d, exec & execution, int result)
     {
-        return token | cancel_token_bit;
+        auto * state = std::get_if<parked>(&execution.state);
+        if (state == nullptr)
+            return;
+
+        auto cancelled =
+            std::holds_alternative<cancel_queued>(state->phase)
+            || std::holds_alternative<cancel_submitted>(state->phase)
+            || std::holds_alternative<cancel_drained>(state->phase);
+        auto waiting_for_cancel =
+            std::holds_alternative<cancel_submitted>(state->phase);
+        if (waiting_for_cancel) {
+            settle(
+                d,
+                execution,
+                result,
+                cancelled,
+                waiting_cancel_cqe{});
+        } else {
+            settle(
+                d,
+                execution,
+                result,
+                cancelled,
+                ready_to_retire{});
+        }
     }
 
-    static bool is_cancel_token(wait_token token) noexcept
+    void handle_cancel_cqe(exec & execution)
     {
-        return (token & cancel_token_bit) != 0;
+        if (auto * state = std::get_if<parked>(&execution.state);
+            state != nullptr
+            && std::holds_alternative<cancel_submitted>(state->phase)) {
+            state->phase = cancel_drained{};
+            return;
+        }
+
+        if (auto * state = std::get_if<settled>(&execution.state);
+            state != nullptr
+            && std::holds_alternative<waiting_cancel_cqe>(state->phase))
+            state->phase = ready_to_retire{};
     }
 
-    static wait_token original_token(wait_token token) noexcept
+    template<typename Phase>
+    void settle(
+        deck & d,
+        exec & execution,
+        int result,
+        bool cancelled,
+        Phase phase)
     {
-        return token & ~cancel_token_bit;
+        auto * state = std::get_if<parked>(&execution.state);
+        if (state == nullptr)
+            return;
+
+        auto continuation = state->continuation;
+        execution.specification.completion->complete(
+            execution.specification.request,
+            result,
+            cancelled);
+        execution.state = settled{.phase = phase};
+        fulfill(d, execution, continuation);
+    }
+
+    void fulfill(deck & d, exec & execution, parked_task continuation)
+    {
+        trace("uring fulfill token=" + std::to_string(token_for(execution)));
+        continuation.resume(d);
+    }
+
+    void fulfill(deck & d, exec & execution)
+    {
+        if (auto * state = std::get_if<parked>(&execution.state))
+            fulfill(d, execution, state->continuation);
+    }
+
+    [[nodiscard]] static bool is_submitted(parked_phase const & phase) noexcept
+    {
+        return std::holds_alternative<submitted>(phase)
+            || std::holds_alternative<cancel_queued>(phase)
+            || std::holds_alternative<cancel_submitted>(phase)
+            || std::holds_alternative<cancel_drained>(phase);
+    }
+
+    [[nodiscard]] static bool is_retirable(exec_state const & state) noexcept
+    {
+        auto const * settled_state = std::get_if<settled>(&state);
+        return settled_state != nullptr
+            && std::holds_alternative<ready_to_retire>(settled_state->phase);
+    }
+
+    void compact_execs()
+    {
+        std::erase_if(pending_submissions_, [](exec * execution) {
+            return execution == nullptr
+                || !std::holds_alternative<parked>(execution->state);
+        });
+        std::erase_if(pending_cancellations_, [](exec * execution) {
+            if (execution == nullptr)
+                return true;
+            auto * state = std::get_if<parked>(&execution->state);
+            return state == nullptr
+                || !std::holds_alternative<cancel_queued>(state->phase);
+        });
+
+        for (auto it = execs_.begin(); it != execs_.end();) {
+            if (is_retirable(it->state))
+                it->state = retired{};
+            if (std::holds_alternative<retired>(it->state)) {
+                it = execs_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     [[nodiscard]] bool has_submitted_completions() const noexcept
     {
         return std::ranges::any_of(
-            completions_,
-            [](auto const & entry) {
-                return entry.second->submitted();
+            execs_,
+            [](exec const & execution) {
+                auto * state = std::get_if<parked>(&execution.state);
+                return state != nullptr && is_submitted(state->phase);
             });
     }
 
@@ -577,11 +800,9 @@ private:
     }
 
     io_uring ring_{};
-    wait_token next_token_ = 1;
-    std::unordered_map<wait_token, std::unique_ptr<completion_base>> completions_;
-    std::unordered_map<wait_token, parked_task> waiters_;
-    std::vector<wait_token> pending_submissions_;
-    std::unordered_set<wait_token> pending_cancellations_;
+    boost::container::hub<exec> execs_;
+    std::vector<exec *> pending_submissions_;
+    std::vector<exec *> pending_cancellations_;
 };
 
 template<typename T>
@@ -612,7 +833,8 @@ inline io_uring_sqe * uring_submission::get_sqe()
 
 inline void uring_submission::attach(io_uring_sqe * sqe) const noexcept
 {
-    uring_wand::attach_token(sqe, token_);
+    if (auto * execution = uring_wand::exec_from_token(token_))
+        uring_wand::attach_exec(sqe, *execution, uring_wand::cqe_kind::op);
 }
 
 inline void uring_submission::complete_sync(int result)
@@ -1075,18 +1297,11 @@ inline bool op::timeout::stage_uring(uring_submission & submission)
 
 inline bool op::poll_until::stage_uring(uring_submission & submission)
 {
-    auto * poll_sqe = submission.get_sqe();
-    io_uring_prep_poll_add(poll_sqe, fd, events);
-    poll_sqe->flags |= IOSQE_IO_LINK;
-    submission.attach(poll_sqe);
-
-    auto * timeout_sqe = submission.get_sqe();
-    io_uring_prep_link_timeout(
-        timeout_sqe,
-        &timeout,
-        0);
-    submission.attach(timeout_sqe);
-    return true;
+    (void)fd;
+    (void)events;
+    (void)timeout;
+    submission.complete_sync(-ENOTSUP);
+    return false;
 }
 
 #endif

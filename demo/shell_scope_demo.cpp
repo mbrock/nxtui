@@ -280,7 +280,7 @@ nxtrt::task<void> pump_stdin_to_pty(
     auto storage = std::array<std::byte, 4096>{};
 
     while (!state.process_done) {
-        auto ready = co_await nxtrt::op::poll_until::after(
+        auto ready = co_await nxtrt::poll_until_after(
             STDIN_FILENO,
             POLLIN,
             80ms);

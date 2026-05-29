@@ -1,5 +1,8 @@
 #lang racket/base
 
+;; Compatibility CLI for the nxtrt executable model. The actual ontology and
+;; Forge-style runtime spec live together in runtime.rkt under #lang rdf-forge.
+
 (require "../rdf-forge/cli.rkt"
          "runtime.rkt")
 

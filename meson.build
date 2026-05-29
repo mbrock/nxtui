@@ -65,6 +65,7 @@ nxt_libvterm_dep = declare_dependency(
 
 nxt_inc = include_directories(
   'src',
+  'vendor/hub/include',
   'vendor/mdspan/include',
 )
 nxt_core_deps = []

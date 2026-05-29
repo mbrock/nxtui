@@ -116,14 +116,14 @@ nxtrt::task<void> poll_until_after_socket_send(int tx, int rx)
     if (sent != message.size())
         throw std::runtime_error{"short poll-until smoke send"};
 
-    auto result = co_await nxtrt::op::poll_until::after(rx, POLLIN, 1s);
+    auto result = co_await nxtrt::poll_until_after(rx, POLLIN, 1s);
     if (result.timed_out || (result.events & POLLIN) == 0)
         throw std::runtime_error{"poll-until did not report readable socket"};
 }
 
 nxtrt::task<void> poll_until_timeout(int rx)
 {
-    auto result = co_await nxtrt::op::poll_until::after(rx, POLLIN, 1ms);
+    auto result = co_await nxtrt::poll_until_after(rx, POLLIN, 1ms);
     if (!result.timed_out)
         throw std::runtime_error{"poll-until did not time out"};
 }

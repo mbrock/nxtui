@@ -1843,6 +1843,84 @@ with_zone(Policy policy, Fn && fn)
 
 namespace detail {
 
+inline task<poll_until_result> poll_ready(op::poll wish)
+{
+    co_return poll_until_result{
+        .events = co_await wish,
+        .timed_out = false,
+    };
+}
+
+inline task<poll_until_result> poll_deadline(
+    std::chrono::nanoseconds duration)
+{
+    co_await op::timeout::after(duration);
+    co_return poll_until_result{
+        .events = 0,
+        .timed_out = true,
+    };
+}
+
+using poll_until_deeds =
+    std::tuple<
+        catching_deed<poll_until_result>,
+        catching_deed<poll_until_result>>;
+
+inline task<poll_until_deeds> fork_poll_until_race(
+    task<poll_until_result> ready,
+    task<poll_until_result> deadline)
+{
+    auto ready_deed =
+        fork(stop_zone_on_completion(std::move(ready))).cope();
+    auto deadline_deed =
+        fork(stop_zone_on_completion(std::move(deadline))).cope();
+    co_return poll_until_deeds{
+        std::move(ready_deed),
+        std::move(deadline_deed),
+    };
+}
+
+inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
+{
+    auto ready_result = std::move(std::get<0>(deeds)).get();
+    auto deadline_result = std::move(std::get<1>(deeds)).get();
+
+    if (ready_result)
+        return std::move(*ready_result);
+    if (deadline_result)
+        return std::move(*deadline_result);
+
+    if (!is_operation_cancelled(ready_result.error()))
+        rethrow(ready_result.error());
+    if (!is_operation_cancelled(deadline_result.error()))
+        rethrow(deadline_result.error());
+    rethrow(ready_result.error());
+}
+
+} // namespace detail
+
+[[nodiscard]] inline task<poll_until_result> poll_until_after(
+    int fd,
+    short events,
+    std::chrono::nanoseconds timeout)
+{
+    auto ready = detail::poll_ready(op::poll{
+        .fd = fd,
+        .events = events,
+    });
+    auto deadline = detail::poll_deadline(timeout);
+    auto deeds = co_await with_zone(
+        [ready = std::move(ready),
+         deadline = std::move(deadline)]() mutable {
+            return detail::fork_poll_until_race(
+                std::move(ready),
+                std::move(deadline));
+        });
+    co_return detail::take_poll_until_result(deeds);
+}
+
+namespace detail {
+
 template<typename T>
 inline auto promise<T>::get_return_object() noexcept -> task_type
 {
@@ -1962,13 +2040,13 @@ inline void waiter<T>::await_suspend(
 
     trace("waiter suspend token=" + std::to_string(token_));
     debug::park_task(running->id, token_, description_);
-    running->cancel_wait_on_stop(*active_wand, token_);
     active_wand->suspend(
         token_,
         parked_task{
             .handle = awaiting,
             .promise = running,
         });
+    running->cancel_wait_on_stop(*active_wand, token_);
 }
 
 inline waiter<void> op::manual::operator co_await() const
