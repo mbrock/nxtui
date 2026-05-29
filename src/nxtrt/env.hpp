@@ -28,6 +28,9 @@ inline const void * env_key_id() noexcept
 }
 
 /// Nullable reference used for optional read-only environment lookups.
+///
+/// Reference accessors throw if the reference is empty, matching the ambient
+/// env convention that missing required context is a runtime error.
 template<typename T>
 class optional_ref
 {
@@ -43,22 +46,29 @@ public:
         return value_ != nullptr;
     }
 
-    [[nodiscard]] T & operator*() const noexcept
+    [[nodiscard]] T & operator*() const
     {
-        return *value_;
+        return *require_value();
     }
 
-    [[nodiscard]] T * operator->() const noexcept
+    [[nodiscard]] T * operator->() const
     {
-        return value_;
+        return require_value();
     }
 
-    [[nodiscard]] T & get() const noexcept
+    [[nodiscard]] T & get() const
     {
-        return *value_;
+        return *require_value();
     }
 
 private:
+    [[nodiscard]] T * require_value() const
+    {
+        if (value_ == nullptr)
+            throw runtime_error{"empty nxtrt optional_ref"};
+        return value_;
+    }
+
     T * value_ = nullptr;
 };
 

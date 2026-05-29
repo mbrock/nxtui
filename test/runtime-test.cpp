@@ -909,6 +909,41 @@ static suite runtime_tests{
         "environment"_test = [] {
             auto deck = nxtrt::deck{};
 
+            "empty optional refs throw on access"_test = [] {
+                struct probe
+                {
+                    int value = 0;
+                };
+
+                auto deref_threw = false;
+                try {
+                    auto ref = nxtrt::optional_ref<const probe>{};
+                    (void)*ref;
+                } catch (const nxtrt::runtime_error &) {
+                    deref_threw = true;
+                }
+
+                auto arrow_threw = false;
+                try {
+                    auto ref = nxtrt::optional_ref<const probe>{};
+                    (void)ref->value;
+                } catch (const nxtrt::runtime_error &) {
+                    arrow_threw = true;
+                }
+
+                auto get_threw = false;
+                try {
+                    auto ref = nxtrt::optional_ref<const probe>{};
+                    (void)ref.get();
+                } catch (const nxtrt::runtime_error &) {
+                    get_threw = true;
+                }
+
+                expect(deref_threw);
+                expect(arrow_threw);
+                expect(get_threw);
+            };
+
             "survives nested task awaits"_test = [&] {
                 auto result = deck.sync_wait([]() -> nxtrt::task<int> {
                     co_return co_await nxtrt::with_env<ambient_int_key>(
