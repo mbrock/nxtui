@@ -757,6 +757,15 @@ public:
         , fd_(fd)
     {}
 
+    /// Bytes successfully written to the file descriptor by completed drains.
+    ///
+    /// Bytes still staged in the writer buffer are not included until `flush()`
+    /// or another drain sends them to the descriptor.
+    [[nodiscard]] std::size_t written_size() const noexcept
+    {
+        return written_;
+    }
+
 private:
     hope<std::size_t>
     drain_more(
@@ -774,17 +783,20 @@ private:
         auto src = detail::first_nonempty(chunks, splat);
         while (true) {
             try {
-                co_return co_await op::write_some{
+                auto n = co_await op::write_some{
                     .fd = fd_,
                     .buffer = src,
                     .offset = -1,
                 };
+                written_ += n;
+                co_return n;
             } catch (const interrupted_system_call &) {
             }
         }
     }
 
     int fd_ = -1;
+    std::size_t written_ = 0;
 };
 
 inline fd_sink standard_output(std::size_t buffer_size = 4096)
@@ -2047,6 +2059,25 @@ task<std::size_t> for_each_chunk(
         visitor(*chunk);
         total += chunk->size();
     }
+}
+
+/// Stream all bytes from `reader` into `writer`, then flush `writer`.
+///
+/// Returns the number of bytes accepted by the writer. Concrete writers that
+/// count actual backend writes may expose their own count after `flush()`.
+inline task<std::size_t> stream_all(
+    byte_reader & reader,
+    byte_writer & writer)
+{
+    auto total = std::size_t{0};
+    while (true) {
+        auto result = co_await reader.stream(writer);
+        total += result.bytes;
+        if (result.eof)
+            break;
+    }
+    co_await writer.flush();
+    co_return total;
 }
 
 } // namespace nxtrt

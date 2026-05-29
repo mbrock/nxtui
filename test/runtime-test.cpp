@@ -2465,6 +2465,22 @@ static suite runtime_tests{
                 expect(reader.buffered_size() == std::size_t{0});
             };
 
+            "byte_reader streams all chunks into a writer"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"ab"sv, "cde"sv, "f"sv};
+                auto source_storage = std::array<std::byte, 2>{};
+                auto reader = text_source(chunks, std::span{source_storage});
+                auto writer = chunking_string_sink{3, std::size_t{0}};
+
+                auto streamed =
+                    deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
+                        co_return co_await nxtrt::stream_all(reader, writer);
+                    });
+
+                expect(streamed == std::size_t{6});
+                expect(writer.text == "abcdef");
+            };
+
             "byte_reader reads directly into caller storage"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"ab"sv, "cde"sv, "fg"sv};

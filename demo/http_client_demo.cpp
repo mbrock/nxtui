@@ -11,10 +11,9 @@
 
 #include "nxtrt/task.hpp"
 #include <nxtrt/buffers.hpp>
-#include <nxtrt/cares.hpp>
 #include <nxtrt/http.hpp>
+#include <nxtrt/net_dns.hpp>
 #include <nxtrt/tls.hpp>
-#include <nxt/unique-fd.hpp>
 
 #if defined(__linux__)
 #  include <nxtrt/uring_wand.hpp>
@@ -22,61 +21,16 @@
 #  include <nxtrt/kqueue_wand.hpp>
 #endif
 
-#include <cerrno>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
-#include <fcntl.h>
 #include <iostream>
 #include <optional>
-#include <ranges>
-#include <span>
 #include <string>
 #include <string_view>
-#include <sys/socket.h>
-#include <system_error>
 #include <utility>
 
 namespace {
-
-void set_close_on_exec(int fd)
-{
-    auto flags = ::fcntl(fd, F_GETFD, 0);
-    if (flags >= 0)
-        (void) ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
-}
-
-nxtrt::task<nxt::unique_fd>
-connect_address(nxtrt::resolved_address address)
-{
-    auto fd = nxt::unique_fd{::socket(
-        address.family,
-        address.socktype == 0 ? SOCK_STREAM : address.socktype,
-        address.protocol)};
-    if (fd.get() < 0)
-        throw nxtrt::runtime_error{
-            "socket: "
-            + std::string{std::generic_category().message(errno)}};
-
-    set_close_on_exec(fd.get());
-    co_await nxtrt::op::connect::from(
-        fd.get(), address.sockaddr_ptr(), address.address_size);
-    co_return std::move(fd);
-}
-
-nxtrt::task<nxt::unique_fd>
-connect_tcp(std::string host, std::string port)
-{
-    auto resolver = nxtrt::cares_resolver{};
-    auto addresses = co_await resolver.getaddrinfo(host, port);
-    if (addresses.empty())
-        throw nxtrt::runtime_error{"no addresses resolved for " + host};
-
-    co_return co_await nxtrt::wait_any_range(
-        addresses | std::views::transform([](auto const & address) {
-            return connect_address(address);
-        }));
-}
 
 // Every encoding this build can decode, so the server is free to pick its best.
 std::string accept_encoding_header()
@@ -122,13 +76,8 @@ void report_head(const nxtrt::http::response_head & head)
 nxtrt::task<std::size_t> drain_to_stdout(nxtrt::byte_reader & body)
 {
     auto out = nxtrt::standard_output(64 * 1024);
-    auto total = std::size_t{0};
-    while (auto chunk = co_await body.take_some()) {
-        total += chunk->size();
-        co_await out.write(*chunk);
-    }
-    co_await out.flush();
-    co_return total;
+    co_await nxtrt::stream_all(body, out);
+    co_return out.written_size();
 }
 
 nxtrt::task<void> fetch(nxtrt::http::url url)
@@ -137,7 +86,7 @@ nxtrt::task<void> fetch(nxtrt::http::url url)
     std::cerr << "> GET " << url.target << " HTTP/1.1 (" << url.host << ":"
               << url.port << (url.tls ? ", TLS 1.3)\n" : ")\n");
 
-    auto socket = co_await connect_tcp(url.host, url.port);
+    auto socket = co_await nxtrt::net::connect_tcp(url.host, url.port);
     auto sink = nxtrt::socket_sink{socket.get(), 0, std::size_t{16 * 1024}};
     auto source =
         nxtrt::socket_source{socket.get(), 0, std::size_t{64 * 1024}};

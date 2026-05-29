@@ -226,6 +226,15 @@ nxtrt::task<void> write_to_fd(int fd, std::string_view text)
         throw std::runtime_error{"short write wish"};
 }
 
+nxtrt::task<std::size_t> write_with_fd_sink_count(int fd, std::string_view text)
+{
+    auto sink = nxtrt::fd_sink{fd, std::size_t{4}};
+    co_await sink.write(text);
+    co_await sink.write(std::string_view{"!"});
+    co_await sink.flush();
+    co_return sink.written_size();
+}
+
 nxtrt::task<nxtai::tool_process::result> capture_shell(
     std::string command,
     std::size_t cap_bytes = 64 * 1024)
@@ -532,6 +541,31 @@ static suite uring_wand_tests{
 
                 expect(std::string_view{buffer.data(), static_cast<std::size_t>(n)}
                     == "wishful stdout");
+            };
+
+            "fd sinks count flushed bytes"_test = [] {
+                auto fds = std::array<int, 2>{-1, -1};
+                if (::pipe(fds.data()) != 0)
+                    throw std::runtime_error{"pipe failed"};
+
+                auto rx = nxt::unique_fd{fds[0]};
+                auto tx = nxt::unique_fd{fds[1]};
+
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto task = write_with_fd_sink_count(tx.get(), "counted");
+
+                deck.start(task);
+                auto counted = pump_until_done(deck, wand, task);
+
+                auto buffer = std::array<char, 32>{};
+                auto n = ::read(rx.get(), buffer.data(), buffer.size());
+                if (n < 0)
+                    throw std::runtime_error{"pipe read failed"};
+
+                expect(counted == std::size_t{8});
+                expect(std::string_view{buffer.data(), static_cast<std::size_t>(n)}
+                    == "counted!");
             };
 
             "subprocess capture drains stdout and stderr"_test = [] {
