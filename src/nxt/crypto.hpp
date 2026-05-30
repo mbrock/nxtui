@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -15,6 +16,7 @@ namespace nxt::crypto {
 using bytes = std::vector<std::byte>;
 
 inline constexpr auto sha256_len = std::size_t{32};
+inline constexpr auto sha256_block_len = std::size_t{64};
 inline constexpr auto aes128_key_len = std::size_t{16};
 inline constexpr auto aes_gcm_nonce_len = std::size_t{12};
 inline constexpr auto aes_gcm_tag_len = std::size_t{16};
@@ -46,6 +48,34 @@ struct mlkem768_encapsulation
 {
     std::array<std::byte, mlkem768_ciphertext_len> ciphertext{};
     std::array<std::byte, mlkem768_shared_secret_len> shared_secret{};
+};
+
+class sha256_state
+{
+public:
+    sha256_state();
+
+    void update(std::span<const std::byte> input);
+    [[nodiscard]] std::array<std::byte, sha256_len> finalize() const;
+
+private:
+    std::array<std::uint32_t, 8> state_{};
+    std::array<std::byte, 64> buffer_{};
+    std::uint64_t size_ = 0;
+    std::size_t buffered_ = 0;
+};
+
+class hmac_sha256_state
+{
+public:
+    explicit hmac_sha256_state(std::span<const std::byte> key);
+
+    void update(std::span<const std::byte> input);
+    [[nodiscard]] std::array<std::byte, sha256_len> finalize() const;
+
+private:
+    sha256_state inner_;
+    std::array<std::byte, sha256_block_len> outer_pad_{};
 };
 
 class aes128gcm_context
@@ -119,6 +149,9 @@ void random(std::span<std::byte> out);
     std::span<const std::byte> plaintext);
 
 [[nodiscard]] x25519_key_pair x25519_keygen();
+[[nodiscard]] std::optional<std::array<std::byte, x25519_key_len>> x25519dh(
+    std::span<const std::byte> secret_key,
+    std::span<const std::byte> peer_public_key);
 [[nodiscard]] std::optional<std::array<std::byte, x25519_key_len>> x25519_dh(
     std::span<const std::byte> secret_key,
     std::span<const std::byte> peer_public_key);

@@ -1,18 +1,14 @@
 #include <nxt/crypto.hpp>
 
 #include <openssl/aead.h>
-#include <openssl/curve25519.h>
 #include <openssl/ec.h>
 #include <openssl/ec_key.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
-#include <openssl/hkdf.h>
-#include <openssl/hmac.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
 #include <openssl/rand.h>
 #include <openssl/rsa.h>
-#include <openssl/sha.h>
 
 #include <algorithm>
 #include <memory>
@@ -136,49 +132,14 @@ bytes random(std::size_t len)
     return out;
 }
 
-std::array<std::byte, sha256_len> sha256(std::span<const std::byte> input)
-{
-    auto out = std::array<std::byte, sha256_len>{};
-    SHA256(u8_data(input), input.size(), u8_data(out));
-    return out;
-}
-
-std::array<std::byte, sha256_len> hmac_sha256(
-    std::span<const std::byte> key,
-    std::span<const std::byte> data)
-{
-    auto out = std::array<std::byte, sha256_len>{};
-    unsigned out_len = 0;
-    if (!HMAC(
-            EVP_sha256(),
-            u8_data(key),
-            static_cast<int>(key.size()),
-            u8_data(data),
-            data.size(),
-            u8_data(out),
-            &out_len)
-        || out_len != out.size())
-        throw crypto_error{"HMAC-SHA256 failed"};
-    return out;
-}
-
 std::array<std::byte, sha256_len> hkdf_extract_sha256(
     std::span<const std::byte> salt,
     std::span<const std::byte> ikm)
 {
-    auto out = std::array<std::byte, sha256_len>{};
-    auto out_len = out.size();
-    if (!HKDF_extract(
-            u8_data(out),
-            &out_len,
-            EVP_sha256(),
-            u8_data(ikm),
-            ikm.size(),
-            u8_data(salt),
-            salt.size())
-        || out_len != out.size())
-        throw crypto_error{"HKDF-SHA256 extract failed"};
-    return out;
+    auto zero_salt = std::array<std::byte, sha256_len>{};
+    if (salt.empty())
+        salt = zero_salt;
+    return hmac_sha256(salt, ikm);
 }
 
 bytes hkdf_expand_sha256(
@@ -186,17 +147,30 @@ bytes hkdf_expand_sha256(
     std::span<const std::byte> info,
     std::size_t len)
 {
+    if (len > 255 * sha256_len)
+        throw crypto_error{"HKDF-SHA256 output is too long"};
+
     auto out = bytes(len);
-    if (!out.empty()
-        && !HKDF_expand(
-            u8_data(out),
-            out.size(),
-            EVP_sha256(),
-            u8_data(prk),
-            prk.size(),
-            u8_data(info),
-            info.size()))
-        throw crypto_error{"HKDF-SHA256 expand failed"};
+    auto previous = std::array<std::byte, sha256_len>{};
+    auto previous_size = std::size_t{0};
+    auto written = std::size_t{0};
+    auto counter = std::byte{1};
+    while (written != out.size()) {
+        auto hmac = hmac_sha256_state{prk};
+        hmac.update(std::span{previous}.first(previous_size));
+        hmac.update(info);
+        hmac.update(std::span{&counter, 1});
+        previous = hmac.finalize();
+
+        auto take = std::min(out.size() - written, previous.size());
+        std::ranges::copy(
+            std::span{previous}.first(take),
+            out.begin() + static_cast<std::ptrdiff_t>(written));
+        written += take;
+        counter = static_cast<std::byte>(
+            std::to_integer<unsigned char>(counter) + 1);
+        previous_size = previous.size();
+    }
     return out;
 }
 
@@ -293,29 +267,6 @@ bytes aes128gcm_seal(
             aad.size()))
         throw crypto_error{"AES-128-GCM seal failed"};
     out.resize(out_len);
-    return out;
-}
-
-x25519_key_pair x25519_keygen()
-{
-    auto out = x25519_key_pair{};
-    X25519_keypair(u8_data(out.public_key), u8_data(out.secret_key));
-    return out;
-}
-
-std::optional<std::array<std::byte, x25519_key_len>> x25519_dh(
-    std::span<const std::byte> secret_key,
-    std::span<const std::byte> peer_public_key)
-{
-    require_size(secret_key, x25519_key_len, "X25519 secret key must be 32 bytes");
-    require_size(
-        peer_public_key,
-        x25519_key_len,
-        "X25519 public key must be 32 bytes");
-
-    auto out = std::array<std::byte, x25519_key_len>{};
-    if (!X25519(u8_data(out), u8_data(secret_key), u8_data(peer_public_key)))
-        return std::nullopt;
     return out;
 }
 

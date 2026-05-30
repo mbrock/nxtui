@@ -107,6 +107,8 @@ nxt_core_sources = files(
   'src/nxtui/ansi.cpp',
   'src/nxtui/compositor.cpp',
   'src/nxt/crypto.cpp',
+  'src/nxt/crypto/sha256.cpp',
+  'src/nxt/crypto/x25519.cpp',
   'src/nxtui/glyph-table.cpp',
   'src/nxtui/input.cpp',
   'src/nxtui/raster.cpp',
@@ -249,6 +251,7 @@ if get_option('tests')
   nxt_test_sources = files(
 	    'test/input-test.cpp',
 	    'test/json-test.cpp',
+    'test/crypto-test.cpp',
 	    'test/include-test.cpp',
     'test/runtime-test.cpp',
     'test/terminal-test.cpp',

@@ -1,4 +1,6 @@
 #include <nxt/crypto.hpp>
+#include <nxtrt/crypto.hpp>
+#include <nxtrt/deck.hpp>
 
 #include "test.hpp"
 
@@ -78,6 +80,20 @@ struct ec_key_deleter
     }
 };
 
+nxtrt::task<void> write_sha256_sink_chunks(nxtrt::sha256_sink & sink)
+{
+    co_await nxtrt::write(sink, "a");
+    co_await nxtrt::write(sink, "bc");
+    co_await sink.flush();
+}
+
+nxtrt::task<void> write_hmac_sha256_sink_chunks(nxtrt::hmac_sha256_sink & sink)
+{
+    co_await nxtrt::write(sink, "Hi ");
+    co_await nxtrt::write(sink, "There");
+    co_await sink.flush();
+}
+
 }
 
 static suite crypto_tests{
@@ -99,11 +115,59 @@ static suite crypto_tests{
                     "b00361a396177a9cb410ff61f20015ad")));
         };
 
+        "hashes incrementally with SHA-256 state"_test = [] {
+            auto state = nxt::crypto::sha256_state{};
+            state.update(bytes_from("a"));
+            state.update(bytes_from("b"));
+            state.update(bytes_from("c"));
+            expect(equal_bytes(
+                state.finalize(),
+                hex("ba7816bf8f01cfea414140de5dae2223"
+                    "b00361a396177a9cb410ff61f20015ad")));
+
+            state.update(bytes_from("def"));
+            expect(equal_bytes(
+                state.finalize(),
+                hex("bef57ec7f53a6d40beb640a780a639c8"
+                    "3bc29ac8a9816f1fc6c5c6dcd93c4721")));
+        };
+
+        "hashes bytes through a SHA-256 sink"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto sink = nxtrt::sha256_sink{std::size_t{2}};
+
+            deck.sync_wait(write_sha256_sink_chunks(sink));
+
+            expect(equal_bytes(
+                sink.finalize(),
+                hex("ba7816bf8f01cfea414140de5dae2223"
+                    "b00361a396177a9cb410ff61f20015ad")));
+        };
+
         "authenticates bytes with HMAC-SHA256"_test = [] {
             auto key = nxt::crypto::bytes(20, std::byte{0x0b});
             auto digest = nxt::crypto::hmac_sha256(key, bytes_from("Hi There"));
             expect(equal_bytes(
                 digest,
+                hex("b0344c61d8db38535ca8afceaf0bf12b"
+                    "881dc200c9833da726e9376c2e32cff7")));
+        };
+
+        "authenticates bytes through HMAC-SHA256 state and sink"_test = [] {
+            auto key = nxt::crypto::bytes(20, std::byte{0x0b});
+            auto state = nxt::crypto::hmac_sha256_state{key};
+            state.update(bytes_from("Hi "));
+            state.update(bytes_from("There"));
+            expect(equal_bytes(
+                state.finalize(),
+                hex("b0344c61d8db38535ca8afceaf0bf12b"
+                    "881dc200c9833da726e9376c2e32cff7")));
+
+            auto deck = nxtrt::deck{};
+            auto sink = nxtrt::hmac_sha256_sink{key, std::size_t{3}};
+            deck.sync_wait(write_hmac_sha256_sink_chunks(sink));
+            expect(equal_bytes(
+                sink.finalize(),
                 hex("b0344c61d8db38535ca8afceaf0bf12b"
                     "881dc200c9833da726e9376c2e32cff7")));
         };
@@ -153,13 +217,46 @@ static suite crypto_tests{
             auto bob = nxt::crypto::x25519_keygen();
 
             auto a_secret =
-                nxt::crypto::x25519_dh(alice.secret_key, bob.public_key);
+                nxt::crypto::x25519dh(alice.secret_key, bob.public_key);
             auto b_secret =
                 nxt::crypto::x25519_dh(bob.secret_key, alice.public_key);
 
             expect(a_secret.has_value());
             expect(b_secret.has_value());
             expect(*a_secret == *b_secret);
+        };
+
+        "matches RFC 7748 X25519 test vectors"_test = [] {
+            auto scalar = nxt::crypto::bytes(nxt::crypto::x25519_key_len);
+            scalar[0] = std::byte{9};
+            auto basepoint = nxt::crypto::bytes(nxt::crypto::x25519_key_len);
+            basepoint[0] = std::byte{9};
+
+            auto base_secret = nxt::crypto::x25519dh(scalar, basepoint);
+            expect(base_secret.has_value());
+            expect(equal_bytes(
+                *base_secret,
+                hex("422c8e7a6227d7bca1350b3e2bb7279f"
+                    "7897b87bb6854b783c60e80311ae3079")));
+
+            auto secret = nxt::crypto::x25519dh(
+                hex("77076d0a7318a57d3c16c17251b26645"
+                    "df4c2f87ebc0992ab177fba51db92c2a"),
+                basepoint);
+
+            expect(secret.has_value());
+            expect(equal_bytes(
+                *secret,
+                hex("8520f0098930a754748b7ddcb43ef75a"
+                    "0dbf3a0d26381af4eba4a98eaa9b4e6a")));
+        };
+
+        "rejects all-zero X25519 shared secrets"_test = [] {
+            auto secret_key = nxt::crypto::bytes(nxt::crypto::x25519_key_len);
+            secret_key[0] = std::byte{9};
+            auto zero_point = nxt::crypto::bytes(nxt::crypto::x25519_key_len);
+
+            expect(!nxt::crypto::x25519dh(secret_key, zero_point));
         };
 
         "round-trips ML-KEM-768 encapsulated shared secrets"_test = [] {
