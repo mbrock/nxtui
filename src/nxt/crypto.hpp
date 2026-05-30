@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -91,11 +90,6 @@ public:
     aes128gcm_context & operator=(aes128gcm_context &&) noexcept = default;
 
 private:
-    struct deleter
-    {
-        void operator()(EVP_AEAD_CTX * ctx) const noexcept;
-    };
-
     friend std::optional<bytes> aes128gcm_open(
         const aes128gcm_context & ctx,
         std::span<const std::byte> nonce,
@@ -107,7 +101,10 @@ private:
         std::span<const std::byte> aad,
         std::span<const std::byte> plaintext);
 
-    std::unique_ptr<EVP_AEAD_CTX, deleter> ctx_;
+public:
+    std::array<std::byte, 176> round_keys_{};
+    std::array<std::byte, 16> ghash_key_{};
+    bool initialized_ = false;
 };
 
 void random(std::span<std::byte> out);

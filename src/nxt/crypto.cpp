@@ -1,6 +1,5 @@
 #include <nxt/crypto.hpp>
 
-#include <openssl/aead.h>
 #include <openssl/ec.h>
 #include <openssl/ec_key.h>
 #include <openssl/ecdsa.h>
@@ -119,6 +118,17 @@ evp_pkey_ctx_ptr mlkem768_keygen_context()
 
 }
 
+std::optional<bytes> aes128gcm_open_impl(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<const std::byte> ciphertext);
+bytes aes128gcm_seal_impl(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<const std::byte> plaintext);
+
 void random(std::span<std::byte> out)
 {
     if (!out.empty() && RAND_bytes(u8_data(out), out.size()) != 1)
@@ -174,23 +184,6 @@ bytes hkdf_expand_sha256(
     return out;
 }
 
-void aes128gcm_context::deleter::operator()(EVP_AEAD_CTX * ctx) const noexcept
-{
-    EVP_AEAD_CTX_free(ctx);
-}
-
-aes128gcm_context::aes128gcm_context(std::span<const std::byte> key)
-{
-    require_size(key, aes128_key_len, "AES-128-GCM key must be 16 bytes");
-    ctx_.reset(EVP_AEAD_CTX_new(
-        EVP_aead_aes_128_gcm(),
-        u8_data(key),
-        key.size(),
-        EVP_AEAD_DEFAULT_TAG_LENGTH));
-    if (!ctx_)
-        throw crypto_error{"failed to create AES-128-GCM context"};
-}
-
 std::optional<bytes> aes128gcm_open(
     std::span<const std::byte> key,
     std::span<const std::byte> nonce,
@@ -207,29 +200,7 @@ std::optional<bytes> aes128gcm_open(
     std::span<const std::byte> aad,
     std::span<const std::byte> ciphertext)
 {
-    if (!ctx.ctx_)
-        throw crypto_error{"AES-128-GCM context is not initialized"};
-    require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
-    if (ciphertext.size() < aes_gcm_tag_len)
-        return std::nullopt;
-
-    auto out = bytes(ciphertext.size() - aes_gcm_tag_len);
-    auto out_len = std::size_t{};
-    if (!EVP_AEAD_CTX_open(
-            ctx.ctx_.get(),
-            u8_data(out),
-            &out_len,
-            out.size(),
-            u8_data(nonce),
-            nonce.size(),
-            u8_data(ciphertext),
-            ciphertext.size(),
-            u8_data(aad),
-            aad.size()))
-        return std::nullopt;
-
-    out.resize(out_len);
-    return out;
+    return aes128gcm_open_impl(ctx, nonce, aad, ciphertext);
 }
 
 bytes aes128gcm_seal(
@@ -248,26 +219,7 @@ bytes aes128gcm_seal(
     std::span<const std::byte> aad,
     std::span<const std::byte> plaintext)
 {
-    if (!ctx.ctx_)
-        throw crypto_error{"AES-128-GCM context is not initialized"};
-    require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
-
-    auto out = bytes(plaintext.size() + aes_gcm_tag_len);
-    auto out_len = std::size_t{};
-    if (!EVP_AEAD_CTX_seal(
-            ctx.ctx_.get(),
-            u8_data(out),
-            &out_len,
-            out.size(),
-            u8_data(nonce),
-            nonce.size(),
-            u8_data(plaintext),
-            plaintext.size(),
-            u8_data(aad),
-            aad.size()))
-        throw crypto_error{"AES-128-GCM seal failed"};
-    out.resize(out_len);
-    return out;
+    return aes128gcm_seal_impl(ctx, nonce, aad, plaintext);
 }
 
 mlkem768_key_pair mlkem768_keygen()

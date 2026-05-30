@@ -107,6 +107,7 @@ nxt_core_sources = files(
   'src/nxtui/ansi.cpp',
   'src/nxtui/compositor.cpp',
   'src/nxt/crypto.cpp',
+  'src/nxt/crypto/aes128gcm.cpp',
   'src/nxt/crypto/sha256.cpp',
   'src/nxt/crypto/x25519.cpp',
   'src/nxtui/glyph-table.cpp',
