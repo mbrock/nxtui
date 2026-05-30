@@ -5,29 +5,17 @@
 
 (provide nxt-next
          TASK
-         DECK
-         FLAP
          GAME
-         BTHREAD
          CARD
          SYNC
-         MOOD
-         DAWN
-         NOON
-         DUSK
-         DEAD
-         holds
-         tries
-         picks
-         feels
          runs
-         offers
+         considers
          chooses
-         at
-         asks
+         awaits
+         posts
          waits
-         blocks
-         then)
+         halts
+         links)
 
 (module+ main
   (display (ontology->turtle nxt-next)))

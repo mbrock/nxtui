@@ -163,7 +163,7 @@ public:
                     *shared_secret, transcript));
         });
 
-        auto leaf_public_key = std::optional<nxt::tls::bytes>{};
+        auto leaf_public_key = std::optional<nxt::tls::leaf_public_key>{};
         auto saw_server_finished = false;
         while (!saw_server_finished) {
             record = co_await span("handshake_record.read", [&] {
@@ -192,7 +192,7 @@ public:
                         auto cert =
                             nxt::tls::parse_tls13_certificate(message);
                         leaf_public_key =
-                            nxt::tls::extract_p256_public_key_from_certificate(
+                            nxt::tls::extract_leaf_public_key(
                                 cert.leaf_der);
                         co_return;
                     });

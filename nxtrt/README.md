@@ -102,13 +102,16 @@ operators:
 /\ c/tries = t
 /\ c/feels ∈ NOON
 /\ d/picks = c
+/\ no ((halts ∋ c) ∩ (g/runs/awaits))
 ```
 
 `∧` and `∨` are accepted in the same positions as `/\` and `\/`.
 
 The slash operator follows a relation path, so `d/holds` is the same relation
-expression as `(d holds)`. The reader also accepts a small Unicode surface for
-the same operators:
+expression as `(d holds)`. `∩`/`&` intersect relations, and `relation ∋ value`
+or `relation ~ value` does an inverse lookup, equivalent to
+`(matching relation value)`. The reader also accepts a small Unicode surface
+for the same operators:
 
 ```racket
 ∀ d ∈ DECK, c ∈ d/picks:
@@ -145,6 +148,7 @@ These are equivalent to the prefix forms:
 in c (d holds)
 == (c tries) t
 && (in (c feels) noon) (== (d picks) c)
+no (intersect (matching halts c) (g runs awaits))
 ```
 
 Field declarations resolve overloaded properties from the enclosing signature

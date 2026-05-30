@@ -11,6 +11,7 @@
 #include <openssl/mem.h>
 #include <openssl/nid.h>
 #include <openssl/rand.h>
+#include <openssl/rsa.h>
 #include <openssl/sha.h>
 
 #include <algorithm>
@@ -74,6 +75,14 @@ struct evp_pkey_ctx_deleter
     }
 };
 
+struct evp_md_ctx_deleter
+{
+    void operator()(EVP_MD_CTX * ctx) const noexcept
+    {
+        EVP_MD_CTX_free(ctx);
+    }
+};
+
 struct ec_key_deleter
 {
     void operator()(EC_KEY * key) const noexcept
@@ -92,6 +101,21 @@ struct ec_point_deleter
 
 using evp_pkey_ptr = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>;
 using evp_pkey_ctx_ptr = std::unique_ptr<EVP_PKEY_CTX, evp_pkey_ctx_deleter>;
+using evp_md_ctx_ptr = std::unique_ptr<EVP_MD_CTX, evp_md_ctx_deleter>;
+
+const EVP_MD * digest_for_bits(unsigned digest_bits)
+{
+    switch (digest_bits) {
+    case 256:
+        return EVP_sha256();
+    case 384:
+        return EVP_sha384();
+    case 512:
+        return EVP_sha512();
+    default:
+        throw crypto_error{"unsupported RSA-PSS digest"};
+    }
+}
 
 evp_pkey_ctx_ptr mlkem768_keygen_context()
 {
@@ -409,5 +433,40 @@ bool ecdsa_p256_sha256_verify(
            == 1;
 }
 
+bool rsa_pss_verify(
+    std::span<const std::byte> spki_der,
+    std::span<const std::byte> message,
+    std::span<const std::byte> signature,
+    unsigned digest_bits)
+{
+    auto * ptr = reinterpret_cast<const unsigned char *>(spki_der.data());
+    auto key = evp_pkey_ptr{
+        d2i_PUBKEY(nullptr, &ptr, static_cast<long>(spki_der.size()))};
+    if (!key)
+        throw crypto_error{"failed to parse RSA public key"};
+    if (EVP_PKEY_base_id(key.get()) != EVP_PKEY_RSA)
+        throw crypto_error{"RSA-PSS verification requires an RSA public key"};
+
+    auto * pkey_ctx = static_cast<EVP_PKEY_CTX *>(nullptr);
+    auto md_ctx = evp_md_ctx_ptr{EVP_MD_CTX_new()};
+    if (!md_ctx)
+        throw crypto_error{"failed to create RSA-PSS verification context"};
+
+    auto * md = digest_for_bits(digest_bits);
+    if (!EVP_DigestVerifyInit(
+            md_ctx.get(), &pkey_ctx, md, nullptr, key.get()))
+        throw crypto_error{"failed to initialize RSA-PSS verification"};
+    if (!EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING))
+        throw crypto_error{"failed to configure RSA-PSS padding"};
+    if (!EVP_PKEY_CTX_set_rsa_pss_saltlen(
+            pkey_ctx, RSA_PSS_SALTLEN_DIGEST))
+        throw crypto_error{"failed to configure RSA-PSS salt length"};
+
+    if (!EVP_DigestVerifyUpdate(md_ctx.get(), u8_data(message), message.size()))
+        throw crypto_error{"failed to update RSA-PSS verification"};
+    return EVP_DigestVerifyFinal(
+        md_ctx.get(), u8_data(signature), signature.size())
+           == 1;
 }
 
+}

@@ -18,6 +18,7 @@
                     lone
                     always
                     next-state
+                    not
                     block)
          (prefix-in f: "model.rkt"))
 
@@ -30,12 +31,16 @@
          field
          one
          no
+         (rename-out [forge-not not])
          =>
          &&
          ||
          either
          conjunct
          disjunct
+         conjunct-prefix
+         disjunct-prefix
+         (rename-out [forge-block block])
          ==
          in
          join
@@ -65,8 +70,183 @@
                      [forge-next-state next-state]))
 
 (define either f:||)
-(define (conjunct expr) expr)
-(define (disjunct expr) expr)
+(define forge-and f:&&)
+(define forge-or f:||)
+(define forge-not f:not)
+
+(begin-for-syntax
+  (struct boolean-node (marker children) #:transparent)
+
+  (define (boolean-marker stx)
+    (case (syntax-e stx)
+      [(&& |/\| conjunct) 'conjunct]
+      [(\|\| |\/| disjunct) 'disjunct]
+      [else #f]))
+
+  (define (marker-head marker)
+    (case marker
+      [(conjunct) #'forge-and]
+      [(disjunct) #'forge-or]
+      [else (raise-argument-error 'marker-head "boolean marker" marker)]))
+
+  (define (trailing-block pieces)
+    (and (pair? pieces)
+         (let ([block-pieces (syntax->list (last pieces))])
+           (and block-pieces
+                (pair? block-pieces)
+                (eq? (syntax-e (car block-pieces)) 'block)
+                (datum->syntax (last pieces)
+                               (cdr block-pieces)
+                               (last pieces)
+                               (last pieces))))))
+
+  (define (drop-trailing-block pieces)
+    (if (trailing-block pieces)
+        (drop-right pieces 1)
+        pieces))
+
+  (define (syntax-list* ctx pieces)
+    (datum->syntax ctx pieces ctx ctx))
+
+  (define (rewrite-infix-stx ctx pieces)
+    #`(#%rewrite-infix #,(syntax-list* ctx pieces)))
+
+  (define (line->boolean-node ctx pieces #:rewrite [rewrite rewrite-infix-stx])
+    (let loop ([markers '()]
+               [remaining pieces])
+      (cond
+        [(and (pair? remaining) (boolean-marker (car remaining)))
+         (loop (append markers (list (boolean-marker (car remaining))))
+               (cdr remaining))]
+        [else
+         (define children (trailing-block remaining))
+         (define expr-pieces (drop-trailing-block remaining))
+         (define leaf (rewrite ctx expr-pieces))
+         (define node
+           (for/fold ([inner leaf]) ([marker (in-list (reverse markers))])
+             (boolean-node marker (list inner))))
+         (if children
+             (for/fold ([current node])
+                       ([child (in-list (syntax->list children))])
+               (insert-boolean-child
+                current
+                (line->boolean-node child (syntax->list child) #:rewrite rewrite)))
+             node)])))
+
+  (define (insert-boolean-child node child)
+    (define target (and (boolean-node? child) (boolean-node-marker child)))
+    (define-values (updated inserted?) (insert-boolean-child* node target child))
+    (if inserted?
+        updated
+        (if (boolean-node? node)
+            (boolean-node (boolean-node-marker node)
+                          (append (boolean-node-children node) (list child)))
+            child)))
+
+  (define (insert-boolean-child* node target child)
+    (cond
+      [(not (boolean-node? node)) (values node #f)]
+      [else
+       (let loop ([seen '()]
+                  [remaining (reverse (boolean-node-children node))])
+         (cond
+           [(null? remaining)
+            (if (eq? (boolean-node-marker node) target)
+                (values (boolean-node (boolean-node-marker node)
+                                      (append (boolean-node-children node) (list child)))
+                        #t)
+                (values node #f))]
+           [else
+            (define-values (updated-child inserted?)
+              (insert-boolean-child* (car remaining) target child))
+            (if inserted?
+                (values (boolean-node (boolean-node-marker node)
+                                      (append (reverse (cdr remaining))
+                                              (list updated-child)
+                                              seen))
+                        #t)
+                (loop (cons (car remaining) seen) (cdr remaining)))]))]))
+
+  (define (boolean-node->syntax node)
+    (cond
+      [(boolean-node? node)
+       (with-syntax ([head (marker-head (boolean-node-marker node))]
+                     [(child ...) (map boolean-node->syntax (boolean-node-children node))])
+         #'(head child ...))]
+      [else node]))
+
+  (define (lamport-boolean-chain? stx)
+    (define pieces (syntax->list stx))
+    (and pieces
+         (pair? pieces)
+         (boolean-marker (car pieces))
+         (pair? (cdr pieces))
+         (boolean-marker (cadr pieces))))
+
+  (define (rewrite-forge-block-clause clause)
+    (if (lamport-boolean-chain? clause)
+        (boolean-node->syntax (line->boolean-node clause (syntax->list clause)))
+        #`(#%rewrite-infix #,clause)))
+
+  (define (marked-clause marker stx)
+    (syntax-parse stx
+      [(head body)
+       #:when (eq? (syntax-e #'head) marker)
+       #'body]
+      [_ #f]))
+
+  (define (marked-block body-stx)
+    (define body (syntax->list body-stx))
+    (define conjuncts (map (lambda (clause) (marked-clause 'conjunct clause)) body))
+    (define disjuncts (map (lambda (clause) (marked-clause 'disjunct clause)) body))
+    (cond
+      [(and (pair? conjuncts) (andmap values conjuncts))
+       #`(f:&& #,@conjuncts)]
+      [(and (pair? disjuncts) (andmap values disjuncts))
+       #`(f:|| #,@disjuncts)]
+      [else
+       #`(f:block #,@body)])))
+
+(define-syntax (forge-block stx)
+  (syntax-parse stx
+    [(_ body ...)
+     #`(f:block #,@(map rewrite-forge-block-clause (syntax->list #'(body ...))))]))
+
+(define-syntax (conjunct stx)
+  (syntax-parse stx
+    [(_ ((~datum block) body ...))
+     (marked-block #'(body ...))]
+    [(_ body)
+     #'body]))
+
+(define-syntax (disjunct stx)
+  (syntax-parse stx
+    [(_ ((~datum block) body ...))
+     (marked-block #'(body ...))]
+    [(_ body)
+     #'body]))
+
+(define-syntax (conjunct-prefix stx parse)
+  (define rest (cdr (syntax->list stx)))
+  (if (and (pair? rest) (boolean-marker (car rest)))
+      (boolean-node->syntax
+       (line->boolean-node stx
+                           (cons #'&& rest)
+                           #:rewrite (lambda (ctx pieces)
+                                       (parse (datum->syntax ctx pieces ctx ctx)))))
+      (with-syntax ([body (parse (datum->syntax stx rest stx stx))])
+        #'(forge-and body))))
+
+(define-syntax (disjunct-prefix stx parse)
+  (define rest (cdr (syntax->list stx)))
+  (if (and (pair? rest) (boolean-marker (car rest)))
+      (boolean-node->syntax
+       (line->boolean-node stx
+                           (cons #'\|\| rest)
+                           #:rewrite (lambda (ctx pieces)
+                                       (parse (datum->syntax ctx pieces ctx ctx)))))
+      (with-syntax ([body (parse (datum->syntax stx rest stx stx))])
+        #'(forge-or body))))
 
 (define-for-syntax (runtime-ref stx)
   (syntax-parse stx
@@ -192,8 +372,8 @@
 
 (define-syntax (forge-body stx)
   (syntax-parse stx
-    [(_ ((~datum block) body:expr ...))
-     #'(f:block body ...)]
+    [(_ ((~datum block) body ...))
+     #`(f:block #,@(map rewrite-forge-block-clause (syntax->list #'(body ...))))]
     [(_ body:expr)
      #'body]))
 
@@ -398,10 +578,9 @@
     (define bindings
       (for/list ([group (in-list binding-groups)])
         (parse-quantifier-binding group parse stx)))
-    (define body-expr (parse body))
     (with-syntax ([(var ...) (map first bindings)]
                   [(set ...) (map second bindings)]
-                  [body body-expr])
+                  [body body])
       (case kind
         [(all)
          #'(f:all ([var set] ...) (forge-body body))]

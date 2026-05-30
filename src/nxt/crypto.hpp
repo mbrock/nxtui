@@ -90,6 +90,10 @@ mlkem768_decaps(
     std::span<const std::byte> public_key,
     std::span<const std::byte> message,
     std::span<const std::byte> der_signature);
+[[nodiscard]] bool rsa_pss_verify(
+    std::span<const std::byte> spki_der,
+    std::span<const std::byte> message,
+    std::span<const std::byte> signature,
+    unsigned digest_bits);
 
 }
-

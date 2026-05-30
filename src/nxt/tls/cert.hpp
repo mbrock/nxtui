@@ -48,6 +48,19 @@ struct tls13_certificate_verify
     bytes signature;
 };
 
+enum class leaf_public_key_kind
+{
+    p256,
+    rsa,
+};
+
+struct leaf_public_key
+{
+    leaf_public_key_kind kind = leaf_public_key_kind::p256;
+    bytes ec_point;
+    bytes spki_der;
+};
+
 inline tls13_certificate
 parse_tls13_certificate(std::span<const std::byte> message)
 {
@@ -99,8 +112,8 @@ parse_tls13_certificate_verify(std::span<const std::byte> message)
     };
 }
 
-inline bytes
-extract_p256_public_key_from_certificate(std::span<const std::byte> der)
+inline leaf_public_key
+extract_leaf_public_key(std::span<const std::byte> der)
 {
     auto * ptr = reinterpret_cast<const unsigned char *>(der.data());
     auto cert = std::unique_ptr<X509, x509_deleter>{
@@ -110,9 +123,23 @@ extract_p256_public_key_from_certificate(std::span<const std::byte> der)
     auto key = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>{
         X509_get_pubkey(cert.get())};
     require_tls(key != nullptr, "leaf certificate has no public key");
+
+    auto spki_len = i2d_PUBKEY(key.get(), nullptr);
+    require_tls(spki_len > 0, "failed to measure leaf public key");
+    auto out = leaf_public_key{};
+    out.spki_der.resize(static_cast<std::size_t>(spki_len));
+    auto * spki_ptr = reinterpret_cast<unsigned char *>(out.spki_der.data());
+    auto written = i2d_PUBKEY(key.get(), &spki_ptr);
+    require_tls(written == spki_len, "failed to encode leaf public key");
+
+    if (EVP_PKEY_base_id(key.get()) == EVP_PKEY_RSA) {
+        out.kind = leaf_public_key_kind::rsa;
+        return out;
+    }
+
     require_tls(
         EVP_PKEY_base_id(key.get()) == EVP_PKEY_EC,
-        "leaf certificate public key is not EC");
+        "leaf certificate public key is not EC or RSA");
 
     auto ec_key = std::unique_ptr<EC_KEY, ec_key_deleter>{
         EVP_PKEY_get1_EC_KEY(key.get())};
@@ -131,15 +158,18 @@ extract_p256_public_key_from_certificate(std::span<const std::byte> der)
         group, point, POINT_CONVERSION_UNCOMPRESSED, nullptr, 0, nullptr);
     require_tls(len > 0, "failed to measure P-256 public key");
 
-    auto out = bytes(len);
-    auto written = EC_POINT_point2oct(
+    out.kind = leaf_public_key_kind::p256;
+    out.ec_point.resize(len);
+    auto ec_written = EC_POINT_point2oct(
         group,
         point,
         POINT_CONVERSION_UNCOMPRESSED,
-        reinterpret_cast<unsigned char *>(out.data()),
-        out.size(),
+        reinterpret_cast<unsigned char *>(out.ec_point.data()),
+        out.ec_point.size(),
         nullptr);
-    require_tls(written == out.size(), "failed to encode P-256 public key");
+    require_tls(
+        ec_written == out.ec_point.size(),
+        "failed to encode P-256 public key");
     return out;
 }
 
@@ -155,17 +185,43 @@ certificate_verify_message(std::span<const std::byte> transcript)
 }
 
 inline bool verify_certificate_verify(
-    std::span<const std::byte> p256_public_key,
+    leaf_public_key const & leaf,
     std::span<const std::byte> transcript_through_certificate,
     tls13_certificate_verify const & certificate_verify)
 {
-    require_tls(
-        certificate_verify.scheme == 0x0403,
-        "server used an unsupported CertificateVerify signature scheme");
     auto message =
         certificate_verify_message(transcript_through_certificate);
-    return nxt::crypto::ecdsa_p256_sha256_verify(
-        p256_public_key, message, certificate_verify.signature);
+    switch (certificate_verify.scheme) {
+    case 0x0403:
+        require_tls(
+            leaf.kind == leaf_public_key_kind::p256,
+            "server used ECDSA CertificateVerify with a non-P-256 leaf");
+        return nxt::crypto::ecdsa_p256_sha256_verify(
+            leaf.ec_point, message, certificate_verify.signature);
+    case 0x0804:
+        require_tls(
+            leaf.kind == leaf_public_key_kind::rsa,
+            "server used RSA-PSS CertificateVerify with a non-RSA leaf");
+        return nxt::crypto::rsa_pss_verify(
+            leaf.spki_der, message, certificate_verify.signature, 256);
+    case 0x0805:
+        require_tls(
+            leaf.kind == leaf_public_key_kind::rsa,
+            "server used RSA-PSS CertificateVerify with a non-RSA leaf");
+        return nxt::crypto::rsa_pss_verify(
+            leaf.spki_der, message, certificate_verify.signature, 384);
+    case 0x0806:
+        require_tls(
+            leaf.kind == leaf_public_key_kind::rsa,
+            "server used RSA-PSS CertificateVerify with a non-RSA leaf");
+        return nxt::crypto::rsa_pss_verify(
+            leaf.spki_der, message, certificate_verify.signature, 512);
+    default:
+        require_tls(
+            false,
+            "server used an unsupported CertificateVerify signature scheme");
+    }
+    return false;
 }
 
 } // namespace nxt::tls

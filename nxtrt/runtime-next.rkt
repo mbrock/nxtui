@@ -21,28 +21,32 @@ model runtime-next-model
   nxt-next
 
   predicate P4
-    ∀ g ∈ GAME, c ∈ g/chooses:
-      ∧ c ∈ g/considers
-      ∧ ∃ b ∈ g/runs:
-        ∧ c ∈ b/awaits/posts
-        ∧ no (intersect (matching halts c) (g/runs/awaits))
+    ∀ game ∈ GAME, card ∈ game/chooses:
+      ∧ card ∈ game/considers
+      ∧ ∃ task ∈ game/runs:
+        ∧ card ∈ task/awaits/posts
+        ∧ no ((halts ∋ card) ∩ (game/runs/awaits))
 
   predicate P5
     ∀ game ∈ GAME, task ∈ game/runs, sync ∈ task/awaits, card ∈ game/chooses:
       next-state
-        ∧ (card ∈ sync/posts ∨ card ∈ sync/waits) ⇒ task/awaits = sync/links
-        ∧ (no (intersect card (sync/posts)) ∧ no (intersect card (sync/waits))) ⇒ task/awaits = sync
+        ∧ ∨ ∧ no (card ∩ sync/posts)
+            ∧ no (card ∩ sync/waits)
+          ∨ task/awaits = sync/links
+        ∧ ∨ card ∈ sync/posts
+          ∨ card ∈ sync/waits
+          ∨ task/awaits = sync
 
   predicate P6
-    ∃ g ∈ GAME, b ∈ g/runs, c ∈ CARD, s1 ∈ SYNC, s2 ∈ SYNC:
-      ∧ c ∈ g/considers
-      ∧ g/runs = TASK
-      ∧ b/awaits = s1
-      ∧ s1/links = s2
-      ∧ no (intersect s1 s2)
-      ∧ c ∈ s1/posts
-      ∧ no (intersect (matching halts c) (g/runs/awaits))
-      ∧ g/chooses = c
+    ∃ game ∈ GAME, task ∈ game/runs, card ∈ CARD, before ∈ SYNC, after ∈ SYNC:
+      ∧ card ∈ game/considers
+      ∧ game/runs = TASK
+      ∧ task/awaits = before
+      ∧ before/links = after
+      ∧ no (before ∩ after)
+      ∧ card ∈ before/posts
+      ∧ no ((halts ∋ card) ∩ (game/runs/awaits))
+      ∧ game/chooses = card
 
   run R3:
     exactly 1 of GAME, CARD

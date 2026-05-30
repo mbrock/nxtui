@@ -40,6 +40,7 @@
  lone
  one
  no
+ not
  =>
  &&
  ||
@@ -87,6 +88,9 @@
 
 (define (no expr)
   (forge-expr 'no (list expr)))
+
+(define (not expr)
+  (forge-expr 'not (list expr)))
 
 (define (=> left right)
   (forge-expr '=> (list left right)))
@@ -539,6 +543,7 @@
        ['block (apply f:&&/func (map compile-arg args))]
        ['one (f:one/func (compile-arg (first args)))]
        ['no (f:no/func (compile-arg (first args)))]
+       ['not (f:!/func (compile-arg (first args)))]
        ['some (f:some/func (compile-arg (first args)))]
        ['lone (f:lone/func (compile-arg (first args)))]
        ['=> (f:=>/func (compile-arg (first args)) (compile-arg (second args)))]
