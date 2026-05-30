@@ -4,6 +4,7 @@ project('nxtui', 'cpp', 'c',
     'cpp_std=c++23',
     'warning_level=2',
     'buildtype=debug',
+    'default_library=shared',
   ],
   meson_version : '>= 1.1',
 )
@@ -69,7 +70,7 @@ nxt_libvterm_sources = files(
   'vendor/libvterm/src/vterm.c',
 )
 
-nxt_libvterm = static_library('vterm',
+nxt_libvterm = library('vterm',
   nxt_libvterm_sources,
   include_directories : include_directories(
     'vendor/libvterm/include',
@@ -106,7 +107,7 @@ nxt_core_sources = files(
   'src/nxtui/raster.cpp',
 )
 
-nxt_core_lib = static_library('nxt-core',
+nxt_core_lib = library('nxt-core',
   nxt_core_sources,
   include_directories : nxt_inc,
   dependencies : nxt_core_deps,
