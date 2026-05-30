@@ -546,6 +546,7 @@ struct tls13_read_keys
     std::array<std::byte, nxt::crypto::sha256_len> traffic_secret{};
     bytes key;
     bytes iv;
+    nxt::crypto::aes128gcm_context aead;
     std::uint64_t sequence = 0;
 };
 
@@ -565,12 +566,15 @@ struct tls13_application_keys
 inline tls13_read_keys derive_traffic_keys(
     std::array<std::byte, nxt::crypto::sha256_len> traffic_secret)
 {
+    auto key = hkdf_expand_label(
+        traffic_secret, "key", {}, nxt::crypto::aes128_key_len);
+    auto iv = hkdf_expand_label(
+        traffic_secret, "iv", {}, nxt::crypto::aes_gcm_nonce_len);
     return tls13_read_keys{
         .traffic_secret = traffic_secret,
-        .key = hkdf_expand_label(
-            traffic_secret, "key", {}, nxt::crypto::aes128_key_len),
-        .iv = hkdf_expand_label(
-            traffic_secret, "iv", {}, nxt::crypto::aes_gcm_nonce_len),
+        .key = key,
+        .iv = std::move(iv),
+        .aead = nxt::crypto::aes128gcm_context{key},
         .sequence = 0,
     };
 }
@@ -614,19 +618,36 @@ inline tls13_application_keys derive_tls13_application_keys(
     };
 }
 
-inline bytes tls13_record_aad(tls_record const & record)
+inline std::array<std::byte, 5> tls13_record_aad(
+    std::uint8_t type,
+    std::uint16_t version,
+    std::uint16_t length)
 {
-    auto aad = bytes{};
-    put_u8(aad, record.type);
-    put_u16(aad, record.version);
-    put_u16(aad, static_cast<std::uint16_t>(record.payload.size()));
-    return aad;
+    return {
+        static_cast<std::byte>(type),
+        static_cast<std::byte>(version >> 8),
+        static_cast<std::byte>(version),
+        static_cast<std::byte>(length >> 8),
+        static_cast<std::byte>(length),
+    };
 }
 
-inline bytes
+inline std::array<std::byte, 5> tls13_record_aad(tls_record const & record)
+{
+    return tls13_record_aad(
+        record.type,
+        record.version,
+        static_cast<std::uint16_t>(record.payload.size()));
+}
+
+inline std::array<std::byte, nxt::crypto::aes_gcm_nonce_len>
 tls13_record_nonce(std::span<const std::byte> iv, std::uint64_t sequence)
 {
-    auto nonce = bytes{iv.begin(), iv.end()};
+    require_tls(
+        iv.size() == nxt::crypto::aes_gcm_nonce_len,
+        "TLS record IV has the wrong length");
+    auto nonce = std::array<std::byte, nxt::crypto::aes_gcm_nonce_len>{};
+    std::ranges::copy(iv, nonce.begin());
     for (auto i = 0; i < 8; ++i) {
         auto shift = static_cast<unsigned>((7 - i) * 8);
         nonce[nonce.size() - 8 + i] ^=
@@ -649,7 +670,7 @@ open_tls13_record(tls13_read_keys & keys, tls_record const & record)
     auto aad = tls13_record_aad(record);
     auto nonce = tls13_record_nonce(keys.iv, keys.sequence++);
     auto plaintext =
-        nxt::crypto::aes128gcm_open(keys.key, nonce, aad, record.payload);
+        nxt::crypto::aes128gcm_open(keys.aead, nonce, aad, record.payload);
     require_tls(plaintext.has_value(), "failed to decrypt TLS record");
 
     while (!plaintext->empty() && plaintext->back() == std::byte{0})
@@ -673,17 +694,15 @@ inline bytes seal_tls13_record(
     auto inner = bytes{content.begin(), content.end()};
     put_u8(inner, inner_type);
 
-    auto aad = bytes{};
-    put_u8(aad, 23);
-    put_u16(aad, 0x0303);
-    put_u16(
-        aad,
+    auto aad = tls13_record_aad(
+        23,
+        0x0303,
         static_cast<std::uint16_t>(
             inner.size() + nxt::crypto::aes_gcm_tag_len));
 
     auto nonce = tls13_record_nonce(keys.iv, keys.sequence++);
     auto ciphertext =
-        nxt::crypto::aes128gcm_seal(keys.key, nonce, aad, inner);
+        nxt::crypto::aes128gcm_seal(keys.aead, nonce, aad, inner);
 
     auto record = bytes{};
     put_bytes(record, aad);

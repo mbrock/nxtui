@@ -22,6 +22,8 @@
 
 namespace {
 
+constexpr auto openai_sse_body_buffer_size = std::size_t{1024 * 1024};
+
 struct cli_options
 {
     std::string model = "gpt-5.4-mini";
@@ -538,7 +540,10 @@ private:
 
         auto head = co_await open_response_stream(tls, request_text);
 
-        auto body = nxtrt::http::response_body_decoding_reader{tls, head};
+        auto body = nxtrt::http::response_body_decoding_reader{
+            tls,
+            head,
+            openai_sse_body_buffer_size};
         auto events = nxtrt::http::sse_event_parser(body);
 
         auto transcript = breadcrumb_output{output};

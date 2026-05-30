@@ -14,9 +14,9 @@
 #include <nxt/json.hpp>
 
 #if defined(__linux__)
-#  include <nxtrt/uring_wand.hpp>
+#  include <nxtrt/wand/uring.hpp>
 #else
-#  include <nxtrt/kqueue_wand.hpp>
+#  include <nxtrt/wand/kqueue.hpp>
 #endif
 
 #include <charconv>
@@ -32,6 +32,8 @@
 #include <vector>
 
 namespace {
+
+constexpr auto openai_sse_body_buffer_size = std::size_t{1024 * 1024};
 
 struct cli_options
 {
@@ -185,7 +187,7 @@ class tls_handshake_event_tx
 {
 public:
     explicit tls_handshake_event_tx(
-        nxtrt::wire<tls_handshake_event>::tx_side events) noexcept
+        nxtrt::wire_tx<tls_handshake_event> & events) noexcept
         : events_(events)
     {}
 
@@ -202,15 +204,16 @@ public:
     }
 
 private:
-    nxtrt::wire<tls_handshake_event>::tx_side events_;
+    nxtrt::wire_tx<tls_handshake_event> & events_;
 };
 
 nxtrt::task<void> print_tls_handshake_events(
-    nxtrt::wire<tls_handshake_event>::rx_side events)
+    nxtrt::wire_rx<tls_handshake_event> & events)
 {
-    auto out = nxtrt::standard_output_writer(4096);
+    auto out = nxtrt::standard_output_sink(4096);
     while (auto event = co_await events.next()) {
-        co_await out.print(
+        co_await nxtrt::print(
+            out,
             "tls: {} {}\n",
             tls_handshake_event_kind_name(event->kind),
             event->name);
@@ -219,17 +222,17 @@ nxtrt::task<void> print_tls_handshake_events(
 }
 
 nxtrt::task<void> write_sse_event(
-    nxtrt::byte_writer & out,
+    nxtrt::bytesink & out,
     const nxtrt::http::server_sent_event & event)
 {
-    co_await out.print("event: {}\n", event.type);
+    co_await nxtrt::print(out, "event: {}\n", event.type);
     if (!event.id.empty())
-        co_await out.print("id: {}\n", event.id);
+        co_await nxtrt::print(out, "id: {}\n", event.id);
     if (event.retry_ms)
-        co_await out.print("retry: {}\n", *event.retry_ms);
-    co_await out.write(std::string_view{"data: "});
-    co_await out.write(event.data);
-    co_await out.write(std::string_view{"\n\n"});
+        co_await nxtrt::print(out, "retry: {}\n", *event.retry_ms);
+    co_await nxtrt::write(out, std::string_view{"data: "});
+    co_await nxtrt::write(out, std::string_view{event.data});
+    co_await nxtrt::write(out, std::string_view{"\n\n"});
     co_await out.flush();
 }
 
@@ -252,8 +255,10 @@ nxtrt::task<void> stream_openai_sse_with_firm(
         std::size_t{64 * 1024},
     };
 
-    auto tls_events = nxtrt::wire<tls_handshake_event>{128};
-    auto tls_tx = tls_events.tx();
+    auto tls_event_storage = std::array<tls_handshake_event, 128>{};
+    auto tls_events =
+        nxtrt::wire<tls_handshake_event>{std::span{tls_event_storage}};
+    auto & tls_tx = tls_events.tx();
     nxtrt::fork(print_tls_handshake_events(tls_events.rx()));
     try {
         co_await tls.handshake(
@@ -278,8 +283,11 @@ nxtrt::task<void> stream_openai_sse_with_firm(
         throw nxtrt::runtime_error{
             "OpenAI Responses expected text/event-stream"};
 
-    auto body = nxtrt::http::response_body_decoding_reader(tls, head);
-    auto stdout_writer = nxtrt::standard_output_writer(64 * 1024);
+    auto body = nxtrt::http::response_body_decoding_reader(
+        tls,
+        head,
+        openai_sse_body_buffer_size);
+    auto stdout_writer = nxtrt::standard_output_sink(64 * 1024);
     while (auto event = co_await nxtrt::http::parse_sse_event(body)) {
         co_await write_sse_event(stdout_writer, *event);
         if (event->data == "[DONE]")

@@ -51,14 +51,6 @@ void require_size(
         throw crypto_error{name};
 }
 
-struct aead_ctx_deleter
-{
-    void operator()(EVP_AEAD_CTX * ctx) const noexcept
-    {
-        EVP_AEAD_CTX_free(ctx);
-    }
-};
-
 struct evp_pkey_deleter
 {
     void operator()(EVP_PKEY * key) const noexcept
@@ -208,30 +200,49 @@ bytes hkdf_expand_sha256(
     return out;
 }
 
+void aes128gcm_context::deleter::operator()(EVP_AEAD_CTX * ctx) const noexcept
+{
+    EVP_AEAD_CTX_free(ctx);
+}
+
+aes128gcm_context::aes128gcm_context(std::span<const std::byte> key)
+{
+    require_size(key, aes128_key_len, "AES-128-GCM key must be 16 bytes");
+    ctx_.reset(EVP_AEAD_CTX_new(
+        EVP_aead_aes_128_gcm(),
+        u8_data(key),
+        key.size(),
+        EVP_AEAD_DEFAULT_TAG_LENGTH));
+    if (!ctx_)
+        throw crypto_error{"failed to create AES-128-GCM context"};
+}
+
 std::optional<bytes> aes128gcm_open(
     std::span<const std::byte> key,
     std::span<const std::byte> nonce,
     std::span<const std::byte> aad,
     std::span<const std::byte> ciphertext)
 {
-    require_size(key, aes128_key_len, "AES-128-GCM key must be 16 bytes");
+    auto ctx = aes128gcm_context{key};
+    return aes128gcm_open(ctx, nonce, aad, ciphertext);
+}
+
+std::optional<bytes> aes128gcm_open(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<const std::byte> ciphertext)
+{
+    if (!ctx.ctx_)
+        throw crypto_error{"AES-128-GCM context is not initialized"};
     require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
     if (ciphertext.size() < aes_gcm_tag_len)
         return std::nullopt;
 
-    auto ctx = std::unique_ptr<EVP_AEAD_CTX, aead_ctx_deleter>{
-        EVP_AEAD_CTX_new(
-            EVP_aead_aes_128_gcm(),
-            u8_data(key),
-            key.size(),
-            EVP_AEAD_DEFAULT_TAG_LENGTH)};
-    if (!ctx)
-        throw crypto_error{"failed to create AES-128-GCM context"};
-
     auto out = bytes(ciphertext.size() - aes_gcm_tag_len);
     auto out_len = std::size_t{};
     if (!EVP_AEAD_CTX_open(
-            ctx.get(),
+            ctx.ctx_.get(),
             u8_data(out),
             &out_len,
             out.size(),
@@ -253,22 +264,24 @@ bytes aes128gcm_seal(
     std::span<const std::byte> aad,
     std::span<const std::byte> plaintext)
 {
-    require_size(key, aes128_key_len, "AES-128-GCM key must be 16 bytes");
-    require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
+    auto ctx = aes128gcm_context{key};
+    return aes128gcm_seal(ctx, nonce, aad, plaintext);
+}
 
-    auto ctx = std::unique_ptr<EVP_AEAD_CTX, aead_ctx_deleter>{
-        EVP_AEAD_CTX_new(
-            EVP_aead_aes_128_gcm(),
-            u8_data(key),
-            key.size(),
-            EVP_AEAD_DEFAULT_TAG_LENGTH)};
-    if (!ctx)
-        throw crypto_error{"failed to create AES-128-GCM context"};
+bytes aes128gcm_seal(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<const std::byte> plaintext)
+{
+    if (!ctx.ctx_)
+        throw crypto_error{"AES-128-GCM context is not initialized"};
+    require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
 
     auto out = bytes(plaintext.size() + aes_gcm_tag_len);
     auto out_len = std::size_t{};
     if (!EVP_AEAD_CTX_seal(
-            ctx.get(),
+            ctx.ctx_.get(),
             u8_data(out),
             &out_len,
             out.size(),

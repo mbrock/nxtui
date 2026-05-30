@@ -2,10 +2,13 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <vector>
+
+#include <openssl/base.h>
 
 namespace nxt::crypto {
 
@@ -45,6 +48,38 @@ struct mlkem768_encapsulation
     std::array<std::byte, mlkem768_shared_secret_len> shared_secret{};
 };
 
+class aes128gcm_context
+{
+public:
+    aes128gcm_context() = default;
+    explicit aes128gcm_context(std::span<const std::byte> key);
+
+    aes128gcm_context(const aes128gcm_context &) = delete;
+    aes128gcm_context & operator=(const aes128gcm_context &) = delete;
+
+    aes128gcm_context(aes128gcm_context &&) noexcept = default;
+    aes128gcm_context & operator=(aes128gcm_context &&) noexcept = default;
+
+private:
+    struct deleter
+    {
+        void operator()(EVP_AEAD_CTX * ctx) const noexcept;
+    };
+
+    friend std::optional<bytes> aes128gcm_open(
+        const aes128gcm_context & ctx,
+        std::span<const std::byte> nonce,
+        std::span<const std::byte> aad,
+        std::span<const std::byte> ciphertext);
+    friend bytes aes128gcm_seal(
+        const aes128gcm_context & ctx,
+        std::span<const std::byte> nonce,
+        std::span<const std::byte> aad,
+        std::span<const std::byte> plaintext);
+
+    std::unique_ptr<EVP_AEAD_CTX, deleter> ctx_;
+};
+
 void random(std::span<std::byte> out);
 [[nodiscard]] bytes random(std::size_t len);
 
@@ -67,8 +102,18 @@ void random(std::span<std::byte> out);
     std::span<const std::byte> nonce,
     std::span<const std::byte> aad,
     std::span<const std::byte> ciphertext);
+[[nodiscard]] std::optional<bytes> aes128gcm_open(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<const std::byte> ciphertext);
 [[nodiscard]] bytes aes128gcm_seal(
     std::span<const std::byte> key,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<const std::byte> plaintext);
+[[nodiscard]] bytes aes128gcm_seal(
+    const aes128gcm_context & ctx,
     std::span<const std::byte> nonce,
     std::span<const std::byte> aad,
     std::span<const std::byte> plaintext);
