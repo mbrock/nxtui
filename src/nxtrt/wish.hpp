@@ -1,18 +1,12 @@
 #pragma once
 
-#include "nxtrt/debug.hpp"
-#include "nxtrt/exceptions.hpp"
 #include "nxtrt/trace.hpp"
 
 #include <algorithm>
 #include <array>
 #include <concepts>
-#include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
-#include <memory>
-#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>

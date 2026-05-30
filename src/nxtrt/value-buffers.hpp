@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxtrt/buffer-core.hpp"
+#include "nxtrt/deck.hpp"
 #include "nxtrt/task.hpp"
 
 #include <algorithm>
@@ -18,6 +19,8 @@
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>

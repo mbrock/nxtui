@@ -1,13 +1,14 @@
 #pragma once
 
 #include "nxtrt/buffer-core.hpp"
+#include "nxtrt/exceptions.hpp"
 #include "nxtrt/task.hpp"
 #include "nxtrt/value-buffers.hpp"
+#include "nxtrt/wish_ops.hpp"
 
 #include <concepts>
 #include <cstddef>
 #include <cstring>
-#include <format>
 #include <limits>
 #include <ranges>
 #include <span>
@@ -16,7 +17,6 @@
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
-#include <vector>
 
 namespace nxtrt {
 

@@ -7,7 +7,6 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
@@ -15,14 +14,15 @@
 #include <span>
 #include <string>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <variant>
 #include <vector>
 
 #if defined(__linux__)
+#include <linux/stat.h>
 #include <linux/time_types.h>
+#else
+#include <cstdint>
 #endif
 
 namespace nxtrt {
@@ -190,7 +190,7 @@ struct spawn_pty : wish<pty_child, "spawn-pty">
 struct wait_child : wish<child_result, "wait-child">
 {
     int pidfd = -1;
-    siginfo_t info{};
+    siginfo_t info{}; // NOLINT(misc-include-cleaner)
 
     auto args() const
     {
@@ -264,7 +264,7 @@ struct connect : wish<void, "connect">
 {
     int fd = -1;
     sockaddr_storage address{};
-    socklen_t address_size = 0;
+    socklen_t address_size = 0; // NOLINT(misc-include-cleaner)
 
     auto args() const
     {

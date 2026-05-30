@@ -277,7 +277,6 @@ using breadcrumb = std::vector<std::string_view>;
 struct breadcrumb_key
 {
     using value_type = breadcrumb;
-    static constexpr auto name = "breadcrumb";
 };
 
 breadcrumb current_breadcrumb()
