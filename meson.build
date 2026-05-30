@@ -10,6 +10,14 @@ project('nxtui', 'cpp', 'c',
 
 cmake = import('cmake')
 
+nxt_section_args = [
+  '-ffunction-sections',
+  '-fdata-sections',
+]
+
+add_project_arguments(nxt_section_args, language : ['c', 'cpp'])
+add_project_link_arguments('-Wl,--gc-sections', language : ['cpp'])
+
 nxt_awslc_options = cmake.subproject_options()
 nxt_awslc_options.add_cmake_defines({
   'BUILD_LIBSSL': false,
@@ -17,6 +25,8 @@ nxt_awslc_options.add_cmake_defines({
   'BUILD_TOOL': false,
   'DISABLE_GO': true,
   'DISABLE_PERL': true,
+  'CMAKE_C_FLAGS': ' '.join(nxt_section_args),
+  'CMAKE_CXX_FLAGS': ' '.join(nxt_section_args),
 })
 
 nxt_awslc_project = cmake.subproject(

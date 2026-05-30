@@ -16,9 +16,9 @@
 #include <nxtrt/tls.hpp>
 
 #if defined(__linux__)
-#  include <nxtrt/uring_wand.hpp>
+#  include <nxtrt/wand/uring.hpp>
 #else
-#  include <nxtrt/kqueue_wand.hpp>
+#  include <nxtrt/wand/kqueue.hpp>
 #endif
 
 #include <cstddef>
@@ -73,7 +73,7 @@ void report_head(const nxtrt::http::response_head & head)
 
 // Drain a fully-assembled body reader (already de-chunked and decompressed) to
 // stdout, returning the number of decoded bytes.
-nxtrt::task<std::size_t> drain_to_stdout(nxtrt::byte_reader & body)
+nxtrt::task<std::size_t> drain_to_stdout(nxtrt::bytefeed & body)
 {
     auto out = nxtrt::standard_output(64 * 1024);
     co_return co_await nxtrt::stream_all(body, out);
@@ -93,14 +93,14 @@ nxtrt::task<void> fetch(nxtrt::http::url url)
     // The transport reader is the TLS session for https, or the raw socket for
     // http. Either way it is just a byte_reader to everything above.
     auto tls = std::optional<nxtrt::tls::tls13_client_session>{};
-    auto * transport = static_cast<nxtrt::byte_reader *>(&source);
+    auto * transport = static_cast<nxtrt::bytefeed *>(&source);
     if (url.tls) {
         tls.emplace(source, sink, std::size_t{64 * 1024});
         co_await tls->handshake(url.host);
         co_await tls->write_all(request_text);
         transport = &*tls;
     } else {
-        co_await sink.write(request_text);
+        co_await nxtrt::write(sink, std::string_view{request_text});
         co_await sink.flush();
     }
 
