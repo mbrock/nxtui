@@ -17,6 +17,8 @@ nxt_section_args = [
 add_project_arguments(nxt_section_args, language : ['c', 'cpp'])
 add_project_link_arguments('-Wl,--gc-sections', language : ['cpp'])
 
+cpp = meson.get_compiler('cpp')
+
 utf8proc_dep = dependency(
   'libutf8proc',
   fallback : ['utf8proc', 'utf8proc_dep'],
@@ -24,7 +26,7 @@ utf8proc_dep = dependency(
 )
 
 zlib_dep = dependency('zlib')
-zstd_dep = dependency('libzstd', required : false)
+zstd_dep = cpp.find_library('zstd', required : false)
 brotli_dep = dependency('libbrotlidec', required : false)
 cares_dep = dependency('libcares', required : get_option('cares'))
 
@@ -33,7 +35,7 @@ nxt_compression_args = []
 nxt_dns_deps = []
 nxt_dns_args = []
 
-if zstd_dep.found()
+if zstd_dep.found() and cpp.has_header('zstd.h')
   message('zstd decompression available')
   nxt_compression_deps += zstd_dep
   nxt_compression_args += '-DNXTRT_HAVE_ZSTD=1'
@@ -125,9 +127,11 @@ nxt_core_dep = declare_dependency(
 nxt_stacktrace_deps = []
 nxt_stacktrace_cpp_args = []
 
-cpp = meson.get_compiler('cpp')
-
-cpptrace_dep = dependency('cpptrace', method : 'cmake', required : false)
+cpptrace_dep = dependency(
+  'cpptrace',
+  method : 'cmake',
+  required : get_option('cpptrace'),
+)
 cpptrace_probe = '''
   #include <cpptrace/cpptrace.hpp>
   #include <cpptrace/formatting.hpp>

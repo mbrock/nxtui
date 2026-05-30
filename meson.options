@@ -12,3 +12,6 @@ option('benchmarks', type : 'boolean', value : false,
 
 option('cares', type : 'feature', value : 'auto',
   description : 'Use system c-ares for DNS when available')
+
+option('cpptrace', type : 'feature', value : 'disabled',
+  description : 'Use cpptrace for rich exception stack traces')
