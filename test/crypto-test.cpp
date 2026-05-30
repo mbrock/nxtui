@@ -7,7 +7,9 @@
 #include <openssl/ec.h>
 #include <openssl/ec_key.h>
 #include <openssl/ecdsa.h>
+#include <openssl/evp.h>
 #include <openssl/nid.h>
+#include <openssl/rsa.h>
 
 #include <algorithm>
 #include <array>
@@ -77,6 +79,30 @@ struct ec_key_deleter
     void operator()(EC_KEY * key) const noexcept
     {
         EC_KEY_free(key);
+    }
+};
+
+struct evp_pkey_deleter
+{
+    void operator()(EVP_PKEY * key) const noexcept
+    {
+        EVP_PKEY_free(key);
+    }
+};
+
+struct evp_pkey_ctx_deleter
+{
+    void operator()(EVP_PKEY_CTX * ctx) const noexcept
+    {
+        EVP_PKEY_CTX_free(ctx);
+    }
+};
+
+struct evp_md_ctx_deleter
+{
+    void operator()(EVP_MD_CTX * ctx) const noexcept
+    {
+        EVP_MD_CTX_free(ctx);
     }
 };
 
@@ -321,6 +347,68 @@ static suite crypto_tests{
                 public_key,
                 message,
                 sig));
+        };
+
+        "verifies RSA-PSS signatures with SHA-256"_test = [] {
+            auto keygen = std::unique_ptr<EVP_PKEY_CTX, evp_pkey_ctx_deleter>{
+                EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr)};
+            expect(keygen != nullptr);
+            expect(EVP_PKEY_keygen_init(keygen.get()) == 1_i);
+            expect(EVP_PKEY_CTX_set_rsa_keygen_bits(keygen.get(), 2048) == 1_i);
+
+            auto * raw_key = static_cast<EVP_PKEY *>(nullptr);
+            expect(EVP_PKEY_keygen(keygen.get(), &raw_key) == 1_i);
+            auto key = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>{raw_key};
+            expect(key != nullptr);
+
+            auto message = bytes_from("nxtui rsa-pss verifier");
+            auto signer = std::unique_ptr<EVP_MD_CTX, evp_md_ctx_deleter>{
+                EVP_MD_CTX_new()};
+            expect(signer != nullptr);
+            auto * pkey_ctx = static_cast<EVP_PKEY_CTX *>(nullptr);
+            expect(
+                EVP_DigestSignInit(
+                    signer.get(),
+                    &pkey_ctx,
+                    EVP_sha256(),
+                    nullptr,
+                    key.get())
+                == 1_i);
+            expect(
+                EVP_PKEY_CTX_set_rsa_padding(
+                    pkey_ctx, RSA_PKCS1_PSS_PADDING)
+                == 1_i);
+            expect(
+                EVP_PKEY_CTX_set_rsa_pss_saltlen(
+                    pkey_ctx, RSA_PSS_SALTLEN_DIGEST)
+                == 1_i);
+            expect(
+                EVP_DigestSignUpdate(
+                    signer.get(),
+                    reinterpret_cast<const uint8_t *>(message.data()),
+                    message.size())
+                == 1_i);
+            auto sig_len = std::size_t{0};
+            expect(EVP_DigestSignFinal(signer.get(), nullptr, &sig_len) == 1_i);
+            auto sig = nxt::crypto::bytes(sig_len);
+            expect(
+                EVP_DigestSignFinal(
+                    signer.get(),
+                    reinterpret_cast<uint8_t *>(sig.data()),
+                    &sig_len)
+                == 1_i);
+            sig.resize(sig_len);
+
+            auto spki_len = i2d_PUBKEY(key.get(), nullptr);
+            expect(spki_len > 0_i);
+            auto spki = nxt::crypto::bytes(static_cast<std::size_t>(spki_len));
+            auto * spki_ptr = reinterpret_cast<unsigned char *>(spki.data());
+            expect(i2d_PUBKEY(key.get(), &spki_ptr) == spki_len);
+
+            expect(nxt::crypto::rsa_pss_verify(spki, message, sig, 256));
+
+            message[0] ^= std::byte{1};
+            expect(!nxt::crypto::rsa_pss_verify(spki, message, sig, 256));
         };
     }};
 

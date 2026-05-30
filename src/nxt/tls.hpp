@@ -99,10 +99,9 @@ inline tls13_client_hello make_tls13_client_hello(std::string_view host)
     }
     {
         auto body = bytes{};
-        put_u16(body, 8);
+        put_u16(body, 6);
         put_u16(body, 0x0403); // ecdsa_secp256r1_sha256
         put_u16(body, 0x0804); // rsa_pss_rsae_sha256
-        put_u16(body, 0x0805); // rsa_pss_rsae_sha384
         put_u16(body, 0x0401); // rsa_pkcs1_sha256
         put_extension(
             extensions, 13, std::move(body)); // signature_algorithms
