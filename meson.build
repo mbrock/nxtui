@@ -60,241 +60,44 @@ nxt_mdspan_args = [
   '-DMDSPAN_USE_PAREN_OPERATOR=0',
 ]
 
-nxt_libvterm_sources = files(
-  'vendor/libvterm/src/encoding.c',
-  'vendor/libvterm/src/keyboard.c',
-  'vendor/libvterm/src/mouse.c',
-  'vendor/libvterm/src/parser.c',
-  'vendor/libvterm/src/pen.c',
-  'vendor/libvterm/src/screen.c',
-  'vendor/libvterm/src/state.c',
-  'vendor/libvterm/src/unicode.c',
-  'vendor/libvterm/src/vterm.c',
-)
-
-nxt_libvterm = library('vterm',
-  nxt_libvterm_sources,
-  include_directories : include_directories(
-    'vendor/libvterm/include',
-    'vendor/libvterm/src'
-  ),
-  c_args : ['-I' + meson.current_build_dir()],
-  override_options : ['warning_level=0'],
-)
-
-nxt_libvterm_dep = declare_dependency(
-  link_with : nxt_libvterm,
-  include_directories : include_directories('vendor/libvterm/include'),
-)
-
 nxt_inc = include_directories(
   'src',
   'vendor/hub/include',
   'vendor/mdspan/include',
 )
-nxt_core_deps = []
-nxt_core_deps += utf8proc_dep
-nxt_core_deps += nxt_libvterm_dep
-nxt_core_deps += nxt_compression_deps
 
-nxt_core_sources = files(
-  'src/nxtui/ansi.cpp',
-  'src/nxtui/compositor.cpp',
-  'src/nxt/crypto.cpp',
-  'src/nxt/crypto/aes128gcm.cpp',
-  'src/nxt/crypto/sha256.cpp',
-  'src/nxt/crypto/x25519.cpp',
-  'src/nxtui/glyph-table.cpp',
-  'src/nxtui/input.cpp',
-  'src/nxtui/raster.cpp',
-)
-
-nxt_core_lib = library('nxt-core',
-  nxt_core_sources,
-  include_directories : nxt_inc,
-  dependencies : nxt_core_deps,
-  cpp_args : nxt_mdspan_args + nxt_compression_args,
-  install : true,
-)
-
-nxt_core_dep = declare_dependency(
-  link_with : nxt_core_lib,
-  include_directories : nxt_inc,
-  dependencies : nxt_core_deps,
-  compile_args : nxt_mdspan_args + nxt_compression_args,
-)
-
-nxt_stacktrace_deps = []
-nxt_stacktrace_cpp_args = []
-
-cpptrace_dep = dependency(
-  'cpptrace',
-  method : 'cmake',
-  required : get_option('cpptrace'),
-)
-cpptrace_probe = '''
-  #include <cpptrace/cpptrace.hpp>
-  #include <cpptrace/formatting.hpp>
-  #include <sstream>
-  int main() {
-    std::ostringstream out;
-    cpptrace::formatter{}.print(out, cpptrace::generate_trace(), false);
-    return 0;
-  }
-'''
-if cpptrace_dep.found() and cpp.links(
-  cpptrace_probe,
-  dependencies : [cpptrace_dep],
-  name : 'cpptrace')
-  nxt_stacktrace_deps += cpptrace_dep
-  nxt_stacktrace_cpp_args += '-DNXT_HAVE_CPPTRACE=1'
-  message('cpptrace available')
-else
-  message('cpptrace not available')
-endif
-
-std_stacktrace_probe = '''
-  #include <stacktrace>
-  int main() {
-    auto trace = std::stacktrace::current();
-    return static_cast<int>(trace.size());
-  }
-'''
-if cpp.links(std_stacktrace_probe, name : 'std::stacktrace')
-  message('std::stacktrace available')
-else
-  stdcxxexp_dep = cpp.find_library('stdc++exp', required : false)
-  if stdcxxexp_dep.found() and cpp.links(
-    std_stacktrace_probe,
-    dependencies : [stdcxxexp_dep],
-    name : 'std::stacktrace with stdc++exp')
-    nxt_stacktrace_deps += stdcxxexp_dep
-    message('std::stacktrace available with stdc++exp')
-  else
-    message('std::stacktrace not available')
-  endif
-endif
-
-nxt_stacktrace_lib = library('nxt-stacktrace',
-  'src/nxt/stacktrace.cpp',
-  include_directories : nxt_inc,
-  dependencies : nxt_stacktrace_deps,
-  cpp_args : nxt_stacktrace_cpp_args,
-)
-
-nxt_stacktrace_dep = declare_dependency(
-  link_with : nxt_stacktrace_lib,
-  dependencies : nxt_stacktrace_deps,
-  compile_args : nxt_stacktrace_cpp_args,
-)
+subdir('src')
 
 if get_option('demo')
   subdir('demo')
 endif
 
-if get_option('llm_tool')
-  nxtllm_dependencies = [nxt_core_dep]
-  nxtllm_dependencies += nxt_stacktrace_dep
-  nxtllm_dependencies += nxt_dns_deps
+subdir('bench')
+subdir('test')
 
-  executable('nxtllm',
-    'src/nxtai/nxtllm.cpp',
-    include_directories : nxt_inc,
-    dependencies : nxtllm_dependencies,
-    cpp_args : nxt_dns_args,
+if get_option('llm_tool')
+  custom_target('nxtllm-root-link',
+    output : 'nxtllm',
+    input : nxtllm,
+    command : ['ln', '-sf', 'src/nxtllm', '@OUTPUT@'],
+    build_by_default : true,
   )
 endif
 
 if get_option('benchmarks')
-  nxt_bench_deps = [nxt_core_dep]
-  nxt_bench_deps += nxt_stacktrace_dep
-  nxt_bench_cpp_args = []
-  nxt_bench_cpp_args += [
-    '-DNXT_RT_ENABLE_TRACE=0',
-    '-fno-omit-frame-pointer',
-  ]
-
-  executable('nxt-echo-bench',
-    'bench/nxtrt-echo-bench.cpp',
-    include_directories : nxt_inc,
-    dependencies : nxt_bench_deps,
-    cpp_args : nxt_bench_cpp_args,
+  custom_target('nxt-echo-bench-root-link',
+    output : 'nxt-echo-bench',
+    input : nxt_echo_bench,
+    command : ['ln', '-sf', 'bench/nxt-echo-bench', '@OUTPUT@'],
+    build_by_default : true,
   )
 endif
 
 if get_option('tests')
-  nxt_test_inc = include_directories('test')
-
-  nxt_test_sources = files(
-	    'test/input-test.cpp',
-	    'test/json-test.cpp',
-    'test/crypto-test.cpp',
-	    'test/include-test.cpp',
-    'test/runtime-test.cpp',
-    'test/terminal-test.cpp',
-    'test/test-main.cpp',
+  custom_target('nxt-tests-root-link',
+    output : 'nxt-tests',
+    input : nxt_tests,
+    command : ['ln', '-sf', 'test/nxt-tests', '@OUTPUT@'],
+    build_by_default : true,
   )
-  nxt_test_deps = []
-  nxt_test_deps += nxt_core_dep
-  nxt_test_deps += nxt_stacktrace_dep
-  nxt_test_cpp_args = []
-
-  nxt_crypto_dep = dependency('libcrypto', required : false)
-  nxt_test_libcrypto_probe = '''
-    #include <openssl/ec.h>
-    #include <openssl/ec_key.h>
-    #include <openssl/ecdsa.h>
-    #include <openssl/evp.h>
-    #include <openssl/nid.h>
-    #include <openssl/rsa.h>
-    int main() {
-      return EVP_PKEY_RSA != 0 && NID_X9_62_prime256v1 != 0;
-    }
-  '''
-  if nxt_crypto_dep.found() and cpp.compiles(
-    nxt_test_libcrypto_probe,
-    dependencies : [nxt_crypto_dep],
-    name : 'libcrypto test fixture API')
-    nxt_test_deps += nxt_crypto_dep
-    nxt_test_cpp_args += '-DNXT_HAVE_TEST_LIBCRYPTO=1'
-  endif
-
-  nxt_mlkem_probe = '''
-    #include <openssl/evp.h>
-    #include <openssl/nid.h>
-    int main() {
-      EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_KEM, nullptr);
-      return ctx != nullptr && NID_MLKEM768 != 0
-        && EVP_PKEY_CTX_kem_set_params(ctx, NID_MLKEM768);
-    }
-  '''
-  if nxt_crypto_dep.found() and cpp.compiles(
-    nxt_mlkem_probe,
-    dependencies : [nxt_crypto_dep],
-    name : 'libcrypto ML-KEM-768 EVP API')
-    message('ML-KEM-768 test support available via system libcrypto')
-    nxt_test_sources += files('src/nxt/crypto/mlkem_libcrypto.cpp')
-    nxt_test_deps += nxt_crypto_dep
-    nxt_test_cpp_args += '-DNXT_HAVE_MLKEM768=1'
-  else
-    message('ML-KEM-768 test support not available')
-  endif
-
-  if host_machine.system() == 'linux'
-    nxt_test_sources += files('test/epoll-wand-test.cpp')
-    nxt_test_sources += files('test/uring-wand-test.cpp')
-    nxt_test_sources += files('test/cares-test.cpp')
-    nxt_test_deps += nxt_dns_deps
-    nxt_test_cpp_args += nxt_dns_args
-  elif host_machine.system() in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
-    nxt_test_sources += files('test/kqueue-wand-test.cpp')
-  endif
-
-  nxt_tests = executable('nxt-tests',
-    nxt_test_sources,
-    include_directories : [nxt_inc, nxt_test_inc],
-    dependencies : nxt_test_deps,
-    cpp_args : nxt_test_cpp_args,
-  )
-  test('nxt-tests', nxt_tests)
 endif
