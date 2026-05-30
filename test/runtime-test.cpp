@@ -3029,7 +3029,7 @@ static suite runtime_tests{
                             co_await writer.write("abcdef"sv);
                             co_await writer.rebase(2, 3);
                             expect(writer.text == "abcd");
-                            expect(nxtrt::as_string_view(writer.buffered()) == "ef");
+                            expect(byte_value_chunks_text(writer.buffered()) == "ef");
                             expect(writer.unused_capacity().size() >= std::size_t{3});
 
                             co_await writer.write("XYZ"sv);
@@ -3050,7 +3050,7 @@ static suite runtime_tests{
                             std::memcpy(out.data(), "XYZ", out.size());
                             expect(writer.text == "abcd");
                             expect(
-                                byte_value_chunks_text(writer.buffered_chunks())
+                                byte_value_chunks_text(writer.buffered())
                                 == "efXYZ");
                             co_await writer.flush();
                         });

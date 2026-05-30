@@ -177,18 +177,19 @@ class byte_writer : public value_sink<std::byte>
 public:
     using byte_chunk_view = byte_chunks<std::byte>;
     using const_byte_chunk_view = byte_chunks<const std::byte>;
+    using value_sink<std::byte>::advance_constructed;
+    using value_sink<std::byte>::buffered;
     using value_sink<std::byte>::buffered_size;
     using value_sink<std::byte>::flush;
+    using value_sink<std::byte>::unused_capacity;
     using value_sink<std::byte>::unused_capacity_size;
 
     explicit byte_writer(std::span<std::byte> buffer)
         : value_sink<std::byte>(buffer)
-        , capacity_(buffer.size())
     {}
 
     explicit byte_writer(std::size_t buffer_size)
         : value_sink<std::byte>(buffer_size)
-        , capacity_(buffer_size)
     {}
 
     byte_writer(const byte_writer &) = delete;
@@ -198,39 +199,6 @@ public:
     byte_writer & operator=(byte_writer &&) = delete;
 
     virtual ~byte_writer() = default;
-
-    /// Return the bytes currently staged for the sink.
-    ///
-    /// This compatibility view requires contiguous staged bytes. The chunk view
-    /// is the native shape of the unified ring buffer.
-    [[nodiscard]] std::span<const std::byte> buffered() const
-    {
-        auto one = buffered_chunks().single_span();
-        if (!one)
-            throw buffer_error{"writer buffered bytes are wrapped"};
-        return *one;
-    }
-
-    [[nodiscard]] const_byte_chunk_view buffered_chunks() const noexcept
-    {
-        return value_sink<std::byte>::buffered();
-    }
-
-    /// Return writable capacity at the ring write cursor.
-    [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
-    {
-        return value_sink<std::byte>::unused_capacity();
-    }
-
-    /// Commit `n` bytes that were written directly into `unused_capacity()`.
-    void advance(std::size_t n)
-    {
-        try {
-            value_sink<std::byte>::advance_constructed(n);
-        } catch (const value_buffer_error & e) {
-            throw buffer_error{e.what()};
-        }
-    }
 
     hope<void> rebase(std::size_t preserve, std::size_t capacity)
     {
@@ -250,26 +218,15 @@ public:
     }
 
     hope<std::span<std::byte>>
-    writable_slice_greedy(std::size_t minimum)
-    {
-        return writable_slice_greedy_preserve(0, minimum);
-    }
-
-    hope<std::span<std::byte>>
     writable_slice_preserve(std::size_t preserve, std::size_t len)
     {
         auto slice = writable_slice_greedy_preserve(preserve, len);
         if (slice.is_ready()) {
             auto out = slice.take_ready().first(len);
-            advance(len);
+            advance_constructed(len);
             return hope<std::span<std::byte>>::ready(out);
         }
         return writable_slice_preserve_slow(std::move(slice), len);
-    }
-
-    hope<std::span<std::byte>> writable_slice(std::size_t len)
-    {
-        return writable_slice_preserve(0, len);
     }
 
     hope<void> write(std::span<const std::byte> bytes)
@@ -399,7 +356,7 @@ private:
         if (bytes.size() > dst.size())
             throw buffer_error{"writer append past buffer capacity"};
         std::memcpy(dst.data(), bytes.data(), bytes.size());
-        advance(bytes.size());
+        advance_constructed(bytes.size());
     }
 
     void append_splat_to_buffer(
@@ -414,7 +371,8 @@ private:
         std::size_t preserve,
         std::size_t capacity) const
     {
-        if (preserve > capacity_ || capacity > capacity_ - preserve)
+        auto max = storage_capacity();
+        if (preserve > max || capacity > max - preserve)
             throw buffer_error{"writer buffer is too small"};
     }
 
@@ -422,7 +380,7 @@ private:
     {
         auto remaining = bytes;
         while (!remaining.empty()) {
-            if (capacity_ == 0 || remaining.size() >= capacity_) {
+            if (storage_capacity() == 0 || remaining.size() >= storage_capacity()) {
                 co_await drain_pending_and_direct(remaining);
                 co_return;
             }
@@ -442,7 +400,7 @@ private:
     {
         (void)repeated_size(pattern.size(), splat);
         while (splat != 0) {
-            if (capacity_ == 0 || pattern.size() >= capacity_) {
+            if (storage_capacity() == 0 || pattern.size() >= storage_capacity()) {
                 co_await drain_pending_and_direct(pattern);
                 --splat;
                 continue;
@@ -464,7 +422,7 @@ private:
             };
             auto count = std::size_t{0};
             auto pending_size = std::size_t{0};
-            for (auto chunk : buffered_chunks()) {
+            for (auto chunk : buffered()) {
                 chunks[count++] = chunk;
                 pending_size += chunk.size();
             }
@@ -489,12 +447,12 @@ private:
     task<void> rebase_slow(std::size_t preserve, std::size_t capacity)
     {
         while (unused_capacity().size() < capacity) {
-            auto buffered = buffered_chunks();
-            auto drainable = buffered.size() - std::min(preserve, buffered.size());
+            auto values = buffered();
+            auto drainable = values.size() - std::min(preserve, values.size());
             if (drainable == 0)
                 throw buffer_error{"writer buffer is too small"};
 
-            auto prefix = buffered.first(drainable);
+            auto prefix = values.first(drainable);
             auto chunks = std::array{
                 std::span<const std::byte>{},
                 std::span<const std::byte>{},
@@ -523,11 +481,10 @@ private:
         std::size_t len)
     {
         auto out = (co_await std::move(slice)).first(len);
-        advance(len);
+        advance_constructed(len);
         co_return out;
     }
 
-    std::size_t capacity_ = 0;
 };
 
 /// Writer that stores bytes in a fixed caller-owned span.
@@ -1605,7 +1562,7 @@ private:
             auto out = normalize_result(result);
             if (out.bytes > dst.size())
                 throw buffer_error{"source overfilled writer buffer"};
-            writer.advance(out.bytes);
+            writer.advance_constructed(out.bytes);
             co_return out;
         }
 
@@ -1791,7 +1748,7 @@ private:
         }
 
         auto n = co_await read_some(dst.first(std::min(dst.size(), limit)));
-        writer.advance(n);
+        writer.advance_constructed(n);
         co_return read_result{
             .bytes = n,
             .eof = n == 0,
@@ -1869,7 +1826,7 @@ private:
         }
 
         auto n = co_await recv_some(dst.first(std::min(dst.size(), limit)));
-        writer.advance(n);
+        writer.advance_constructed(n);
         co_return read_result{
             .bytes = n,
             .eof = n == 0,

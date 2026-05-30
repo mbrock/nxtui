@@ -337,6 +337,11 @@ public:
     }
 
 protected:
+    [[nodiscard]] std::size_t storage_capacity() const noexcept
+    {
+        return capacity_;
+    }
+
     [[nodiscard]] std::span<value_type> unused_capacity() noexcept
     {
         return detail::ring_unused_capacity(

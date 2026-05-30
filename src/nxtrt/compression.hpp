@@ -145,7 +145,7 @@ private:
                     co_return read_result{};
                 }
 
-                writer.advance(produced);
+                writer.advance_constructed(produced);
                 co_return read_result{.bytes = produced};
             }
 
@@ -296,7 +296,7 @@ private:
                     co_return read_result{};
                 }
 
-                writer.advance(output.pos);
+                writer.advance_constructed(output.pos);
                 co_return read_result{.bytes = output.pos};
             }
 
@@ -440,7 +440,7 @@ private:
                     co_return read_result{};
                 }
 
-                writer.advance(produced);
+                writer.advance_constructed(produced);
                 co_return read_result{.bytes = produced};
             }
 
