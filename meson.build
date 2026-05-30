@@ -251,6 +251,8 @@ if get_option('tests')
   nxt_test_deps += nxt_stacktrace_deps
 
   if host_machine.system() == 'linux'
+    nxt_test_sources += files('test/epoll-wand-test.cpp')
+
     nxt_test_liburing_dep = dependency(
       'liburing',
       fallback : ['liburing', 'uring'],
