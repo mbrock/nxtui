@@ -830,30 +830,25 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 /// Unlike Zig, this C++ reader currently requires at least one byte of buffer
 /// storage. Borrowed-span APIs need somewhere stable to park source bytes across
 /// awaits, and we do not yet have Zig's exact empty-slice `readVec` convention.
-class byte_reader
+class byte_reader : public value_source<std::byte>
 {
 public:
     using byte_chunk_view = byte_chunks<std::byte>;
     using const_byte_chunk_view = byte_chunks<const std::byte>;
+    using value_source<std::byte>::buffered_size;
+    using value_source<std::byte>::unused_capacity_size;
 
     /// Construct a reader with owned buffer storage.
     explicit byte_reader(std::size_t buffer_size)
-        : owned_buffer_(buffer_size)
-        , buffer_(owned_buffer_)
-    {
-        if (owned_buffer_.empty())
-            throw buffer_error{"reader buffer is empty"};
-    }
+        : value_source<std::byte>(require_nonzero(buffer_size))
+    {}
 
     /// Construct a reader over caller-owned buffer storage.
     ///
     /// The storage must outlive the reader.
     explicit byte_reader(std::span<std::byte> buffer)
-        : buffer_(buffer)
-    {
-        if (buffer.empty())
-            throw buffer_error{"reader buffer is empty"};
-    }
+        : value_source<std::byte>(require_nonempty(buffer))
+    {}
 
     virtual ~byte_reader() = default;
 
@@ -867,9 +862,12 @@ public:
     ///
     /// The returned span is invalidated by any operation that refills, rebases,
     /// or consumes the reader.
-    [[nodiscard]] std::span<const std::byte> buffered() const noexcept
+    [[nodiscard]] std::span<const std::byte> buffered() const
     {
-        return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
+        auto one = buffered_chunks().single_span();
+        if (!one)
+            throw buffer_error{"reader buffered bytes are wrapped"};
+        return *one;
     }
 
     /// Return currently buffered bytes as chunks.
@@ -878,13 +876,7 @@ public:
     /// used by ring-buffered value sources and sinks.
     [[nodiscard]] const_byte_chunk_view buffered_chunks() const noexcept
     {
-        return const_byte_chunk_view{buffered()};
-    }
-
-    /// Return the number of currently buffered bytes.
-    [[nodiscard]] std::size_t buffered_size() const noexcept
-    {
-        return end_ - seek_;
+        return value_source<std::byte>::buffered();
     }
 
     /// Return writable storage after the currently buffered bytes.
@@ -893,7 +885,7 @@ public:
     /// `advance()`.
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
     {
-        return buffer_.subspan(end_);
+        return value_source<std::byte>::unused_capacity();
     }
 
     /// Ensure that `capacity` bytes can fit from the current seek position.
@@ -903,13 +895,9 @@ public:
     /// storage strategies.
     void rebase(std::size_t capacity)
     {
-        if (capacity > buffer_.size())
+        if (capacity > storage_capacity())
             throw buffer_error{"reader buffer is too small"};
-        if (buffer_.size() - seek_ >= capacity)
-            return;
         rebase_more(capacity);
-        if (buffer_.size() - seek_ < capacity)
-            throw buffer_error{"reader rebase did not make enough room"};
     }
 
     /// Ensure at least `n` bytes are buffered.
@@ -918,7 +906,7 @@ public:
     /// If EOF occurs before `n` bytes are available, throws `end_of_stream`.
     hope<void> fill(std::size_t n)
     {
-        if (n > buffer_.size())
+        if (n > storage_capacity())
             throw buffer_error{"reader buffer is too small"};
         if (buffered_size() >= n)
             return hope<void>::ready();
@@ -933,10 +921,9 @@ public:
     /// is also true.
     hope<read_result> fill_more()
     {
-        if (buffered_size() == buffer_.size())
+        if (buffered_size() == storage_capacity())
             throw buffer_error{"reader buffer is full"};
-        rebase(buffered_size() + 1);
-        return fill_more_without_rebase();
+        return read_more();
     }
 
     /// Borrow the next `n` bytes without consuming them.
@@ -945,11 +932,18 @@ public:
     /// mutate the reader buffer.
     hope<std::span<const std::byte>> peek(std::size_t n)
     {
-        if (n > buffer_.size())
+        if (n > storage_capacity())
             throw buffer_error{"reader buffer is too small"};
-        if (buffered_size() >= n)
+        if (buffered_size() >= n) {
+            auto chunks = buffered_chunks().first(n);
+            auto one = chunks.single_span();
+            if (one)
+                return hope<std::span<const std::byte>>::ready(*one);
+            contiguize_buffered_for_derived();
             return hope<std::span<const std::byte>>::ready(
                 buffered().first(n));
+        }
+
         return peek_slow(n);
     }
 
@@ -958,7 +952,7 @@ public:
     /// This is the ring-buffer-friendly counterpart to `peek(n)`.
     hope<const_byte_chunk_view> peek_chunks(std::size_t n)
     {
-        if (n > buffer_.size())
+        if (n > storage_capacity())
             throw buffer_error{"reader buffer is too small"};
         if (buffered_size() >= n)
             return hope<const_byte_chunk_view>::ready(
@@ -996,8 +990,8 @@ public:
                     ready(buffered().first(0));
         }
 
-        auto n = std::min(limit, buffered_size());
-        auto out = buffered().first(n);
+        auto out = first_buffered_span(limit);
+        auto n = out.size();
         toss(n);
         return hope<std::optional<std::span<const std::byte>>>::ready(out);
     }
@@ -1005,9 +999,11 @@ public:
     /// Discard `n` already-buffered bytes.
     void toss(std::size_t n)
     {
-        if (n > buffered_size())
+        try {
+            consume_buffered_for_derived(n);
+        } catch (const value_buffer_error &) {
             throw buffer_error{"reader consumed past buffered input"};
-        seek_ += n;
+        }
     }
 
     /// Consume and return exactly `n` borrowed bytes.
@@ -1016,10 +1012,10 @@ public:
     /// and `end_of_stream` if EOF arrives before `n` bytes are available.
     hope<std::span<const std::byte>> take(std::size_t n)
     {
-        if (n > buffer_.size())
+        if (n > storage_capacity())
             throw buffer_error{"reader buffer is too small"};
         if (buffered_size() >= n) {
-            auto out = buffered().first(n);
+            auto out = coerce_buffered_span(n);
             toss(n);
             return hope<std::span<const std::byte>>::ready(out);
         }
@@ -1045,7 +1041,7 @@ public:
     hope<std::optional<T>> take_struct()
     {
         if (buffered_size() >= sizeof(T)) {
-            auto value = copy_struct<T>(buffered());
+            auto value = copy_struct<T>(buffered_chunks().first(sizeof(T)));
             toss(sizeof(T));
             return hope<std::optional<T>>::ready(value);
         }
@@ -1064,11 +1060,12 @@ public:
         if (delimiter.empty())
             throw buffer_error{"empty delimiter"};
 
+        contiguize_buffered_for_derived();
         auto available = buffered();
         auto cut = find_bytes(available, delimiter);
         if (cut < available.size()) {
             auto out = available.first(cut);
-            seek_ += cut + delimiter.size();
+            toss(cut + delimiter.size());
             return hope<std::span<const std::byte>>::ready(out);
         }
 
@@ -1129,8 +1126,8 @@ public:
     /// Discard one available chunk, up to `limit` bytes.
     ///
     /// Buffered bytes are tossed synchronously. Otherwise this delegates to
-    /// `discard_more()`, whose default implementation streams into a discarding
-    /// writer.
+    /// `discard_bytes_more()`, whose default implementation streams into a
+    /// discarding writer.
     hope<read_result> discard(
         std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
@@ -1138,7 +1135,7 @@ public:
             return hope<read_result>::ready(read_result{});
 
         if (buffered_size() == 0)
-            return discard_more(limit);
+            return discard_bytes_more(limit);
 
         auto n = std::min(limit, buffered_size());
         toss(n);
@@ -1152,15 +1149,17 @@ protected:
     /// should usually prefer `unused_capacity()`.
     [[nodiscard]] std::span<std::byte> buffer_storage() noexcept
     {
-        return buffer_;
+        return value_source<std::byte>::buffer_storage();
     }
 
     /// Commit `n` bytes that a derived reader wrote into `unused_capacity()`.
     void advance(std::size_t n)
     {
-        if (n > unused_capacity().size())
+        try {
+            advance_constructed(n);
+        } catch (const value_buffer_error &) {
             throw buffer_error{"reader advanced past buffer capacity"};
-        end_ += n;
+        }
     }
 
     /// Mandatory cold-path source operation.
@@ -1181,6 +1180,21 @@ protected:
     virtual hope<read_result> stream_more(
         byte_writer & writer,
         std::size_t limit) = 0;
+
+    hope<value_result> stream_more(
+        value_sink<std::byte> & sink,
+        std::size_t limit) override
+    {
+        if (auto * writer = dynamic_cast<byte_writer *>(&sink)) {
+            auto result = stream_more(*writer, limit);
+            if (result.is_ready())
+                return hope<value_result>::ready(
+                    to_value_result(result.take_ready()));
+            return stream_more_value_slow(std::move(result));
+        }
+
+        return stream_more_value_task(sink, limit);
+    }
 
     /// Cold-path vectored pull operation.
     ///
@@ -1208,9 +1222,9 @@ protected:
     /// Called only when the public `discard()` has no buffered bytes to toss. The
     /// default streams into a discarding writer backed by this reader's buffer.
     /// Override this when the backend can skip bytes more directly.
-    virtual hope<read_result> discard_more(std::size_t limit)
+    virtual hope<read_result> discard_bytes_more(std::size_t limit)
     {
-        auto writer = discarding_byte_writer{buffer_};
+        auto writer = discarding_byte_writer{buffer_storage()};
         auto result = stream_more(writer, limit);
         if (result.is_ready())
             return hope<read_result>::ready(result.take_ready());
@@ -1224,10 +1238,7 @@ protected:
     /// The default memmoves buffered bytes to the start of `buffer_`.
     virtual void rebase_more(std::size_t)
     {
-        auto pending = buffered_size();
-        std::memmove(buffer_.data(), buffer_.data() + seek_, pending);
-        seek_ = 0;
-        end_ = pending;
+        contiguize_buffered_for_derived();
     }
 
 private:
@@ -1235,11 +1246,12 @@ private:
         byte_writer & writer,
         std::size_t limit)
     {
-        auto n = std::min(limit, buffered_size());
+        auto bytes = first_buffered_span(limit);
+        auto n = bytes.size();
         if (n == 0)
             return hope<read_result>::ready(read_result{});
 
-        auto write = writer.write(buffered().first(n));
+        auto write = writer.write(bytes);
         if (write.is_ready()) {
             toss(n);
             return hope<read_result>::ready(read_result{.bytes = n});
@@ -1266,7 +1278,9 @@ private:
             auto n = std::min(dst.size(), buffered_size());
             if (n == 0)
                 break;
-            std::memcpy(dst.data(), buffered().data(), n);
+            auto src = first_buffered_span(n);
+            n = src.size();
+            std::memcpy(dst.data(), src.data(), n);
             toss(n);
             total += n;
         }
@@ -1300,25 +1314,30 @@ private:
     {
         if (result.bytes > unused_capacity().size())
             throw buffer_error{"source overfilled read buffer"};
-        end_ += result.bytes;
+        advance(result.bytes);
         return result;
-    }
-
-    hope<read_result> fill_more_without_rebase()
-    {
-        if (unused_capacity().empty())
-            throw buffer_error{"reader buffer is full"};
-        return read_more();
     }
 
     task<> fill_slow(std::size_t n)
     {
-        rebase(n);
         while (buffered_size() < n) {
-            auto read = co_await fill_more_without_rebase();
+            auto read = co_await fill_more();
             if (read.eof && read.bytes == 0)
                 throw end_of_stream{"unexpected end of input"};
         }
+    }
+
+    task<value_result> stream_more_value_slow(hope<read_result> result)
+    {
+        co_return to_value_result(co_await std::move(result));
+    }
+
+    task<value_result> stream_more_value_task(
+        value_sink<std::byte> & sink,
+        std::size_t limit)
+    {
+        auto writer = value_sink_byte_writer{sink};
+        co_return to_value_result(co_await stream_more(writer, limit));
     }
 
     task<read_result> read_more_slow(std::size_t limit)
@@ -1339,7 +1358,7 @@ private:
 
     task<read_result> discard_more_slow(std::size_t limit)
     {
-        auto writer = discarding_byte_writer{buffer_};
+        auto writer = discarding_byte_writer{buffer_storage()};
         co_return co_await stream_more(writer, limit);
     }
 
@@ -1353,7 +1372,7 @@ private:
     task<std::span<const std::byte>> peek_slow(std::size_t n)
     {
         co_await fill(n);
-        co_return buffered().first(n);
+        co_return coerce_buffered_span(n);
     }
 
     task<const_byte_chunk_view> peek_chunks_slow(std::size_t n)
@@ -1380,9 +1399,8 @@ private:
         if (read.bytes == 0)
             co_return buffered().first(0);
 
-        auto n = std::min(limit, buffered_size());
-        auto out = buffered().first(n);
-        toss(n);
+        auto out = first_buffered_span(limit);
+        toss(out.size());
         co_return out;
     }
 
@@ -1403,19 +1421,19 @@ private:
         requires std::is_trivially_copyable_v<T>
     task<std::optional<T>> take_struct_slow()
     {
-        if (buffered_size() < sizeof(T)) {
-            rebase(sizeof(T));
-            while (buffered_size() < sizeof(T)) {
-                auto read = co_await fill_more_without_rebase();
-                if (read.eof && read.bytes == 0) {
-                    if (buffered_size() == 0)
-                        co_return std::nullopt;
-                    throw end_of_stream{"unexpected end of input"};
-                }
-            }
+        try {
+            auto ready = value_source<std::byte>::fill(sizeof(T));
+            if (!ready.is_ready())
+                co_await std::move(ready);
+        } catch (const value_end_of_stream &) {
+            if (buffered_size() == 0)
+                co_return std::nullopt;
+            throw end_of_stream{"unexpected end of input"};
+        } catch (const value_buffer_error & e) {
+            throw buffer_error{e.what()};
         }
 
-        auto value = copy_struct<T>(buffered());
+        auto value = copy_struct<T>(buffered_chunks().first(sizeof(T)));
         toss(sizeof(T));
         co_return value;
     }
@@ -1428,19 +1446,33 @@ private:
         return value;
     }
 
+    template<typename T>
+    static T copy_struct(const_byte_chunk_view chunks)
+    {
+        auto value = T{};
+        auto dst = std::as_writable_bytes(std::span{&value, 1});
+        auto offset = std::size_t{0};
+        for (auto chunk : chunks.first(sizeof(T))) {
+            std::memcpy(dst.data() + offset, chunk.data(), chunk.size());
+            offset += chunk.size();
+        }
+        return value;
+    }
+
     task<std::span<const std::byte>>
     take_until_slow(std::span<const std::byte> delimiter)
     {
         while (true) {
+            contiguize_buffered_for_derived();
             auto available = buffered();
             auto cut = find_bytes(available, delimiter);
             if (cut < available.size()) {
                 auto out = available.first(cut);
-                seek_ += cut + delimiter.size();
+                toss(cut + delimiter.size());
                 co_return out;
             }
 
-            if (buffered_size() == buffer_.size())
+            if (buffered_size() == storage_capacity())
                 throw buffer_error{"reader buffer filled before delimiter"};
 
             auto read = co_await fill_more();
@@ -1449,10 +1481,89 @@ private:
         }
     }
 
-    std::vector<std::byte> owned_buffer_;
-    std::span<std::byte> buffer_;
-    std::size_t seek_ = 0;
-    std::size_t end_ = 0;
+    std::span<const std::byte> first_buffered_span(
+        std::size_t limit = std::numeric_limits<std::size_t>::max()) const
+    {
+        auto chunks = buffered_chunks();
+        auto first = chunks.single_span();
+        if (first)
+            return first->first(std::min(limit, first->size()));
+        return chunks.chunks().front().first(
+            std::min(limit, chunks.chunks().front().size()));
+    }
+
+    std::span<const std::byte> coerce_buffered_span(std::size_t n)
+    {
+        auto chunks = buffered_chunks().first(n);
+        auto one = chunks.single_span();
+        if (one)
+            return *one;
+        contiguize_buffered_for_derived();
+        return buffered().first(n);
+    }
+
+    static std::size_t require_nonzero(std::size_t size)
+    {
+        if (size == 0)
+            throw buffer_error{"reader buffer is empty"};
+        return size;
+    }
+
+    static std::span<std::byte> require_nonempty(std::span<std::byte> buffer)
+    {
+        if (buffer.empty())
+            throw buffer_error{"reader buffer is empty"};
+        return buffer;
+    }
+
+    static value_result to_value_result(read_result result) noexcept
+    {
+        return value_result{.values = result.bytes, .eof = result.eof};
+    }
+
+    class value_sink_byte_writer final : public byte_writer
+    {
+    public:
+        explicit value_sink_byte_writer(value_sink<std::byte> & sink)
+            : byte_writer(std::size_t{0})
+            , sink_(&sink)
+        {}
+
+    private:
+        hope<std::size_t> drain_more(
+            std::span<const std::span<const std::byte>> chunks,
+            std::size_t splat) override
+        {
+            return drain_more_task(chunks, splat);
+        }
+
+        task<std::size_t> drain_more_task(
+            std::span<const std::span<const std::byte>> chunks,
+            std::size_t splat)
+        {
+            auto accepted = std::size_t{0};
+            for (auto chunk : chunks.first(chunks.size() - 1)) {
+                for (auto byte : chunk) {
+                    co_await sink_->write(byte);
+                    ++accepted;
+                }
+            }
+
+            if (!chunks.empty()) {
+                auto pattern = chunks.back();
+                for (auto i = std::size_t{0}; i < splat; ++i) {
+                    for (auto byte : pattern) {
+                        co_await sink_->write(byte);
+                        ++accepted;
+                    }
+                }
+            }
+
+            co_return accepted;
+        }
+
+        value_sink<std::byte> * sink_;
+    };
 };
 
 /// Reader backed by a callable returning `task<read_result>` or

@@ -7,6 +7,7 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -282,6 +283,49 @@ public:
         return write_slow(std::move(value));
     }
 
+    /// Accept a contiguous run of values into this sink.
+    hope<void> write(std::span<const value_type> values)
+        requires std::copy_constructible<value_type>
+    {
+        if (values.empty())
+            return hope<void>::ready();
+        if (values.size() <= unused_capacity().size()) {
+            append_to_buffer(values);
+            return hope<void>::ready();
+        }
+        return write_slow(values);
+    }
+
+    /// Accept a chunked run of values into this sink.
+    template<std::size_t Inline>
+    hope<void> write(value_chunks<const value_type, Inline> values)
+        requires std::copy_constructible<value_type>
+    {
+        if (values.empty())
+            return hope<void>::ready();
+        if (values.size() <= unused_capacity().size()) {
+            append_to_buffer(values);
+            return hope<void>::ready();
+        }
+        return write_slow(values);
+    }
+
+    /// Accept `pattern` repeated `splat` times.
+    hope<void> write_splat(
+        std::span<const value_type> pattern,
+        std::size_t splat)
+        requires std::copy_constructible<value_type>
+    {
+        if (pattern.empty() || splat == 0)
+            return hope<void>::ready();
+        auto count = repeated_size(pattern.size(), splat);
+        if (count <= unused_capacity().size()) {
+            append_splat_to_buffer(pattern, splat);
+            return hope<void>::ready();
+        }
+        return write_splat_slow(pattern, splat);
+    }
+
     /// Drain all currently buffered values to the concrete sink.
     hope<void> flush()
     {
@@ -349,6 +393,45 @@ private:
         ++size_;
     }
 
+    static std::size_t repeated_size(
+        std::size_t pattern_size,
+        std::size_t splat)
+    {
+        if (
+            pattern_size != 0
+            && splat > std::numeric_limits<std::size_t>::max() / pattern_size)
+            throw value_buffer_error{"value count overflow"};
+        return pattern_size * splat;
+    }
+
+    void append_to_buffer(std::span<const value_type> values)
+        requires std::copy_constructible<value_type>
+    {
+        auto dst = unused_capacity();
+        if (values.size() > dst.size())
+            throw value_buffer_error{"value sink buffer is full"};
+        for (auto i = std::size_t{0}; i < values.size(); ++i)
+            std::construct_at(dst.data() + i, values[i]);
+        size_ += values.size();
+    }
+
+    template<std::size_t Inline>
+    void append_to_buffer(value_chunks<const value_type, Inline> values)
+        requires std::copy_constructible<value_type>
+    {
+        for (auto chunk : values)
+            append_to_buffer(chunk);
+    }
+
+    void append_splat_to_buffer(
+        std::span<const value_type> pattern,
+        std::size_t splat)
+        requires std::copy_constructible<value_type>
+    {
+        for (auto i = std::size_t{0}; i < splat; ++i)
+            append_to_buffer(pattern);
+    }
+
     void reset_if_empty() noexcept
     {
         if (size_ == 0)
@@ -400,6 +483,30 @@ private:
             co_await drain_buffered_once();
 
         emplace_back(std::move(value));
+    }
+
+    task<void> write_slow(std::span<const value_type> values)
+        requires std::copy_constructible<value_type>
+    {
+        for (auto value : values)
+            co_await write(value_type{value});
+    }
+
+    template<std::size_t Inline>
+    task<void> write_slow(value_chunks<const value_type, Inline> values)
+        requires std::copy_constructible<value_type>
+    {
+        for (auto chunk : values)
+            co_await write(chunk);
+    }
+
+    task<void> write_splat_slow(
+        std::span<const value_type> pattern,
+        std::size_t splat)
+        requires std::copy_constructible<value_type>
+    {
+        for (auto i = std::size_t{0}; i < splat; ++i)
+            co_await write(pattern);
     }
 
     task<void> drain_buffered_once()
@@ -655,6 +762,23 @@ public:
         return peek_slow(n);
     }
 
+    /// Copy a trivially copyable object from the next values without consuming.
+    ///
+    /// This is byte-reader `peek_struct()` generalized over atom-sized source
+    /// values: for example, three buffered `int` values may be copied into a
+    /// trivially copyable struct whose object representation is three ints wide.
+    template<typename Object>
+        requires std::is_trivially_copyable_v<Object>
+            && std::is_trivially_copyable_v<value_type>
+    hope<Object> peek_struct()
+    {
+        constexpr auto n = object_value_count<Object>();
+        auto values = peek(n);
+        if (values.is_ready())
+            return hope<Object>::ready(copy_struct<Object>(values.take_ready()));
+        return peek_struct_slow<Object>(std::move(values));
+    }
+
     /// Consume and return the next value.
     ///
     /// Returns `std::nullopt` at EOF.
@@ -699,6 +823,26 @@ public:
             return hope<value_type>::ready(std::move(*one));
         }
         return take_one_slow(std::move(value));
+    }
+
+    /// Consume and copy a trivially copyable object from the next values.
+    ///
+    /// Returns `std::nullopt` only when EOF is reached before any value of the
+    /// object is available. EOF in the middle of the object is
+    /// `value_end_of_stream`.
+    template<typename Object>
+        requires std::is_trivially_copyable_v<Object>
+            && std::is_trivially_copyable_v<value_type>
+    hope<std::optional<Object>> take_struct()
+    {
+        constexpr auto n = object_value_count<Object>();
+        if (buffered_size() >= n) {
+            auto value = copy_struct<Object>(buffered().first(n));
+            toss(n);
+            return hope<std::optional<Object>>::ready(value);
+        }
+
+        return take_struct_slow<Object>();
     }
 
     /// Consume one expected value, or throw without consuming on mismatch.
@@ -766,6 +910,16 @@ protected:
             size_);
     }
 
+    [[nodiscard]] std::size_t storage_capacity() const noexcept
+    {
+        return capacity_;
+    }
+
+    [[nodiscard]] std::span<value_type> buffer_storage() noexcept
+    {
+        return {buffer_, capacity_};
+    }
+
     [[nodiscard]] std::span<value_type> unused_capacity() noexcept
     {
         return detail::ring_unused_capacity(
@@ -781,6 +935,45 @@ protected:
             throw value_buffer_error{"value source buffer is full"};
         std::construct_at(buffer_ + write_index(), std::move(value));
         ++size_;
+    }
+
+    void advance_constructed(std::size_t n)
+    {
+        if (n > unused_capacity().size())
+            throw value_buffer_error{"value source advanced past buffer capacity"};
+        size_ += n;
+    }
+
+    void consume_buffered_for_derived(std::size_t n)
+    {
+        toss(n);
+    }
+
+    void contiguize_buffered_for_derived()
+        requires std::is_trivially_copyable_v<value_type>
+    {
+        if (size_ == 0) {
+            seek_ = 0;
+            return;
+        }
+        if (seek_ + size_ <= capacity_)
+            return;
+
+        auto values = std::vector<value_type>(size_);
+        auto offset = std::size_t{0};
+        for (auto chunk : buffered_chunks()) {
+            std::memcpy(
+                values.data() + offset,
+                chunk.data(),
+                chunk.size_bytes());
+            offset += chunk.size();
+        }
+
+        destroy_prefix(size_);
+        seek_ = 0;
+        for (auto i = std::size_t{0}; i < values.size(); ++i)
+            std::construct_at(buffer_ + i, values[i]);
+        size_ = values.size();
     }
 
     /// Mandatory cold-path source operation.
@@ -919,6 +1112,14 @@ private:
         co_return buffered().first(n);
     }
 
+    template<typename Object>
+        requires std::is_trivially_copyable_v<Object>
+            && std::is_trivially_copyable_v<value_type>
+    task<Object> peek_struct_slow(hope<const_value_chunk_view> values)
+    {
+        co_return copy_struct<Object>(co_await std::move(values));
+    }
+
     task<std::optional<value_type>> take_slow()
     {
         while (true) {
@@ -958,6 +1159,34 @@ private:
         if (!one)
             throw value_end_of_stream{"unexpected end of value input"};
         co_return std::move(*one);
+    }
+
+    template<typename Object>
+        requires std::is_trivially_copyable_v<Object>
+            && std::is_trivially_copyable_v<value_type>
+    task<std::optional<Object>> take_struct_slow()
+    {
+        constexpr auto n = object_value_count<Object>();
+        if (buffered_size() < n) {
+            while (buffered_size() < n) {
+                auto before = buffered_size();
+                auto read = co_await fill_more();
+                if (
+                    read.eof
+                    && read.values == 0
+                    && buffered_size() == before) {
+                    if (buffered_size() == 0)
+                        co_return std::nullopt;
+                    throw value_end_of_stream{
+                        "unexpected end of value input",
+                    };
+                }
+            }
+        }
+
+        auto value = copy_struct<Object>(buffered().first(n));
+        toss(n);
+        co_return value;
     }
 
     task<void> expect_slow(value_type expected)
@@ -1007,6 +1236,36 @@ private:
     {
         destroy_prefix(size_);
         seek_ = 0;
+    }
+
+    template<typename Object>
+    static consteval std::size_t object_value_count()
+    {
+        static_assert(
+            sizeof(Object) % sizeof(value_type) == 0,
+            "object size must be a whole number of source values");
+        return sizeof(Object) / sizeof(value_type);
+    }
+
+    template<typename Object, std::size_t Inline>
+    static Object copy_struct(value_chunks<const value_type, Inline> values)
+    {
+        constexpr auto n = object_value_count<Object>();
+        if (values.size() < n)
+            throw value_buffer_error{"not enough values to copy object"};
+
+        auto out = Object{};
+        auto bytes = std::as_writable_bytes(std::span{&out, 1});
+        auto offset = std::size_t{0};
+        for (auto chunk : values.first(n)) {
+            auto chunk_bytes = std::as_bytes(chunk);
+            std::memcpy(
+                bytes.data() + offset,
+                chunk_bytes.data(),
+                chunk_bytes.size());
+            offset += chunk_bytes.size();
+        }
+        return out;
     }
 
     value_storage<value_type> owned_buffer_{0};

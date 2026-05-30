@@ -3247,6 +3247,15 @@ static suite runtime_tests{
                 deck.sync_wait(check_byte_value_source_ring_shape(source));
             };
 
+            "byte readers are byte value sources"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"abcdef"sv};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader = text_source(chunks, std::span{storage});
+
+                deck.sync_wait(check_byte_value_source_ring_shape(reader));
+            };
+
             "peek returns null at eof"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto source = int_value_source{std::vector<int>{}, 1};
@@ -3289,6 +3298,21 @@ static suite runtime_tests{
                 deck.sync_wait(check_value_sink_ring_buffer(sink));
 
                 expect(sink.collected == std::vector<int>{1, 2, 3, 4, 5});
+            };
+
+            "sinks write value spans and splats"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto sink = collecting_int_sink{64, std::size_t{8}};
+                auto values = std::array{1, 2, 3};
+                auto pattern = std::array{8, 9};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await sink.write(std::span<const int>{values});
+                    co_await sink.write_splat(std::span<const int>{pattern}, 2);
+                    co_await sink.flush();
+                }());
+
+                expect(sink.collected == std::vector<int>{1, 2, 3, 8, 9, 8, 9});
             };
 
             "stream_all moves source values into sinks"_test = [] {
@@ -3343,6 +3367,37 @@ static suite runtime_tests{
 
                 expect(streamed == std::size_t{3});
                 expect(values == std::vector<int>{10, 20, 30});
+            };
+
+            "sources peek and take structs over value atoms"_test = [] {
+                struct triple
+                {
+                    int a = 0;
+                    int b = 0;
+                    int c = 0;
+                };
+
+                auto deck = nxtrt::deck{};
+                auto source =
+                    int_value_source{std::vector<int>{1, 2, 3, 4}, 3};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    auto peeked = co_await source.peek_struct<triple>();
+                    expect(peeked.a == 1_i);
+                    expect(peeked.b == 2_i);
+                    expect(peeked.c == 3_i);
+                    expect(source.buffered_size() == std::size_t{3});
+
+                    auto taken = co_await source.take_struct<triple>();
+                    expect(taken.has_value());
+                    expect(taken->a == 1_i);
+                    expect(taken->b == 2_i);
+                    expect(taken->c == 3_i);
+                    expect(source.buffered_size() == std::size_t{0});
+
+                    auto rest = co_await source.take_one();
+                    expect(rest == 4_i);
+                }());
             };
 
             "byte parsers stream parsed values from byte readers"_test = [] {
