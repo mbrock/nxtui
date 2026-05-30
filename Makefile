@@ -75,7 +75,11 @@ bench-uring-trace: bench-build
 	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-trace
 
 spec:
+	@echo "== baseline runtime spec =="
 	racket nxtrt/model.rkt --run-all
+	@echo
+	@echo "== next runtime spec =="
+	racket nxtrt/model-next.rkt --run-all
 
 docs:
 	rm -rf docs/html

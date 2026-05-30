@@ -204,8 +204,11 @@ public:
     {
         start(t);
         while (!t.done()) {
-            if (ready_.empty())
-                throw runtime_error{"nxtrt deck deadlock"};
+            if (ready_.empty()) {
+                auto message = std::string{"nxtrt deck deadlock\n"};
+                message += runtime_dump_text();
+                throw runtime_error{std::move(message)};
+            }
             run_ready();
         }
 

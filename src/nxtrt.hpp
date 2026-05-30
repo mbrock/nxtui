@@ -11,6 +11,7 @@
 #include "nxtrt/deck.hpp"
 #include "nxtrt/exceptions.hpp"
 #include "nxtrt/fs.hpp"
+#include "nxtrt/game.hpp"
 #include "nxtrt/http.hpp"
 #include "nxtrt/sampling.hpp"
 #include "nxtrt/scoped_process.hpp"

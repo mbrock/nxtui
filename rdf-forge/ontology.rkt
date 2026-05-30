@@ -1,5 +1,7 @@
 #lang racket/base
 
+(require racket/string)
+
 (require (for-syntax racket/base
                      syntax/parse))
 
@@ -8,6 +10,7 @@
  (struct-out term)
  define-ontology
  define-class
+ define-variant
  define-property
  ontology-declared-terms
  ontology-property
@@ -28,20 +31,30 @@
   (set-box! (ontology-terms ont) (cons value (unbox (ontology-terms ont))))
   value)
 
-(define (make-class-term ont local #:abstract [abstract #f] #:subclass-of [parent #f])
+(define (make-class-term ont local
+                         #:abstract [abstract #f]
+                         #:subclass-of [parent #f]
+                         #:variant-children [variant-children #f])
   (make-term ont local 'class
              (append (if abstract (list (cons 'abstract #t)) '())
-                     (if parent (list (cons 'subclass-of parent)) '()))))
+                     (if parent (list (cons 'subclass-of parent)) '())
+                     (if variant-children
+                         (list (cons 'variant-children variant-children))
+                         '()))))
 
 (define (make-property-term ont local
                             #:domain [domain #f]
                             #:range [range #f]
+                            #:multiplicity [multiplicity #f]
+                            #:variable? [variable? #f]
                             #:inverse-of [inverse #f]
                             #:forge-name [forge-name #f]
                             #:rdf-name [rdf-name #f])
   (make-term ont local 'property
              (append (if domain (list (cons 'domain domain)) '())
                      (if range (list (cons 'range range)) '())
+                     (if multiplicity (list (cons 'multiplicity multiplicity)) '())
+                     (if variable? (list (cons 'variable? variable?)) '())
                      (if inverse (list (cons 'inverse-of inverse)) '())
                      (if forge-name (list (cons 'forge-name forge-name)) '())
                      (if rdf-name (list (cons 'rdf-name rdf-name)) '()))))
@@ -53,14 +66,23 @@
            (term-local domain)
            (term-local range))))
 
+(define (property-overload-domain overload) (list-ref overload 0))
+(define (property-overload-range overload) (list-ref overload 1))
+(define (property-overload-multiplicity overload)
+  (if (>= (length overload) 3) (list-ref overload 2) #f))
+(define (property-overload-variable? overload)
+  (if (>= (length overload) 4) (list-ref overload 3) #f))
+
 (define (make-property-family ont local overloads)
   (for/list ([overload (in-list overloads)])
-    (define domain (car overload))
-    (define range (cadr overload))
+    (define domain (property-overload-domain overload))
+    (define range (property-overload-range overload))
     (define forge-name (overload-forge-name local domain range))
     (make-property-term ont forge-name
                         #:domain domain
                         #:range range
+                        #:multiplicity (property-overload-multiplicity overload)
+                        #:variable? (property-overload-variable? overload)
                         #:rdf-name local)))
 
 (define (ontology-property-matches ont local #:domain [domain #f] #:range [range #f])
@@ -122,6 +144,12 @@
     [(symbol? value) (format "~a" value)]
     [else (format "~s" value)]))
 
+(define (turtle-local-name ont local)
+  (format "~a:~a" (ontology-prefix ont) local))
+
+(define (turtle-list items)
+  (format "(~a)" (string-join items " ")))
+
 (define (term->turtle value)
   (define options (term-options value))
   (case (term-kind value)
@@ -132,27 +160,35 @@
           (format "~a rdfs:subClassOf ~a .\n"
                   (turtle-name value)
                   (turtle-literal (option-ref options 'subclass-of)))
+          "")
+      (if (option-ref options 'variant-children)
+          (format "~a owl:disjointUnionOf ~a .\n"
+                  (turtle-name value)
+                  (turtle-list
+                   (map (lambda (local)
+                          (turtle-local-name (term-ontology value) local))
+                        (option-ref options 'variant-children))))
           ""))]
     [(property)
-     (if (eq? (term-local value) (term-rdf-name value))
-         (string-append
-          (format "~a a owl:ObjectProperty .\n" (turtle-name value))
-          (if (option-ref options 'domain)
-              (format "~a rdfs:domain ~a .\n"
-                      (turtle-name value)
-                      (turtle-literal (option-ref options 'domain)))
-              "")
-          (if (option-ref options 'range)
-              (format "~a rdfs:range ~a .\n"
-                      (turtle-name value)
-                      (turtle-literal (option-ref options 'range)))
-              "")
-          (if (option-ref options 'inverse-of)
-              (format "~a owl:inverseOf ~a .\n"
-                      (turtle-name value)
-                      (turtle-literal (option-ref options 'inverse-of)))
-              ""))
-         "")]
+     (define name (turtle-local-name (term-ontology value)
+                                     (term-rdf-name value)))
+     (string-append
+      (format "~a a owl:ObjectProperty .\n" name)
+      (if (option-ref options 'domain)
+          (format "~a rdfs:domain ~a .\n"
+                  name
+                  (turtle-literal (option-ref options 'domain)))
+          "")
+      (if (option-ref options 'range)
+          (format "~a rdfs:range ~a .\n"
+                  name
+                  (turtle-literal (option-ref options 'range)))
+          "")
+      (if (option-ref options 'inverse-of)
+          (format "~a owl:inverseOf ~a .\n"
+                  name
+                  (turtle-literal (option-ref options 'inverse-of)))
+          ""))]
     [else ""]))
 
 (define (ontology->turtle ont)
@@ -178,6 +214,43 @@
     [(_ ont:id name:id #:subclass-of parent:id #:abstract)
      #'(define name (make-class-term ont 'name #:abstract #t #:subclass-of parent))]))
 
+(define-syntax (define-variant stx)
+  (syntax-parse stx
+    [(_ ont:id parent:id (child:id ...))
+     #'(begin
+         (define parent
+           (make-class-term ont
+                            'parent
+                            #:abstract #t
+                            #:variant-children '(child ...)))
+         (define child (make-class-term ont 'child #:subclass-of parent))
+         ...)]))
+
+(begin-for-syntax
+  (define-syntax-class property-clause
+    #:attributes (domain range multiplicity variable?)
+    [pattern (domain:id range:id)
+     #:attr multiplicity #''set
+     #:attr variable? #'#f]
+    [pattern (domain:id (~datum one) range:id)
+     #:attr multiplicity #''one
+     #:attr variable? #'#f]
+    [pattern (domain:id (~datum lone) range:id)
+     #:attr multiplicity #''lone
+     #:attr variable? #'#f]
+    [pattern (domain:id (~datum set) range:id)
+     #:attr multiplicity #''set
+     #:attr variable? #'#f]
+    [pattern (domain:id (~datum var) (~datum one) range:id)
+     #:attr multiplicity #''one
+     #:attr variable? #'#t]
+    [pattern (domain:id (~datum var) (~datum lone) range:id)
+     #:attr multiplicity #''lone
+     #:attr variable? #'#t]
+    [pattern (domain:id (~datum var) (~datum set) range:id)
+     #:attr multiplicity #''set
+     #:attr variable? #'#t]))
+
 (define-syntax (define-property stx)
   (syntax-parse stx
     [(_ ont:id name:id)
@@ -191,9 +264,16 @@
               #'(ontology-ensure-property ont 'name #:domain domain* #:range range*)]
              [(_ range*:id)
               #'(ontology-property ont 'name #:range range*)])))]
-    [(_ ont:id name:id ((domain:id range:id) ...))
+    [(_ ont:id name:id (clause:property-clause ...))
      #'(begin
-         (void (make-property-family ont 'name (list (list domain range) ...)))
+         (void (make-property-family
+                ont
+                'name
+                (list (list clause.domain
+                            clause.range
+                            clause.multiplicity
+                            clause.variable?)
+                      ...)))
          (define-syntax (name use-stx)
            (syntax-parse use-stx
              [id:id

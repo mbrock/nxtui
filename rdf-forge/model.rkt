@@ -151,7 +151,7 @@
 
 (define-syntax (all stx)
   (syntax-parse stx
-    [(_ ([var:id set:expr] ...) body:expr)
+    [(_ ([var:id set] ...) body)
      #'(with-forge-vars (var ...)
          (forge-quant 'all
                       (list (cons 'var set) ...)
@@ -159,22 +159,22 @@
 
 (define-syntax (some stx)
   (syntax-parse stx
-    [(_ ([var:id set:expr] ...) body:expr)
+    [(_ ([var:id set] ...) body)
      #'(with-forge-vars (var ...)
          (forge-quant 'some
                       (list (cons 'var set) ...)
                       body))]
-    [(_ expr:expr)
+    [(_ expr)
      #'(forge-expr 'some (list expr))]))
 
 (define-syntax (lone stx)
   (syntax-parse stx
-    [(_ ([var:id set:expr] ...) body:expr)
+    [(_ ([var:id set] ...) body)
      #'(with-forge-vars (var ...)
          (forge-quant 'lone
                       (list (cons 'var set) ...)
                       body))]
-    [(_ expr:expr)
+    [(_ expr)
      #'(forge-expr 'lone (list expr))]))
 
 (define (make-field term multiplicity range #:variable? [variable? #f])
@@ -262,6 +262,54 @@
                          (list (forge-option 'max_tracelength max-tracelength))
                          '()))))
 
+(define (ontology-class-terms ont)
+  (filter (lambda (value)
+            (and (term? value)
+                 (eq? (term-kind value) 'class)))
+          (ontology-declared-terms ont)))
+
+(define (ontology-field-terms ont)
+  (filter (lambda (value)
+            (and (term? value)
+                 (eq? (term-kind value) 'property)
+                 (term-option value 'domain)
+                 (term-option value 'range)))
+          (ontology-declared-terms ont)))
+
+(define (ontology->signatures ont)
+  (define class-terms (ontology-class-terms ont))
+  (define fields-by-domain
+    (for/fold ([fields (hasheq)])
+              ([property (in-list (ontology-field-terms ont))])
+      (define domain (term-option property 'domain))
+      (define range (term-option property 'range))
+      (define fld
+        (make-field property
+                    (term-option property 'multiplicity 'set)
+                    range
+                    #:variable? (and (term-option property 'variable?) #t)))
+      (hash-update fields domain (lambda (existing) (append existing (list fld))) '())))
+  (for/list ([class-term (in-list class-terms)])
+    (apply make-signature
+           class-term
+           (hash-ref fields-by-domain class-term '()))))
+
+(define (merge-signature-list signatures)
+  (define-values (order fields-by-term)
+    (for/fold ([order '()]
+               [fields (hasheq)])
+              ([sig (in-list signatures)])
+      (define term (forge-signature-term sig))
+      (define first? (not (hash-has-key? fields term)))
+      (values (if first? (append order (list term)) order)
+              (hash-update fields
+                           term
+                           (lambda (existing)
+                             (append existing (forge-signature-fields sig)))
+                           '()))))
+  (for/list ([term (in-list order)])
+    (apply make-signature term (hash-ref fields-by-term term))))
+
 (define (model #:language [language 'forge/temporal] . parts)
   (define-values (options signatures predicates checks runs)
     (for/fold ([options '()]
@@ -275,6 +323,12 @@
          (values (cons part options) signatures predicates checks runs)]
         [(forge-signature? part)
          (values options (cons part signatures) predicates checks runs)]
+        [(ontology? part)
+         (values options
+                 (append (reverse (ontology->signatures part)) signatures)
+                 predicates
+                 checks
+                 runs)]
         [(forge-predicate? part)
          (values options signatures (cons part predicates) checks runs)]
         [(forge-check? part)
@@ -285,7 +339,7 @@
          (raise-argument-error 'model "model part" part)])))
   (forge-model language
                (reverse options)
-               (reverse signatures)
+               (merge-signature-list (reverse signatures))
                (reverse predicates)
                (reverse checks)
                (reverse runs)))
@@ -309,6 +363,18 @@
                                #:domain domain-term
                                #:range (forge-field-range fld))]
     [else term]))
+
+(define (variant-children range-term signatures)
+  (define children (term-option range-term 'variant-children))
+  (and children
+       (for/list ([child-local (in-list children)])
+         (or (for/first ([sig (in-list signatures)]
+                         #:when (eq? (term-local (forge-signature-term sig))
+                                     child-local))
+               (forge-signature-term sig))
+             (raise-argument-error 'variant-children
+                                   "variant child signature"
+                                   child-local)))))
 
 (define (forge-option-hash model
                            #:run-options [run-options '()]
@@ -379,23 +445,37 @@
   relation-map)
 
 (define (compile-field-constraints signatures sig-map relation-map)
-  (for*/list ([sig (in-list signatures)]
-              [fld (in-list (forge-signature-fields sig))]
-              #:unless (eq? (forge-field-multiplicity fld) 'set))
+  (apply
+   append
+   (for*/list ([sig (in-list signatures)]
+               [fld (in-list (forge-signature-fields sig))])
     (define domain (hash-ref sig-map (forge-signature-term sig)))
     (define relation-term (field-term-for-domain (forge-signature-term sig) fld))
     (define relation (hash-ref relation-map relation-term))
     (define var (f:var (string->symbol (string-append (forge-name (forge-signature-term sig)) "_self"))))
     (define relation-value (f:join/func var relation))
-    (define body
+    (define variant-cases
+      (variant-children (forge-field-range fld) signatures))
+    (define multiplicity-body
       (case (forge-field-multiplicity fld)
+        [(set) #f]
         [(one) (f:one/func relation-value)]
         [(lone) (f:lone/func relation-value)]
         [else
          (raise-argument-error 'compile-field-constraints
                                "field multiplicity"
                                (forge-field-multiplicity fld))]))
-    (f:all-quant/func (list (cons var domain)) body)))
+    (define variant-body
+      (and variant-cases
+           (f:in/func
+            relation-value
+            (apply f:+/func
+                   (map (lambda (child) (hash-ref sig-map child))
+                        variant-cases)))))
+    (for/list ([body (in-list (filter values
+                                      (list multiplicity-body
+                                            variant-body)))])
+      (f:all-quant/func (list (cons var domain)) body)))))
 
 (define (compile-symbol sym env predicate-map)
   (cond

@@ -4,6 +4,7 @@
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/bell.hpp>
 #include <nxtrt/compression.hpp>
+#include <nxtrt/game.hpp>
 #include <nxtrt/http.hpp>
 #include <nxtrt/wand/kqueue.hpp>
 #include <nxtrt/sampling.hpp>
@@ -805,6 +806,229 @@ nxtrt::task<void> record_current_firm(
 {
     co_await nxtrt::yield();
     firms.push_back(nxtrt::current_firm());
+}
+
+nxtrt::task<void> record_current_int_game(
+    std::vector<nxtrt::game<int> *> & games)
+{
+    co_await nxtrt::yield();
+    games.push_back(nxtrt::current_game<int>());
+}
+
+nxtrt::task<void> post_game_event(int event)
+{
+    co_await nxtrt::require_current_game<int>().sync({
+        .post = {event},
+    });
+}
+
+nxtrt::task<void> wait_for_game_event(
+    int event,
+    std::vector<int> & seen)
+{
+    auto selected = co_await nxtrt::require_current_game<int>().sync({
+        .post = {},
+        .wait = [event](int x) { return x == event; },
+    });
+    seen.push_back(selected);
+}
+
+nxtrt::task<void> halt_game_event_once(
+    int event,
+    std::vector<int> & seen)
+{
+    auto selected = co_await nxtrt::require_current_game<int>().sync({
+        .post = {},
+        .wait = [event](int x) { return x != event; },
+        .halt = [event](int x) { return x == event; },
+    });
+    seen.push_back(selected);
+    nxtrt::require_current_firm().stop();
+}
+
+nxtrt::task<void> wait_for_never_game_event(bool & cancelled)
+{
+    try {
+        (void)co_await nxtrt::require_current_game<int>().sync({
+            .post = {},
+            .wait = [](int) { return false; },
+        });
+    } catch (const nxtrt::operation_cancelled &) {
+        cancelled = true;
+    }
+}
+
+enum class ttt_kind
+{
+    move,
+    x_win,
+    o_win,
+    draw,
+};
+
+struct ttt_event
+{
+    ttt_kind kind = ttt_kind::move;
+    char player = 'X';
+    int row = 0;
+    int col = 0;
+
+    friend bool operator==(ttt_event const &, ttt_event const &) = default;
+};
+
+struct ttt_board
+{
+    std::array<char, 9> cells{};
+
+    [[nodiscard]] char at(int row, int col) const
+    {
+        return cells[static_cast<std::size_t>(row * 3 + col)];
+    }
+
+    void place(ttt_event event)
+    {
+        cells[static_cast<std::size_t>(event.row * 3 + event.col)] =
+            event.player;
+    }
+
+    [[nodiscard]] bool full() const
+    {
+        return std::ranges::all_of(cells, [](char cell) {
+            return cell != '\0';
+        });
+    }
+
+    [[nodiscard]] bool wins(char player) const
+    {
+        auto line = [&](int a, int b, int c) {
+            return cells[static_cast<std::size_t>(a)] == player
+                && cells[static_cast<std::size_t>(b)] == player
+                && cells[static_cast<std::size_t>(c)] == player;
+        };
+        return line(0, 1, 2) || line(3, 4, 5) || line(6, 7, 8)
+            || line(0, 3, 6) || line(1, 4, 7) || line(2, 5, 8)
+            || line(0, 4, 8) || line(2, 4, 6);
+    }
+};
+
+inline ttt_event ttt_move(char player, int row, int col)
+{
+    return ttt_event{
+        .kind = ttt_kind::move,
+        .player = player,
+        .row = row,
+        .col = col,
+    };
+}
+
+nxtrt::task<void> ttt_enforce_turns()
+{
+    for (;;) {
+        co_yield nxtrt::sync_spec<ttt_event>{
+            .post = {},
+            .wait = [](ttt_event const & event) {
+                return event.kind == ttt_kind::move && event.player == 'X';
+            },
+            .halt = [](ttt_event const & event) {
+                return event.kind == ttt_kind::move && event.player == 'O';
+            },
+        };
+        co_yield nxtrt::sync_spec<ttt_event>{
+            .post = {},
+            .wait = [](ttt_event const & event) {
+                return event.kind == ttt_kind::move && event.player == 'O';
+            },
+            .halt = [](ttt_event const & event) {
+                return event.kind == ttt_kind::move && event.player == 'X';
+            },
+        };
+    }
+}
+
+nxtrt::task<void> ttt_square_taken(int row, int col)
+{
+    auto is_square = [row, col](ttt_event const & event) {
+        return event.kind == ttt_kind::move
+            && event.row == row
+            && event.col == col;
+    };
+    co_yield nxtrt::sync_spec<ttt_event>{
+        .post = {},
+        .wait = is_square,
+    };
+    for (;;) {
+        co_yield nxtrt::sync_spec<ttt_event>{
+            .post = {},
+            .halt = is_square,
+        };
+    }
+}
+
+nxtrt::task<void> ttt_detect_end(
+    ttt_board & board,
+    std::vector<ttt_event> & events)
+{
+    for (;;) {
+        auto event = co_yield nxtrt::sync_spec<ttt_event>{
+            .post = {},
+            .wait = [](ttt_event const & event) {
+                return event.kind == ttt_kind::move;
+            },
+        };
+        events.push_back(event);
+        board.place(event);
+
+        if (board.wins(event.player)) {
+            auto kind = event.player == 'X' ? ttt_kind::x_win : ttt_kind::o_win;
+            auto selected = co_yield ttt_event{.kind = kind};
+            events.push_back(selected);
+            nxtrt::require_current_firm().stop();
+            co_return;
+        }
+        if (board.full()) {
+            auto selected = co_yield ttt_event{.kind = ttt_kind::draw};
+            events.push_back(selected);
+            nxtrt::require_current_firm().stop();
+            co_return;
+        }
+    }
+}
+
+nxtrt::task<void> ttt_x_script()
+{
+    auto moves = std::array{
+        ttt_move('X', 1, 1),
+        ttt_move('X', 0, 1),
+        ttt_move('X', 2, 1),
+    };
+    for (auto move : moves) {
+        co_yield move;
+    }
+}
+
+nxtrt::task<void> ttt_o_ai()
+{
+    for (;;) {
+        co_yield nxtrt::sync_spec<ttt_event>{
+            .post = {},
+            .wait = [](ttt_event const & event) {
+                return event.kind == ttt_kind::move && event.player == 'X';
+            },
+        };
+        co_yield nxtrt::sync_spec<ttt_event>{
+            .post = {
+                ttt_move('O', 1, 1),
+                ttt_move('O', 0, 0),
+                ttt_move('O', 0, 2),
+                ttt_move('O', 2, 0),
+                ttt_move('O', 2, 2),
+                ttt_move('O', 0, 1),
+                ttt_move('O', 1, 0),
+                ttt_move('O', 1, 2),
+                ttt_move('O', 2, 1),
+            },
+        };
+    }
 }
 
 nxtrt::task<bool> read_task_stop_after_yield()
@@ -1714,6 +1938,131 @@ static suite runtime_tests{
             "keeps the alternate screen opt-in"_test = [] {
                 auto options = nxtrt::terminal_app_options{};
                 expect(!options.alternate_screen);
+            };
+        };
+
+        "games"_test = [] {
+            "bind the current game while the body runs"_test = [] {
+                auto deck = nxtrt::deck{};
+
+                auto seen = nxtrt::sync_wait_game<int>(
+                    deck,
+                    []() -> nxtrt::task<bool> {
+                        auto * before = nxtrt::current_game<int>();
+                        co_await nxtrt::yield();
+                        auto * after = nxtrt::current_game<int>();
+                        co_return before != nullptr && before == after;
+                });
+
+                expect(seen);
+            };
+
+            "forked tasks inherit the current game"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto games = std::vector<nxtrt::game<int> *>{};
+                auto expected = static_cast<nxtrt::game<int> *>(nullptr);
+
+                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
+                    expected = nxtrt::current_game<int>();
+                    nxtrt::fork(record_current_int_game(games));
+                    co_await nxtrt::join();
+                });
+
+                expect(expected != nullptr);
+                expect(games == std::vector<nxtrt::game<int> *>{expected});
+            };
+
+            "selected events resume posters and waiters"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto seen = std::vector<int>{};
+
+                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
+                    nxtrt::fork(post_game_event(7));
+                    nxtrt::fork(wait_for_game_event(7, seen));
+                    co_await nxtrt::join();
+                });
+
+                expect(seen == std::vector<int>{7});
+            };
+
+            "halted events wait for another legal post"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto seen = std::vector<int>{};
+
+                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
+                    nxtrt::fork(post_game_event(1));
+                    nxtrt::fork(halt_game_event_once(1, seen));
+                    nxtrt::fork(post_game_event(2));
+                    co_await nxtrt::join();
+                });
+
+                expect(seen == std::vector<int>{2});
+            };
+
+            "firm stop cancels parked game syncs"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto cancelled = false;
+
+                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
+                    nxtrt::fork(wait_for_never_game_event(cancelled));
+                    co_await nxtrt::yield();
+                    nxtrt::require_current_firm().stop();
+                    co_await nxtrt::join();
+                });
+
+                expect(cancelled);
+            };
+
+            "deck deadlocks describe parked game syncs"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto message = std::string{};
+
+                try {
+                    nxtrt::sync_wait_game<int>(
+                        deck,
+                        []() -> nxtrt::task<void> {
+                            co_yield nxtrt::sync_spec<int>{};
+                            co_return;
+                        });
+                } catch (const std::exception & e) {
+                    message = e.what();
+                }
+
+                expect(message.contains("nxtrt deck deadlock"));
+                expect(message.contains("[nxtrt] runtime dump"));
+                expect(message.contains("parked wishes: 1"));
+                expect(message.contains("game sync"));
+            };
+
+            "tic tac toe rules coordinate a self-play game"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto board = ttt_board{};
+                auto events = std::vector<ttt_event>{};
+
+                nxtrt::sync_wait_game<ttt_event>(
+                    deck,
+                    [&]() -> nxtrt::task<void> {
+                        nxtrt::fork(ttt_enforce_turns());
+                        for (auto row = 0; row != 3; ++row) {
+                            for (auto col = 0; col != 3; ++col)
+                                nxtrt::fork(ttt_square_taken(row, col));
+                        }
+                        nxtrt::fork(ttt_detect_end(board, events));
+                        nxtrt::fork(ttt_x_script());
+                        nxtrt::fork(ttt_o_ai());
+                        co_await nxtrt::join();
+                });
+
+                expect(events == std::vector<ttt_event>{
+                    ttt_move('X', 1, 1),
+                    ttt_move('O', 0, 0),
+                    ttt_move('X', 0, 1),
+                    ttt_move('O', 0, 2),
+                    ttt_move('X', 2, 1),
+                    ttt_event{.kind = ttt_kind::x_win},
+                });
+                expect(board.wins('X'));
+                expect(!board.wins('O'));
             };
         };
 

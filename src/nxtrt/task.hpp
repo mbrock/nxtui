@@ -106,6 +106,9 @@ struct promise_base
         return final_awaitable{};
     }
 
+    template<typename Yielded>
+    decltype(auto) yield_value(Yielded && yielded);
+
     /// Remember the coroutine that should continue after this task completes.
     void set_continuation(
         std::coroutine_handle<> handle,
@@ -499,6 +502,7 @@ private:
     {
         if (!coroutine_)
             return false;
+        debug::unpark_task(coroutine_.promise().id);
         coroutine_.destroy();
         coroutine_ = nullptr;
         return true;

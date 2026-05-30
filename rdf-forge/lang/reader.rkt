@@ -2,6 +2,8 @@
 
 (require (only-in parser-tools/lex position-line position-col position-offset)
          racket/match
+         racket/port
+         racket/string
          something/reader
          syntax/strip-context)
 
@@ -39,8 +41,27 @@
        (->syntax val pos)]))
   (walk form))
 
+(define unicode-replacements
+  '(("∀" . " forall ")
+    ("∃" . " exists ")
+    ("∈" . " in ")
+    ("∧" . " && ")
+    ("∨" . " || ")
+    ("⇒" . " => ")
+    ("→" . " => ")
+    ("∩" . " intersect ")
+    ("∪" . " union ")))
+
+(define (normalize-unicode-operators text)
+  (for/fold ([text text])
+            ([replacement (in-list unicode-replacements)])
+    (string-replace text (car replacement) (cdr replacement))))
+
 (define (read-syntax src [p (current-input-port)])
-  (define forms (read-something-forms p))
+  (define forms
+    (read-something-forms
+     (open-input-string
+      (normalize-unicode-operators (port->string p)))))
   (strip-context
    #`(module rdf-forge-module rdf-forge/lang/base
        (#%rewrite-body #,@(map (lambda (form) (form->syntax src form)) forms)))))

@@ -1,0 +1,48 @@
+There are tasks, decks, and flaps.
+
+A mood is either dawn, noon, dusk, or dead.
+
+A flap's mood varies.
+
+A deck's optional flap varies.
+
+  class TASK
+  class DECK
+  class FLAP
+
+  class MOOD is DAWN or NOON or DUSK or DEAD
+
+  a DECK holds some FLAP
+  a FLAP tries one TASK
+  a DECK varyingly picks a FLAP or not
+  a FLAP varyingly feels one MOOD
+
+model runtime-next-model
+  nxt-next
+
+  predicate P1
+    ∀ d ∈ DECK, c ∈ d/picks:
+      ∧ c ∈ d/holds
+
+  predicate P2
+    ∃ d ∈ DECK, t ∈ TASK, c ∈ FLAP:
+      ∧ c ∈ d/holds
+      ∧ c/tries = t
+      ∧ c/feels ∈ DAWN
+
+  predicate P3
+    ∃ d ∈ DECK, c ∈ d/holds:
+      ∧ c/feels ∈ DAWN
+      next-state
+        ∧ c/feels ∈ NOON
+        ∧ d/picks = c
+
+  run R1:
+    exactly 1 of DECK, TASK, FLAP, DAWN, NOON, DUSK, DEAD
+    show P2
+
+  run R2:
+    exactly 1 of DECK, TASK, FLAP, DAWN, NOON, DUSK, DEAD
+    for 2 steps
+    always P1
+    show P3
