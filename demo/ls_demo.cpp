@@ -3,15 +3,14 @@
 #include <nxtrt/fs.hpp>
 
 #if defined(__linux__)
-#include <nxtrt/uring_wand.hpp>
+#include <nxtrt/wand/uring.hpp>
 #else
-#include <nxtrt/kqueue_wand.hpp>
+#include <nxtrt/wand/kqueue.hpp>
 #endif
 
 #include <array>
 #include <format>
 #include <iostream>
-#include <ranges>
 #include <string>
 #include <sys/stat.h>
 #include <utility>
@@ -75,30 +74,30 @@ std::string mode_string(nxtrt::fs::file_status const & status)
     return result;
 }
 
+nxtrt::task<void> list_path_to_stdout(std::string path)
+{
+    auto out = nxtrt::standard_output_sink();
+    for (auto const & entry : co_await nxtrt::fs::list_path(std::move(path)))
+        co_await nxtrt::write(
+            out,
+            std::format(
+                "{} {:>8} {}\n",
+                mode_string(entry.status),
+                entry.status.size,
+                entry.name));
+    co_await out.flush();
+}
+
 } // namespace
 
 int main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
-    auto body = [path = std::move(path)]() mutable -> nxtrt::task<void> {
-        auto out = nxtrt::standard_output_writer();
-        co_await out.write_all(
-            (co_await nxtrt::fs::list_path(std::move(path)))
-                | std::views::transform(
-                    [](nxtrt::fs::directory_entry const & entry) {
-                        return std::format(
-                            "{} {:>8} {}\n",
-                            mode_string(entry.status),
-                            entry.status.size,
-                            entry.name);
-                    }));
-    };
-
 #if defined(__linux__)
-    nxtrt::run(std::move(body));
+    nxtrt::run(list_path_to_stdout(std::move(path)));
 #elif NXT_RT_HAS_KQUEUE
-    nxtrt::run_with_kqueue(std::move(body));
+    nxtrt::run_with_kqueue(list_path_to_stdout(std::move(path)));
 #else
     static_assert(NXT_RT_HAS_KQUEUE, "ls demo needs a runtime wand");
 #endif

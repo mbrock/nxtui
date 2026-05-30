@@ -1,14 +1,15 @@
 #pragma once
 
 #include "nxtrt/exec_lifecycle.hpp"
+#include "nxtrt/raw_uring.hpp"
 #include "nxtrt/task.hpp"
 
 #include <boost/container/hub.hpp>
 
-#if __has_include(<liburing.h>)
-#define NXT_RT_HAS_LIBURING 1
+#if defined(__linux__)
+#define NXT_RT_HAS_URING 1
 #else
-#define NXT_RT_HAS_LIBURING 0
+#define NXT_RT_HAS_URING 0
 #endif
 
 #include <algorithm>
@@ -34,17 +35,13 @@
 #include <variant>
 #include <vector>
 
-#if NXT_RT_HAS_LIBURING
-#include <liburing.h>
-#endif
-
 extern "C" char ** environ;
 
 namespace nxtrt {
 
-inline constexpr bool has_liburing_wand = NXT_RT_HAS_LIBURING != 0;
+inline constexpr bool has_uring_wand = NXT_RT_HAS_URING != 0;
 
-#if NXT_RT_HAS_LIBURING
+#if NXT_RT_HAS_URING
 
 class uring_wand;
 

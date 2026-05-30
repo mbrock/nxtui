@@ -164,23 +164,8 @@ if get_option('demo')
 endif
 
 if get_option('llm_tool')
-  if host_machine.system() == 'linux'
-    nxt_llm_liburing_dep = dependency(
-      'liburing',
-      fallback : ['liburing', 'uring'],
-      required : false,
-    )
-  else
-    nxt_llm_liburing_dep = disabler()
-  endif
-
   nxtllm_dependencies = [nxt_core_dep]
   nxtllm_dependencies += nxt_stacktrace_deps
-  if host_machine.system() == 'linux' and nxt_llm_liburing_dep.found()
-    nxtllm_dependencies += nxt_llm_liburing_dep
-  elif host_machine.system() == 'linux'
-    error('nxtllm requires liburing on Linux')
-  endif
 
   nxt_llm_cares_dep = dependency('libcares', required : true)
   nxtllm_dependencies += nxt_llm_cares_dep
@@ -203,20 +188,6 @@ if get_option('benchmarks')
     '-DNXT_RT_ENABLE_TRACE=0',
     '-fno-omit-frame-pointer',
   ]
-
-  if host_machine.system() == 'linux'
-    nxt_bench_liburing_dep = dependency(
-      'liburing',
-      fallback : ['liburing', 'uring'],
-      required : false,
-    )
-
-    if nxt_bench_liburing_dep.found()
-      nxt_bench_deps += nxt_bench_liburing_dep
-    else
-      error('benchmarks require liburing on Linux')
-    endif
-  endif
 
   executable('nxt-echo-bench',
     'bench/nxtrt-echo-bench.cpp',
@@ -288,22 +259,12 @@ if get_option('tests')
 
   if host_machine.system() == 'linux'
     nxt_test_sources += files('test/epoll-wand-test.cpp')
+    nxt_test_sources += files('test/uring-wand-test.cpp')
 
-    nxt_test_liburing_dep = dependency(
-      'liburing',
-      fallback : ['liburing', 'uring'],
-      required : false,
-    )
-
-    if nxt_test_liburing_dep.found()
-      nxt_test_sources += files('test/uring-wand-test.cpp')
-      nxt_test_deps += nxt_test_liburing_dep
-
-      nxt_test_cares_dep = dependency('libcares', required : false)
-      if nxt_test_cares_dep.found()
-        nxt_test_sources += files('test/cares-test.cpp')
-        nxt_test_deps += nxt_test_cares_dep
-      endif
+    nxt_test_cares_dep = dependency('libcares', required : false)
+    if nxt_test_cares_dep.found()
+      nxt_test_sources += files('test/cares-test.cpp')
+      nxt_test_deps += nxt_test_cares_dep
     endif
   elif host_machine.system() in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
     nxt_test_sources += files('test/kqueue-wand-test.cpp')

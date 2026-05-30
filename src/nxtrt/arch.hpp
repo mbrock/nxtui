@@ -8,7 +8,7 @@
 #endif
 
 namespace nxtrt::arch {
-#if defined(__linux__) && NXT_RT_HAS_LIBURING
+#if defined(__linux__) && NXT_RT_HAS_URING
 #define NXTRT_ARCH_HAS_WAND 1
 using wand = uring_wand;
 inline constexpr bool has_wand = true;

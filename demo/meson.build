@@ -1,23 +1,10 @@
-if host_machine.system() == 'linux'
-  nxt_liburing_dep = dependency(
-    'liburing',
-    fallback : ['liburing', 'uring'],
-    required : false,
-  )
-else
-  nxt_liburing_dep = disabler()
-endif
-
 ls_demo_dependencies = []
 ls_demo_available = false
 http_client_demo_dependencies = []
 http_client_demo_available = false
 
-if host_machine.system() == 'darwin'
+if host_machine.system() in ['linux', 'darwin']
   ls_demo_available = true
-elif nxt_liburing_dep.found()
-  ls_demo_available = true
-  ls_demo_dependencies += nxt_liburing_dep
 endif
 
 if ls_demo_available
@@ -64,10 +51,6 @@ if http_client_demo_available
   )
 else
   message('no HTTP demo dependencies found; skipping nxt-http-client-demo')
-endif
-
-if host_machine.system() == 'linux' and not nxt_liburing_dep.found()
-  message('liburing not found; skipping nxt-ls-demo')
 endif
 
 if not nxt_cares_dep.found()
