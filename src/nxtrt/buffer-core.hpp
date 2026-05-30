@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <expected>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -47,16 +48,54 @@ inline std::size_t find_bytes(
         std::distance(haystack.begin(), match.begin()));
 }
 
-struct read_result
+struct eof_t
+{};
+
+inline constexpr auto eof = eof_t{};
+
+/// Values accepted by the requested destination, or explicit EOF.
+///
+/// A successful zero count is valid progresslessness; EOF is represented by the
+/// error alternative instead of by a count value.
+class fare_t
 {
-    /// Bytes written into the requested destination.
-    ///
-    /// Zero bytes is valid progresslessness; it only means EOF when `eof` is
-    /// also true.
-    std::size_t bytes = 0;
-    /// True when the source is known to be exhausted.
-    bool eof = false;
+public:
+    fare_t(std::size_t n = 0) noexcept
+        : result_(n)
+    {}
+
+    fare_t(eof_t) noexcept
+        : result_(std::unexpected{eof})
+    {}
+
+    [[nodiscard]] bool has_value() const noexcept
+    {
+        return result_.has_value();
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return result_.has_value();
+    }
+
+    [[nodiscard]] std::size_t operator*() const noexcept
+    {
+        return *result_;
+    }
+
+private:
+    std::expected<std::size_t, eof_t> result_;
 };
+
+inline std::size_t value_count(fare_t const & result) noexcept
+{
+    return result ? *result : 0;
+}
+
+inline bool is_eof(fare_t const & result) noexcept
+{
+    return !result;
+}
 
 template<typename T, std::size_t Inline = 2>
 class buffer_chunks

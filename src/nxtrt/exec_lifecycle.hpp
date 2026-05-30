@@ -1,13 +1,13 @@
 #pragma once
 
-#include "nxtrt/wish.hpp"
+#include "nxtrt/wand.hpp"
 
 #include <concepts>
 #include <variant>
 
 namespace nxtrt::detail::wand_exec {
 
-/// Allocated by `prepare_wish`; not yet parked by the urge.
+/// Allocated by `prep`; not yet parked by the urge.
 struct prepared
 {};
 
@@ -41,7 +41,7 @@ struct lifecycle
     struct parked
     {
         /// Coroutine to requeue when the wish settles.
-        parked_task continuation;
+        need continuation;
         /// Current phase while the continuation is still parked.
         ParkedPhase phase = ParkedPhase{queued{}};
     };

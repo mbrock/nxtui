@@ -101,18 +101,18 @@ private:
         return std::string{fallback};
     }
 
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
         if (done_)
-            return hope<value_result>::ready(value_result{.eof = true});
+            return hope<fare_t>::ready(eof);
         return stream_more_task(writer, limit);
     }
 
-    task<value_result> stream_more_task(
+    task<fare_t> stream_more_task(
         bytesink & writer,
         std::size_t limit)
     {
@@ -121,7 +121,7 @@ private:
 
         while (true) {
             if (out.empty())
-                co_return value_result{};
+                co_return 0;
 
             if (stream_.avail_in == 0)
                 co_await refill_input();
@@ -142,15 +142,15 @@ private:
             if (produced != 0) {
                 if (into_reader) {
                     advance_constructed(produced);
-                    co_return value_result{};
+                    co_return 0;
                 }
 
                 writer.advance_constructed(produced);
-                co_return value_result{.values = produced};
+                co_return produced;
             }
 
             if (done_)
-                co_return value_result{.eof = true};
+                co_return eof;
 
             if (rc == Z_BUF_ERROR && stream_.avail_in != 0)
                 throw compression_error{"zlib inflate made no progress"};
@@ -254,18 +254,18 @@ public:
     }
 
 private:
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
         if (done_)
-            return hope<value_result>::ready(value_result{.eof = true});
+            return hope<fare_t>::ready(eof);
         return stream_more_task(writer, limit);
     }
 
-    task<value_result> stream_more_task(
+    task<fare_t> stream_more_task(
         bytesink & writer,
         std::size_t limit)
     {
@@ -274,7 +274,7 @@ private:
 
         while (true) {
             if (out.empty())
-                co_return value_result{};
+                co_return 0;
 
             if (input_.pos == input_.size)
                 co_await refill_input();
@@ -293,15 +293,15 @@ private:
             if (output.pos != 0) {
                 if (into_reader) {
                     advance_constructed(output.pos);
-                    co_return value_result{};
+                    co_return 0;
                 }
 
                 writer.advance_constructed(output.pos);
-                co_return value_result{.values = output.pos};
+                co_return output.pos;
             }
 
             if (done_)
-                co_return value_result{.eof = true};
+                co_return eof;
         }
     }
 
@@ -390,18 +390,18 @@ public:
     }
 
 private:
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
         if (done_)
-            return hope<value_result>::ready(value_result{.eof = true});
+            return hope<fare_t>::ready(eof);
         return stream_more_task(writer, limit);
     }
 
-    task<value_result> stream_more_task(
+    task<fare_t> stream_more_task(
         bytesink & writer,
         std::size_t limit)
     {
@@ -410,7 +410,7 @@ private:
 
         while (true) {
             if (out.empty())
-                co_return value_result{};
+                co_return 0;
 
             if (available_in_ == 0)
                 co_await refill_input();
@@ -437,15 +437,15 @@ private:
             if (produced != 0) {
                 if (into_reader) {
                     advance_constructed(produced);
-                    co_return value_result{};
+                    co_return 0;
                 }
 
                 writer.advance_constructed(produced);
-                co_return value_result{.values = produced};
+                co_return produced;
             }
 
             if (done_)
-                co_return value_result{.eof = true};
+                co_return eof;
         }
     }
 

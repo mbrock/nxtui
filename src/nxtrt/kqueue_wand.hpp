@@ -119,7 +119,7 @@ public:
     kqueue_wand(kqueue_wand &&) = delete;
     kqueue_wand & operator=(kqueue_wand &&) = delete;
 
-    void suspend(wait_token token, parked_task task) override
+    void suspend(wait_token token, need task) override
     {
         trace("kqueue park token={}", token);
         auto * execution = exec_from_token(token);
@@ -228,7 +228,7 @@ private:
         std::shared_ptr<void> erased_state);
 
 protected:
-    wait_token prepare_wish(
+    wait_token prep(
         deck &,
         detail::promise_base &,
         detail::prepared_wish packet) override;
@@ -1290,7 +1290,7 @@ private:
             || !pending_changes_.empty();
     }
 
-    void fulfill(deck & d, exec & execution, parked_task continuation)
+    void fulfill(deck & d, exec & execution, need continuation)
     {
         trace("kqueue fulfill token={}", token_for(execution));
         continuation.resume(d);
@@ -1389,7 +1389,7 @@ wait_token kqueue_wand::prepare_kqueue_wish(
     return token;
 }
 
-inline wait_token kqueue_wand::prepare_wish(
+inline wait_token kqueue_wand::prep(
     deck &,
     detail::promise_base &,
     detail::prepared_wish packet)

@@ -403,7 +403,7 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 // `await_ready`), which is exactly the per-field trampoline this design exists
 // to kill.
 //
-// `stream_more()` itself returns `hope<read_result>`, not `task<read_result>`.
+// `stream_more()` itself returns `hope<fare_t>`, not `task<fare_t>`.
 // That is the payoff lever: a layer that already holds bytes (decrypted TLS
 // plaintext, an in-memory span) streams or refills SYNCHRONOUSLY, so a
 // fully-buffered read composes with zero suspensions through a whole stack of
@@ -448,7 +448,7 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 
 using bytefeed = feed<std::byte>;
 
-/// Reader backed by a callable returning `task<read_result>` or
+/// Reader backed by a callable returning `task<fare_t>` or
 /// `task<std::size_t>`. Count-only reads treat zero bytes as EOF.
 template<byte_read_task Read>
 class task_bytefeed final : public taskfeed<std::byte, Read>
@@ -492,12 +492,12 @@ public:
     {}
 
 private:
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
 
         auto total = std::size_t{0};
         auto remaining = limit;
@@ -521,19 +521,20 @@ private:
                 total += n;
                 remaining -= n;
                 if (remaining == 0 || writer.unused_capacity().empty())
-                    return hope<value_result>::ready(
-                        value_result{.values = total, .eof = chunk_ == end_});
+                    return hope<fare_t>::ready(
+                        total);
                 continue;
             }
 
             return stream_write_slow(std::move(write), n, chunk.size(), total);
         }
 
-        return hope<value_result>::ready(
-            value_result{.values = total, .eof = true});
+        if (total == 0)
+            return hope<fare_t>::ready(eof);
+        return hope<fare_t>::ready(total);
     }
 
-    task<value_result> stream_write_slow(
+    task<fare_t> stream_write_slow(
         hope<void> write,
         std::size_t n,
         std::size_t chunk_size,
@@ -541,7 +542,7 @@ private:
     {
         co_await std::move(write);
         advance_chunk(n, chunk_size);
-        co_return value_result{.values = prefix + n, .eof = chunk_ == end_};
+        co_return prefix + n;
     }
 
     void advance_chunk(std::size_t n, std::size_t chunk_size)
@@ -695,8 +696,8 @@ inline task<std::size_t> stream_all(
     auto total = std::size_t{0};
     while (true) {
         auto result = co_await reader.stream(writer);
-        total += result.values;
-        if (result.eof)
+        total += value_count(result);
+        if (is_eof(result))
             break;
     }
     co_await writer.flush();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/buffer-core.hpp"
 #include "nxtrt/buffers.hpp"
 #include "nxtrt/compression.hpp"
 #include "nxtrt/value-buffers.hpp"
@@ -415,35 +416,34 @@ private:
         }
     }
 
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
         return stream_more_task(writer, limit);
     }
 
-    task<value_result> stream_more_task(
+    task<fare_t> stream_more_task(
         bytesink & writer,
         std::size_t limit)
     {
         if (done_)
-            co_return value_result{.values = 0, .eof = true};
+            co_return eof;
 
         if (auto dst = writer.unused_capacity(); !dst.empty())
             limit = std::min(limit, dst.size());
 
         auto chunk = co_await next(limit);
         if (!chunk)
-            co_return value_result{.values = 0, .eof = true};
+            co_return eof;
 
         co_await nxtrt::write(writer, *chunk);
 
-        co_return value_result{
-            .values = chunk->size(),
-            .eof = done_ && chunk->empty(),
-        };
+        if (done_ && chunk->empty())
+            co_return eof;
+        co_return chunk->size();
     }
 
     task<std::optional<std::span<const std::byte>>>
@@ -578,7 +578,7 @@ private:
         }
     }
 
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {

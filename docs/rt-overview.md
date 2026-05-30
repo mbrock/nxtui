@@ -16,10 +16,10 @@ The core value is @ref nxtrt::task "task<T>": a lazy coroutine frame that
 uniquely owns its state until it is moved into another task, awaited by a
 parent task, forked into a firm, or driven by a deck.
 
-Tasks do not run on construction. They run when a @ref nxtrt::deck "deck"
-puts their coroutine handle on its ready queue and later resumes that handle.
-Completion also returns to the deck: a task that finishes wakes its continuation
-by enqueueing it, rather than by resuming it inline.
+Tasks do not run on construction. They run when a @ref nxtrt::deck "deck" puts
+their coroutine handle on its ready queue and later resumes that handle.
+Completion also returns to the deck: a task that finishes wakes its
+continuation by enqueueing it, rather than by resuming it inline.
 
 ## Decks {#rt_deck}
 
@@ -27,12 +27,12 @@ A deck is the cooperative scheduler for the runtime. It owns a ready queue and
 resumes tasks in pump rounds.
 
 `run_ready()` is intentionally one round: it resumes the handles that were
-ready at the start of the call. Tasks that become ready during the call are left
-for a later round. This keeps scheduling explicit and avoids surprising
+ready at the start of the call. Tasks that become ready during the call are
+left for a later round. This keeps scheduling explicit and avoids surprising
 reentrancy.
 
-`sync_wait()` is the bridge from synchronous code into the runtime: it starts a
-root task and pumps the deck until that task completes. A deck may also be
+`sync_wait()` is the bridge from synchronous code into the runtime: it starts
+a root task and pumps the deck until that task completes. A deck may also be
 paired with a @ref rt_wand "wand" so tasks can await external I/O.
 
 Concrete API:
@@ -57,8 +57,8 @@ Concrete API:
 
 ## Firms {#rt_firm}
 
-Firms provide structured concurrency. A firm is an extent in which tasks can be
-forked, joined, stopped together, and observed after the firm has reached a
+Firms provide structured concurrency. A firm is an extent in which tasks can
+be forked, joined, stopped together, and observed after the firm has reached a
 join point.
 
 Forking a task into a firm starts child work without immediately awaiting it.
@@ -76,9 +76,9 @@ Concrete API:
 ## Deeds {#rt_deed}
 
 A deed is the caller's handle to a task forked into a firm. It is deliberately
-not the same thing as a task: the firm owns and joins the child work, while the
-deed lets user code recover the child's result after the firm has reached the
-appropriate point.
+not the same thing as a task: the firm owns and joins the child work, while
+the deed lets user code recover the child's result after the firm has reached
+the appropriate point.
 
 `deed<T>` rethrows child failure when read. `catching_deed<T>` carries an
 expected-like result so helpers can collect multiple child outcomes before
@@ -91,9 +91,9 @@ Concrete API:
 
 ## Wishes {#rt_wish}
 
-A wish is an awaitable request for outside work. It is a closed operation value:
-read some bytes, write some bytes, wait for readiness, open a file, wait for a
-timeout, and so on.
+A wish is an awaitable request for outside work. It is a closed operation
+value: read some bytes, write some bytes, wait for readiness, open a file,
+wait for a timeout, and so on.
 
 When task code awaits a wish, the active deck asks its active wand to prepare
 that operation. Preparation returns a typed urge, and the urge parks the
@@ -106,13 +106,13 @@ Concrete API:
 
 - @ref nxtrt::op "nxtrt::op"
 - @ref nxtrt::urge "nxtrt::urge<T>"
-- @ref nxtrt::parked_task "nxtrt::parked_task"
+- @ref nxtrt::need "nxtrt::need"
 
 ## Wands {#rt_wand}
 
 A wand is the backend boundary. It receives prepared wishes, stores parked
-tasks, submits platform work, and later resumes tasks by putting them back on a
-deck.
+tasks, submits platform work, and later resumes tasks by putting them back on
+a deck.
 
 `wave()` is called after a deck pump round. That gives task code a chance to
 stage several operations synchronously, then lets the wand submit them as a
@@ -131,8 +131,8 @@ buffered hot path and expose small `hope<T>` read operations; concrete readers
 override the refill edge. Byte writers mirror that shape for buffered writes,
 with concrete writers overriding the drain edge.
 
-Protocol helpers such as `nxtrt::fs` and `nxtrt::http` sit above the wish
-and byte-stream layers: they use runtime I/O, but they are not scheduler
+Protocol helpers such as `nxtrt::fs` and `nxtrt::http` sit above the wish and
+byte-stream layers: they use runtime I/O, but they are not scheduler
 primitives.
 
 Concrete API:

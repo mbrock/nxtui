@@ -145,7 +145,7 @@ struct ambient_int_key
 struct manual_wand final : nxtrt::wand
 {
     void
-    suspend(nxtrt::wait_token token, nxtrt::parked_task task) override
+    suspend(nxtrt::coin_t token, nxtrt::need task) override
     {
         parked.push_back(
             parked_entry{
@@ -154,7 +154,7 @@ struct manual_wand final : nxtrt::wand
             });
     }
 
-    void cancel(nxtrt::wait_token token) override
+    void cancel(nxtrt::coin_t token) override
     {
         cancelled.push_back(token);
     }
@@ -164,7 +164,7 @@ struct manual_wand final : nxtrt::wand
         ++waves;
     }
 
-    void fulfill(nxtrt::deck & deck, nxtrt::wait_token token)
+    void fulfill(nxtrt::deck & deck, nxtrt::coin_t token)
     {
         for (auto it = parked.begin(); it != parked.end(); ++it) {
             if (it->token != token)
@@ -179,7 +179,7 @@ struct manual_wand final : nxtrt::wand
     }
 
 protected:
-    nxtrt::wait_token prepare_wish(
+    nxtrt::coin_t prep(
         nxtrt::deck &,
         nxtrt::detail::promise_base &,
         nxtrt::detail::prepared_wish packet) override
@@ -199,12 +199,12 @@ protected:
 public:
     struct parked_entry
     {
-        nxtrt::wait_token token = 0;
-        nxtrt::parked_task task;
+        nxtrt::coin_t token = 0;
+        nxtrt::need task;
     };
 
-    std::vector<nxtrt::wait_token> prepared;
-    std::vector<nxtrt::wait_token> cancelled;
+    std::vector<nxtrt::coin_t> prepared;
+    std::vector<nxtrt::coin_t> cancelled;
     std::vector<parked_entry> parked;
     std::vector<std::shared_ptr<nxtrt::urge_state<void>>> states;
     int waves = 0;
@@ -217,28 +217,22 @@ struct empty_then_string_source final : nxtrt::bytefeed
     {}
 
 private:
-    nxtrt::hope<nxtrt::value_result> stream_more(
+    nxtrt::hope<nxtrt::fare_t> stream_more(
         nxtrt::bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return nxtrt::hope<nxtrt::value_result>::ready(
-                nxtrt::value_result{});
+            return nxtrt::hope<nxtrt::fare_t>::ready(
+                0);
         if (!returned_empty) {
             returned_empty = true;
-            return nxtrt::hope<nxtrt::value_result>::ready(
-                nxtrt::value_result{
-                .values = 0,
-                .eof = false,
-            });
+            return nxtrt::hope<nxtrt::fare_t>::ready(
+                0);
         }
 
         if (offset == text.size()) {
-            return nxtrt::hope<nxtrt::value_result>::ready(
-                nxtrt::value_result{
-                .values = 0,
-                .eof = true,
-            });
+            return nxtrt::hope<nxtrt::fare_t>::ready(
+                nxtrt::eof);
         }
 
         auto rest = std::string_view{text}.substr(offset);
@@ -250,23 +244,21 @@ private:
         if (!write.is_ready())
             return stream_write_slow(std::move(write), n);
         offset += n;
-        return nxtrt::hope<nxtrt::value_result>::ready(
-            nxtrt::value_result{
-            .values = n,
-            .eof = offset == text.size(),
-        });
+        if (n == 0 && offset == text.size())
+            return nxtrt::hope<nxtrt::fare_t>::ready(nxtrt::eof);
+        return nxtrt::hope<nxtrt::fare_t>::ready(
+            n);
     }
 
-    nxtrt::task<nxtrt::value_result> stream_write_slow(
+    nxtrt::task<nxtrt::fare_t> stream_write_slow(
         nxtrt::hope<void> write,
         std::size_t n)
     {
         co_await std::move(write);
         offset += n;
-        co_return nxtrt::value_result{
-            .values = n,
-            .eof = offset == text.size(),
-        };
+        if (n == 0 && offset == text.size())
+            co_return nxtrt::eof;
+        co_return n;
     }
 
 public:
@@ -392,41 +384,35 @@ struct int_feed final : nxtrt::feed<int>
     {}
 
 private:
-    nxtrt::hope<nxtrt::value_result> stream_more(
+    nxtrt::hope<nxtrt::fare_t> stream_more(
         nxtrt::sink<int> & sink,
         std::size_t limit) override
     {
         if (limit == 0)
-            return nxtrt::hope<nxtrt::value_result>::ready(
-                nxtrt::value_result{});
+            return nxtrt::hope<nxtrt::fare_t>::ready(
+                0);
         if (offset == values.size())
-            return nxtrt::hope<nxtrt::value_result>::ready(
-                nxtrt::value_result{.eof = true});
+            return nxtrt::hope<nxtrt::fare_t>::ready(
+                nxtrt::eof);
 
         auto write = sink.write(values[offset]);
         if (write.is_ready()) {
             ++offset;
             ++reads;
-            return nxtrt::hope<nxtrt::value_result>::ready(
-                nxtrt::value_result{
-                .values = 1,
-                .eof = offset == values.size(),
-            });
+            return nxtrt::hope<nxtrt::fare_t>::ready(
+                1);
         }
 
         return stream_write_slow(std::move(write));
     }
 
-    nxtrt::task<nxtrt::value_result> stream_write_slow(
+    nxtrt::task<nxtrt::fare_t> stream_write_slow(
         nxtrt::hope<void> write)
     {
         co_await std::move(write);
         ++offset;
         ++reads;
-        co_return nxtrt::value_result{
-            .values = 1,
-            .eof = offset == values.size(),
-        };
+        co_return 1;
     }
 
 public:
@@ -525,7 +511,7 @@ nxtrt::task<void> check_feed_chunk_peek(int_feed & source)
     expect(source.reads == std::size_t{2});
 
     auto discarded = co_await source.discard(2);
-    expect(discarded.values == std::size_t{2});
+    expect(value_count(discarded) == std::size_t{2});
 
     auto next = co_await source.take();
     expect(next && *next == 3_i);
@@ -536,7 +522,7 @@ nxtrt::task<void> check_feed_ring_peek(int_feed & source)
     auto initial = co_await source.peek(3);
     expect(initial.size() == std::size_t{3});
     auto discarded = co_await source.discard(2);
-    expect(discarded.values == std::size_t{2});
+    expect(value_count(discarded) == std::size_t{2});
 
     auto wrapped = co_await source.peek(3);
     expect(wrapped.size() == std::size_t{3});
@@ -567,7 +553,7 @@ nxtrt::task<void> check_byte_feed_ring_shape(
     expect(initial.chunk_count() == std::size_t{1});
 
     auto discarded = co_await source.discard(2);
-    expect(discarded.values == std::size_t{2});
+    expect(value_count(discarded) == std::size_t{2});
 
     auto wrapped = co_await source.peek(4);
     expect(byte_value_chunks_text(wrapped) == "cdef");
@@ -832,12 +818,12 @@ nxtrt::task<bool> shielded_child_stop_state()
     co_return co_await nxtrt::shield(read_task_stop_after_yield());
 }
 
-nxtrt::task<void> await_manual_token(nxtrt::wait_token token)
+nxtrt::task<void> await_manual_token(nxtrt::coin_t token)
 {
     co_await nxtrt::op::manual{.token = token};
 }
 
-nxtrt::task<void> shielded_manual_token(nxtrt::wait_token token)
+nxtrt::task<void> shielded_manual_token(nxtrt::coin_t token)
 {
     co_await nxtrt::shield(await_manual_token(token));
 }
@@ -1047,7 +1033,7 @@ inline nxtrt::task<int> map_over_ready_hope()
         nxtrt::hope<int>::ready(21), [](int x) { return x * 2; });
 }
 
-inline nxtrt::task<int> map_over_manual_wish(nxtrt::wait_token token)
+inline nxtrt::task<int> map_over_manual_wish(nxtrt::coin_t token)
 {
     co_return co_await nxtrt::map(
         nxtrt::op::manual{.token = token}, [] { return 7; });
@@ -1402,7 +1388,7 @@ static suite runtime_tests{
 
                 expect(!task.done())
                     << "mapped wish should park, not complete synchronously";
-                expect(wand.prepared == std::vector<nxtrt::wait_token>{55})
+                expect(wand.prepared == std::vector<nxtrt::coin_t>{55})
                     << "map must forward the wish's preparation to the wand";
                 expect(wand.parked.size() == std::size_t{1})
                     << "map must forward the single suspension";
@@ -2227,7 +2213,7 @@ static suite runtime_tests{
                 task.request_stop();
                 deck.run_until_idle();
 
-                expect(wand.prepared == std::vector<nxtrt::wait_token>{99});
+                expect(wand.prepared == std::vector<nxtrt::coin_t>{99});
                 expect(wand.cancelled.empty());
                 expect(wand.parked.size() == std::size_t{1});
 
@@ -2466,7 +2452,7 @@ static suite runtime_tests{
                 expect(deck.empty())
                     << "manual wish should not requeue itself";
                 expect(
-                    wand.prepared == std::vector<nxtrt::wait_token>{42})
+                    wand.prepared == std::vector<nxtrt::coin_t>{42})
                     << "wand should synchronously prepare the wish";
                 expect(wand.parked.size() == std::size_t{1})
                     << "urge should park the suspended coroutine";
@@ -2497,7 +2483,7 @@ static suite runtime_tests{
 
                 expect(events == std::vector<int>{1});
                 expect(
-                    wand.prepared == std::vector<nxtrt::wait_token>{7});
+                    wand.prepared == std::vector<nxtrt::coin_t>{7});
                 expect(wand.parked.size() == std::size_t{1});
                 expect(wand.waves == 1_i)
                     << "run_ready should wave the deck wand after the pump round";
@@ -2523,7 +2509,7 @@ static suite runtime_tests{
                 deck.run_ready();
                 task.request_stop();
 
-                expect(wand.cancelled == std::vector<nxtrt::wait_token>{99});
+                expect(wand.cancelled == std::vector<nxtrt::coin_t>{99});
             };
         };
 
@@ -2696,7 +2682,8 @@ static suite runtime_tests{
 
                 auto streamed =
                     deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
-                    co_return (co_await reader.stream(writer, 3)).values;
+                    co_return nxtrt::value_count(
+                        co_await reader.stream(writer, 3));
                 });
 
                 expect(streamed == std::size_t{3});
@@ -2729,7 +2716,8 @@ static suite runtime_tests{
                 auto dsts = std::array{std::span<std::byte>{out}};
 
                 auto read = deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
-                    co_return (co_await reader.read_vec(std::span{dsts})).bytes;
+                    co_return nxtrt::value_count(
+                        co_await reader.read_vec(std::span{dsts}));
                 });
 
                 expect(read == std::size_t{5});
@@ -2751,7 +2739,8 @@ static suite runtime_tests{
 
                 auto read = deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
                     co_await reader.fill(4);
-                    co_return (co_await reader.read_vec(std::span{dsts})).bytes;
+                    co_return nxtrt::value_count(
+                        co_await reader.read_vec(std::span{dsts}));
                 });
 
                 expect(read == std::size_t{3});
@@ -2768,20 +2757,21 @@ static suite runtime_tests{
 
                 auto discarded =
                     deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
-                    co_return (co_await reader.discard(2)).values;
+                    co_return nxtrt::value_count(
+                        co_await reader.discard(2));
                 });
                 auto rest = deck.sync_wait([&]() -> nxtrt::task<std::string> {
                     co_return std::string{
                         nxtrt::as_string_view(co_await reader.take(2))};
                 });
-                auto eof = deck.sync_wait([&]() -> nxtrt::task<nxtrt::value_result> {
+                auto eof = deck.sync_wait([&]() -> nxtrt::task<nxtrt::fare_t> {
                     co_return co_await reader.discard();
                 });
 
                 expect(discarded == std::size_t{2});
                 expect(rest == "cd");
-                expect(eof.values == std::size_t{0});
-                expect(eof.eof);
+                expect(value_count(eof) == std::size_t{0});
+                expect(is_eof(eof));
             };
 
             "write_all drains borrowed bytes into sinks"_test = [] {
@@ -2801,16 +2791,13 @@ static suite runtime_tests{
                 "from read results"_test = [] {
                     auto deck = nxtrt::deck{};
                     auto read = [](nxtrt::junk<std::byte> dst)
-                        -> nxtrt::task<nxtrt::read_result> {
+                        -> nxtrt::task<nxtrt::fare_t> {
                         auto text = std::string_view{"xy"};
                         std::memcpy(
                             dst.as_writable_bytes().data(),
                             text.data(),
                             text.size());
-                        co_return nxtrt::read_result{
-                            .bytes = text.size(),
-                            .eof = true,
-                        };
+                        co_return text.size();
                     };
                     auto storage = std::array<std::byte, 4>{};
                     auto source = nxtrt::task_bytefeed{read, std::span{storage}};
@@ -2841,22 +2828,21 @@ static suite runtime_tests{
                     auto source = nxtrt::task_bytefeed{read, std::span{storage}};
 
                     auto result = deck.sync_wait(
-                        [&]() -> nxtrt::task<nxtrt::read_result> {
+                        [&]() -> nxtrt::task<nxtrt::fare_t> {
                         auto chunk = co_await source.take_some();
-                        co_return nxtrt::read_result{
-                            .bytes = chunk ? chunk->size() : 0,
-                            .eof = !chunk,
-                        };
+                        if (!chunk)
+                            co_return nxtrt::eof;
+                        co_return chunk->size();
                     });
 
-                    expect(result.bytes == std::size_t{2});
-                    expect(!result.eof);
+                    expect(value_count(result) == std::size_t{2});
+                    expect(!is_eof(result));
                 };
 
                 "buffers into its feed storage when the stream sink has no room"_test = [] {
                     struct read_once
                     {
-                        nxtrt::task<nxtrt::read_result>
+                        nxtrt::task<nxtrt::fare_t>
                         operator()(nxtrt::junk<std::byte> dst)
                         {
                             auto text = std::string_view{"abc"};
@@ -2865,10 +2851,9 @@ static suite runtime_tests{
                                 dst.as_writable_bytes().data(),
                                 text.data(),
                                 n);
-                            co_return nxtrt::read_result{
-                                .bytes = n,
-                                .eof = false,
-                            };
+                            if (n == 0)
+                                co_return nxtrt::eof;
+                            co_return n;
                         }
                     };
 
@@ -2882,13 +2867,13 @@ static suite runtime_tests{
 
                     deck.sync_wait([&]() -> nxtrt::task<void> {
                         auto first = co_await source.stream(writer, 3);
-                        expect(first.values == std::size_t{0});
-                        expect(!first.eof);
+                        expect(value_count(first) == std::size_t{0});
+                        expect(!is_eof(first));
                         expect(writer.text.empty());
                         expect(nxtrt::as_string_view(source.buffered_span()) == "abc");
 
                         auto second = co_await source.stream(writer, 3);
-                        expect(second.values == std::size_t{3});
+                        expect(value_count(second) == std::size_t{3});
                     });
 
                     expect(writer.text == "abc");
@@ -3531,17 +3516,16 @@ static suite runtime_tests{
             "taskfeeds fill typed value storage from task callables"_test = [] {
                 struct read_ints
                 {
-                    nxtrt::task<nxtrt::value_result>
+                    nxtrt::task<nxtrt::fare_t>
                     operator()(nxtrt::junk<int> dst)
                     {
                         auto n = std::min(dst.size(), values.size() - offset);
                         for (auto i = std::size_t{0}; i < n; ++i)
                             std::construct_at(dst.data() + i, values[offset + i]);
                         offset += n;
-                        co_return nxtrt::value_result{
-                            .values = n,
-                            .eof = offset == values.size(),
-                        };
+                        if (n == 0)
+                            co_return nxtrt::eof;
+                        co_return n;
                     }
 
                     std::array<int, 4> values{1, 2, 3, 4};

@@ -70,17 +70,6 @@ struct unexpected_value : value_buffer_error
     using value_buffer_error::value_buffer_error;
 };
 
-struct value_result
-{
-    /// Values accepted by the requested destination.
-    ///
-    /// Zero values is valid progresslessness; it only means EOF when `eof` is
-    /// also true.
-    std::size_t values = 0;
-    /// True when the source is known to be exhausted.
-    bool eof = false;
-};
-
 /// View of raw storage where up to `size()` values of `T` may be constructed.
 ///
 /// Unlike `std::span<T>`, this does not claim that live `T` objects already
@@ -137,9 +126,8 @@ namespace detail {
 
 template<typename T, typename Result>
 concept value_read_result =
-    std::same_as<Result, value_result>
-    || std::same_as<Result, std::size_t>
-    || (std::same_as<T, std::byte> && std::same_as<Result, read_result>);
+    std::same_as<Result, fare_t>
+    || std::same_as<Result, std::size_t>;
 
 template<typename T, typename Read>
 concept value_read_task =
@@ -150,17 +138,14 @@ concept value_read_task =
         task_result_t<std::invoke_result_t<Read &, junk<T>>>>;
 
 template<typename T, typename Result>
-value_result normalize_value_read_result(Result result)
+fare_t normalize_value_read_result(Result result)
 {
-    if constexpr (std::same_as<Result, value_result>) {
+    if constexpr (std::same_as<Result, fare_t>) {
         return result;
-    } else if constexpr (std::same_as<Result, read_result>) {
-        return value_result{.values = result.bytes, .eof = result.eof};
     } else {
-        return value_result{
-            .values = result,
-            .eof = result == 0,
-        };
+        if (result == 0)
+            return eof;
+        return result;
     }
 }
 
@@ -1210,7 +1195,7 @@ public:
         auto result = read.take_ready();
         if (buffered_size() != 0)
             return hope<const value_type *>::ready(buffer_ + seek_);
-        if (result.eof && result.values == 0)
+        if (is_eof(result) && value_count(result) == 0)
             return hope<const value_type *>::ready(nullptr);
         return peek_slow();
     }
@@ -1262,7 +1247,7 @@ public:
         auto result = read.take_ready();
         if (buffered_size() != 0)
             return hope<std::optional<value_type>>::ready(take_buffered());
-        if (result.eof && result.values == 0)
+        if (is_eof(result) && value_count(result) == 0)
             return hope<std::optional<value_type>>::ready(std::nullopt);
         return take_slow();
     }
@@ -1340,12 +1325,12 @@ public:
     }
 
     /// Transfer one available chunk to `sink`, up to `limit` values.
-    hope<value_result> stream(
+    hope<fare_t> stream(
         sink<value_type> & sink,
         std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
 
         if (buffered_size() == 0)
             return stream_more(sink, limit);
@@ -1354,18 +1339,18 @@ public:
     }
 
     /// Discard one available chunk, up to `limit` values.
-    hope<value_result> discard(
+    hope<fare_t> discard(
         std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
 
         if (buffered_size() == 0)
             return discard_more(limit);
 
         auto n = std::min(limit, buffered_size());
         toss(n);
-        return hope<value_result>::ready(value_result{.values = n});
+        return hope<fare_t>::ready(n);
     }
 
     void rebase(std::size_t capacity)
@@ -1423,10 +1408,10 @@ public:
             if (!read.is_ready())
                 return take_some_span_slow(std::move(read), limit);
             auto result = read.take_ready();
-            if (result.eof && result.values == 0)
+            if (is_eof(result) && value_count(result) == 0)
                 return hope<std::optional<std::span<const value_type>>>::
                     ready(std::nullopt);
-            if (result.values == 0)
+            if (value_count(result) == 0)
                 return hope<std::optional<std::span<const value_type>>>::
                     ready(buffered_span().first(0));
         }
@@ -1471,12 +1456,12 @@ public:
         return take_until(as_bytes(delimiter));
     }
 
-    hope<read_result> read_vec(std::span<std::span<value_type>> dsts)
+    hope<fare_t> read_vec(std::span<std::span<value_type>> dsts)
         requires std::same_as<value_type, std::byte>
     {
         if (buffered_size() != 0) {
             auto n = copy_buffered_to(dsts);
-            return hope<read_result>::ready(read_result{.bytes = n});
+            return hope<fare_t>::ready(n);
         }
 
         auto dst = std::span<value_type>{};
@@ -1487,17 +1472,17 @@ public:
             }
         }
         if (dst.empty())
-            return hope<read_result>::ready(read_result{});
+            return hope<fare_t>::ready(0);
 
         auto out = fixed_sink<value_type>{dst};
         auto result = stream_more(out, dst.size());
         if (result.is_ready())
-            return hope<read_result>::ready(
+            return hope<fare_t>::ready(
                 finish_direct_read(out, result.take_ready()));
         return read_vec_slow(dst);
     }
 
-    hope<read_result> read(std::span<value_type> dst)
+    hope<fare_t> read(std::span<value_type> dst)
         requires std::same_as<value_type, std::byte>
     {
         auto dsts = std::array{dst};
@@ -1601,15 +1586,15 @@ protected:
     /// itself mean EOF.
     ///
     /// Like `feed<std::byte>::stream_more()`, an implementation may instead append
-    /// values to this source's own buffer with `emplace()` and return
-    /// `{.values = 0, .eof = false}`. That is the fallback when the destination
-    /// cannot immediately accept a value and the source has local buffer space.
-    virtual hope<value_result> stream_more(
+    /// values to this source's own buffer with `emplace()` and return zero.
+    /// That is the fallback when the destination cannot immediately accept a
+    /// value and the source has local buffer space.
+    virtual hope<fare_t> stream_more(
         sink<value_type> & sink,
         std::size_t limit)
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
         return stream_next(sink);
     }
 
@@ -1620,12 +1605,12 @@ protected:
         co_return std::nullopt;
     }
 
-    virtual hope<value_result> discard_more(std::size_t limit)
+    virtual hope<fare_t> discard_more(std::size_t limit)
     {
         auto sink = discarding_sink<value_type>{};
         auto result = stream_more(sink, limit);
         if (result.is_ready())
-            return hope<value_result>::ready(result.take_ready());
+            return hope<fare_t>::ready(result.take_ready());
         return discard_more_slow(limit);
     }
 
@@ -1661,14 +1646,14 @@ private:
             seek_ = 0;
     }
 
-    hope<value_result> fill_more()
+    hope<fare_t> fill_more()
     {
         if (buffered_size() == capacity_)
             throw value_buffer_error{"value source buffer is full"};
         return fill_more_into_capacity();
     }
 
-    hope<value_result> fill_more_into_capacity()
+    hope<fare_t> fill_more_into_capacity()
     {
         auto dst = unused_capacity();
         if (dst.empty())
@@ -1677,36 +1662,42 @@ private:
         auto sink = fixed_sink<value_type>{dst};
         auto result = stream_more(sink, dst.size());
         if (result.is_ready())
-            return hope<value_result>::ready(
+            return hope<fare_t>::ready(
                 finish_read(sink, result.take_ready()));
         return read_more_slow(dst.size());
     }
 
-    value_result finish_read(
+    fare_t finish_read(
         fixed_sink<value_type> & sink,
-        value_result result)
+        fare_t result)
     {
         auto written = sink.buffered_size();
-        if (written != result.values)
+        auto reported = value_count(result);
+        if (reported != 0 && written != reported)
             throw value_buffer_error{"value source stream count mismatch"};
         sink.release_buffered();
         size_ += written;
-        return result;
+        if (written == 0)
+            return result;
+        return written;
     }
 
-    read_result finish_direct_read(
+    fare_t finish_direct_read(
         fixed_sink<value_type> & sink,
-        value_result result)
+        fare_t result)
         requires std::same_as<value_type, std::byte>
     {
         auto written = sink.buffered_size();
-        if (written != result.values)
+        auto reported = value_count(result);
+        if (reported != 0 && written != reported)
             throw value_buffer_error{"value source stream count mismatch"};
         sink.release_buffered();
-        return read_result{.bytes = written, .eof = result.eof};
+        if (written == 0)
+            return result;
+        return written;
     }
 
-    task<value_result> read_more_slow(std::size_t limit)
+    task<fare_t> read_more_slow(std::size_t limit)
     {
         auto sink = fixed_sink<value_type>{
             unused_capacity().first(limit),
@@ -1720,7 +1711,7 @@ private:
         while (buffered_size() < n) {
             auto before = buffered_size();
             auto read = co_await fill_more_into_capacity();
-            if (read.eof && read.values == 0 && buffered_size() == before)
+            if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
                 throw value_end_of_stream{"unexpected end of value input"};
         }
     }
@@ -1732,18 +1723,18 @@ private:
             auto read = co_await fill_more();
             if (buffered_size() != 0)
                 co_return buffer_ + seek_;
-            if (read.eof && read.values == 0 && buffered_size() == before)
+            if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
                 co_return nullptr;
         }
     }
 
-    task<const value_type *> peek_slow(hope<value_result> first_read)
+    task<const value_type *> peek_slow(hope<fare_t> first_read)
     {
         auto before = buffered_size();
         auto read = co_await std::move(first_read);
         if (buffered_size() != 0)
             co_return buffer_ + seek_;
-        if (read.eof && read.values == 0 && buffered_size() == before)
+        if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
             co_return nullptr;
         co_return co_await peek_slow();
     }
@@ -1769,18 +1760,18 @@ private:
             auto read = co_await fill_more();
             if (buffered_size() != 0)
                 co_return take_buffered();
-            if (read.eof && read.values == 0 && buffered_size() == before)
+            if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
                 co_return std::nullopt;
         }
     }
 
-    task<std::optional<value_type>> take_slow(hope<value_result> first_read)
+    task<std::optional<value_type>> take_slow(hope<fare_t> first_read)
     {
         auto before = buffered_size();
         auto read = co_await std::move(first_read);
         if (buffered_size() != 0)
             co_return take_buffered();
-        if (read.eof && read.values == 0 && buffered_size() == before)
+        if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
             co_return std::nullopt;
         co_return co_await take_slow();
     }
@@ -1814,8 +1805,8 @@ private:
                 auto before = buffered_size();
                 auto read = co_await fill_more();
                 if (
-                    read.eof
-                    && read.values == 0
+                    is_eof(read)
+                    && value_count(read) == 0
                     && buffered_size() == before) {
                     if (buffered_size() == 0)
                         co_return std::nullopt;
@@ -1842,7 +1833,7 @@ private:
         co_await discard(1);
     }
 
-    hope<value_result> stream_buffered(
+    hope<fare_t> stream_buffered(
         sink<value_type> & sink,
         std::size_t limit)
     {
@@ -1856,8 +1847,8 @@ private:
                     chunk.size(),
                     true);
             toss(chunk.size());
-            return hope<value_result>::ready(
-                value_result{.values = chunk.size()});
+            return hope<fare_t>::ready(
+                chunk.size());
         }
 
         auto moved = std::size_t{0};
@@ -1870,10 +1861,10 @@ private:
                 return stream_buffered_slow(std::move(write), moved, false);
         }
 
-        return hope<value_result>::ready(value_result{.values = moved});
+        return hope<fare_t>::ready(moved);
     }
 
-    task<value_result> stream_buffered_slow(
+    task<fare_t> stream_buffered_slow(
         hope<void> write,
         std::size_t moved,
         bool consume_after)
@@ -1881,10 +1872,10 @@ private:
         co_await std::move(write);
         if (consume_after)
             toss(moved);
-        co_return value_result{.values = moved};
+        co_return moved;
     }
 
-    task<value_result> discard_more_slow(std::size_t limit)
+    task<fare_t> discard_more_slow(std::size_t limit)
     {
         auto sink = discarding_sink<value_type>{};
         co_return co_await stream_more(sink, limit);
@@ -1897,23 +1888,24 @@ private:
             auto out = fixed_sink<value_type>{storage};
             auto result = co_await stream_more(out, 1);
             auto written = out.buffered_size();
-            if (written != result.values)
+            auto reported = value_count(result);
+            if (reported != 0 && written != reported)
                 throw value_buffer_error{"value source stream count mismatch"};
             if (written != 0)
                 co_return std::optional<value_type>{std::move(storage.data()[0])};
-            if (result.eof)
+            if (is_eof(result))
                 co_return std::nullopt;
         }
     }
 
-    task<value_result> stream_next(sink<value_type> & sink)
+    task<fare_t> stream_next(sink<value_type> & sink)
     {
         auto value = co_await next_value();
         if (!value)
-            co_return value_result{.eof = true};
+            co_return eof;
 
         co_await sink.write(std::move(*value));
-        co_return value_result{.values = 1};
+        co_return 1;
     }
 
     std::span<const value_type> first_buffered_span(
@@ -1976,13 +1968,13 @@ private:
     }
 
     task<std::optional<std::span<const value_type>>>
-    take_some_span_slow(hope<value_result> first_read, std::size_t limit)
+    take_some_span_slow(hope<fare_t> first_read, std::size_t limit)
         requires std::same_as<value_type, std::byte>
     {
         auto read = co_await std::move(first_read);
-        if (read.eof && read.values == 0)
+        if (is_eof(read) && value_count(read) == 0)
             co_return std::nullopt;
-        if (read.values == 0)
+        if (value_count(read) == 0)
             co_return buffered_span().first(0);
 
         auto out = first_buffered_span(limit);
@@ -2015,12 +2007,12 @@ private:
                 throw value_buffer_error{"value source buffer filled before delimiter"};
 
             auto read = co_await fill_more();
-            if (read.eof && read.values == 0)
+            if (is_eof(read) && value_count(read) == 0)
                 throw value_end_of_stream{"unexpected end of value input"};
         }
     }
 
-    task<read_result> read_vec_slow(std::span<value_type> dst)
+    task<fare_t> read_vec_slow(std::span<value_type> dst)
         requires std::same_as<value_type, std::byte>
     {
         auto out = fixed_sink<value_type>{dst};
@@ -2106,42 +2098,41 @@ public:
     {}
 
 private:
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         sink<value_type> & sink,
         std::size_t limit) override
     {
         return stream_more_task(sink, limit);
     }
 
-    task<value_result> stream_more_task(
+    task<fare_t> stream_more_task(
         sink<value_type> & sink,
         std::size_t limit)
     {
         if (limit == 0)
-            co_return value_result{};
+            co_return 0;
 
         auto dst = sink.uninitialized_capacity();
         if (dst.empty()) {
             this->rebase(1);
             dst = this->uninitialized_capacity().first(limit);
             auto out = co_await read_into(dst);
-            this->advance_constructed(out.values);
-            co_return value_result{
-                .values = 0,
-                .eof = out.eof && out.values == 0,
-            };
+            this->advance_constructed(value_count(out));
+            if (is_eof(out) && value_count(out) == 0)
+                co_return eof;
+            co_return std::size_t{0};
         }
 
         auto out = co_await read_into(dst.first(limit));
-        sink.advance_constructed(out.values);
+        sink.advance_constructed(value_count(out));
         co_return out;
     }
 
-    task<value_result> read_into(junk<value_type> dst)
+    task<fare_t> read_into(junk<value_type> dst)
     {
         auto result = co_await derived().read_into(dst);
         auto out = normalize_value_read_result<value_type>(result);
-        if (out.values > dst.size())
+        if (value_count(out) > dst.size())
             throw value_buffer_error{"source overfilled taskfeed buffer"};
         co_return out;
     }
@@ -2287,12 +2278,12 @@ public:
     {}
 
 private:
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         sink<value_type> & sink,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
 
         auto total = std::size_t{0};
         while (value_ != end_ && total != limit) {
@@ -2307,20 +2298,18 @@ private:
                 break;
         }
 
-        return hope<value_result>::ready(
-            value_result{.values = total, .eof = value_ == end_});
+        if (total == 0 && value_ == end_)
+            return hope<fare_t>::ready(eof);
+        return hope<fare_t>::ready(total);
     }
 
-    task<value_result> stream_write_slow(
+    task<fare_t> stream_write_slow(
         hope<void> write,
         std::size_t prefix)
     {
         co_await std::move(write);
         ++value_;
-        co_return value_result{
-            .values = prefix + 1,
-            .eof = value_ == end_,
-        };
+        co_return prefix + 1;
     }
 
     Values values_;
@@ -2351,8 +2340,8 @@ task<std::size_t> stream_all(
     auto total = std::size_t{0};
     while (true) {
         auto result = co_await source.stream(sink);
-        total += result.values;
-        if (result.eof)
+        total += value_count(result);
+        if (is_eof(result))
             break;
     }
     co_await sink.flush();

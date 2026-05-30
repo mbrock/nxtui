@@ -3,7 +3,7 @@
 #include "nxtrt/ids.hpp"
 #include "nxtrt/env.hpp"
 #include "nxtrt/trace.hpp"
-#include "nxtrt/wish.hpp"
+#include "nxtrt/wand.hpp"
 
 #include <concepts>
 #include <coroutine>
@@ -233,7 +233,7 @@ private:
     template<typename T>
     friend class task;
     friend class firm;
-    friend struct parked_task;
+    friend struct need;
     friend struct yield_awaiter;
     /// @endcond
 

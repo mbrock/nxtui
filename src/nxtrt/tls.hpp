@@ -270,13 +270,13 @@ public:
     }
 
 private:
-    hope<value_result> stream_more(
+    hope<fare_t> stream_more(
         bytesink & writer,
         std::size_t limit) override
     {
         require_handshake();
         if (limit == 0)
-            return hope<value_result>::ready(value_result{});
+            return hope<fare_t>::ready(0);
 
         if (pending_offset_ < pending_.size())
             return copy_pending(writer, limit);
@@ -284,7 +284,7 @@ private:
         return stream_more_task(writer, limit);
     }
 
-    task<value_result> stream_more_task(
+    task<fare_t> stream_more_task(
         bytesink & writer,
         std::size_t limit)
     {
@@ -301,7 +301,7 @@ private:
         co_return co_await copy_pending(writer, limit);
     }
 
-    hope<read_result> copy_pending(
+    hope<fare_t> copy_pending(
         bytesink & writer,
         std::size_t limit)
     {
@@ -314,19 +314,19 @@ private:
         auto write = writer.write(pending.first(n));
         if (write.is_ready()) {
             pending_offset_ += n;
-            return hope<value_result>::ready(
-                value_result{.values = n, .eof = false});
+            return hope<fare_t>::ready(
+                n);
         }
         return copy_pending_slow(std::move(write), n);
     }
 
-    task<read_result> copy_pending_slow(
+    task<fare_t> copy_pending_slow(
         hope<void> write,
         std::size_t n)
     {
         co_await std::move(write);
         pending_offset_ += n;
-        co_return value_result{.values = n, .eof = false};
+        co_return n;
     }
 
     void require_handshake() const

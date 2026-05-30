@@ -55,7 +55,7 @@ public:
     uring_submission(
         uring_wand & wand,
         deck & d,
-        wait_token token) noexcept
+        coin_t token) noexcept
         : wand_(wand)
         , deck_(d)
         , token_(token)
@@ -65,7 +65,7 @@ public:
     void attach(io_uring_sqe * sqe) const noexcept;
     void complete_sync(int result);
 
-    [[nodiscard]] wait_token token() const noexcept
+    [[nodiscard]] coin_t token() const noexcept
     {
         return token_;
     }
@@ -73,7 +73,7 @@ public:
 private:
     uring_wand & wand_;
     deck & deck_;
-    wait_token token_;
+    coin_t token_;
 };
 
 inline bool stage_uring(uring_submission &, op::manual &);
@@ -171,7 +171,7 @@ public:
         io_uring_queue_exit(&ring_);
     }
 
-    void suspend(wait_token token, parked_task task) override
+    void suspend(coin_t token, need task) override
     {
         trace("uring park token={}", token);
         auto * execution = exec_from_token(token);
@@ -185,7 +185,7 @@ public:
         };
     }
 
-    void cancel(wait_token token) override
+    void cancel(coin_t token) override
     {
         auto * execution = exec_from_token(token);
         if (execution == nullptr)
@@ -278,7 +278,7 @@ public:
         }
     }
 
-    void complete(deck & d, wait_token token, int result)
+    void complete(deck & d, coin_t token, int result)
     {
         auto * execution = exec_from_token(token);
         if (execution == nullptr)
@@ -288,20 +288,20 @@ public:
         compact_execs();
     }
 
-    void fulfill(deck & d, wait_token token)
+    void fulfill(deck & d, coin_t token)
     {
         if (auto * execution = exec_from_token(token))
             fulfill(d, *execution);
     }
 
 protected:
-    wait_token prepare_wish(
+    coin_t prep(
         deck &,
         detail::promise_base &,
         detail::prepared_wish packet) override
     {
         return std::visit(
-            [this, &packet](auto & wish) -> wait_token {
+            [this, &packet](auto & wish) -> coin_t {
                 return prepare_uring_wish(
                     std::move(wish),
                     std::move(packet.state));
@@ -515,7 +515,7 @@ private:
     };
 
     template<typename Wish>
-    wait_token prepare_uring_wish(
+    coin_t prepare_uring_wish(
         Wish wish,
         std::shared_ptr<void> erased_state)
     {
@@ -567,16 +567,16 @@ private:
     }
 
     /// Return the public wait token for a live hub execution.
-    static wait_token token_for(exec & execution) noexcept
+    static coin_t token_for(exec & execution) noexcept
     {
-        static_assert(sizeof(std::uintptr_t) <= sizeof(wait_token));
+        static_assert(sizeof(std::uintptr_t) <= sizeof(coin_t));
         static_assert(alignof(exec) >= 2);
-        return static_cast<wait_token>(
+        return static_cast<coin_t>(
             reinterpret_cast<std::uintptr_t>(&execution));
     }
 
     /// Decode a wait token back to the live hub execution it names.
-    static exec * exec_from_token(wait_token token) noexcept
+    static exec * exec_from_token(coin_t token) noexcept
     {
         return reinterpret_cast<exec *>(
             static_cast<std::uintptr_t>(token));
@@ -768,7 +768,7 @@ private:
         fulfill(d, execution, continuation);
     }
 
-    void fulfill(deck & d, exec & execution, parked_task continuation)
+    void fulfill(deck & d, exec & execution, need continuation)
     {
         trace("uring fulfill token={}", token_for(execution));
         continuation.resume(d);

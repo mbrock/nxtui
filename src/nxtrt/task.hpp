@@ -119,7 +119,7 @@ struct promise_base
                 });
     }
 
-    void cancel_wait_on_stop(wand & w, wait_token token)
+    void cancel_wait_on_stop(wand & w, coin_t token)
     {
         wait_stop_callback.reset();
         auto stop = stop_token();
@@ -2399,7 +2399,7 @@ inline void deck::ready_item::resume_if_ready(deck & d) const
     handle.resume();
 }
 
-inline void parked_task::resume(deck & d) const
+inline void need::resume(deck & d) const
 {
     trace("wand fulfill parked task");
     if (promise != nullptr)
@@ -2431,7 +2431,7 @@ inline running_wish_context current_wish_context() noexcept
 }
 
 template<typename Wish>
-auto prepare_wish_awaitable(Wish const & wish)
+auto prep_wish_awaitable(Wish const & wish)
 {
     auto context = current_wish_context();
     if (context.active_deck == nullptr
@@ -2463,18 +2463,18 @@ inline void urge<T>::await_suspend(
         throw runtime_error{
             "nxtrt urge awaited without a prepared wand"};
 
-    trace("urge suspend token={}", token_);
+    trace("urge suspend token={}", coin_);
     debug::park_task(
         running->id,
-        token_,
+        coin_,
         debug::parked_wish_description(description_));
     active_wand->suspend(
-        token_,
-        parked_task{
+        coin_,
+        need{
             .handle = awaiting,
             .promise = running,
         });
-    running->cancel_wait_on_stop(*active_wand, token_);
+    running->cancel_wait_on_stop(*active_wand, coin_);
 }
 
 namespace op {
@@ -2482,7 +2482,7 @@ namespace op {
 template<awaitable_wish Wish>
 inline urge<typename Wish::result_type> operator co_await(Wish const & wish)
 {
-    return detail::prepare_wish_awaitable(wish);
+    return detail::prep_wish_awaitable(wish);
 }
 
 } // namespace op
