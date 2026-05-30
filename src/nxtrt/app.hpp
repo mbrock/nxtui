@@ -60,6 +60,8 @@ public:
 
     runtime()
         : deck_(&wand_)
+        , resize_wire_(resize_wire_storage_)
+        , input_wire_(input_wire_storage_)
     {
         debug::install_signal_dump();
     }
@@ -174,6 +176,8 @@ private:
     platform_wand wand_;
     deck deck_;
     bell damage_bell_;
+    value_storage<term_size> resize_wire_storage_{64};
+    value_storage<input_event> input_wire_storage_{64};
     wire<term_size> resize_wire_;
     wire<input_event> input_wire_;
     bool stopping_ = false;

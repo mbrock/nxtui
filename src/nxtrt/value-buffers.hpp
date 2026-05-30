@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -22,8 +23,6 @@
 #include <vector>
 
 namespace nxtrt {
-
-class byte_reader;
 
 namespace detail {
 
@@ -61,9 +60,9 @@ struct value_buffer_error : buffer_error
     using buffer_error::buffer_error;
 };
 
-struct value_end_of_stream : value_buffer_error
+struct value_end_of_stream : end_of_stream
 {
-    using value_buffer_error::value_buffer_error;
+    using end_of_stream::end_of_stream;
 };
 
 struct unexpected_value : value_buffer_error
@@ -81,6 +80,91 @@ struct value_result
     /// True when the source is known to be exhausted.
     bool eof = false;
 };
+
+/// View of raw storage where up to `size()` values of `T` may be constructed.
+///
+/// Unlike `std::span<T>`, this does not claim that live `T` objects already
+/// exist. Producers must start object lifetimes before reporting values as
+/// constructed to a feed or sink.
+template<typename T>
+class junk
+{
+public:
+    using value_type = std::remove_cv_t<T>;
+
+    junk() = default;
+
+    junk(value_type * data, std::size_t size)
+        : data_(data)
+        , size_(size)
+    {}
+
+    [[nodiscard]] value_type * data() const noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return size_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+
+    [[nodiscard]] junk first(std::size_t n) const noexcept
+    {
+        return {data_, std::min(n, size_)};
+    }
+
+    [[nodiscard]] std::span<std::byte> as_writable_bytes() const noexcept
+        requires std::is_trivially_copyable_v<value_type>
+    {
+        return {
+            reinterpret_cast<std::byte *>(data_),
+            size_ * sizeof(value_type),
+        };
+    }
+
+private:
+    value_type * data_ = nullptr;
+    std::size_t size_ = 0;
+};
+
+namespace detail {
+
+template<typename T, typename Result>
+concept value_read_result =
+    std::same_as<Result, value_result>
+    || std::same_as<Result, std::size_t>
+    || (std::same_as<T, std::byte> && std::same_as<Result, read_result>);
+
+template<typename T, typename Read>
+concept value_read_task =
+    std::invocable<Read &, junk<T>>
+    && is_task_v<std::invoke_result_t<Read &, junk<T>>>
+    && value_read_result<
+        T,
+        task_result_t<std::invoke_result_t<Read &, junk<T>>>>;
+
+template<typename T, typename Result>
+value_result normalize_value_read_result(Result result)
+{
+    if constexpr (std::same_as<Result, value_result>) {
+        return result;
+    } else if constexpr (std::same_as<Result, read_result>) {
+        return value_result{.values = result.bytes, .eof = result.eof};
+    } else {
+        return value_result{
+            .values = result,
+            .eof = result == 0,
+        };
+    }
+}
+
+} // namespace detail
 
 template<typename T, std::size_t Inline = 2>
 using value_chunks = buffer_chunks<T, Inline>;
@@ -214,13 +298,13 @@ private:
         sizeof(value_type) * (N == 0 ? 1 : N)];
 };
 
-/// Buffered asynchronous value sink.
+/// Buffered asynchronous sink for typed values.
 ///
-/// This is the typed-value counterpart to `byte_writer`: accepted values are
-/// constructed in raw value storage, and the virtual `drain_more()` is the cold
-/// path for moving staged values into the concrete backend.
+/// Accepted values are constructed in raw ring storage. The hot path is
+/// non-virtual and ready when values fit; `drain_more()` is the cold path that
+/// moves staged chunks into the concrete backend.
 template<typename T>
-class value_sink
+class sink
 {
 public:
     using value_type = std::remove_cv_t<T>;
@@ -228,24 +312,24 @@ public:
     using value_chunk_view = value_chunks<value_type>;
     using const_value_chunk_view = value_chunks<const value_type>;
 
-    explicit value_sink(storage_ref buffer)
+    explicit sink(storage_ref buffer)
         : buffer_(buffer.data)
         , capacity_(buffer.size)
     {}
 
-    explicit value_sink(std::size_t buffer_size)
+    explicit sink(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
         , buffer_(owned_buffer_.data())
         , capacity_(owned_buffer_.size())
     {}
 
-    value_sink(const value_sink &) = delete;
-    value_sink & operator=(const value_sink &) = delete;
+    sink(const sink &) = delete;
+    sink & operator=(const sink &) = delete;
 
-    value_sink(value_sink &&) = delete;
-    value_sink & operator=(value_sink &&) = delete;
+    sink(sink &&) = delete;
+    sink & operator=(sink &&) = delete;
 
-    virtual ~value_sink()
+    virtual ~sink()
     {
         destroy_buffered();
     }
@@ -389,6 +473,12 @@ public:
         if (n > unused_capacity().size())
             throw value_buffer_error{"value sink advanced past buffer capacity"};
         size_ += n;
+    }
+
+    [[nodiscard]] junk<value_type> uninitialized_capacity() noexcept
+    {
+        auto span = unused_capacity();
+        return {span.data(), span.size()};
     }
 
 protected:
@@ -713,13 +803,13 @@ private:
 
 /// Sink that stores values in fixed caller-owned raw storage.
 template<typename T>
-class fixed_value_sink final : public value_sink<T>
+class fixed_sink final : public sink<T>
 {
 public:
-    using typename value_sink<T>::storage_ref;
+    using typename sink<T>::storage_ref;
 
-    explicit fixed_value_sink(storage_ref buffer)
-        : value_sink<T>(buffer)
+    explicit fixed_sink(storage_ref buffer)
+        : sink<T>(buffer)
     {}
 
     void release_buffered() noexcept
@@ -730,7 +820,7 @@ public:
 private:
     hope<std::size_t>
     drain_more(
-        typename value_sink<T>::value_chunk_view,
+        typename sink<T>::value_chunk_view,
         std::size_t) override
     {
         throw value_buffer_error{"fixed value sink is full"};
@@ -739,26 +829,26 @@ private:
 
 /// Sink that accepts and ignores all values.
 template<typename T>
-class discarding_value_sink final : public value_sink<T>
+class discarding_sink final : public sink<T>
 {
 public:
-    using typename value_sink<T>::storage_ref;
+    using typename sink<T>::storage_ref;
 
-    explicit discarding_value_sink(storage_ref buffer = {})
-        : value_sink<T>(buffer)
+    explicit discarding_sink(storage_ref buffer = {})
+        : sink<T>(buffer)
     {}
 
 private:
     hope<std::size_t>
     drain_more(
-        typename value_sink<T>::value_chunk_view values,
+        typename sink<T>::value_chunk_view values,
         std::size_t splat) override
     {
         return hope<std::size_t>::ready(splatted_size(values, splat));
     }
 
     static std::size_t splatted_size(
-        typename value_sink<T>::value_chunk_view values,
+        typename sink<T>::value_chunk_view values,
         std::size_t splat)
     {
         if (values.empty())
@@ -778,20 +868,20 @@ template<typename Container>
     requires detail::append_value_container<
         Container,
         typename Container::value_type>
-class container_value_sink final
-    : public value_sink<typename Container::value_type>
+class container_sink final
+    : public sink<typename Container::value_type>
 {
 public:
     using value_type = typename Container::value_type;
 
-    explicit container_value_sink(Container & container)
-        : value_sink<value_type>(value_storage_ref<value_type>{})
+    explicit container_sink(Container & container)
+        : sink<value_type>(value_storage_ref<value_type>{})
         , container_(&container)
     {}
 
 private:
     hope<std::size_t> drain_more(
-        typename value_sink<value_type>::value_chunk_view values,
+        typename sink<value_type>::value_chunk_view values,
         std::size_t splat) override
     {
         auto total = std::size_t{0};
@@ -831,17 +921,17 @@ private:
 };
 
 template<typename Container>
-container_value_sink(Container &) -> container_value_sink<Container>;
+container_sink(Container &) -> container_sink<Container>;
 
 /// Sink that writes accepted values directly through an output iterator.
 template<typename T, std::output_iterator<std::remove_cv_t<T>> Output>
-class iterator_value_sink final : public value_sink<T>
+class iterator_sink final : public sink<T>
 {
 public:
     using value_type = std::remove_cv_t<T>;
 
-    explicit iterator_value_sink(Output output)
-        : value_sink<T>(value_storage_ref<value_type>{})
+    explicit iterator_sink(Output output)
+        : sink<T>(value_storage_ref<value_type>{})
         , output_(std::move(output))
     {}
 
@@ -852,7 +942,7 @@ public:
 
 private:
     hope<std::size_t> drain_more(
-        typename value_sink<T>::value_chunk_view values,
+        typename sink<T>::value_chunk_view values,
         std::size_t splat) override
     {
         auto total = std::size_t{0};
@@ -897,14 +987,14 @@ private:
 
 /// Write values and flush the sink.
 template<typename T>
-hope<void> write(value_sink<T> & sink, std::remove_cv_t<T> value)
+hope<void> write(sink<T> & sink, std::remove_cv_t<T> value)
 {
     return sink.write(std::move(value));
 }
 
 template<typename T>
 hope<void> write(
-    value_sink<T> & sink,
+    sink<T> & sink,
     std::span<const std::remove_cv_t<T>> values)
     requires std::copy_constructible<std::remove_cv_t<T>>
 {
@@ -913,7 +1003,7 @@ hope<void> write(
 
 template<typename T, std::size_t Inline>
 hope<void> write(
-    value_sink<T> & sink,
+    sink<T> & sink,
     value_chunks<const std::remove_cv_t<T>, Inline> values)
     requires std::copy_constructible<std::remove_cv_t<T>>
 {
@@ -922,7 +1012,7 @@ hope<void> write(
 
 template<typename T>
 hope<void> write_splat(
-    value_sink<T> & sink,
+    sink<T> & sink,
     std::span<const std::remove_cv_t<T>> pattern,
     std::size_t splat)
     requires std::copy_constructible<std::remove_cv_t<T>>
@@ -931,7 +1021,7 @@ hope<void> write_splat(
 }
 
 template<typename T>
-task<void> write_all(value_sink<T> & sink, std::remove_cv_t<T> value)
+task<void> write_all(sink<T> & sink, std::remove_cv_t<T> value)
 {
     co_await sink.write(std::move(value));
     co_await sink.flush();
@@ -939,7 +1029,7 @@ task<void> write_all(value_sink<T> & sink, std::remove_cv_t<T> value)
 
 template<typename T>
 task<void> write_all(
-    value_sink<T> & sink,
+    sink<T> & sink,
     std::span<const std::remove_cv_t<T>> values)
     requires std::copy_constructible<std::remove_cv_t<T>>
 {
@@ -949,7 +1039,7 @@ task<void> write_all(
 
 template<typename T, std::size_t Inline>
 task<void> write_all(
-    value_sink<T> & sink,
+    sink<T> & sink,
     value_chunks<const std::remove_cv_t<T>, Inline> values)
     requires std::copy_constructible<std::remove_cv_t<T>>
 {
@@ -958,24 +1048,24 @@ task<void> write_all(
 }
 
 inline hope<void> write(
-    value_sink<std::byte> & sink,
+    sink<std::byte> & sink,
     std::string_view text)
 {
     return sink.write(as_bytes(text));
 }
 
-inline hope<void> write(value_sink<std::byte> & sink, const char * text)
+inline hope<void> write(sink<std::byte> & sink, const char * text)
 {
     return write(sink, std::string_view{text});
 }
 
-inline task<void> write(value_sink<std::byte> & sink, std::string text)
+inline task<void> write(sink<std::byte> & sink, std::string text)
 {
     co_await write(sink, std::string_view{text});
 }
 
 inline hope<void> write_splat(
-    value_sink<std::byte> & sink,
+    sink<std::byte> & sink,
     std::string_view pattern,
     std::size_t splat)
 {
@@ -983,7 +1073,7 @@ inline hope<void> write_splat(
 }
 
 inline task<void> write_all(
-    value_sink<std::byte> & sink,
+    sink<std::byte> & sink,
     std::string_view text)
 {
     co_await write(sink, text);
@@ -991,7 +1081,7 @@ inline task<void> write_all(
 }
 
 inline task<void> write_all(
-    value_sink<std::byte> & sink,
+    sink<std::byte> & sink,
     std::string text)
 {
     co_await write_all(sink, std::string_view{text});
@@ -999,7 +1089,7 @@ inline task<void> write_all(
 
 template<typename... Args>
 task<void> print(
-    value_sink<std::byte> & sink,
+    sink<std::byte> & sink,
     std::format_string<Args...> fmt,
     Args &&... args)
 {
@@ -1008,7 +1098,7 @@ task<void> print(
 
 template<typename... Args>
 task<void> print_all(
-    value_sink<std::byte> & sink,
+    sink<std::byte> & sink,
     std::format_string<Args...> fmt,
     Args &&... args)
 {
@@ -1018,7 +1108,7 @@ task<void> print_all(
 
 template<typename... Args>
 task<void> print(
-    value_sink<char> & sink,
+    sink<char> & sink,
     std::format_string<Args...> fmt,
     Args &&... args)
 {
@@ -1028,7 +1118,7 @@ task<void> print(
 
 template<typename... Args>
 task<void> print_all(
-    value_sink<char> & sink,
+    sink<char> & sink,
     std::format_string<Args...> fmt,
     Args &&... args)
 {
@@ -1036,13 +1126,13 @@ task<void> print_all(
     co_await sink.flush();
 }
 
-/// Buffered asynchronous value source.
+/// Buffered asynchronous feed for typed values.
 ///
-/// This is the typed-value counterpart to `byte_reader`: lookahead lives in the
-/// source's reusable value storage, while `stream_more()` is the cold path that
-/// produces more values from the concrete source.
+/// Lookahead lives in reusable ring storage. The hot path borrows or consumes
+/// buffered values directly; `stream_more()` is the cold path that produces more
+/// values from the concrete source.
 template<typename T>
-class value_source
+class feed
 {
 public:
     using value_type = std::remove_cv_t<T>;
@@ -1050,30 +1140,24 @@ public:
     using value_chunk_view = value_chunks<value_type>;
     using const_value_chunk_view = value_chunks<const value_type>;
 
-    explicit value_source(storage_ref buffer)
+    explicit feed(storage_ref buffer)
         : buffer_(buffer.data)
         , capacity_(buffer.size)
-    {
-        if (capacity_ == 0)
-            throw value_buffer_error{"value source buffer is empty"};
-    }
+    {}
 
-    explicit value_source(std::size_t buffer_size)
+    explicit feed(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
         , buffer_(owned_buffer_.data())
         , capacity_(owned_buffer_.size())
-    {
-        if (capacity_ == 0)
-            throw value_buffer_error{"value source buffer is empty"};
-    }
+    {}
 
-    value_source(const value_source &) = delete;
-    value_source & operator=(const value_source &) = delete;
+    feed(const feed &) = delete;
+    feed & operator=(const feed &) = delete;
 
-    value_source(value_source &&) = delete;
-    value_source & operator=(value_source &&) = delete;
+    feed(feed &&) = delete;
+    feed & operator=(feed &&) = delete;
 
-    virtual ~value_source()
+    virtual ~feed()
     {
         destroy_buffered();
     }
@@ -1168,6 +1252,8 @@ public:
     {
         if (buffered_size() != 0)
             return hope<std::optional<value_type>>::ready(take_buffered());
+        if (capacity_ == 0)
+            return take_direct_slow();
 
         auto read = fill_more();
         if (!read.is_ready())
@@ -1255,7 +1341,7 @@ public:
 
     /// Transfer one available chunk to `sink`, up to `limit` values.
     hope<value_result> stream(
-        value_sink<value_type> & sink,
+        sink<value_type> & sink,
         std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
         if (limit == 0)
@@ -1280,6 +1366,142 @@ public:
         auto n = std::min(limit, buffered_size());
         toss(n);
         return hope<value_result>::ready(value_result{.values = n});
+    }
+
+    void rebase(std::size_t capacity)
+        requires std::is_trivially_copyable_v<value_type>
+    {
+        if (capacity > capacity_)
+            throw value_buffer_error{"value source buffer is too small"};
+        contiguize_buffered_for_derived();
+    }
+
+    [[nodiscard]] std::span<const value_type> buffered_span() const
+        requires std::same_as<value_type, std::byte>
+    {
+        auto one = buffered().single_span();
+        if (!one)
+            throw value_buffer_error{"value feed buffered values are wrapped"};
+        return *one;
+    }
+
+    hope<const_value_chunk_view> peek_chunks(std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        return peek(n);
+    }
+
+    hope<std::span<const value_type>> peek_span(std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        if (n > capacity_)
+            throw value_buffer_error{"value source buffer is too small"};
+        if (buffered_size() >= n)
+            return hope<std::span<const value_type>>::ready(
+                contiguous_prefix(n));
+        return peek_span_slow(n);
+    }
+
+    hope<std::span<const value_type>> take(std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto values = peek_span(n);
+        if (values.is_ready()) {
+            auto out = values.take_ready();
+            toss(n);
+            return hope<std::span<const value_type>>::ready(out);
+        }
+        return take_span_slow(std::move(values), n);
+    }
+
+    hope<std::optional<std::span<const value_type>>>
+    take_some(std::size_t limit = std::numeric_limits<std::size_t>::max())
+        requires std::same_as<value_type, std::byte>
+    {
+        if (buffered_size() == 0) {
+            auto read = fill_more();
+            if (!read.is_ready())
+                return take_some_span_slow(std::move(read), limit);
+            auto result = read.take_ready();
+            if (result.eof && result.values == 0)
+                return hope<std::optional<std::span<const value_type>>>::
+                    ready(std::nullopt);
+            if (result.values == 0)
+                return hope<std::optional<std::span<const value_type>>>::
+                    ready(buffered_span().first(0));
+        }
+
+        auto out = first_buffered_span(limit);
+        toss(out.size());
+        return hope<std::optional<std::span<const value_type>>>::ready(out);
+    }
+
+    hope<std::string_view> take_string_view(std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto bytes = take(n);
+        if (bytes.is_ready())
+            return hope<std::string_view>::ready(
+                as_string_view(bytes.take_ready()));
+        return take_string_view_slow(std::move(bytes));
+    }
+
+    hope<std::span<const value_type>> take_until(
+        std::span<const value_type> delimiter)
+        requires std::same_as<value_type, std::byte>
+    {
+        if (delimiter.empty())
+            throw value_buffer_error{"empty delimiter"};
+
+        contiguize_buffered_for_derived();
+        auto available = buffered_span();
+        auto cut = find_bytes(available, delimiter);
+        if (cut < available.size()) {
+            auto out = available.first(cut);
+            toss(cut + delimiter.size());
+            return hope<std::span<const value_type>>::ready(out);
+        }
+
+        return take_until_slow(delimiter);
+    }
+
+    hope<std::span<const value_type>> take_until(std::string_view delimiter)
+        requires std::same_as<value_type, std::byte>
+    {
+        return take_until(as_bytes(delimiter));
+    }
+
+    hope<read_result> read_vec(std::span<std::span<value_type>> dsts)
+        requires std::same_as<value_type, std::byte>
+    {
+        if (buffered_size() != 0) {
+            auto n = copy_buffered_to(dsts);
+            return hope<read_result>::ready(read_result{.bytes = n});
+        }
+
+        auto dst = std::span<value_type>{};
+        for (auto candidate : dsts) {
+            if (!candidate.empty()) {
+                dst = candidate;
+                break;
+            }
+        }
+        if (dst.empty())
+            return hope<read_result>::ready(read_result{});
+
+        auto out = fixed_sink<value_type>{dst};
+        auto result = stream_more(out, dst.size());
+        if (result.is_ready())
+            return hope<read_result>::ready(
+                finish_direct_read(out, result.take_ready()));
+        return read_vec_slow(dst);
+    }
+
+    hope<read_result> read(std::span<value_type> dst)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto dsts = std::array{dst};
+        return read_vec(std::span{dsts});
     }
 
 protected:
@@ -1326,9 +1548,22 @@ protected:
         size_ += n;
     }
 
+    [[nodiscard]] junk<value_type> uninitialized_capacity() noexcept
+    {
+        auto span = unused_capacity();
+        return {span.data(), span.size()};
+    }
+
     void consume_buffered_for_derived(std::size_t n)
     {
         toss(n);
+    }
+
+    std::optional<value_type> take_buffered_for_derived()
+    {
+        if (buffered_size() == 0)
+            return std::nullopt;
+        return take_buffered();
     }
 
     void contiguize_buffered_for_derived()
@@ -1358,23 +1593,36 @@ protected:
         size_ = values.size();
     }
 
-    /// Mandatory cold-path source operation.
+    /// Cold-path source operation.
     ///
-    /// Implementations should transfer up to `limit` values from the underlying
-    /// source into `sink`, returning how many values were logically advanced.
-    /// A zero value count does not by itself mean EOF.
+    /// Implementations that can produce many values at once should transfer up
+    /// to `limit` values from the underlying source into `sink`, returning how
+    /// many values were logically advanced. A zero value count does not by
+    /// itself mean EOF.
     ///
-    /// Like `byte_reader::stream_more()`, an implementation may instead append
+    /// Like `feed<std::byte>::stream_more()`, an implementation may instead append
     /// values to this source's own buffer with `emplace()` and return
     /// `{.values = 0, .eof = false}`. That is the fallback when the destination
     /// cannot immediately accept a value and the source has local buffer space.
     virtual hope<value_result> stream_more(
-        value_sink<value_type> & sink,
-        std::size_t limit) = 0;
+        sink<value_type> & sink,
+        std::size_t limit)
+    {
+        if (limit == 0)
+            return hope<value_result>::ready(value_result{});
+        return stream_next(sink);
+    }
+
+    /// Single-value source hook used by the default `stream_more()`.
+    virtual task<std::optional<value_type>> next_value()
+    {
+        throw value_buffer_error{"value feed has no next implementation"};
+        co_return std::nullopt;
+    }
 
     virtual hope<value_result> discard_more(std::size_t limit)
     {
-        auto sink = discarding_value_sink<value_type>{};
+        auto sink = discarding_sink<value_type>{};
         auto result = stream_more(sink, limit);
         if (result.is_ready())
             return hope<value_result>::ready(result.take_ready());
@@ -1426,7 +1674,7 @@ private:
         if (dst.empty())
             throw value_buffer_error{"value source buffer is full"};
 
-        auto sink = fixed_value_sink<value_type>{dst};
+        auto sink = fixed_sink<value_type>{dst};
         auto result = stream_more(sink, dst.size());
         if (result.is_ready())
             return hope<value_result>::ready(
@@ -1435,7 +1683,7 @@ private:
     }
 
     value_result finish_read(
-        fixed_value_sink<value_type> & sink,
+        fixed_sink<value_type> & sink,
         value_result result)
     {
         auto written = sink.buffered_size();
@@ -1446,9 +1694,21 @@ private:
         return result;
     }
 
+    read_result finish_direct_read(
+        fixed_sink<value_type> & sink,
+        value_result result)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto written = sink.buffered_size();
+        if (written != result.values)
+            throw value_buffer_error{"value source stream count mismatch"};
+        sink.release_buffered();
+        return read_result{.bytes = written, .eof = result.eof};
+    }
+
     task<value_result> read_more_slow(std::size_t limit)
     {
-        auto sink = fixed_value_sink<value_type>{
+        auto sink = fixed_sink<value_type>{
             unused_capacity().first(limit),
         };
         auto result = co_await stream_more(sink, limit);
@@ -1583,10 +1843,23 @@ private:
     }
 
     hope<value_result> stream_buffered(
-        value_sink<value_type> & sink,
+        sink<value_type> & sink,
         std::size_t limit)
     {
         auto n = std::min(limit, buffered_size());
+        if constexpr (std::copy_constructible<value_type>) {
+            auto chunk = buffered().first(n).chunks().front();
+            auto write = sink.write(chunk);
+            if (!write.is_ready())
+                return stream_buffered_slow(
+                    std::move(write),
+                    chunk.size(),
+                    true);
+            toss(chunk.size());
+            return hope<value_result>::ready(
+                value_result{.values = chunk.size()});
+        }
+
         auto moved = std::size_t{0};
         while (moved != n) {
             auto value = std::move(buffer_[seek_]);
@@ -1594,7 +1867,7 @@ private:
             auto write = sink.write(std::move(value));
             ++moved;
             if (!write.is_ready())
-                return stream_buffered_slow(std::move(write), moved);
+                return stream_buffered_slow(std::move(write), moved, false);
         }
 
         return hope<value_result>::ready(value_result{.values = moved});
@@ -1602,16 +1875,157 @@ private:
 
     task<value_result> stream_buffered_slow(
         hope<void> write,
-        std::size_t moved)
+        std::size_t moved,
+        bool consume_after)
     {
         co_await std::move(write);
+        if (consume_after)
+            toss(moved);
         co_return value_result{.values = moved};
     }
 
     task<value_result> discard_more_slow(std::size_t limit)
     {
-        auto sink = discarding_value_sink<value_type>{};
+        auto sink = discarding_sink<value_type>{};
         co_return co_await stream_more(sink, limit);
+    }
+
+    task<std::optional<value_type>> take_direct_slow()
+    {
+        while (true) {
+            auto storage = value_storage<value_type>{1};
+            auto out = fixed_sink<value_type>{storage};
+            auto result = co_await stream_more(out, 1);
+            auto written = out.buffered_size();
+            if (written != result.values)
+                throw value_buffer_error{"value source stream count mismatch"};
+            if (written != 0)
+                co_return std::optional<value_type>{std::move(storage.data()[0])};
+            if (result.eof)
+                co_return std::nullopt;
+        }
+    }
+
+    task<value_result> stream_next(sink<value_type> & sink)
+    {
+        auto value = co_await next_value();
+        if (!value)
+            co_return value_result{.eof = true};
+
+        co_await sink.write(std::move(*value));
+        co_return value_result{.values = 1};
+    }
+
+    std::span<const value_type> first_buffered_span(
+        std::size_t limit = std::numeric_limits<std::size_t>::max()) const
+        requires std::same_as<value_type, std::byte>
+    {
+        auto chunks = buffered();
+        auto first = chunks.single_span();
+        if (first)
+            return first->first(std::min(limit, first->size()));
+        return chunks.chunks().front().first(
+            std::min(limit, chunks.chunks().front().size()));
+    }
+
+    std::span<const value_type> contiguous_prefix(std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto chunks = buffered().first(n);
+        auto one = chunks.single_span();
+        if (one)
+            return *one;
+        contiguize_buffered_for_derived();
+        return buffered_span().first(n);
+    }
+
+    std::size_t copy_buffered_to(std::span<std::span<value_type>> dsts)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto total = std::size_t{0};
+        for (auto dst : dsts) {
+            if (dst.empty())
+                continue;
+            auto n = std::min(dst.size(), buffered_size());
+            if (n == 0)
+                break;
+            auto src = first_buffered_span(n);
+            n = src.size();
+            std::memcpy(dst.data(), src.data(), n);
+            toss(n);
+            total += n;
+        }
+        return total;
+    }
+
+    task<std::span<const value_type>> peek_span_slow(std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        co_await fill(n);
+        co_return contiguous_prefix(n);
+    }
+
+    task<std::span<const value_type>> take_span_slow(
+        hope<std::span<const value_type>> values,
+        std::size_t n)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto out = co_await std::move(values);
+        toss(n);
+        co_return out;
+    }
+
+    task<std::optional<std::span<const value_type>>>
+    take_some_span_slow(hope<value_result> first_read, std::size_t limit)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto read = co_await std::move(first_read);
+        if (read.eof && read.values == 0)
+            co_return std::nullopt;
+        if (read.values == 0)
+            co_return buffered_span().first(0);
+
+        auto out = first_buffered_span(limit);
+        toss(out.size());
+        co_return out;
+    }
+
+    task<std::string_view> take_string_view_slow(
+        hope<std::span<const value_type>> bytes)
+        requires std::same_as<value_type, std::byte>
+    {
+        co_return as_string_view(co_await std::move(bytes));
+    }
+
+    task<std::span<const value_type>> take_until_slow(
+        std::span<const value_type> delimiter)
+        requires std::same_as<value_type, std::byte>
+    {
+        while (true) {
+            contiguize_buffered_for_derived();
+            auto available = buffered_span();
+            auto cut = find_bytes(available, delimiter);
+            if (cut < available.size()) {
+                auto out = available.first(cut);
+                toss(cut + delimiter.size());
+                co_return out;
+            }
+
+            if (buffered_size() == capacity_)
+                throw value_buffer_error{"value source buffer filled before delimiter"};
+
+            auto read = co_await fill_more();
+            if (read.eof && read.values == 0)
+                throw value_end_of_stream{"unexpected end of value input"};
+        }
+    }
+
+    task<read_result> read_vec_slow(std::span<value_type> dst)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto out = fixed_sink<value_type>{dst};
+        auto result = co_await stream_more(out, dst.size());
+        co_return finish_direct_read(out, result);
     }
 
     void destroy_buffered() noexcept
@@ -1674,62 +2088,169 @@ private:
     }
 };
 
-/// Source that repeatedly parses typed values from a byte reader.
-template<typename T>
-class byte_parser final : public value_source<T>
+namespace detail {
+
+template<typename T, typename Derived>
+class taskfeed_base : public feed<T>
 {
 public:
-    using value_type = std::remove_cv_t<T>;
-    using storage_ref = value_storage_ref<value_type>;
-    using parser_type = task<std::optional<value_type>> (*)(byte_reader &);
+    using value_type = typename feed<T>::value_type;
+    using storage_ref = typename feed<T>::storage_ref;
 
-    byte_parser(
-        byte_reader & reader,
-        parser_type parser,
-        std::size_t buffer_size = 1)
-        : value_source<value_type>(buffer_size)
-        , reader_(&reader)
-        , parser_(parser)
-    {
-        if (parser_ == nullptr)
-            throw value_buffer_error{"byte parser function is null"};
-    }
+    explicit taskfeed_base(storage_ref buffer)
+        : feed<T>(buffer)
+    {}
 
-    byte_parser(
-        byte_reader & reader,
-        parser_type parser,
-        storage_ref buffer)
-        : value_source<value_type>(buffer)
-        , reader_(&reader)
-        , parser_(parser)
-    {
-        if (parser_ == nullptr)
-            throw value_buffer_error{"byte parser function is null"};
-    }
+    explicit taskfeed_base(std::size_t buffer_size)
+        : feed<T>(buffer_size)
+    {}
 
 private:
     hope<value_result> stream_more(
-        value_sink<value_type> & sink,
+        sink<value_type> & sink,
         std::size_t limit) override
     {
-        if (limit == 0)
-            return hope<value_result>::ready(value_result{});
-        return stream_more_task(sink);
+        return stream_more_task(sink, limit);
     }
 
-    task<value_result> stream_more_task(value_sink<value_type> & sink)
+    task<value_result> stream_more_task(
+        sink<value_type> & sink,
+        std::size_t limit)
     {
-        auto value = co_await parser_(*reader_);
-        if (!value)
-            co_return value_result{.eof = true};
+        if (limit == 0)
+            co_return value_result{};
 
-        co_await sink.write(std::move(*value));
-        co_return value_result{.values = 1};
+        auto dst = sink.uninitialized_capacity();
+        if (dst.empty()) {
+            this->rebase(1);
+            dst = this->uninitialized_capacity().first(limit);
+            auto out = co_await read_into(dst);
+            this->advance_constructed(out.values);
+            co_return value_result{
+                .values = 0,
+                .eof = out.eof && out.values == 0,
+            };
+        }
+
+        auto out = co_await read_into(dst.first(limit));
+        sink.advance_constructed(out.values);
+        co_return out;
     }
 
-    byte_reader * reader_;
+    task<value_result> read_into(junk<value_type> dst)
+    {
+        auto result = co_await derived().read_into(dst);
+        auto out = normalize_value_read_result<value_type>(result);
+        if (out.values > dst.size())
+            throw value_buffer_error{"source overfilled taskfeed buffer"};
+        co_return out;
+    }
+
+    Derived & derived() noexcept
+    {
+        return static_cast<Derived &>(*this);
+    }
+};
+
+} // namespace detail
+
+/// Feed backed by a task callable that constructs values into raw storage.
+///
+/// The callable receives `junk<T>` and reports how many values it constructed.
+/// A count-only result treats zero values as EOF.
+template<typename T, typename Read>
+    requires std::is_trivially_copyable_v<std::remove_cv_t<T>>
+        && detail::value_read_task<std::remove_cv_t<T>, Read>
+class taskfeed
+    : public detail::taskfeed_base<std::remove_cv_t<T>, taskfeed<T, Read>>
+{
+    using base =
+        detail::taskfeed_base<std::remove_cv_t<T>, taskfeed<T, Read>>;
+
+public:
+    using value_type = std::remove_cv_t<T>;
+    using typename base::storage_ref;
+
+    taskfeed(Read read, storage_ref buffer)
+        : base(buffer)
+        , read_(std::move(read))
+    {}
+
+    template<std::size_t Extent>
+    taskfeed(Read read, std::span<value_type, Extent> buffer)
+        : taskfeed(std::move(read), storage_ref{std::span<value_type>{buffer}})
+    {}
+
+    explicit taskfeed(Read read, std::size_t buffer_size = 4096)
+        : base(buffer_size)
+        , read_(std::move(read))
+    {}
+
+    auto read_into(junk<value_type> dst)
+    {
+        return std::invoke(read_, dst);
+    }
+
+private:
+    friend base;
+
+    Read read_;
+};
+
+template<typename Read, typename T, std::size_t Extent>
+taskfeed(Read, std::span<T, Extent>) -> taskfeed<T, Read>;
+
+template<typename Read, typename T>
+taskfeed(Read, value_storage_ref<T>) -> taskfeed<T, Read>;
+
+/// Parser feed backed by a callable parser function.
+template<typename Out, typename In>
+class function_parser_feed final : public feed<Out>
+{
+public:
+    using base = feed<Out>;
+    using value_type = typename base::value_type;
+    using input_type = std::remove_cv_t<In>;
+    using storage_ref = typename base::storage_ref;
+    using parser_type = task<std::optional<value_type>> (*)(feed<input_type> &);
+
+    function_parser_feed(
+        feed<input_type> & input,
+        parser_type parser,
+        std::size_t buffer_size = 1)
+        : base(buffer_size)
+        , input_(&input)
+        , parser_(parser)
+    {
+        if (parser_ == nullptr)
+            throw value_buffer_error{"parser function is null"};
+    }
+
+    function_parser_feed(
+        feed<input_type> & input,
+        parser_type parser,
+        storage_ref buffer)
+        : base(buffer)
+        , input_(&input)
+        , parser_(parser)
+    {
+        if (parser_ == nullptr)
+            throw value_buffer_error{"parser function is null"};
+    }
+
+private:
+    task<std::optional<value_type>> next_value() override
+    {
+        co_return co_await parser_(*input_);
+    }
+
+    feed<input_type> * input_;
     parser_type parser_;
 };
+
+/// Source that repeatedly parses typed values from a byte feed.
+template<typename T>
+using byte_parser = function_parser_feed<T, std::byte>;
 
 /// Source backed by a single-pass range or lazy view of values.
 template<std::ranges::input_range Values>
@@ -1738,7 +2259,7 @@ template<std::ranges::input_range Values>
             std::remove_cv_t<std::ranges::range_value_t<Values>>,
             std::ranges::range_rvalue_reference_t<Values>>
 class value_range_source final
-    : public value_source<std::ranges::range_value_t<Values>>
+    : public feed<std::ranges::range_value_t<Values>>
 {
 public:
     using value_type =
@@ -1748,7 +2269,7 @@ public:
     template<std::ranges::viewable_range Range>
         requires std::constructible_from<Values, std::views::all_t<Range>>
     value_range_source(Range && values, storage_ref buffer)
-        : value_source<value_type>(buffer)
+        : feed<value_type>(buffer)
         , values_(std::views::all(std::forward<Range>(values)))
         , value_(std::ranges::begin(values_))
         , end_(std::ranges::end(values_))
@@ -1759,7 +2280,7 @@ public:
     explicit value_range_source(
         Range && values,
         std::size_t buffer_size = 1)
-        : value_source<value_type>(buffer_size)
+        : feed<value_type>(buffer_size)
         , values_(std::views::all(std::forward<Range>(values)))
         , value_(std::ranges::begin(values_))
         , end_(std::ranges::end(values_))
@@ -1767,7 +2288,7 @@ public:
 
 private:
     hope<value_result> stream_more(
-        value_sink<value_type> & sink,
+        sink<value_type> & sink,
         std::size_t limit) override
     {
         if (limit == 0)
@@ -1824,8 +2345,8 @@ value_range_source(Range &&, std::size_t)
 /// Stream all values from `source` into `sink`, then flush `sink`.
 template<typename T>
 task<std::size_t> stream_all(
-    value_source<T> & source,
-    value_sink<std::remove_cv_t<T>> & sink)
+    feed<T> & source,
+    sink<std::remove_cv_t<T>> & sink)
 {
     auto total = std::size_t{0};
     while (true) {

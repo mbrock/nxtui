@@ -295,13 +295,13 @@ std::size_t current_breadcrumb_depth()
 }
 
 nxtrt::task<void>
-write_indent(nxtrt::byte_writer & output, std::size_t depth)
+write_indent(nxtrt::bytesink & output, std::size_t depth)
 {
     co_await nxtrt::write_splat(output, "  ", depth);
 }
 
 nxtrt::task<void> write_indented_line(
-    nxtrt::byte_writer & output, std::size_t depth, std::string_view text)
+    nxtrt::bytesink & output, std::size_t depth, std::string_view text)
 {
     co_await write_indent(output, depth);
     co_await nxtrt::write(output, text);
@@ -309,7 +309,7 @@ nxtrt::task<void> write_indented_line(
 }
 
 nxtrt::task<void> write_indented_block(
-    nxtrt::byte_writer & output, std::size_t depth, std::string_view text)
+    nxtrt::bytesink & output, std::size_t depth, std::string_view text)
 {
     auto offset = std::size_t{0};
     while (offset < text.size()) {
@@ -330,7 +330,7 @@ nxtrt::task<void> write_indented_block(
 }
 
 nxtrt::task<void> write_sse_event_debug(
-    nxtrt::byte_writer & output,
+    nxtrt::bytesink & output,
     nxtrt::http::server_sent_event event,
     std::size_t depth)
 {
@@ -342,7 +342,7 @@ nxtrt::task<void> write_sse_event_debug(
 
 struct breadcrumb_output
 {
-    nxtrt::byte_writer & output;
+    nxtrt::bytesink & output;
     breadcrumb rendered = {};
 
     nxtrt::task<void> render_current()
@@ -413,7 +413,7 @@ struct openai_response_stream_client
 {
     using event_type = nxtrt::http::server_sent_event;
 
-    nxtrt::value_source<event_type> & events;
+    nxtrt::feed<event_type> & events;
     breadcrumb_output & output;
 
     nxtrt::task<void> stream_response()
@@ -511,7 +511,7 @@ private:
 struct stream_zone_body
 {
     nxtai::responses::openai_responses_request request;
-    nxtrt::byte_writer & output;
+    nxtrt::bytesink & output;
     std::array<std::byte, 16 * 1024> socktxbuf{};
     std::array<std::byte, 64 * 1024> sockrxbuf{};
     std::array<std::byte, 64 * 1024> tlsbuf{};
@@ -552,7 +552,7 @@ private:
 
 nxtrt::task<int> run_nxtllm(cli_options options)
 {
-    auto output = nxtrt::standard_output_writer(64 * 1024);
+    auto output = nxtrt::standard_output_sink(64 * 1024);
 
     if (!options.prompt) {
         throw missing_prompt{};

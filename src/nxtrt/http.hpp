@@ -235,7 +235,7 @@ inline response_head parse_response_head(std::span<const std::byte> bytes)
     return head;
 }
 
-inline task<response_head> read_response_head(byte_reader & reader)
+inline task<response_head> read_response_head(bytefeed & reader)
 {
     co_return parse_response_head(co_await reader.take_until("\r\n\r\n"));
 }
@@ -353,24 +353,24 @@ inline std::size_t parse_chunk_size(std::span<const std::byte> line)
     return size;
 }
 
-class http_body_reader final : public byte_reader
+class http_body_reader final : public bytefeed
 {
 public:
     http_body_reader(
-        byte_reader & reader,
+        bytefeed & reader,
         const response_head & head,
         std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
+        : bytefeed(buffer_size)
         , reader_(&reader)
     {
         configure(head);
     }
 
     http_body_reader(
-        byte_reader & reader,
+        bytefeed & reader,
         const response_head & head,
         std::span<std::byte> buffer)
-        : byte_reader(buffer)
+        : bytefeed(buffer)
         , reader_(&reader)
     {
         configure(head);
@@ -415,33 +415,33 @@ private:
         }
     }
 
-    hope<read_result> stream_bytes_more(
-        byte_writer & writer,
+    hope<value_result> stream_more(
+        bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<read_result>::ready(read_result{});
+            return hope<value_result>::ready(value_result{});
         return stream_more_task(writer, limit);
     }
 
-    task<read_result> stream_more_task(
-        byte_writer & writer,
+    task<value_result> stream_more_task(
+        bytesink & writer,
         std::size_t limit)
     {
         if (done_)
-            co_return read_result{.bytes = 0, .eof = true};
+            co_return value_result{.values = 0, .eof = true};
 
         if (auto dst = writer.unused_capacity(); !dst.empty())
             limit = std::min(limit, dst.size());
 
         auto chunk = co_await next(limit);
         if (!chunk)
-            co_return read_result{.bytes = 0, .eof = true};
+            co_return value_result{.values = 0, .eof = true};
 
         co_await nxtrt::write(writer, *chunk);
 
-        co_return read_result{
-            .bytes = chunk->size(),
+        co_return value_result{
+            .values = chunk->size(),
             .eof = done_ && chunk->empty(),
         };
     }
@@ -506,20 +506,20 @@ private:
         co_return chunk;
     }
 
-    byte_reader * reader_;
+    bytefeed * reader_;
     mode mode_ = mode::until_eof;
     std::size_t remaining_ = 0;
     bool done_ = false;
 };
 
-class response_body_decoding_reader final : public byte_reader
+class response_body_decoding_reader final : public bytefeed
 {
 public:
     response_body_decoding_reader(
-        byte_reader & reader,
+        bytefeed & reader,
         const response_head & head,
         std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
+        : bytefeed(buffer_size)
         , transfer_(reader, head, buffer_size)
         , active_(&transfer_)
     {
@@ -527,10 +527,10 @@ public:
     }
 
     response_body_decoding_reader(
-        byte_reader & reader,
+        bytefeed & reader,
         const response_head & head,
         std::span<std::byte> buffer)
-        : byte_reader(buffer)
+        : bytefeed(buffer)
         , transfer_(reader, head, buffer.size())
         , active_(&transfer_)
     {
@@ -578,8 +578,8 @@ private:
         }
     }
 
-    hope<read_result> stream_bytes_more(
-        byte_writer & writer,
+    hope<value_result> stream_more(
+        bytesink & writer,
         std::size_t limit) override
     {
         return active_->stream(writer, limit);
@@ -593,11 +593,11 @@ private:
 #if defined(NXTRT_HAVE_BROTLI)
     std::optional<brotli_reader> decoded_brotli_;
 #endif
-    byte_reader * active_;
+    bytefeed * active_;
 };
 
 inline task<std::optional<server_sent_event>>
-parse_sse_event(byte_reader & reader)
+parse_sse_event(bytefeed & reader)
 {
     auto event = server_sent_event{};
     auto have_data = false;
@@ -666,24 +666,44 @@ parse_sse_event(byte_reader & reader)
     }
 }
 
-inline byte_parser<server_sent_event> sse_event_parser(
-    byte_reader & reader,
+class sse_feed final : public feed<server_sent_event>
+{
+public:
+    explicit sse_feed(bytefeed & reader, std::size_t buffer_size = 1)
+        : feed<server_sent_event>(buffer_size)
+        , reader_(&reader)
+    {}
+
+    sse_feed(bytefeed & reader, value_storage_ref<server_sent_event> buffer)
+        : feed<server_sent_event>(buffer)
+        , reader_(&reader)
+    {}
+
+private:
+    task<std::optional<server_sent_event>> next_value() override
+    {
+        co_return co_await parse_sse_event(*reader_);
+    }
+
+    bytefeed * reader_;
+};
+
+inline sse_feed sse_event_parser(
+    bytefeed & reader,
     std::size_t buffer_size = 1)
 {
-    return byte_parser<server_sent_event>{
+    return sse_feed{
         reader,
-        parse_sse_event,
         buffer_size,
     };
 }
 
-inline byte_parser<server_sent_event> sse_event_parser(
-    byte_reader & reader,
+inline sse_feed sse_event_parser(
+    bytefeed & reader,
     value_storage_ref<server_sent_event> buffer)
 {
-    return byte_parser<server_sent_event>{
+    return sse_feed{
         reader,
-        parse_sse_event,
         buffer,
     };
 }

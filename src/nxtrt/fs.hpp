@@ -126,11 +126,11 @@ inline task<file_status> stat_path(int dirfd, std::string path)
 inline task<std::vector<std::string>> read_directory_names(int fd)
 {
     auto storage = std::array<std::byte, 16 * 1024>{};
-    auto source = task_byte_source{
-        [fd](std::span<std::byte> dst) -> task<std::size_t> {
+    auto source = task_bytefeed{
+        [fd](junk<std::byte> dst) -> task<std::size_t> {
             co_return co_await op::getdents64{
                 .fd = fd,
-                .buffer = dst,
+                .buffer = dst.as_writable_bytes(),
             };
         },
         std::span{storage}};

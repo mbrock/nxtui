@@ -35,30 +35,30 @@ enum class zlib_format
 
 /// Streaming inflater reader backed by zlib or zlib-ng's zlib-compatible API.
 ///
-/// This is a `byte_reader` adapter: compressed bytes are pulled from the wrapped
+/// This is a `bytefeed` adapter: compressed bytes are pulled from the wrapped
 /// reader, inflated incrementally, and exposed through the ordinary buffered
 /// reader hot path. The implementation follows the same Zig-inspired rule as the
 /// other readers here: if a destination writer has no immediate capacity, the
 /// inflater parks output in its own reader buffer instead of allocating temporary
 /// storage.
-class zlib_reader final : public byte_reader
+class zlib_reader final : public bytefeed
 {
 public:
     explicit zlib_reader(
-        byte_reader & reader,
+        bytefeed & reader,
         zlib_format format,
         std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
+        : bytefeed(buffer_size)
         , reader_(&reader)
     {
         init(format);
     }
 
     explicit zlib_reader(
-        byte_reader & reader,
+        bytefeed & reader,
         zlib_format format,
         std::span<std::byte> buffer)
-        : byte_reader(buffer)
+        : bytefeed(buffer)
         , reader_(&reader)
     {
         init(format);
@@ -101,19 +101,19 @@ private:
         return std::string{fallback};
     }
 
-    hope<read_result> stream_bytes_more(
-        byte_writer & writer,
+    hope<value_result> stream_more(
+        bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<read_result>::ready(read_result{});
+            return hope<value_result>::ready(value_result{});
         if (done_)
-            return hope<read_result>::ready(read_result{.eof = true});
+            return hope<value_result>::ready(value_result{.eof = true});
         return stream_more_task(writer, limit);
     }
 
-    task<read_result> stream_more_task(
-        byte_writer & writer,
+    task<value_result> stream_more_task(
+        bytesink & writer,
         std::size_t limit)
     {
         auto into_reader = false;
@@ -121,7 +121,7 @@ private:
 
         while (true) {
             if (out.empty())
-                co_return read_result{};
+                co_return value_result{};
 
             if (stream_.avail_in == 0)
                 co_await refill_input();
@@ -141,16 +141,16 @@ private:
 
             if (produced != 0) {
                 if (into_reader) {
-                    advance(produced);
-                    co_return read_result{};
+                    advance_constructed(produced);
+                    co_return value_result{};
                 }
 
                 writer.advance_constructed(produced);
-                co_return read_result{.bytes = produced};
+                co_return value_result{.values = produced};
             }
 
             if (done_)
-                co_return read_result{.eof = true};
+                co_return value_result{.eof = true};
 
             if (rc == Z_BUF_ERROR && stream_.avail_in != 0)
                 throw compression_error{"zlib inflate made no progress"};
@@ -158,7 +158,7 @@ private:
     }
 
     std::span<std::byte> output_capacity(
-        byte_writer & writer,
+        bytesink & writer,
         std::size_t limit,
         bool & into_reader)
     {
@@ -190,7 +190,7 @@ private:
         }
     }
 
-    byte_reader * reader_;
+    bytefeed * reader_;
     z_stream stream_{};
     std::span<const std::byte> input_;
     bool initialized_ = false;
@@ -198,28 +198,28 @@ private:
 };
 
 inline zlib_reader gzip_reader(
-    byte_reader & reader,
+    bytefeed & reader,
     std::size_t buffer_size = 4096)
 {
     return zlib_reader{reader, zlib_format::gzip, buffer_size};
 }
 
 inline zlib_reader gzip_reader(
-    byte_reader & reader,
+    bytefeed & reader,
     std::span<std::byte> buffer)
 {
     return zlib_reader{reader, zlib_format::gzip, buffer};
 }
 
 inline zlib_reader deflate_reader(
-    byte_reader & reader,
+    bytefeed & reader,
     std::size_t buffer_size = 4096)
 {
     return zlib_reader{reader, zlib_format::zlib, buffer_size};
 }
 
 inline zlib_reader deflate_reader(
-    byte_reader & reader,
+    bytefeed & reader,
     std::span<std::byte> buffer)
 {
     return zlib_reader{reader, zlib_format::zlib, buffer};
@@ -227,11 +227,11 @@ inline zlib_reader deflate_reader(
 
 #if defined(NXTRT_HAVE_ZSTD)
 
-class zstd_reader final : public byte_reader
+class zstd_reader final : public bytefeed
 {
 public:
-    explicit zstd_reader(byte_reader & reader, std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
+    explicit zstd_reader(bytefeed & reader, std::size_t buffer_size = 4096)
+        : bytefeed(buffer_size)
         , reader_(&reader)
         , stream_(ZSTD_createDStream())
     {
@@ -239,8 +239,8 @@ public:
             throw compression_error{"zstd decompressor init failed"};
     }
 
-    explicit zstd_reader(byte_reader & reader, std::span<std::byte> buffer)
-        : byte_reader(buffer)
+    explicit zstd_reader(bytefeed & reader, std::span<std::byte> buffer)
+        : bytefeed(buffer)
         , reader_(&reader)
         , stream_(ZSTD_createDStream())
     {
@@ -254,19 +254,19 @@ public:
     }
 
 private:
-    hope<read_result> stream_bytes_more(
-        byte_writer & writer,
+    hope<value_result> stream_more(
+        bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<read_result>::ready(read_result{});
+            return hope<value_result>::ready(value_result{});
         if (done_)
-            return hope<read_result>::ready(read_result{.eof = true});
+            return hope<value_result>::ready(value_result{.eof = true});
         return stream_more_task(writer, limit);
     }
 
-    task<read_result> stream_more_task(
-        byte_writer & writer,
+    task<value_result> stream_more_task(
+        bytesink & writer,
         std::size_t limit)
     {
         auto into_reader = false;
@@ -274,7 +274,7 @@ private:
 
         while (true) {
             if (out.empty())
-                co_return read_result{};
+                co_return value_result{};
 
             if (input_.pos == input_.size)
                 co_await refill_input();
@@ -292,21 +292,21 @@ private:
 
             if (output.pos != 0) {
                 if (into_reader) {
-                    advance(output.pos);
-                    co_return read_result{};
+                    advance_constructed(output.pos);
+                    co_return value_result{};
                 }
 
                 writer.advance_constructed(output.pos);
-                co_return read_result{.bytes = output.pos};
+                co_return value_result{.values = output.pos};
             }
 
             if (done_)
-                co_return read_result{.eof = true};
+                co_return value_result{.eof = true};
         }
     }
 
     std::span<std::byte> output_capacity(
-        byte_writer & writer,
+        bytesink & writer,
         std::size_t limit,
         bool & into_reader)
     {
@@ -338,7 +338,7 @@ private:
         }
     }
 
-    byte_reader * reader_;
+    bytefeed * reader_;
     ZSTD_DStream * stream_;
     std::span<const std::byte> input_span_;
     ZSTD_inBuffer input_{};
@@ -346,14 +346,14 @@ private:
 };
 
 inline zstd_reader zstd_reader_for(
-    byte_reader & reader,
+    bytefeed & reader,
     std::size_t buffer_size = 4096)
 {
     return zstd_reader{reader, buffer_size};
 }
 
 inline zstd_reader zstd_reader_for(
-    byte_reader & reader,
+    bytefeed & reader,
     std::span<std::byte> buffer)
 {
     return zstd_reader{reader, buffer};
@@ -363,11 +363,11 @@ inline zstd_reader zstd_reader_for(
 
 #if defined(NXTRT_HAVE_BROTLI)
 
-class brotli_reader final : public byte_reader
+class brotli_reader final : public bytefeed
 {
 public:
-    explicit brotli_reader(byte_reader & reader, std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
+    explicit brotli_reader(bytefeed & reader, std::size_t buffer_size = 4096)
+        : bytefeed(buffer_size)
         , reader_(&reader)
         , state_(BrotliDecoderCreateInstance(nullptr, nullptr, nullptr))
     {
@@ -375,8 +375,8 @@ public:
             throw compression_error{"brotli decompressor init failed"};
     }
 
-    explicit brotli_reader(byte_reader & reader, std::span<std::byte> buffer)
-        : byte_reader(buffer)
+    explicit brotli_reader(bytefeed & reader, std::span<std::byte> buffer)
+        : bytefeed(buffer)
         , reader_(&reader)
         , state_(BrotliDecoderCreateInstance(nullptr, nullptr, nullptr))
     {
@@ -390,19 +390,19 @@ public:
     }
 
 private:
-    hope<read_result> stream_bytes_more(
-        byte_writer & writer,
+    hope<value_result> stream_more(
+        bytesink & writer,
         std::size_t limit) override
     {
         if (limit == 0)
-            return hope<read_result>::ready(read_result{});
+            return hope<value_result>::ready(value_result{});
         if (done_)
-            return hope<read_result>::ready(read_result{.eof = true});
+            return hope<value_result>::ready(value_result{.eof = true});
         return stream_more_task(writer, limit);
     }
 
-    task<read_result> stream_more_task(
-        byte_writer & writer,
+    task<value_result> stream_more_task(
+        bytesink & writer,
         std::size_t limit)
     {
         auto into_reader = false;
@@ -410,7 +410,7 @@ private:
 
         while (true) {
             if (out.empty())
-                co_return read_result{};
+                co_return value_result{};
 
             if (available_in_ == 0)
                 co_await refill_input();
@@ -436,21 +436,21 @@ private:
 
             if (produced != 0) {
                 if (into_reader) {
-                    advance(produced);
-                    co_return read_result{};
+                    advance_constructed(produced);
+                    co_return value_result{};
                 }
 
                 writer.advance_constructed(produced);
-                co_return read_result{.bytes = produced};
+                co_return value_result{.values = produced};
             }
 
             if (done_)
-                co_return read_result{.eof = true};
+                co_return value_result{.eof = true};
         }
     }
 
     std::span<std::byte> output_capacity(
-        byte_writer & writer,
+        bytesink & writer,
         std::size_t limit,
         bool & into_reader)
     {
@@ -480,7 +480,7 @@ private:
         }
     }
 
-    byte_reader * reader_;
+    bytefeed * reader_;
     BrotliDecoderState * state_;
     std::span<const std::byte> input_;
     const std::uint8_t * next_in_ = nullptr;
@@ -489,14 +489,14 @@ private:
 };
 
 inline brotli_reader brotli_reader_for(
-    byte_reader & reader,
+    bytefeed & reader,
     std::size_t buffer_size = 4096)
 {
     return brotli_reader{reader, buffer_size};
 }
 
 inline brotli_reader brotli_reader_for(
-    byte_reader & reader,
+    bytefeed & reader,
     std::span<std::byte> buffer)
 {
     return brotli_reader{reader, buffer};

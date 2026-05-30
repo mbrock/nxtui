@@ -69,24 +69,24 @@ task<std::decay_t<T>> ready_task(T value)
     co_return std::move(value);
 }
 
-class tls13_client_session final : public byte_reader
+class tls13_client_session final : public bytefeed
 {
 public:
     tls13_client_session(
-        byte_reader & reader,
-        byte_writer & writer,
+        bytefeed & reader,
+        bytesink & writer,
         std::size_t buffer_size = 4096)
-        : byte_reader(buffer_size)
+        : bytefeed(buffer_size)
         , reader_(reader)
         , writer_(writer)
     {
     }
 
     tls13_client_session(
-        byte_reader & reader,
-        byte_writer & writer,
+        bytefeed & reader,
+        bytesink & writer,
         std::span<std::byte> buffer)
-        : byte_reader(buffer)
+        : bytefeed(buffer)
         , reader_(reader)
         , writer_(writer)
     {
@@ -270,13 +270,13 @@ public:
     }
 
 private:
-    hope<read_result> stream_bytes_more(
-        byte_writer & writer,
+    hope<value_result> stream_more(
+        bytesink & writer,
         std::size_t limit) override
     {
         require_handshake();
         if (limit == 0)
-            return hope<read_result>::ready(read_result{});
+            return hope<value_result>::ready(value_result{});
 
         if (pending_offset_ < pending_.size())
             return copy_pending(writer, limit);
@@ -284,8 +284,8 @@ private:
         return stream_more_task(writer, limit);
     }
 
-    task<read_result> stream_more_task(
-        byte_writer & writer,
+    task<value_result> stream_more_task(
+        bytesink & writer,
         std::size_t limit)
     {
         pending_.clear();
@@ -302,7 +302,7 @@ private:
     }
 
     hope<read_result> copy_pending(
-        byte_writer & writer,
+        bytesink & writer,
         std::size_t limit)
     {
         auto pending = std::span{pending_}.subspan(pending_offset_);
@@ -314,8 +314,8 @@ private:
         auto write = writer.write(pending.first(n));
         if (write.is_ready()) {
             pending_offset_ += n;
-            return hope<read_result>::ready(
-                read_result{.bytes = n, .eof = false});
+            return hope<value_result>::ready(
+                value_result{.values = n, .eof = false});
         }
         return copy_pending_slow(std::move(write), n);
     }
@@ -326,7 +326,7 @@ private:
     {
         co_await std::move(write);
         pending_offset_ += n;
-        co_return read_result{.bytes = n, .eof = false};
+        co_return value_result{.values = n, .eof = false};
     }
 
     void require_handshake() const
@@ -335,8 +335,8 @@ private:
             throw runtime_error{"TLS session has not completed handshake"};
     }
 
-    byte_reader & reader_;
-    byte_writer & writer_;
+    bytefeed & reader_;
+    bytesink & writer_;
     nxt::tls::tls13_application_keys application_keys_;
     std::vector<std::byte> pending_;
     std::size_t pending_offset_ = 0;
