@@ -1,8 +1,5 @@
 #include <nxt/crypto.hpp>
 
-#include <openssl/ec.h>
-#include <openssl/ec_key.h>
-#include <openssl/ecdsa.h>
 #include <openssl/evp.h>
 #include <openssl/nid.h>
 
@@ -65,22 +62,6 @@ struct evp_pkey_ctx_deleter
     void operator()(EVP_PKEY_CTX * ctx) const noexcept
     {
         EVP_PKEY_CTX_free(ctx);
-    }
-};
-
-struct ec_key_deleter
-{
-    void operator()(EC_KEY * key) const noexcept
-    {
-        EC_KEY_free(key);
-    }
-};
-
-struct ec_point_deleter
-{
-    void operator()(EC_POINT * point) const noexcept
-    {
-        EC_POINT_free(point);
     }
 };
 
@@ -243,6 +224,64 @@ boost::multiprecision::cpp_int int_from_bytes(std::span<const std::byte> in)
     return out;
 }
 
+boost::multiprecision::cpp_int hex_int(const char * text)
+{
+    auto out = boost::multiprecision::cpp_int{0};
+    for (auto * p = text; *p != '\0'; p++) {
+        auto ch = *p;
+        if (ch == ' ' || ch == '\n')
+            continue;
+        auto digit = 0;
+        if (ch >= '0' && ch <= '9')
+            digit = ch - '0';
+        else if (ch >= 'a' && ch <= 'f')
+            digit = 10 + ch - 'a';
+        else if (ch >= 'A' && ch <= 'F')
+            digit = 10 + ch - 'A';
+        else
+            throw crypto_error{"bad hex integer"};
+        out = (out << 4) | digit;
+    }
+    return out;
+}
+
+boost::multiprecision::cpp_int mod(
+    boost::multiprecision::cpp_int value,
+    const boost::multiprecision::cpp_int & modulus)
+{
+    value %= modulus;
+    if (value < 0)
+        value += modulus;
+    return value;
+}
+
+boost::multiprecision::cpp_int mod_inverse(
+    boost::multiprecision::cpp_int value,
+    boost::multiprecision::cpp_int modulus)
+{
+    if (modulus == 0)
+        throw crypto_error{"zero modular inverse modulus"};
+    value = mod(value, modulus);
+    if (value == 0)
+        throw crypto_error{"zero has no modular inverse"};
+    auto old_r = modulus;
+    auto r = value;
+    auto old_s = boost::multiprecision::cpp_int{0};
+    auto s = boost::multiprecision::cpp_int{1};
+    while (r != 0) {
+        auto q = boost::multiprecision::cpp_int{old_r / r};
+        auto next_r = boost::multiprecision::cpp_int{old_r - q * r};
+        old_r = r;
+        r = next_r;
+        auto next_s = boost::multiprecision::cpp_int{old_s - q * s};
+        old_s = s;
+        s = next_s;
+    }
+    if (old_r != 1)
+        throw crypto_error{"value has no modular inverse"};
+    return mod(old_s, modulus);
+}
+
 bytes bytes_from_int(boost::multiprecision::cpp_int value, std::size_t len)
 {
     auto out = bytes(len);
@@ -319,6 +358,117 @@ bool constant_time_equal(
     for (std::size_t i = 0; i < a.size(); i++)
         diff |= std::to_integer<unsigned char>(a[i] ^ b[i]);
     return diff == 0;
+}
+
+struct p256_point
+{
+    boost::multiprecision::cpp_int x;
+    boost::multiprecision::cpp_int y;
+    bool infinity = true;
+};
+
+const boost::multiprecision::cpp_int & p256_p()
+{
+    static const auto value = hex_int(
+        "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff");
+    return value;
+}
+
+const boost::multiprecision::cpp_int & p256_n()
+{
+    static const auto value = hex_int(
+        "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+    return value;
+}
+
+const p256_point & p256_g()
+{
+    static const auto value = p256_point{
+        .x = hex_int(
+            "6b17d1f2e12c4247f8bce6e563a440f2"
+            "77037d812deb33a0f4a13945d898c296"),
+        .y = hex_int(
+            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e16"
+            "2bce33576b315ececbb6406837bf51f5"),
+        .infinity = false};
+    return value;
+}
+
+p256_point p256_add(const p256_point & a, const p256_point & b)
+{
+    if (a.infinity)
+        return b;
+    if (b.infinity)
+        return a;
+
+    const auto & p = p256_p();
+    if (a.x == b.x) {
+        if (mod(a.y + b.y, p) == 0)
+            return {};
+        auto denominator = mod(2 * a.y, p);
+        if (denominator == 0)
+            return {};
+        auto lambda = mod(
+            (3 * a.x * a.x - 3) * mod_inverse(denominator, p),
+            p);
+        auto x = mod(lambda * lambda - 2 * a.x, p);
+        auto y = mod(lambda * (a.x - x) - a.y, p);
+        return {.x = x, .y = y, .infinity = false};
+    }
+
+    auto denominator = mod(b.x - a.x, p);
+    if (denominator == 0)
+        return {};
+    auto lambda = mod((b.y - a.y) * mod_inverse(denominator, p), p);
+    auto x = mod(lambda * lambda - a.x - b.x, p);
+    auto y = mod(lambda * (a.x - x) - a.y, p);
+    return {.x = x, .y = y, .infinity = false};
+}
+
+p256_point p256_mul(boost::multiprecision::cpp_int scalar, p256_point point)
+{
+    auto out = p256_point{};
+    while (scalar > 0) {
+        if ((scalar & 1) != 0)
+            out = p256_add(out, point);
+        scalar >>= 1;
+        if (scalar != 0)
+            point = p256_add(point, point);
+    }
+    return out;
+}
+
+bool p256_on_curve(const p256_point & point)
+{
+    if (point.infinity)
+        return false;
+    const auto & p = p256_p();
+    auto left = mod(point.y * point.y, p);
+    auto right = mod(point.x * point.x * point.x - 3 * point.x
+                         + hex_int(
+                             "5ac635d8aa3a93e7b3ebbd55769886bc"
+                             "651d06b0cc53b0f63bce3c3e27d2604b"),
+                     p);
+    return left == right;
+}
+
+struct ecdsa_signature
+{
+    boost::multiprecision::cpp_int r;
+    boost::multiprecision::cpp_int s;
+};
+
+ecdsa_signature parse_ecdsa_der(std::span<const std::byte> der_signature)
+{
+    auto sig =
+        der_cursor{der_cursor{der_signature}.take_value(std::byte{0x30})};
+    auto r = int_from_bytes(
+        der_positive_integer(sig.take_value(std::byte{0x02})));
+    auto s = int_from_bytes(
+        der_positive_integer(sig.take_value(std::byte{0x02})));
+    if (!sig.empty())
+        throw crypto_error{"trailing data in ECDSA signature"};
+    return {.r = r, .s = s};
 }
 
 }
@@ -540,35 +690,30 @@ bool ecdsa_p256_sha256_verify(
     std::span<const std::byte> message,
     std::span<const std::byte> der_signature)
 {
-    auto key = std::unique_ptr<EC_KEY, ec_key_deleter>{
-        EC_KEY_new_by_curve_name(NID_X9_62_prime256v1)};
-    if (!key)
-        throw crypto_error{"failed to create P-256 key"};
-
-    const auto * group = EC_KEY_get0_group(key.get());
-    auto point = std::unique_ptr<EC_POINT, ec_point_deleter>{
-        EC_POINT_new(group)};
-    if (!point)
-        throw crypto_error{"failed to create P-256 point"};
-    if (!EC_POINT_oct2point(
-            group,
-            point.get(),
-            u8_data(public_key),
-            public_key.size(),
-            nullptr))
+    if (public_key.size() != 65 || public_key.front() != std::byte{0x04})
         return false;
-    if (!EC_KEY_set_public_key(key.get(), point.get()))
-        throw crypto_error{"failed to set P-256 public key"};
+
+    auto q = p256_point{
+        .x = int_from_bytes(public_key.subspan(1, 32)),
+        .y = int_from_bytes(public_key.subspan(33, 32)),
+        .infinity = false};
+    if (!p256_on_curve(q))
+        return false;
+
+    auto sig = parse_ecdsa_der(der_signature);
+    const auto & n = p256_n();
+    if (sig.r <= 0 || sig.r >= n || sig.s <= 0 || sig.s >= n)
+        return false;
 
     auto digest = sha256(message);
-    return ECDSA_verify(
-        0,
-        u8_data(digest),
-        digest.size(),
-        u8_data(der_signature),
-        der_signature.size(),
-        key.get())
-           == 1;
+    auto z = int_from_bytes(digest);
+    auto w = mod_inverse(sig.s, n);
+    auto u1 = mod(z * w, n);
+    auto u2 = mod(sig.r * w, n);
+    auto point = p256_add(p256_mul(u1, p256_g()), p256_mul(u2, q));
+    if (point.infinity)
+        return false;
+    return mod(point.x, n) == sig.r;
 }
 
 bool rsa_pss_verify(
