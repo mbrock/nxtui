@@ -5,6 +5,7 @@
 #include "nxtrt/trace.hpp"
 #include "nxt/unique-fd.hpp"
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <csignal>
@@ -40,7 +41,6 @@ namespace nxtrt {
 
 class deck;
 class wand;
-class uring_submission;
 
 namespace detail {
 struct promise_base;
@@ -85,10 +85,10 @@ struct parked_task
 };
 
 template<typename T>
-class waiter;
+class urge;
 
 template<typename T>
-class wait_state
+class urge_state
 {
 public:
     using stored_type = std::remove_cv_t<T>;
@@ -108,7 +108,7 @@ public:
         if (exception_)
             rethrow(exception_);
         if (!value_)
-            throw runtime_error{"nxtrt waiter result was never set"};
+            throw runtime_error{"nxtrt urge result was never set"};
         return std::move(*value_);
     }
 
@@ -118,7 +118,7 @@ private:
 };
 
 template<>
-class wait_state<void>
+class urge_state<void>
 {
 public:
     void set_value() noexcept
@@ -136,7 +136,7 @@ public:
         if (exception_)
             rethrow(exception_);
         if (!done_)
-            throw runtime_error{"nxtrt waiter result was never set"};
+            throw runtime_error{"nxtrt urge result was never set"};
     }
 
 private:
@@ -144,18 +144,18 @@ private:
     std::exception_ptr exception_;
 };
 
-/// Typed waiter returned by a wand after preparing an operation.
+/// Typed urge returned by a wand after preparing an operation.
 template<typename T>
-class waiter
+class urge
 {
 public:
     using result_type = T;
 
-    waiter() = default;
-    waiter(
+    urge() = default;
+    urge(
         wand & source,
         wait_token token,
-        std::shared_ptr<wait_state<T>> state,
+        std::shared_ptr<urge_state<T>> state,
         std::string description = {}) noexcept
         : source_(&source)
         , token_(token)
@@ -172,7 +172,7 @@ public:
     T await_resume()
     {
         if (state_ == nullptr)
-            throw runtime_error{"nxtrt waiter has no result state"};
+            throw runtime_error{"nxtrt urge has no result state"};
         return state_->take();
     }
 
@@ -181,7 +181,7 @@ public:
         return token_;
     }
 
-    [[nodiscard]] std::shared_ptr<wait_state<T>> state() const noexcept
+    [[nodiscard]] std::shared_ptr<urge_state<T>> state() const noexcept
     {
         return state_;
     }
@@ -189,15 +189,15 @@ public:
 private:
     wand * source_ = nullptr;
     wait_token token_ = 0;
-    std::shared_ptr<wait_state<T>> state_;
+    std::shared_ptr<urge_state<T>> state_;
     std::string description_;
 };
 
 template<>
-inline void waiter<void>::await_resume()
+inline void urge<void>::await_resume()
 {
     if (state_ == nullptr)
-        throw runtime_error{"nxtrt waiter has no result state"};
+        throw runtime_error{"nxtrt urge has no result state"};
     state_->take();
 }
 
@@ -290,6 +290,66 @@ private:
     }
 };
 
+template<std::size_t N>
+struct fixed_string
+{
+    char value[N]{};
+
+    constexpr fixed_string(char const (&text)[N]) noexcept
+    {
+        std::copy_n(text, N, value);
+    }
+
+    [[nodiscard]] constexpr std::string_view view() const noexcept
+    {
+        return std::string_view{value, N - 1};
+    }
+};
+
+template<typename Result, fixed_string Name>
+struct wish
+{
+    using result_type = Result;
+    static constexpr auto fixed_name = Name;
+    static constexpr auto name = fixed_name.view();
+};
+
+template<typename... Args>
+constexpr auto wish_args(Args &&... args)
+{
+    if constexpr (sizeof...(Args) == 0)
+        return std::array<wish_arg, 0>{};
+    else
+        return std::array{wish_arg{std::forward<Args>(args)}...};
+}
+
+inline auto no_args()
+{
+    return wish_args();
+}
+
+inline auto fd_args(int fd)
+{
+    return wish_args(wish_arg{"fd", fd});
+}
+
+inline auto fd_bytes_args(int fd, std::size_t bytes)
+{
+    return wish_args(
+        wish_arg{"fd", fd},
+        wish_arg{"bytes", bytes});
+}
+
+inline auto path_args(std::string const & path)
+{
+    return wish_args(wish_arg{"path", std::string_view{path}});
+}
+
+inline auto pidfd_args(int pidfd)
+{
+    return wish_args(wish_arg{"pidfd", pidfd});
+}
+
 template<std::ranges::input_range Args>
 std::string format_wish_args(Args const & args)
 {
@@ -316,55 +376,50 @@ std::string format_wish_args(Args const & args)
 }
 
 template<typename Wish>
-void trace_wish(Wish const & wish)
+std::string describe_wish(Wish const & wish)
 {
     auto args = wish.args();
-    if (std::ranges::empty(args)) {
-        trace("{}", Wish::name);
-    } else {
-        trace("{} {}", Wish::name, format_wish_args(args));
-    }
+    if (std::ranges::empty(args))
+        return std::string{Wish::name};
+    return std::string{Wish::name}
+        + " "
+        + format_wish_args(args);
+}
+
+template<typename Wish>
+void trace_wish(Wish const & wish)
+{
+    trace("{}", describe_wish(wish));
 }
 
 template<typename Wish>
 concept awaitable_wish =
-    requires(
-        std::remove_cvref_t<Wish> & staged,
-        Wish const & wish,
-        uring_submission & submission) {
+    requires(Wish const & wish) {
         typename Wish::result_type;
         { Wish::name } -> std::convertible_to<std::string_view>;
         wish.args();
-        { staged.stage_uring(submission) } -> std::same_as<bool>;
     };
 
 template<awaitable_wish Wish>
-waiter<typename Wish::result_type> operator co_await(Wish const & wish);
+urge<typename Wish::result_type> operator co_await(Wish const & wish);
 
 /// Closed operation type for deterministic/manual tests.
 ///
 /// This is deliberately more like a tiny SQE recipe than a generic variant:
 /// the operation owns its input parameters and names its result type.
-struct manual
+struct manual : wish<void, "manual">
 {
-    using result_type = void;
-    static constexpr std::string_view name = "manual";
-
     wait_token token = 0;
 
     auto args() const
     {
-        return std::array{wish_arg{"token", token}};
+        return wish_args(wish_arg{"token", token});
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct openat
+struct openat : wish<int, "openat">
 {
-    using result_type = int;
-    static constexpr std::string_view name = "openat";
-
     int dirfd = AT_FDCWD;
     std::string path;
     int flags = O_RDONLY;
@@ -372,18 +427,14 @@ struct openat
 
     auto args() const
     {
-        return std::array{wish_arg{"path", std::string_view{path}}};
+        return path_args(path);
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
 #if defined(__linux__)
-struct statx
+struct statx : wish<statx_result, "statx">
 {
-    using result_type = statx_result;
-    static constexpr std::string_view name = "statx";
-
     int dirfd = AT_FDCWD;
     std::string path;
     int flags = AT_SYMLINK_NOFOLLOW;
@@ -392,51 +443,37 @@ struct statx
 
     auto args() const
     {
-        return std::array{wish_arg{"path", std::string_view{path}}};
+        return path_args(path);
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct getdents64
+struct getdents64 : wish<std::size_t, "getdents64">
 {
-    using result_type = std::size_t;
-    static constexpr std::string_view name = "getdents64";
-
     int fd = -1;
     std::span<std::byte> buffer;
 
     auto args() const
     {
-        return std::array{
-            wish_arg{"fd", fd},
-            wish_arg{"bytes", buffer.size()}};
+        return fd_bytes_args(fd, buffer.size());
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct spawn_piped
+struct spawn_piped : wish<piped_child, "spawn-piped">
 {
-    using result_type = piped_child;
-    static constexpr std::string_view name = "spawn-piped";
-
     std::vector<std::string> argv;
     std::shared_ptr<piped_child> child = std::make_shared<piped_child>();
 
     auto args() const
     {
-        return std::array{wish_arg{"argv", argv.size()}};
+        return wish_args(wish_arg{"argv", argv.size()});
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct spawn_pty
+struct spawn_pty : wish<pty_child, "spawn-pty">
 {
-    using result_type = pty_child;
-    static constexpr std::string_view name = "spawn-pty";
-
     std::vector<std::string> argv;
     std::size_t columns = 80;
     std::size_t rows = 24;
@@ -444,135 +481,99 @@ struct spawn_pty
 
     auto args() const
     {
-        return std::array{wish_arg{"argv", argv.size()}};
+        return wish_args(wish_arg{"argv", argv.size()});
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct wait_child
+struct wait_child : wish<child_result, "wait-child">
 {
-    using result_type = child_result;
-    static constexpr std::string_view name = "wait-child";
-
     int pidfd = -1;
     siginfo_t info{};
 
     auto args() const
     {
-        return std::array{wish_arg{"pidfd", pidfd}};
+        return pidfd_args(pidfd);
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct signal_child
+struct signal_child : wish<void, "signal-child">
 {
-    using result_type = void;
-    static constexpr std::string_view name = "signal-child";
-
     int pidfd = -1;
     int signal = SIGTERM;
 
     auto args() const
     {
-        return std::array{
+        return wish_args(
             wish_arg{"pidfd", pidfd},
-            wish_arg{"signal", signal}};
+            wish_arg{"signal", signal});
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 #endif
 
-struct read_some
+struct read_some : wish<std::size_t, "read">
 {
-    using result_type = std::size_t;
-    static constexpr std::string_view name = "read";
-
     int fd = -1;
     std::span<std::byte> buffer;
     off_t offset = -1;
 
     auto args() const
     {
-        return std::array{
-            wish_arg{"fd", fd},
-            wish_arg{"bytes", buffer.size()}};
+        return fd_bytes_args(fd, buffer.size());
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct write_some
+struct write_some : wish<std::size_t, "write">
 {
-    using result_type = std::size_t;
-    static constexpr std::string_view name = "write";
-
     int fd = -1;
     std::span<const std::byte> buffer;
     off_t offset = -1;
 
     auto args() const
     {
-        return std::array{
-            wish_arg{"fd", fd},
-            wish_arg{"bytes", buffer.size()}};
+        return fd_bytes_args(fd, buffer.size());
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct recv_some
+struct recv_some : wish<std::size_t, "recv">
 {
-    using result_type = std::size_t;
-    static constexpr std::string_view name = "recv";
-
     int fd = -1;
     std::span<std::byte> buffer;
     int flags = 0;
 
     auto args() const
     {
-        return std::array{
-            wish_arg{"fd", fd},
-            wish_arg{"bytes", buffer.size()}};
+        return fd_bytes_args(fd, buffer.size());
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct send_some
+struct send_some : wish<std::size_t, "send">
 {
-    using result_type = std::size_t;
-    static constexpr std::string_view name = "send";
-
     int fd = -1;
     std::span<const std::byte> buffer;
     int flags = 0;
 
     auto args() const
     {
-        return std::array{
-            wish_arg{"fd", fd},
-            wish_arg{"bytes", buffer.size()}};
+        return fd_bytes_args(fd, buffer.size());
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct connect
+struct connect : wish<void, "connect">
 {
-    using result_type = void;
-    static constexpr std::string_view name = "connect";
-
     int fd = -1;
     sockaddr_storage address{};
     socklen_t address_size = 0;
 
     auto args() const
     {
-        return std::array{wish_arg{"fd", fd}};
+        return fd_args(fd);
     }
 
     static connect from(
@@ -597,57 +598,45 @@ struct connect
         return reinterpret_cast<sockaddr const *>(&address);
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
 /// Accept one connection from a listening socket.
 ///
 /// The accepted file descriptor is returned as the wish result. The caller owns
 /// it immediately and should wrap it in an RAII file descriptor type.
-struct accept
+struct accept : wish<int, "accept">
 {
-    using result_type = int;
-    static constexpr std::string_view name = "accept";
-
     int fd = -1;
     int flags = 0;
 
     auto args() const
     {
-        return std::array{wish_arg{"fd", fd}};
+        return fd_args(fd);
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct poll
+struct poll : wish<int, "poll">
 {
-    using result_type = int;
-    static constexpr std::string_view name = "poll";
-
     int fd = -1;
     short events = 0;
 
     auto args() const
     {
-        return std::array{
+        return wish_args(
             wish_arg{"fd", fd},
-            wish_arg{"events", events}};
+            wish_arg{"events", events});
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
-struct timeout
+struct timeout : wish<void, "timeout">
 {
-    using result_type = void;
-    static constexpr std::string_view name = "timeout";
-
     kernel_timespec duration{};
 
     auto args() const
     {
-        return std::array<wish_arg, 0>{};
+        return no_args();
     }
 
     static timeout after(std::chrono::nanoseconds duration)
@@ -657,27 +646,23 @@ struct timeout
         };
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
 /// Backend-specific fused poll/deadline wish.
 ///
 /// Portable runtime code should prefer `poll_until_after`, which composes a
 /// poll wish and timeout wish and lets ordinary task racing choose the winner.
-struct poll_until
+struct poll_until : wish<poll_until_result, "poll-until">
 {
-    using result_type = poll_until_result;
-    static constexpr std::string_view name = "poll-until";
-
     int fd = -1;
     short events = 0;
     kernel_timespec timeout{};
 
     auto args() const
     {
-        return std::array{
+        return wish_args(
             wish_arg{"fd", fd},
-            wish_arg{"events", events}};
+            wish_arg{"events", events});
     }
 
     static poll_until after(
@@ -692,7 +677,6 @@ struct poll_until
         };
     }
 
-    bool stage_uring(uring_submission & submission);
 };
 
 } // namespace op
@@ -726,111 +710,11 @@ struct prepared_wish
     std::shared_ptr<void> state;
 };
 
-inline std::string describe_wish(const op::manual & wish)
-{
-    return "manual token " + std::to_string(wish.token);
-}
-
-inline std::string describe_wish(const op::openat & wish)
-{
-    return "openat " + wish.path;
-}
-
-#if defined(__linux__)
-inline std::string describe_wish(const op::statx & wish)
-{
-    return "statx " + wish.path;
-}
-
-inline std::string describe_wish(const op::getdents64 & wish)
-{
-    return "getdents64 fd " + std::to_string(wish.fd)
-        + " bytes " + std::to_string(wish.buffer.size());
-}
-
-inline std::string describe_wish(const op::spawn_piped & wish)
-{
-    auto command = wish.argv.empty() ? std::string{} : wish.argv.front();
-    return "spawn-piped argc " + std::to_string(wish.argv.size())
-        + (command.empty() ? std::string{} : " command " + command);
-}
-
-inline std::string describe_wish(const op::spawn_pty & wish)
-{
-    auto command = wish.argv.empty() ? std::string{} : wish.argv.front();
-    return "spawn-pty argc " + std::to_string(wish.argv.size())
-        + (command.empty() ? std::string{} : " command " + command);
-}
-
-inline std::string describe_wish(const op::wait_child & wish)
-{
-    return "wait-child pidfd " + std::to_string(wish.pidfd);
-}
-
-inline std::string describe_wish(const op::signal_child & wish)
-{
-    return "signal-child pidfd " + std::to_string(wish.pidfd)
-        + " signal " + std::to_string(wish.signal);
-}
-#endif
-
-inline std::string describe_wish(const op::read_some & wish)
-{
-    return "read fd " + std::to_string(wish.fd)
-        + " bytes " + std::to_string(wish.buffer.size());
-}
-
-inline std::string describe_wish(const op::write_some & wish)
-{
-    return "write fd " + std::to_string(wish.fd)
-        + " bytes " + std::to_string(wish.buffer.size());
-}
-
-inline std::string describe_wish(const op::recv_some & wish)
-{
-    return "recv fd " + std::to_string(wish.fd)
-        + " bytes " + std::to_string(wish.buffer.size());
-}
-
-inline std::string describe_wish(const op::send_some & wish)
-{
-    return "send fd " + std::to_string(wish.fd)
-        + " bytes " + std::to_string(wish.buffer.size());
-}
-
-inline std::string describe_wish(const op::connect & wish)
-{
-    return "connect fd " + std::to_string(wish.fd);
-}
-
-inline std::string describe_wish(const op::accept & wish)
-{
-    return "accept fd " + std::to_string(wish.fd);
-}
-
-inline std::string describe_wish(const op::poll & wish)
-{
-    return "poll fd " + std::to_string(wish.fd)
-        + " events " + std::to_string(wish.events);
-}
-
-inline std::string describe_wish(const op::timeout & wish)
-{
-    auto millis = wish.duration.tv_sec * 1000 + wish.duration.tv_nsec / 1000000;
-    return "timeout " + std::to_string(millis) + "ms";
-}
-
-inline std::string describe_wish(const op::poll_until & wish)
-{
-    return "poll-until fd " + std::to_string(wish.fd)
-        + " events " + std::to_string(wish.events);
-}
-
 template<typename Wish>
-[[nodiscard]] inline std::string describe_wish_for_waiter(const Wish & wish)
+[[nodiscard]] inline std::string describe_wish_for_urge(const Wish & wish)
 {
     if constexpr (debug::describe_wishes)
-        return describe_wish(wish);
+        return op::describe_wish(wish);
     else
         return {};
 }
@@ -840,8 +724,8 @@ template<typename Wish>
 /// Backend interface for staged platform/event-loop machinery.
 ///
 /// `prepare()` is called synchronously while a coroutine is running. It can
-/// allocate backend state, stage submission records, and return a typed waiter.
-/// The waiter parks the coroutine at `await_suspend()`. After a deck round,
+/// allocate backend state, stage submission records, and return a typed urge.
+/// The urge parks the coroutine at `await_suspend()`. After a deck round,
 /// `wave()` lets the wand submit whatever it staged during that round.
 class wand
 {
@@ -849,14 +733,14 @@ public:
     virtual ~wand() = default;
 
     template<typename Wish>
-    waiter<typename Wish::result_type> prepare(
+    urge<typename Wish::result_type> prepare(
         deck & d,
         detail::promise_base & promise,
         Wish wish)
     {
         using result_type = typename Wish::result_type;
-        auto state = std::make_shared<wait_state<result_type>>();
-        auto description = detail::describe_wish_for_waiter(wish);
+        auto state = std::make_shared<urge_state<result_type>>();
+        auto description = detail::describe_wish_for_urge(wish);
         auto token = prepare_wish(
             d,
             promise,
@@ -864,7 +748,7 @@ public:
                 .wish = wish_variant{std::move(wish)},
                 .state = state,
             });
-        return waiter<result_type>{
+        return urge<result_type>{
             *this,
             token,
             state,

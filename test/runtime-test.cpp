@@ -191,7 +191,7 @@ protected:
 
         prepared.push_back(wish->token);
         states.push_back(
-            std::static_pointer_cast<nxtrt::wait_state<void>>(
+            std::static_pointer_cast<nxtrt::urge_state<void>>(
                 packet.state));
         return wish->token;
     }
@@ -206,7 +206,7 @@ public:
     std::vector<nxtrt::wait_token> prepared;
     std::vector<nxtrt::wait_token> cancelled;
     std::vector<parked_entry> parked;
-    std::vector<std::shared_ptr<nxtrt::wait_state<void>>> states;
+    std::vector<std::shared_ptr<nxtrt::urge_state<void>>> states;
     int waves = 0;
 };
 
@@ -907,7 +907,7 @@ nxtrt::task<void> record_task_stop_state_after_yield(
 
 // A custom awaitable exercising task::splice_onto. When `ready` holds it
 // resolves through await_ready() and never suspends; on a miss it delegates
-// its slow path to a real task spliced as the awaiter's continuation. This is
+// its slow path to a real task spliced as the awaiter continuation. This is
 // the buffered-reader fast/slow split in miniature: a buffered read takes the
 // ready path with no deck round-trip, a miss runs a refill coroutine.
 inline nxtrt::task<void> splice_probe_fill(std::vector<int> & events)
@@ -2445,7 +2445,7 @@ static suite runtime_tests{
         };
 
         "wishes"_test = [] {
-            "typed waiters are prepared and parked"_test = [] {
+            "typed urges are prepared and parked"_test = [] {
                 auto wand = manual_wand{};
                 auto deck = nxtrt::deck{&wand};
                 auto events = std::vector<int>{};
@@ -2469,7 +2469,7 @@ static suite runtime_tests{
                     wand.prepared == std::vector<nxtrt::wait_token>{42})
                     << "wand should synchronously prepare the wish";
                 expect(wand.parked.size() == std::size_t{1})
-                    << "waiter should park the suspended coroutine";
+                    << "urge should park the suspended coroutine";
                 expect(wand.parked.front().token == std::uint64_t{42});
 
                 wand.fulfill(deck, 42);

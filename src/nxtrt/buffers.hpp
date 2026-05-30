@@ -397,7 +397,7 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 // The hot/cold split is mirrored by `hope<T>` (see task.hpp). The buffered case
 // returns `hope<...>::ready(span)` -- a synchronous value, no coroutine frame,
 // no deck round-trip -- and only a miss builds a `*_slow` task that is spliced
-// as the awaiter's continuation. This is the C++ stackless answer to Zig's
+// as the awaiter continuation. This is the C++ stackless answer to Zig's
 // `fill`/`fillUnbuffered` inlining trick: without it, `co_await feed.take(n)`
 // on already-buffered data would still bounce the deck (lazy `task<T>` is never
 // `await_ready`), which is exactly the per-field trampoline this design exists
@@ -439,7 +439,7 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 // TODO(zig-rebase): use the virtual `rebase_more` slot for a ring- or
 //   mmap-backed reader that can make room differently from memmove.
 // TODO(eager-wand): push the synchronous-completion idea of `stream_more()` down
-//   to the wish layer -- an honest `waiter::await_ready()` plus a sync path in
+//   to the wish layer -- an honest `urge::await_ready()` plus a sync path in
 //   `wand::prepare` -- so a warm `read_some` on the fd also skips the
 //   round-trip. At that point the buffered feed can BE a wand and `hope`
 //   dissolves into a single "maybe already here, else suspends" awaitable

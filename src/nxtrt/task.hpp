@@ -499,7 +499,7 @@ private:
 /// A hope is the sum of a synchronous result and a pending coroutine: it is
 /// `ready(T)` when the value is already available, or a `task<T>` when it is
 /// not. Awaiting a ready hope never suspends (the value is returned inline);
-/// awaiting a pending hope splices the task as the awaiter's continuation and
+/// awaiting a pending hope splices the task as the awaiter continuation and
 /// resumes with its result.
 ///
 /// This is the seam between functional (wish-like) and coroutine (task-like)
@@ -2453,7 +2453,7 @@ auto prepare_wish_awaitable(Wish const & wish)
 } // namespace detail
 
 template<typename T>
-inline void waiter<T>::await_suspend(
+inline void urge<T>::await_suspend(
     std::coroutine_handle<> awaiting) const
 {
     auto * active_wand = source_;
@@ -2461,9 +2461,9 @@ inline void waiter<T>::await_suspend(
     auto * running = current == nullptr ? nullptr : current->current_promise;
     if (active_wand == nullptr || running == nullptr)
         throw runtime_error{
-            "nxtrt waiter awaited without a prepared wand"};
+            "nxtrt urge awaited without a prepared wand"};
 
-    trace("waiter suspend token={}", token_);
+    trace("urge suspend token={}", token_);
     debug::park_task(
         running->id,
         token_,
@@ -2480,7 +2480,7 @@ inline void waiter<T>::await_suspend(
 namespace op {
 
 template<awaitable_wish Wish>
-inline waiter<typename Wish::result_type> operator co_await(Wish const & wish)
+inline urge<typename Wish::result_type> operator co_await(Wish const & wish)
 {
     return detail::prepare_wish_awaitable(wish);
 }

@@ -365,7 +365,7 @@ private:
     class completion final : public completion_base
     {
     public:
-        explicit completion(std::shared_ptr<wait_state<T>> state)
+        explicit completion(std::shared_ptr<urge_state<T>> state)
             : state_(std::move(state))
         {}
 
@@ -968,7 +968,7 @@ private:
                     std::make_exception_ptr(
                         runtime_error{
                             "kqueue delivered scalar result to unsupported "
-                            "waiter"}));
+                            "urge"}));
             }
         }
 
@@ -982,7 +982,7 @@ private:
                     std::make_exception_ptr(
                         runtime_error{
                             "kqueue delivered poll_until result to wrong "
-                            "waiter"}));
+                            "urge"}));
             }
         }
 
@@ -1003,7 +1003,7 @@ private:
                         + std::to_string(err)}));
         }
 
-        std::shared_ptr<wait_state<T>> state_;
+        std::shared_ptr<urge_state<T>> state_;
     };
 
     /// Immutable wish recipe plus the typed completion sink for an exec.
@@ -1018,7 +1018,7 @@ private:
 
         /// Closed wish that knows how to register its kqueue events.
         kqueue_wish request;
-        /// Type-erased bridge to the awaiter's result state.
+        /// Type-erased bridge to the urge result state.
         std::unique_ptr<completion_base> completion;
     };
 
@@ -1376,7 +1376,7 @@ wait_token kqueue_wand::prepare_kqueue_wish(
 {
     using result_type = typename Wish::result_type;
     auto state =
-        std::static_pointer_cast<wait_state<result_type>>(erased_state);
+        std::static_pointer_cast<urge_state<result_type>>(erased_state);
     auto iterator = execs_.emplace(
         spec{
             kqueue_wish{std::move(wish)},

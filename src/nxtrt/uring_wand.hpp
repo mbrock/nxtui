@@ -48,7 +48,7 @@ inline constexpr bool has_liburing_wand = NXT_RT_HAS_LIBURING != 0;
 
 class uring_wand;
 
-/// Per-wish staging context handed to `op::*::stage_uring`.
+/// Per-wish staging context handed to uring staging overloads.
 class uring_submission
 {
 public:
@@ -75,6 +75,26 @@ private:
     deck & deck_;
     wait_token token_;
 };
+
+inline bool stage_uring(uring_submission &, op::manual &);
+inline bool stage_uring(uring_submission &, op::openat &);
+#if defined(__linux__)
+inline bool stage_uring(uring_submission &, op::statx &);
+inline bool stage_uring(uring_submission &, op::getdents64 &);
+inline bool stage_uring(uring_submission &, op::spawn_piped &);
+inline bool stage_uring(uring_submission &, op::spawn_pty &);
+inline bool stage_uring(uring_submission &, op::wait_child &);
+inline bool stage_uring(uring_submission &, op::signal_child &);
+#endif
+inline bool stage_uring(uring_submission &, op::read_some &);
+inline bool stage_uring(uring_submission &, op::write_some &);
+inline bool stage_uring(uring_submission &, op::recv_some &);
+inline bool stage_uring(uring_submission &, op::send_some &);
+inline bool stage_uring(uring_submission &, op::connect &);
+inline bool stage_uring(uring_submission &, op::accept &);
+inline bool stage_uring(uring_submission &, op::poll &);
+inline bool stage_uring(uring_submission &, op::timeout &);
+inline bool stage_uring(uring_submission &, op::poll_until &);
 
 /// io_uring-backed wand for Linux runtime wishes.
 ///
@@ -339,7 +359,7 @@ private:
     public:
         virtual ~completion_base() = default;
 
-        /// Transfer an io_uring result into the typed waiter state.
+        /// Transfer an io_uring result into the typed urge state.
         virtual void complete(
             uring_wish & request,
             int result,
@@ -350,7 +370,7 @@ private:
         {
             return std::visit(
                 [](auto const & wish) {
-                    return detail::describe_wish(wish);
+                    return op::describe_wish(wish);
                 },
                 request);
         }
@@ -360,7 +380,7 @@ private:
     class completion final : public completion_base
     {
     public:
-        explicit completion(std::shared_ptr<wait_state<T>> state)
+        explicit completion(std::shared_ptr<urge_state<T>> state)
             : state_(std::move(state))
         {}
 
@@ -459,7 +479,7 @@ private:
             return message;
         }
 
-        std::shared_ptr<wait_state<T>> state_;
+        std::shared_ptr<urge_state<T>> state_;
     };
 
     /// Immutable wish recipe plus the typed completion sink for an exec.
@@ -474,7 +494,7 @@ private:
 
         /// Closed wish that knows how to stage its SQE.
         uring_wish request;
-        /// Type-erased bridge to the awaiter's result state.
+        /// Type-erased bridge to the urge result state.
         std::unique_ptr<completion_base> completion;
     };
 
@@ -501,7 +521,7 @@ private:
     {
         using result_type = typename Wish::result_type;
         auto state =
-            std::static_pointer_cast<wait_state<result_type>>(erased_state);
+            std::static_pointer_cast<urge_state<result_type>>(erased_state);
         auto iterator = execs_.emplace(
             spec{
                 uring_wish{std::move(wish)},
@@ -642,7 +662,7 @@ private:
         auto submission = uring_submission{*this, d, token_for(execution)};
         return std::visit(
             [&submission](auto & op) {
-                return op.stage_uring(submission);
+                return stage_uring(submission, op);
             },
             execution.specification.request);
     }
@@ -988,48 +1008,49 @@ inline std::string pty_slave_name(int master_fd)
     return name.data();
 }
 
-inline bool op::manual::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::manual & wish)
 {
+    (void)wish;
     auto * sqe = submission.get_sqe();
     io_uring_prep_nop(sqe);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::openat::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::openat & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_openat(
         sqe,
-        dirfd,
-        path.c_str(),
-        flags,
-        mode);
+        wish.dirfd,
+        wish.path.c_str(),
+        wish.flags,
+        wish.mode);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::statx::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::statx & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_statx(
         sqe,
-        dirfd,
-        path.c_str(),
-        flags,
-        mask,
-        &result);
+        wish.dirfd,
+        wish.path.c_str(),
+        wish.flags,
+        wish.mask,
+        &wish.result);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::getdents64::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::getdents64 & wish)
 {
     auto result = ::syscall(
         SYS_getdents64,
-        fd,
-        buffer.data(),
-        buffer.size());
+        wish.fd,
+        wish.buffer.data(),
+        wish.buffer.size());
     if (result < 0)
         result = -errno;
 
@@ -1041,9 +1062,9 @@ inline bool op::getdents64::stage_uring(uring_submission & submission)
     return false;
 }
 
-inline bool op::spawn_piped::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::spawn_piped & wish)
 {
-    if (argv.empty()) {
+    if (wish.argv.empty()) {
         submission.complete_sync(-EINVAL);
         return false;
     }
@@ -1084,11 +1105,11 @@ inline bool op::spawn_piped::stage_uring(uring_submission & submission)
         return false;
     }
 
-    auto ptrs = argv_ptrs(argv);
+    auto ptrs = argv_ptrs(wish.argv);
     auto pid = pid_t{-1};
     rc = ::posix_spawnp(
         &pid,
-        argv.front().c_str(),
+        wish.argv.front().c_str(),
         actions.get(),
         nullptr,
         ptrs.data(),
@@ -1108,7 +1129,7 @@ inline bool op::spawn_piped::stage_uring(uring_submission & submission)
     }
 
     write_fd.reset();
-    *child = piped_child{
+    *wish.child = piped_child{
         .pid = pid,
         .pidfd = nxt::unique_fd{pidfd},
         .output = std::move(read_fd),
@@ -1117,9 +1138,9 @@ inline bool op::spawn_piped::stage_uring(uring_submission & submission)
     return false;
 }
 
-inline bool op::spawn_pty::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::spawn_pty & wish)
 {
-    if (argv.empty()) {
+    if (wish.argv.empty()) {
         submission.complete_sync(-EINVAL);
         return false;
     }
@@ -1135,7 +1156,7 @@ inline bool op::spawn_pty::stage_uring(uring_submission & submission)
             submission.complete_sync(-errno);
             return false;
         }
-        auto ws = winsize_from(columns, rows);
+        auto ws = winsize_from(wish.columns, wish.rows);
         if (::ioctl(slave.get(), TIOCSWINSZ, &ws) < 0) {
             submission.complete_sync(-errno);
             return false;
@@ -1145,7 +1166,7 @@ inline bool op::spawn_pty::stage_uring(uring_submission & submission)
         return false;
     }
 
-    auto ptrs = argv_ptrs(argv);
+    auto ptrs = argv_ptrs(wish.argv);
     auto pid = ::fork();
     if (pid < 0) {
         submission.complete_sync(-errno);
@@ -1188,7 +1209,7 @@ inline bool op::spawn_pty::stage_uring(uring_submission & submission)
         return false;
     }
 
-    *child = pty_child{
+    *wish.child = pty_child{
         .pid = pid,
         .pidfd = nxt::unique_fd{pidfd},
         .master = std::move(master),
@@ -1197,133 +1218,133 @@ inline bool op::spawn_pty::stage_uring(uring_submission & submission)
     return false;
 }
 
-inline bool op::wait_child::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::wait_child & wish)
 {
-    if (pidfd < 0) {
+    if (wish.pidfd < 0) {
         submission.complete_sync(-EBADF);
         return false;
     }
 
     auto * sqe = submission.get_sqe();
-    io_uring_prep_waitid(sqe, P_PIDFD, pidfd, &info, WEXITED, 0);
+    io_uring_prep_waitid(sqe, P_PIDFD, wish.pidfd, &wish.info, WEXITED, 0);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::signal_child::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::signal_child & wish)
 {
-    if (pidfd < 0) {
+    if (wish.pidfd < 0) {
         submission.complete_sync(-EBADF);
         return false;
     }
 
-    auto rc = send_pidfd_signal(pidfd, signal);
+    auto rc = send_pidfd_signal(wish.pidfd, wish.signal);
     submission.complete_sync(rc < 0 ? -errno : 0);
     return false;
 }
 
-inline bool op::read_some::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::read_some & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_read(
         sqe,
-        fd,
-        buffer.data(),
-        buffer.size(),
-        offset);
+        wish.fd,
+        wish.buffer.data(),
+        wish.buffer.size(),
+        wish.offset);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::write_some::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::write_some & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_write(
         sqe,
-        fd,
-        buffer.data(),
-        buffer.size(),
-        offset);
+        wish.fd,
+        wish.buffer.data(),
+        wish.buffer.size(),
+        wish.offset);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::recv_some::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::recv_some & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_recv(
         sqe,
-        fd,
-        buffer.data(),
-        buffer.size(),
-        flags);
+        wish.fd,
+        wish.buffer.data(),
+        wish.buffer.size(),
+        wish.flags);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::send_some::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::send_some & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_send(
         sqe,
-        fd,
-        buffer.data(),
-        buffer.size(),
-        flags);
+        wish.fd,
+        wish.buffer.data(),
+        wish.buffer.size(),
+        wish.flags);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::connect::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::connect & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_connect(
         sqe,
-        fd,
-        sockaddr_ptr(),
-        address_size);
+        wish.fd,
+        wish.sockaddr_ptr(),
+        wish.address_size);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::accept::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::accept & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_accept(
         sqe,
-        fd,
+        wish.fd,
         nullptr,
         nullptr,
-        flags);
+        wish.flags);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::poll::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::poll & wish)
 {
     auto * sqe = submission.get_sqe();
-    io_uring_prep_poll_add(sqe, fd, events);
+    io_uring_prep_poll_add(sqe, wish.fd, wish.events);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::timeout::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::timeout & wish)
 {
     auto * sqe = submission.get_sqe();
     io_uring_prep_timeout(
         sqe,
-        &duration,
+        &wish.duration,
         0,
         IORING_TIMEOUT_ETIME_SUCCESS);
     submission.attach(sqe);
     return true;
 }
 
-inline bool op::poll_until::stage_uring(uring_submission & submission)
+inline bool stage_uring(uring_submission & submission, op::poll_until & wish)
 {
-    (void)fd;
-    (void)events;
-    (void)timeout;
+    (void)wish.fd;
+    (void)wish.events;
+    (void)wish.timeout;
     submission.complete_sync(-ENOTSUP);
     return false;
 }

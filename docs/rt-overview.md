@@ -96,7 +96,7 @@ read some bytes, write some bytes, wait for readiness, open a file, wait for a
 timeout, and so on.
 
 When task code awaits a wish, the active deck asks its active wand to prepare
-that operation. Preparation returns a typed waiter, and the waiter parks the
+that operation. Preparation returns a typed urge, and the urge parks the
 current coroutine until the backend fulfills or cancels the operation.
 
 This split keeps task code platform-neutral. The task names what it wants; the
@@ -105,7 +105,7 @@ wand decides how to stage and complete that work on a particular platform.
 Concrete API:
 
 - @ref nxtrt::op "nxtrt::op"
-- @ref nxtrt::waiter "nxtrt::waiter<T>"
+- @ref nxtrt::urge "nxtrt::urge<T>"
 - @ref nxtrt::parked_task "nxtrt::parked_task"
 
 ## Wands {#rt_wand}

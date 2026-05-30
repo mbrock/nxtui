@@ -7,7 +7,7 @@
 
 namespace nxtrt::detail::wand_exec {
 
-/// Allocated by `prepare_wish`; not yet parked by the awaiter.
+/// Allocated by `prepare_wish`; not yet parked by the urge.
 struct prepared
 {};
 

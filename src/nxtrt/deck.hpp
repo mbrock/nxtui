@@ -123,7 +123,7 @@ public:
     /// Pump one ready round with `w` as the active backend, then wave it.
     ///
     /// Awaiting a closed wish operation synchronously asks the active wand to
-    /// prepare a typed waiter. Once the round ends, `wave()` lets the wand
+    /// prepare a typed urge. Once the round ends, `wave()` lets the wand
     /// submit whatever platform work it staged during coroutine execution.
     void run_ready(wand & w)
     {
