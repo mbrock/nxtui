@@ -6,11 +6,18 @@
 #include <openssl/evp.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
-#include <openssl/rand.h>
 #include <openssl/rsa.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <memory>
+
+#if defined(__linux__)
+#    include <sys/random.h>
+#else
+#    include <stdlib.h>
+#endif
 
 namespace nxt::crypto {
 namespace {
@@ -131,8 +138,25 @@ bytes aes128gcm_seal_impl(
 
 void random(std::span<std::byte> out)
 {
-    if (!out.empty() && RAND_bytes(u8_data(out), out.size()) != 1)
-        throw crypto_error{"random byte generation failed"};
+    auto rest = out;
+    while (!rest.empty()) {
+#if defined(__linux__)
+        auto n = getrandom(u8_data(rest), rest.size(), 0);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            throw crypto_error{
+                std::string{"random byte generation failed: "}
+                + std::strerror(errno)};
+        }
+        if (n == 0)
+            throw crypto_error{"random byte generation made no progress"};
+        rest = rest.subspan(static_cast<std::size_t>(n));
+#else
+        arc4random_buf(rest.data(), rest.size());
+        rest = {};
+#endif
+    }
 }
 
 bytes random(std::size_t len)

@@ -8,8 +8,6 @@
 #include <stdexcept>
 #include <vector>
 
-#include <openssl/base.h>
-
 namespace nxt::crypto {
 
 using bytes = std::vector<std::byte>;
