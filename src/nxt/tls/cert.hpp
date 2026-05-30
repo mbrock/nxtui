@@ -2,39 +2,7 @@
 
 #include <nxt/tls.hpp>
 
-#include <openssl/ec.h>
-#include <openssl/ec_key.h>
-#include <openssl/evp.h>
-#include <openssl/nid.h>
-#include <openssl/x509.h>
-
-#include <memory>
-
 namespace nxt::tls {
-
-struct x509_deleter
-{
-    void operator()(X509 * cert) const noexcept
-    {
-        X509_free(cert);
-    }
-};
-
-struct evp_pkey_deleter
-{
-    void operator()(EVP_PKEY * key) const noexcept
-    {
-        EVP_PKEY_free(key);
-    }
-};
-
-struct ec_key_deleter
-{
-    void operator()(EC_KEY * key) const noexcept
-    {
-        EC_KEY_free(key);
-    }
-};
 
 struct tls13_certificate
 {
@@ -60,6 +28,110 @@ struct leaf_public_key
     bytes ec_point;
     bytes spki_der;
 };
+
+class der_cursor
+{
+public:
+    explicit der_cursor(std::span<const std::byte> input)
+        : input_(input)
+    {}
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return offset_ == input_.size();
+    }
+
+    [[nodiscard]] std::span<const std::byte> remaining() const noexcept
+    {
+        return input_.subspan(offset_);
+    }
+
+    std::byte take_u8()
+    {
+        require_tls(offset_ < input_.size(), "truncated DER value");
+        return input_[offset_++];
+    }
+
+    std::span<const std::byte> take(std::size_t n)
+    {
+        require_tls(n <= input_.size() - offset_, "truncated DER value");
+        auto out = input_.subspan(offset_, n);
+        offset_ += n;
+        return out;
+    }
+
+    std::span<const std::byte> take_tlv(std::byte expected_tag)
+    {
+        auto start = offset_;
+        auto tag = take_u8();
+        require_tls(tag == expected_tag, "unexpected DER tag");
+        auto len = take_length();
+        take(len);
+        return input_.subspan(start, offset_ - start);
+    }
+
+    std::span<const std::byte> take_value(std::byte expected_tag)
+    {
+        auto tag = take_u8();
+        require_tls(tag == expected_tag, "unexpected DER tag");
+        auto len = take_length();
+        return take(len);
+    }
+
+private:
+    std::size_t take_length()
+    {
+        auto first = std::to_integer<unsigned char>(take_u8());
+        if ((first & 0x80) == 0)
+            return first;
+
+        auto octets = static_cast<std::size_t>(first & 0x7f);
+        require_tls(octets != 0, "indefinite DER length is not allowed");
+        require_tls(octets <= sizeof(std::size_t), "DER length is too large");
+        require_tls(
+            offset_ + octets <= input_.size(), "truncated DER length");
+
+        auto out = std::size_t{0};
+        for (std::size_t i = 0; i < octets; i++)
+            out = (out << 8) | std::to_integer<unsigned char>(take_u8());
+        require_tls(out >= 128, "non-minimal DER length");
+        return out;
+    }
+
+    std::span<const std::byte> input_;
+    std::size_t offset_ = 0;
+};
+
+inline bool der_equal(
+    std::span<const std::byte> value,
+    std::initializer_list<unsigned char> expected)
+{
+    if (value.size() != expected.size())
+        return false;
+    auto it = expected.begin();
+    for (auto byte : value) {
+        if (std::to_integer<unsigned char>(byte) != *it++)
+            return false;
+    }
+    return true;
+}
+
+inline std::span<const std::byte>
+certificate_spki(std::span<const std::byte> der)
+{
+    auto cert = der_cursor{der_cursor{der}.take_value(std::byte{0x30})};
+    auto tbs = der_cursor{cert.take_value(std::byte{0x30})};
+
+    if (!tbs.empty() && tbs.remaining().front() == std::byte{0xa0})
+        tbs.take_tlv(std::byte{0xa0}); // version
+
+    tbs.take_tlv(std::byte{0x02}); // serialNumber
+    tbs.take_tlv(std::byte{0x30}); // signature
+    tbs.take_tlv(std::byte{0x30}); // issuer
+    tbs.take_tlv(std::byte{0x30}); // validity
+    tbs.take_tlv(std::byte{0x30}); // subject
+    return tbs.take_tlv(std::byte{0x30}); // subjectPublicKeyInfo
+}
 
 inline tls13_certificate
 parse_tls13_certificate(std::span<const std::byte> message)
@@ -115,61 +187,42 @@ parse_tls13_certificate_verify(std::span<const std::byte> message)
 inline leaf_public_key
 extract_leaf_public_key(std::span<const std::byte> der)
 {
-    auto * ptr = reinterpret_cast<const unsigned char *>(der.data());
-    auto cert = std::unique_ptr<X509, x509_deleter>{
-        d2i_X509(nullptr, &ptr, static_cast<long>(der.size()))};
-    require_tls(cert != nullptr, "failed to parse leaf certificate");
-
-    auto key = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>{
-        X509_get_pubkey(cert.get())};
-    require_tls(key != nullptr, "leaf certificate has no public key");
-
-    auto spki_len = i2d_PUBKEY(key.get(), nullptr);
-    require_tls(spki_len > 0, "failed to measure leaf public key");
     auto out = leaf_public_key{};
-    out.spki_der.resize(static_cast<std::size_t>(spki_len));
-    auto * spki_ptr = reinterpret_cast<unsigned char *>(out.spki_der.data());
-    auto written = i2d_PUBKEY(key.get(), &spki_ptr);
-    require_tls(written == spki_len, "failed to encode leaf public key");
+    auto spki = certificate_spki(der);
+    out.spki_der.assign(spki.begin(), spki.end());
 
-    if (EVP_PKEY_base_id(key.get()) == EVP_PKEY_RSA) {
+    auto spki_body = der_cursor{der_cursor{spki}.take_value(std::byte{0x30})};
+    auto algorithm =
+        der_cursor{spki_body.take_value(std::byte{0x30})};
+    auto algorithm_oid = algorithm.take_value(std::byte{0x06});
+    auto public_key = der_cursor{spki_body.take_value(std::byte{0x03})};
+    auto unused_bits = public_key.take_u8();
+    require_tls(unused_bits == std::byte{0}, "unsupported DER BIT STRING");
+
+    if (der_equal(
+            algorithm_oid,
+            {0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01})) {
         out.kind = leaf_public_key_kind::rsa;
         return out;
     }
 
     require_tls(
-        EVP_PKEY_base_id(key.get()) == EVP_PKEY_EC,
+        der_equal(algorithm_oid, {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01}),
         "leaf certificate public key is not EC or RSA");
-
-    auto ec_key = std::unique_ptr<EC_KEY, ec_key_deleter>{
-        EVP_PKEY_get1_EC_KEY(key.get())};
-    require_tls(ec_key != nullptr, "failed to extract EC public key");
-
-    auto * group = EC_KEY_get0_group(ec_key.get());
-    auto * point = EC_KEY_get0_public_key(ec_key.get());
     require_tls(
-        group != nullptr && point != nullptr,
-        "EC public key is incomplete");
+        !algorithm.empty(), "EC public key parameters are missing");
+    auto curve_oid = algorithm.take_value(std::byte{0x06});
     require_tls(
-        EC_GROUP_get_curve_name(group) == NID_X9_62_prime256v1,
+        der_equal(curve_oid, {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}),
         "leaf certificate public key is not P-256");
+    require_tls(algorithm.empty(), "unexpected EC public key parameters");
 
-    auto len = EC_POINT_point2oct(
-        group, point, POINT_CONVERSION_UNCOMPRESSED, nullptr, 0, nullptr);
-    require_tls(len > 0, "failed to measure P-256 public key");
-
-    out.kind = leaf_public_key_kind::p256;
-    out.ec_point.resize(len);
-    auto ec_written = EC_POINT_point2oct(
-        group,
-        point,
-        POINT_CONVERSION_UNCOMPRESSED,
-        reinterpret_cast<unsigned char *>(out.ec_point.data()),
-        out.ec_point.size(),
-        nullptr);
+    auto point = public_key.remaining();
     require_tls(
-        ec_written == out.ec_point.size(),
-        "failed to encode P-256 public key");
+        point.size() == 65 && point.front() == std::byte{0x04},
+        "leaf certificate P-256 public key is not uncompressed");
+    out.kind = leaf_public_key_kind::p256;
+    out.ec_point.assign(point.begin(), point.end());
     return out;
 }
 
