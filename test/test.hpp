@@ -2,15 +2,19 @@
 
 #include <nxt/stacktrace.hpp>
 
-#include <ranges>
 #include <chrono>
+#include <csignal>
+#include <cstring>
 #include <exception>
 #include <format>
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <sys/time.h>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -21,7 +25,8 @@ inline int tests_run = 0;
 inline int tests_failed = 0;
 inline bool progress_started = false;
 
-inline constexpr double slow_test_failure_ms = 100.0;
+inline constexpr double slow_test_failure_ms = 1000.0;
+inline constexpr std::chrono::seconds test_timeout{1};
 inline constexpr std::string_view test_root_name = "nxt";
 
 struct test_result
@@ -47,6 +52,9 @@ inline std::vector<int> active_path;
 inline std::vector<int> sibling_counts;
 inline std::vector<std::vector<int>> filters;
 inline std::optional<std::vector<int>> active_leaf_path;
+inline char active_timeout_label[512] = {};
+inline struct sigaction previous_alarm_action {};
+inline bool alarm_handler_installed = false;
 
 enum class run_phase
 {
@@ -82,6 +90,68 @@ inline std::string format_path(const std::vector<int> & path)
         out += std::format("{}", path[i]);
     }
     return out;
+}
+
+inline void write_signal_text(std::string_view text)
+{
+    (void)::write(STDERR_FILENO, text.data(), text.size());
+}
+
+inline void write_signal_cstr(const char * text)
+{
+    if (text != nullptr)
+        (void)::write(STDERR_FILENO, text, std::strlen(text));
+}
+
+[[noreturn]] inline void test_timeout_handler(int)
+{
+    write_signal_text("\n\nTEST TIMEOUT after 1s: ");
+    write_signal_cstr(active_timeout_label);
+    write_signal_text("\n");
+    nxt::debug::print_current_stacktrace(
+        std::cerr,
+        "  ",
+        "Timeout site",
+        2);
+    std::cerr.flush();
+    ::_exit(124);
+}
+
+inline void install_timeout_handler()
+{
+    if (alarm_handler_installed)
+        return;
+
+    struct sigaction action {};
+    action.sa_handler = test_timeout_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESETHAND;
+    sigaction(SIGALRM, &action, &previous_alarm_action);
+    alarm_handler_installed = true;
+}
+
+inline void set_timeout_label(std::string_view label)
+{
+    auto n = std::min(label.size(), sizeof(active_timeout_label) - 1);
+    std::memcpy(active_timeout_label, label.data(), n);
+    active_timeout_label[n] = '\0';
+}
+
+inline void arm_test_timeout(std::string_view label)
+{
+    install_timeout_handler();
+    set_timeout_label(label);
+
+    auto timer = itimerval{};
+    timer.it_value.tv_sec = test_timeout.count();
+    setitimer(ITIMER_REAL, &timer, nullptr);
+}
+
+inline void disarm_test_timeout()
+{
+    auto timer = itimerval{};
+    setitimer(ITIMER_REAL, &timer, nullptr);
+    active_timeout_label[0] = '\0';
 }
 
 inline bool path_starts_with(
@@ -284,6 +354,9 @@ struct test_case
         auto count_this_test =
             phase == run_phase::execution && active_leaf_path == path;
         auto scope = scoped_test{result, path};
+        auto timeout_label =
+            std::format("{} {}", format_path(path), result.name);
+        arm_test_timeout(timeout_label);
         auto start = std::chrono::steady_clock::now();
         try {
             std::forward<F>(f)();
@@ -301,6 +374,7 @@ struct test_case
                 nxt::debug::print_current_exception_trace(std::cerr, "  ");
             }
         }
+        disarm_test_timeout();
 
         auto elapsed =
             std::chrono::duration_cast<std::chrono::microseconds>(

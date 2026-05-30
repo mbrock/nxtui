@@ -140,6 +140,13 @@ bool print_current_exception_trace(
     std::string_view indent = "",
     std::string_view label = "Catch site");
 
+/// Print the best stack trace available for the current execution point.
+bool print_current_stacktrace(
+    std::ostream & out,
+    std::string_view indent = "",
+    std::string_view label = "Current trace",
+    std::size_t skip = 0);
+
 #ifdef NXT_HAVE_CPPTRACE
 /// Print one cpptrace stacktrace using nxt's crash-report formatting.
 void print_stacktrace(

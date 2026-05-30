@@ -379,7 +379,7 @@ struct int_value_source final : nxtrt::value_source<int>
 {
     int_value_source(
         std::vector<int> values,
-        std::span<nxtrt::value_slot<int>> buffer)
+        nxtrt::value_storage_ref<int> buffer)
         : nxtrt::value_source<int>(buffer)
         , values(std::move(values))
     {}
@@ -444,18 +444,24 @@ struct collecting_int_sink final : nxtrt::value_sink<int>
 
     collecting_int_sink(
         std::size_t limit,
-        std::span<nxtrt::value_slot<int>> buffer)
+        nxtrt::value_storage_ref<int> buffer)
         : nxtrt::value_sink<int>(buffer)
         , limit(limit)
     {}
 
 private:
     nxtrt::hope<std::size_t>
-    drain_more(std::span<nxtrt::value_slot<int>> values) override
+    drain_more(nxtrt::value_sink<int>::value_chunk_view values) override
     {
-        auto n = std::min(limit, values.size());
-        for (auto & value : values.first(n))
-            collected.push_back(*value);
+        auto n = std::size_t{0};
+        for (auto chunk : values) {
+            for (auto & value : chunk) {
+                if (n == limit)
+                    return nxtrt::hope<std::size_t>::ready(n);
+                collected.push_back(value);
+                ++n;
+            }
+        }
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -483,6 +489,80 @@ nxtrt::task<void> check_value_source_peek(int_value_source & source)
     auto next = co_await source.take();
     expect(next && *next == 2_i);
     expect(source.reads == std::size_t{2});
+}
+
+nxtrt::task<void> check_value_source_chunk_peek(int_value_source & source)
+{
+    auto values = co_await source.peek(2);
+    expect(values.size() == std::size_t{2});
+    expect(values.chunk_count() == std::size_t{1});
+
+    auto seen = std::vector<int>{};
+    for (auto chunk : values) {
+        for (auto value : chunk)
+            seen.push_back(value);
+    }
+    expect(seen == std::vector<int>{1, 2});
+    expect(source.buffered_size() == std::size_t{2});
+    expect(source.reads == std::size_t{2});
+
+    auto discarded = co_await source.discard(2);
+    expect(discarded.values == std::size_t{2});
+
+    auto next = co_await source.take();
+    expect(next && *next == 3_i);
+}
+
+nxtrt::task<void> check_value_source_ring_peek(int_value_source & source)
+{
+    auto initial = co_await source.peek(3);
+    expect(initial.size() == std::size_t{3});
+    auto discarded = co_await source.discard(2);
+    expect(discarded.values == std::size_t{2});
+
+    auto wrapped = co_await source.peek(3);
+    expect(wrapped.size() == std::size_t{3});
+    expect(wrapped.chunk_count() == std::size_t{2});
+
+    auto seen = std::vector<int>{};
+    for (auto chunk : wrapped) {
+        for (auto value : chunk)
+            seen.push_back(value);
+    }
+    expect(seen == std::vector<int>{3, 4, 5});
+}
+
+std::string byte_value_chunks_text(
+    nxtrt::value_chunks<const std::byte> chunks)
+{
+    auto out = std::string{};
+    for (auto chunk : chunks)
+        out += nxtrt::as_string_view(chunk);
+    return out;
+}
+
+nxtrt::task<void> check_byte_value_source_ring_shape(
+    nxtrt::value_source<std::byte> & source)
+{
+    auto initial = co_await source.peek(3);
+    expect(byte_value_chunks_text(initial) == "abc");
+    expect(initial.chunk_count() == std::size_t{1});
+
+    auto discarded = co_await source.discard(2);
+    expect(discarded.values == std::size_t{2});
+
+    auto wrapped = co_await source.peek(4);
+    expect(byte_value_chunks_text(wrapped) == "cdef");
+    expect(wrapped.chunk_count() == std::size_t{2});
+
+    auto out = std::vector<std::byte>{};
+    auto sink = nxtrt::container_value_sink{out};
+    auto streamed = co_await nxtrt::stream_all(source, sink);
+    expect(streamed == std::size_t{4});
+    expect(nxtrt::as_string_view(out) == "cdef");
+
+    auto eof = co_await source.take();
+    expect(!eof);
 }
 
 nxtrt::task<const int *> peek_int_value(nxtrt::value_source<int> & source)
@@ -523,6 +603,33 @@ nxtrt::task<void> check_sink_buffers_until_flush(
     co_await sink.write(1);
     co_await sink.write(2);
     expect(sink.collected.empty());
+    auto buffered = sink.buffered();
+    expect(buffered.size() == std::size_t{2});
+    expect(buffered.chunk_count() == std::size_t{1});
+    co_await sink.flush();
+}
+
+nxtrt::task<void> check_value_sink_ring_buffer(collecting_int_sink & sink)
+{
+    co_await sink.write(1);
+    co_await sink.write(2);
+    co_await sink.write(3);
+    co_await sink.write(4);
+    expect(sink.collected == std::vector<int>{1, 2});
+
+    co_await sink.write(5);
+
+    auto buffered = sink.buffered();
+    expect(buffered.size() == std::size_t{3});
+    expect(buffered.chunk_count() == std::size_t{2});
+
+    auto staged = std::vector<int>{};
+    for (auto chunk : buffered) {
+        for (auto value : chunk)
+            staged.push_back(value);
+    }
+    expect(staged == std::vector<int>{3, 4, 5});
+
     co_await sink.flush();
 }
 
@@ -855,6 +962,21 @@ take_three_buffered_bytes(nxtrt::byte_reader & reader, std::vector<int> & events
     out += nxtrt::as_string_view(second);
     out += nxtrt::as_string_view(third);
     co_return out;
+}
+
+inline nxtrt::task<void>
+check_byte_reader_chunk_peek(nxtrt::byte_reader & reader)
+{
+    auto initial = co_await reader.peek_chunks(3);
+    expect(byte_value_chunks_text(initial) == "abc");
+    expect(initial.chunk_count() == std::size_t{1});
+
+    auto taken = co_await reader.take_string_view(2);
+    expect(taken == "ab"sv);
+
+    auto rest = co_await reader.peek_chunks(2);
+    expect(byte_value_chunks_text(rest) == "cd");
+    expect(rest.chunk_count() == std::size_t{1});
 }
 
 inline nxtrt::task<void>
@@ -2402,6 +2524,15 @@ static suite runtime_tests{
                 expect(std::move(task).result() == "abc");
             };
 
+            "byte_reader peeks through shared chunk views"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"abcd"sv};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader = text_source(chunks, std::span{storage});
+
+                deck.sync_wait(check_byte_reader_chunk_peek(reader));
+            };
+
             "empty reads are distinguished from EOF"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto storage = std::array<std::byte, 8>{};
@@ -2919,7 +3050,7 @@ static suite runtime_tests{
                             std::memcpy(out.data(), "XYZ", out.size());
                             expect(writer.text == "abcd");
                             expect(
-                                nxtrt::as_string_view(writer.buffered())
+                                byte_value_chunks_text(writer.buffered_chunks())
                                 == "efXYZ");
                             co_await writer.flush();
                         });
@@ -3080,13 +3211,40 @@ static suite runtime_tests{
         "value sources and sinks"_test = [] {
             "peek fills the source buffer without consuming"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = std::array<nxtrt::value_slot<int>, 1>{};
+                auto storage = nxtrt::static_value_storage<int, 1>{};
                 auto source = int_value_source{
                     std::vector<int>{1, 2},
-                    std::span{storage},
+                    storage,
                 };
 
                 deck.sync_wait(check_value_source_peek(source));
+            };
+
+            "peek borrows requested values as chunks"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{1, 2, 3}, 2};
+
+                deck.sync_wait(check_value_source_chunk_peek(source));
+            };
+
+            "source buffers expose wrapped chunks"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source =
+                    int_value_source{std::vector<int>{1, 2, 3, 4, 5}, 3};
+
+                deck.sync_wait(check_value_source_ring_peek(source));
+            };
+
+            "byte value sources have reader-shaped ring lookahead"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto text = "abcdef"sv;
+                auto storage = nxtrt::static_value_storage<std::byte, 4>{};
+                auto source = nxtrt::value_range_source{
+                    nxtrt::as_bytes(text),
+                    storage,
+                };
+
+                deck.sync_wait(check_byte_value_source_ring_shape(source));
             };
 
             "peek returns null at eof"_test = [] {
@@ -3116,12 +3274,21 @@ static suite runtime_tests{
 
             "sink buffers values until flush"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = std::array<nxtrt::value_slot<int>, 2>{};
-                auto sink = collecting_int_sink{64, std::span{storage}};
+                auto storage = nxtrt::static_value_storage<int, 2>{};
+                auto sink = collecting_int_sink{64, storage};
 
                 deck.sync_wait(check_sink_buffers_until_flush(sink));
 
                 expect(sink.collected == std::vector<int>{1, 2});
+            };
+
+            "sink buffers expose wrapped chunks"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto sink = collecting_int_sink{2, std::size_t{3}};
+
+                deck.sync_wait(check_value_sink_ring_buffer(sink));
+
+                expect(sink.collected == std::vector<int>{1, 2, 3, 4, 5});
             };
 
             "stream_all moves source values into sinks"_test = [] {
@@ -3196,10 +3363,10 @@ static suite runtime_tests{
 
             "range source lookahead uses source storage"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = std::array<nxtrt::value_slot<int>, 1>{};
+                auto storage = nxtrt::static_value_storage<int, 1>{};
                 auto source = nxtrt::value_range_source{
                     std::views::iota(5, 7),
-                    std::span{storage},
+                    storage,
                 };
 
                 deck.sync_wait(check_range_source_lookahead(source));

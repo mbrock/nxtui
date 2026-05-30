@@ -1,18 +1,16 @@
 #pragma once
 
+#include "nxtrt/buffer-core.hpp"
 #include "nxtrt/task.hpp"
+#include "nxtrt/value-buffers.hpp"
 
-#include <algorithm>
-#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstring>
 #include <format>
 #include <limits>
-#include <optional>
 #include <ranges>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -21,50 +19,6 @@
 #include <vector>
 
 namespace nxtrt {
-
-struct buffer_error : runtime_error
-{
-    using runtime_error::runtime_error;
-};
-
-struct end_of_stream : buffer_error
-{
-    using buffer_error::buffer_error;
-};
-
-/// View immutable bytes as text without copying.
-inline std::string_view as_string_view(std::span<const std::byte> bytes) noexcept
-{
-    return {
-        reinterpret_cast<const char *>(bytes.data()),
-        bytes.size_bytes(),
-    };
-}
-
-inline std::span<const std::byte> as_bytes(std::string_view text) noexcept
-{
-    return std::as_bytes(std::span{text});
-}
-
-inline std::size_t find_bytes(
-    std::span<const std::byte> haystack,
-    std::span<const std::byte> needle)
-{
-    auto match = std::ranges::search(haystack, needle);
-    return static_cast<std::size_t>(
-        std::distance(haystack.begin(), match.begin()));
-}
-
-struct read_result
-{
-    /// Bytes written into the requested destination.
-    ///
-    /// Zero bytes is valid progresslessness; it only means EOF when `eof` is
-    /// also true.
-    std::size_t bytes = 0;
-    /// True when the source is known to be exhausted.
-    bool eof = false;
-};
 
 template<typename Read>
 concept byte_read_task =
@@ -218,16 +172,23 @@ inline std::span<std::byte> first_nonempty(
 ///
 /// An empty writer buffer is valid. It means "always cold path": non-empty
 /// writes call `drain_more()` immediately.
-class byte_writer
+class byte_writer : public value_sink<std::byte>
 {
 public:
+    using byte_chunk_view = byte_chunks<std::byte>;
+    using const_byte_chunk_view = byte_chunks<const std::byte>;
+    using value_sink<std::byte>::buffered_size;
+    using value_sink<std::byte>::flush;
+    using value_sink<std::byte>::unused_capacity_size;
+
     explicit byte_writer(std::span<std::byte> buffer)
-        : buffer_(buffer)
+        : value_sink<std::byte>(buffer)
+        , capacity_(buffer.size())
     {}
 
     explicit byte_writer(std::size_t buffer_size)
-        : owned_buffer_(buffer_size)
-        , buffer_(owned_buffer_)
+        : value_sink<std::byte>(buffer_size)
+        , capacity_(buffer_size)
     {}
 
     byte_writer(const byte_writer &) = delete;
@@ -239,59 +200,46 @@ public:
     virtual ~byte_writer() = default;
 
     /// Return the bytes currently staged for the sink.
-    [[nodiscard]] std::span<const std::byte> buffered() const noexcept
-    {
-        return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
-    }
-
-    /// Return the number of bytes currently staged for the sink.
-    [[nodiscard]] std::size_t buffered_size() const noexcept
-    {
-        return end_ - seek_;
-    }
-
-    /// Return writable buffer capacity after the currently staged bytes.
     ///
-    /// Source adapters may fill this span directly and then call `advance()`.
-    /// The span is invalidated by any later writer operation.
+    /// This compatibility view requires contiguous staged bytes. The chunk view
+    /// is the native shape of the unified ring buffer.
+    [[nodiscard]] std::span<const std::byte> buffered() const
+    {
+        auto one = buffered_chunks().single_span();
+        if (!one)
+            throw buffer_error{"writer buffered bytes are wrapped"};
+        return *one;
+    }
+
+    [[nodiscard]] const_byte_chunk_view buffered_chunks() const noexcept
+    {
+        return value_sink<std::byte>::buffered();
+    }
+
+    /// Return writable capacity at the ring write cursor.
     [[nodiscard]] std::span<std::byte> unused_capacity() noexcept
     {
-        return buffer_.subspan(end_);
+        return value_sink<std::byte>::unused_capacity();
     }
 
     /// Commit `n` bytes that were written directly into `unused_capacity()`.
     void advance(std::size_t n)
     {
-        if (n > unused_capacity().size())
-            throw buffer_error{"writer advanced past buffer capacity"};
-        end_ += n;
+        try {
+            value_sink<std::byte>::advance_constructed(n);
+        } catch (const value_buffer_error & e) {
+            throw buffer_error{e.what()};
+        }
     }
 
-    /// Ensure `capacity` bytes can be appended while preserving recent output.
-    ///
-    /// This is the C++ mapping of Zig writer `rebase(w, preserve, capacity)`.
-    /// If there is already enough unused capacity, it returns ready. Otherwise
-    /// it may drain buffered output, but the most recent `preserve` bytes of the
-    /// currently buffered output remain staged. Because `byte_writer` has both
-    /// `seek_` and `end_`, this can honestly drain only the non-preserved prefix
-    /// instead of temporarily hiding the preserved suffix as Zig currently does.
     hope<void> rebase(std::size_t preserve, std::size_t capacity)
     {
         require_preserved_capacity(preserve, capacity);
         if (unused_capacity().size() >= capacity)
             return hope<void>::ready();
-        if (can_compact_for(capacity)) {
-            compact_buffered();
-            return hope<void>::ready();
-        }
         return rebase_slow(preserve, capacity);
     }
 
-    /// Return writable capacity after preserving recent output if needed.
-    ///
-    /// The returned span is not advanced. It is invalidated by any later writer
-    /// operation. If `preserve` is zero this is equivalent to
-    /// `writable_slice_greedy(minimum)`.
     hope<std::span<std::byte>>
     writable_slice_greedy_preserve(std::size_t preserve, std::size_t minimum)
     {
@@ -301,19 +249,12 @@ public:
         return writable_slice_greedy_preserve_slow(std::move(ready));
     }
 
-    /// Return writable capacity, draining or compacting if needed.
     hope<std::span<std::byte>>
     writable_slice_greedy(std::size_t minimum)
     {
         return writable_slice_greedy_preserve(0, minimum);
     }
 
-    /// Reserve exactly `len` bytes while preserving recent output if needed.
-    ///
-    /// The returned span has length `len` and has already been committed with
-    /// `advance(len)`, matching Zig's `writableSlicePreserve`. The caller should
-    /// write to the returned span before any other writer operation observes the
-    /// newly committed bytes.
     hope<std::span<std::byte>>
     writable_slice_preserve(std::size_t preserve, std::size_t len)
     {
@@ -326,100 +267,57 @@ public:
         return writable_slice_preserve_slow(std::move(slice), len);
     }
 
-    /// Reserve exactly `len` bytes.
     hope<std::span<std::byte>> writable_slice(std::size_t len)
     {
         return writable_slice_preserve(0, len);
     }
 
-    /// Drain all currently buffered output to the concrete sink.
-    ///
-    /// Returns ready when there is no buffered data. Otherwise this repeatedly
-    /// calls `drain_more()` until `buffered_size()` reaches zero.
-    hope<void> flush()
-    {
-        if (buffered_size() == 0) {
-            reset_if_empty();
-            return hope<void>::ready();
-        }
-        return flush_slow();
-    }
-
-    /// Write bytes, buffering them when capacity is available.
-    ///
-    /// This is a one-call convenience: when `bytes` does not fit in the current
-    /// buffer it may drain pending output and then either write directly to the
-    /// sink or stage a suffix in the buffer.
     hope<void> write(std::span<const std::byte> bytes)
     {
         if (bytes.empty())
             return hope<void>::ready();
-
         if (bytes.size() <= unused_capacity().size()) {
             append_to_buffer(bytes);
             return hope<void>::ready();
         }
-
-        return write_slow(bytes);
+        return write_task(bytes);
     }
 
-    /// Write `pattern` repeated `splat` times.
-    ///
-    /// Mirrors Zig's splat semantics: the final chunk passed to `drain_more()`
-    /// represents a span that should be repeated, avoiding allocation of a range
-    /// containing the same span many times.
     hope<void> write_splat(
         std::span<const std::byte> pattern,
         std::size_t splat)
     {
         if (pattern.empty() || splat == 0)
             return hope<void>::ready();
-
         auto count = repeated_size(pattern.size(), splat);
         if (count <= unused_capacity().size()) {
             append_splat_to_buffer(pattern, splat);
             return hope<void>::ready();
         }
-
-        return write_splat_slow(pattern, splat);
+        return write_splat_task(pattern, splat);
     }
 
-    /// Write a UTF-8 text pattern repeatedly as bytes.
     hope<void> write_splat(std::string_view pattern, std::size_t splat)
     {
         return write_splat(as_bytes(pattern), splat);
     }
 
-    /// Write an owned string, keeping its storage alive across suspension.
     task<void> write(std::string text)
     {
         co_await write(as_bytes(std::string_view{text}));
     }
 
-    /// Write a borrowed UTF-8 string view as bytes.
-    ///
-    /// If this returns a non-ready `hope`, the caller must ensure `text` remains
-    /// alive until the await completes.
     hope<void> write(std::string_view text)
     {
         return write(as_bytes(text));
     }
 
-    /// Format text with `std::format` and write the resulting bytes.
-    ///
-    /// This is the C++ counterpart to Zig writer `.print(fmt, ...)`. Formatting
-    /// materializes a temporary `std::string`; the resulting write still uses the
-    /// normal buffered writer semantics.
     template<typename... Args>
     task<void> print(std::format_string<Args...> fmt, Args &&... args)
     {
         co_await write(std::format(fmt, std::forward<Args>(args)...));
     }
 
-    /// Write each chunk in a byte/text chunk range.
-    ///
-    /// Chunks may be byte spans or UTF-8 string-like views. The range itself must
-    /// remain valid until the returned task completes.
     template<detail::byte_writer_chunk_range Chunks>
     task<void> write(Chunks && chunks)
     {
@@ -427,21 +325,18 @@ public:
             co_await write(std::forward<decltype(chunk)>(chunk));
     }
 
-    /// Write borrowed UTF-8 text, then flush the writer.
     task<void> write_all(std::string_view text)
     {
         co_await write(text);
         co_await flush();
     }
 
-    /// Write borrowed bytes, then flush the writer.
     task<void> write_all(std::span<const std::byte> bytes)
     {
         co_await write(bytes);
         co_await flush();
     }
 
-    /// Write byte/text chunks, then flush the writer.
     template<detail::byte_writer_chunk_range Chunks>
     task<void> write_all(Chunks && chunks)
     {
@@ -449,7 +344,6 @@ public:
         co_await flush();
     }
 
-    /// Format text, write it, then flush the writer.
     template<typename... Args>
     task<void> print_all(std::format_string<Args...> fmt, Args &&... args)
     {
@@ -458,49 +352,35 @@ public:
     }
 
 protected:
-    /// Cold-path sink operation.
-    ///
-    /// Implementations transfer bytes from `chunks` to the concrete backend and
-    /// return how many bytes were accepted. The return value may describe a
-    /// partial transfer, but it must be no larger than the total logical byte
-    /// count. Returning zero when any bytes are available is a protocol error for
-    /// the base writer, which relies on progress to avoid an infinite flush loop.
-    ///
-    /// The last span in `chunks` is repeated `splat` times. Earlier spans are
-    /// sent once. This follows Zig's `Writer.drain(data, splat)` trick and is
-    /// what lets `write_splat()` express repeated output without allocating or
-    /// manufacturing a large vector of identical spans.
     virtual hope<std::size_t> drain_more(
         std::span<const std::span<const std::byte>> chunks,
         std::size_t splat) = 0;
 
 private:
-    void append_to_buffer(std::span<const std::byte> bytes)
+    hope<std::size_t>
+    drain_more(value_sink<std::byte>::value_chunk_view values) override
     {
-        std::memcpy(buffer_.data() + end_, bytes.data(), bytes.size());
-        advance(bytes.size());
+        return drain_more_value_task(values);
     }
 
-    void append_splat_to_buffer(
-        std::span<const std::byte> pattern,
-        std::size_t splat)
+    task<std::size_t>
+    drain_more_value_task(value_sink<std::byte>::value_chunk_view values)
     {
-        for (auto i = std::size_t{0}; i < splat; ++i)
-            append_to_buffer(pattern);
+        auto chunks = std::array{
+            std::span<const std::byte>{},
+            std::span<const std::byte>{},
+        };
+        auto count = std::size_t{0};
+        for (auto chunk : values)
+            chunks[count++] = chunk;
+        co_return co_await drain_more(std::span{chunks}.first(count), 1);
     }
 
-    void reset_if_empty() noexcept
+    static std::size_t repeated_size(std::size_t size, std::size_t count)
     {
-        if (seek_ == end_)
-            seek_ = end_ = 0;
-    }
-
-    void consume_buffered(std::size_t n)
-    {
-        if (n > buffered_size())
-            throw buffer_error{"writer overreported drained bytes"};
-        seek_ += n;
-        reset_if_empty();
+        if (size != 0 && count > std::numeric_limits<std::size_t>::max() / size)
+            throw buffer_error{"byte count overflow"};
+        return size * count;
     }
 
     static void require_progress(
@@ -513,132 +393,36 @@ private:
             throw buffer_error{"writer overreported written bytes"};
     }
 
-    static std::size_t repeated_size(std::size_t size, std::size_t count)
+    void append_to_buffer(std::span<const std::byte> bytes)
     {
-        if (size != 0 && count > std::numeric_limits<std::size_t>::max() / size)
-            throw buffer_error{"byte count overflow"};
-        return size * count;
+        auto dst = unused_capacity();
+        if (bytes.size() > dst.size())
+            throw buffer_error{"writer append past buffer capacity"};
+        std::memcpy(dst.data(), bytes.data(), bytes.size());
+        advance(bytes.size());
     }
 
-    static void require_preserved_capacity(
-        std::size_t preserve,
-        std::size_t capacity,
-        std::size_t total)
+    void append_splat_to_buffer(
+        std::span<const std::byte> pattern,
+        std::size_t splat)
     {
-        if (preserve > total || capacity > total - preserve)
-            throw buffer_error{"writer buffer is too small"};
+        for (auto i = std::size_t{0}; i < splat; ++i)
+            append_to_buffer(pattern);
     }
 
     void require_preserved_capacity(
         std::size_t preserve,
         std::size_t capacity) const
     {
-        require_preserved_capacity(preserve, capacity, buffer_.size());
+        if (preserve > capacity_ || capacity > capacity_ - preserve)
+            throw buffer_error{"writer buffer is too small"};
     }
 
-    bool can_compact_for(std::size_t capacity) const noexcept
-    {
-        return buffer_.size() - buffered_size() >= capacity;
-    }
-
-    void compact_buffered()
-    {
-        auto pending = buffered_size();
-        if (seek_ != 0 && pending != 0)
-            std::memmove(buffer_.data(), buffer_.data() + seek_, pending);
-        seek_ = 0;
-        end_ = pending;
-    }
-
-    task<void> flush_slow()
-    {
-        while (buffered_size() != 0) {
-            auto pending = buffered();
-            auto chunks = std::array{pending};
-            auto written = co_await drain_more(std::span{chunks}, 1);
-            require_progress(written, pending.size());
-            consume_buffered(written);
-        }
-    }
-
-    task<void> drain_pending_and_direct(std::span<const std::byte> bytes)
-    {
-        auto remaining = bytes;
-        while (buffered_size() != 0 || !remaining.empty()) {
-            auto pending = buffered();
-            auto chunks = pending.empty()
-                ? std::array{remaining, std::span<const std::byte>{}}
-                : std::array{pending, remaining};
-            auto count = pending.size() + remaining.size();
-            auto written = co_await drain_more(std::span{chunks}, 1);
-            require_progress(written, count);
-
-            auto from_pending = std::min(written, pending.size());
-            consume_buffered(from_pending);
-            written -= from_pending;
-            if (written > remaining.size())
-                throw buffer_error{"writer overreported written bytes"};
-            remaining = remaining.subspan(written);
-        }
-    }
-
-    task<void> drain_pending_and_splat(
-        std::span<const std::byte> pattern,
-        std::size_t splat)
-    {
-        auto partial = std::span<const std::byte>{};
-        while (buffered_size() != 0 || !partial.empty() || splat != 0) {
-            auto pending = buffered();
-            auto chunks = std::array{
-                std::span<const std::byte>{},
-                std::span<const std::byte>{},
-                std::span<const std::byte>{},
-            };
-            auto chunk_count = std::size_t{0};
-            if (!pending.empty())
-                chunks[chunk_count++] = pending;
-            if (!partial.empty())
-                chunks[chunk_count++] = partial;
-            if (splat != 0)
-                chunks[chunk_count++] = pattern;
-
-            auto available = pending.size()
-                + partial.size()
-                + repeated_size(pattern.size(), splat);
-            auto repeated = splat == 0 ? std::size_t{1} : splat;
-            auto written = co_await drain_more(
-                std::span{chunks}.first(chunk_count),
-                repeated);
-            require_progress(written, available);
-
-            auto from_pending = std::min(written, pending.size());
-            consume_buffered(from_pending);
-            written -= from_pending;
-
-            auto from_partial = std::min(written, partial.size());
-            partial = partial.subspan(from_partial);
-            written -= from_partial;
-
-            if (written == 0)
-                continue;
-
-            auto full = std::min(splat, written / pattern.size());
-            splat -= full;
-            written -= full * pattern.size();
-            if (written != 0) {
-                if (written > pattern.size() || splat == 0)
-                    throw buffer_error{"writer overreported written bytes"};
-                partial = pattern.subspan(written);
-                --splat;
-            }
-        }
-    }
-
-    task<void> write_slow(std::span<const std::byte> bytes)
+    task<void> write_task(std::span<const std::byte> bytes)
     {
         auto remaining = bytes;
         while (!remaining.empty()) {
-            if (remaining.size() >= buffer_.size()) {
+            if (capacity_ == 0 || remaining.size() >= capacity_) {
                 co_await drain_pending_and_direct(remaining);
                 co_return;
             }
@@ -647,30 +431,82 @@ private:
                 co_await flush();
 
             auto n = std::min(unused_capacity().size(), remaining.size());
-            std::memcpy(buffer_.data() + end_, remaining.data(), n);
-            advance(n);
+            append_to_buffer(remaining.first(n));
             remaining = remaining.subspan(n);
+        }
+    }
+
+    task<void> write_splat_task(
+        std::span<const std::byte> pattern,
+        std::size_t splat)
+    {
+        (void)repeated_size(pattern.size(), splat);
+        while (splat != 0) {
+            if (capacity_ == 0 || pattern.size() >= capacity_) {
+                co_await drain_pending_and_direct(pattern);
+                --splat;
+                continue;
+            }
+
+            co_await write(pattern);
+            --splat;
+        }
+    }
+
+    task<void> drain_pending_and_direct(std::span<const std::byte> bytes)
+    {
+        auto remaining = bytes;
+        while (buffered_size() != 0 || !remaining.empty()) {
+            auto chunks = std::array{
+                std::span<const std::byte>{},
+                std::span<const std::byte>{},
+                std::span<const std::byte>{},
+            };
+            auto count = std::size_t{0};
+            auto pending_size = std::size_t{0};
+            for (auto chunk : buffered_chunks()) {
+                chunks[count++] = chunk;
+                pending_size += chunk.size();
+            }
+            if (!remaining.empty())
+                chunks[count++] = remaining;
+
+            auto available = pending_size + remaining.size();
+            auto written = co_await drain_more(std::span{chunks}.first(count), 1);
+            require_progress(written, available);
+
+            auto from_pending = std::min(written, pending_size);
+            if (from_pending != 0)
+                consume_buffered_for_derived(from_pending);
+            written -= from_pending;
+
+            if (written > remaining.size())
+                throw buffer_error{"writer overreported written bytes"};
+            remaining = remaining.subspan(written);
         }
     }
 
     task<void> rebase_slow(std::size_t preserve, std::size_t capacity)
     {
         while (unused_capacity().size() < capacity) {
-            if (can_compact_for(capacity)) {
-                compact_buffered();
-                co_return;
-            }
-
-            auto preserved = std::min(preserve, buffered_size());
-            auto drainable = buffered_size() - preserved;
+            auto buffered = buffered_chunks();
+            auto drainable = buffered.size() - std::min(preserve, buffered.size());
             if (drainable == 0)
                 throw buffer_error{"writer buffer is too small"};
 
-            auto prefix = buffered().first(drainable);
-            auto chunks = std::array{prefix};
-            auto written = co_await drain_more(std::span{chunks}, 1);
-            require_progress(written, prefix.size());
-            consume_buffered(written);
+            auto prefix = buffered.first(drainable);
+            auto chunks = std::array{
+                std::span<const std::byte>{},
+                std::span<const std::byte>{},
+            };
+            auto count = std::size_t{0};
+            for (auto chunk : prefix)
+                chunks[count++] = chunk;
+            auto written = co_await drain_more(
+                std::span{chunks}.first(count),
+                1);
+            require_progress(written, drainable);
+            consume_buffered_for_derived(written);
         }
     }
 
@@ -691,31 +527,7 @@ private:
         co_return out;
     }
 
-    task<void> write_splat_slow(
-        std::span<const std::byte> pattern,
-        std::size_t splat)
-    {
-        if (pattern.size() >= buffer_.size()) {
-            co_await drain_pending_and_splat(pattern, splat);
-            co_return;
-        }
-
-        while (splat != 0) {
-            if (unused_capacity().size() < pattern.size())
-                co_await flush();
-
-            auto fit = std::min(
-                splat,
-                unused_capacity().size() / pattern.size());
-            append_splat_to_buffer(pattern, fit);
-            splat -= fit;
-        }
-    }
-
-    std::vector<std::byte> owned_buffer_;
-    std::span<std::byte> buffer_;
-    std::size_t seek_ = 0;
-    std::size_t end_ = 0;
+    std::size_t capacity_ = 0;
 };
 
 /// Writer that stores bytes in a fixed caller-owned span.
@@ -1021,6 +833,9 @@ inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 class byte_reader
 {
 public:
+    using byte_chunk_view = byte_chunks<std::byte>;
+    using const_byte_chunk_view = byte_chunks<const std::byte>;
+
     /// Construct a reader with owned buffer storage.
     explicit byte_reader(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
@@ -1055,6 +870,15 @@ public:
     [[nodiscard]] std::span<const std::byte> buffered() const noexcept
     {
         return std::span<const std::byte>{buffer_}.subspan(seek_, end_ - seek_);
+    }
+
+    /// Return currently buffered bytes as chunks.
+    ///
+    /// This currently mirrors `buffered()` as one chunk, and is the shared shape
+    /// used by ring-buffered value sources and sinks.
+    [[nodiscard]] const_byte_chunk_view buffered_chunks() const noexcept
+    {
+        return const_byte_chunk_view{buffered()};
     }
 
     /// Return the number of currently buffered bytes.
@@ -1127,6 +951,19 @@ public:
             return hope<std::span<const std::byte>>::ready(
                 buffered().first(n));
         return peek_slow(n);
+    }
+
+    /// Borrow the next `n` bytes as chunks without consuming them.
+    ///
+    /// This is the ring-buffer-friendly counterpart to `peek(n)`.
+    hope<const_byte_chunk_view> peek_chunks(std::size_t n)
+    {
+        if (n > buffer_.size())
+            throw buffer_error{"reader buffer is too small"};
+        if (buffered_size() >= n)
+            return hope<const_byte_chunk_view>::ready(
+                buffered_chunks().first(n));
+        return peek_chunks_slow(n);
     }
 
     /// Copy a trivially copyable value from the next bytes without consuming it.
@@ -1517,6 +1354,12 @@ private:
     {
         co_await fill(n);
         co_return buffered().first(n);
+    }
+
+    task<const_byte_chunk_view> peek_chunks_slow(std::size_t n)
+    {
+        co_await fill(n);
+        co_return buffered_chunks().first(n);
     }
 
     template<typename T>

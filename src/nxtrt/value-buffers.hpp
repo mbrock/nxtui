@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nxtrt/buffers.hpp"
+#include "nxtrt/buffer-core.hpp"
 #include "nxtrt/task.hpp"
 
 #include <algorithm>
@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <new>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -18,6 +20,8 @@
 #include <vector>
 
 namespace nxtrt {
+
+class byte_reader;
 
 namespace detail {
 
@@ -76,28 +80,161 @@ struct value_result
     bool eof = false;
 };
 
+template<typename T, std::size_t Inline = 2>
+using value_chunks = buffer_chunks<T, Inline>;
+
 template<typename T>
-using value_slot = std::optional<T>;
+struct value_storage_ref
+{
+    using value_type = std::remove_cv_t<T>;
+
+    value_storage_ref() = default;
+
+    value_storage_ref(value_type * data, std::size_t size)
+        : data(data)
+        , size(size)
+    {}
+
+    value_storage_ref(std::span<value_type> storage)
+        : data(storage.data())
+        , size(storage.size())
+    {}
+
+    value_type * data = nullptr;
+    std::size_t size = 0;
+};
+
+template<typename T>
+class value_storage
+{
+public:
+    using value_type = std::remove_cv_t<T>;
+
+    explicit value_storage(std::size_t size)
+        : data_(size == 0 ? nullptr : allocator_.allocate(size))
+        , size_(size)
+    {}
+
+    value_storage(const value_storage &) = delete;
+    value_storage & operator=(const value_storage &) = delete;
+
+    value_storage(value_storage && other) noexcept
+        : data_(std::exchange(other.data_, nullptr))
+        , size_(std::exchange(other.size_, 0))
+    {}
+
+    value_storage & operator=(value_storage && other) noexcept
+    {
+        if (this != &other) {
+            deallocate();
+            data_ = std::exchange(other.data_, nullptr);
+            size_ = std::exchange(other.size_, 0);
+        }
+        return *this;
+    }
+
+    ~value_storage()
+    {
+        deallocate();
+    }
+
+    [[nodiscard]] value_type * data() noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return size_;
+    }
+
+    [[nodiscard]] value_storage_ref<value_type> ref() & noexcept
+    {
+        return {data_, size_};
+    }
+
+    [[nodiscard]] operator value_storage_ref<value_type>() & noexcept
+    {
+        return ref();
+    }
+
+    operator value_storage_ref<value_type>() && = delete;
+
+private:
+    void deallocate() noexcept
+    {
+        if (data_ != nullptr)
+            allocator_.deallocate(data_, size_);
+        data_ = nullptr;
+        size_ = 0;
+    }
+
+    [[no_unique_address]] std::allocator<value_type> allocator_;
+    value_type * data_ = nullptr;
+    std::size_t size_ = 0;
+};
+
+template<typename T, std::size_t N>
+class static_value_storage
+{
+public:
+    using value_type = std::remove_cv_t<T>;
+
+    static_value_storage() = default;
+
+    static_value_storage(const static_value_storage &) = delete;
+    static_value_storage & operator=(const static_value_storage &) = delete;
+
+    [[nodiscard]] value_type * data() noexcept
+    {
+        return std::launder(reinterpret_cast<value_type *>(storage_));
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return N;
+    }
+
+    [[nodiscard]] value_storage_ref<value_type> ref() & noexcept
+    {
+        return {data(), N};
+    }
+
+    [[nodiscard]] operator value_storage_ref<value_type>() & noexcept
+    {
+        return ref();
+    }
+
+    operator value_storage_ref<value_type>() && = delete;
+
+private:
+    alignas(value_type) std::byte storage_[
+        sizeof(value_type) * (N == 0 ? 1 : N)];
+};
 
 /// Buffered asynchronous value sink.
 ///
 /// This is the typed-value counterpart to `byte_writer`: accepted values are
-/// staged in object-lifetime-aware slots, and the virtual `drain_more()` is the
-/// cold path for moving staged values into the concrete backend.
+/// constructed in raw value storage, and the virtual `drain_more()` is the cold
+/// path for moving staged values into the concrete backend.
 template<typename T>
 class value_sink
 {
 public:
     using value_type = std::remove_cv_t<T>;
-    using slot_type = value_slot<value_type>;
+    using storage_ref = value_storage_ref<value_type>;
+    using value_chunk_view = value_chunks<value_type>;
+    using const_value_chunk_view = value_chunks<const value_type>;
 
-    explicit value_sink(std::span<slot_type> buffer)
-        : buffer_(buffer)
+    explicit value_sink(storage_ref buffer)
+        : buffer_(buffer.data)
+        , capacity_(buffer.size)
     {}
 
     explicit value_sink(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
-        , buffer_(owned_buffer_)
+        , buffer_(owned_buffer_.data())
+        , capacity_(owned_buffer_.size())
     {}
 
     value_sink(const value_sink &) = delete;
@@ -106,16 +243,28 @@ public:
     value_sink(value_sink &&) = delete;
     value_sink & operator=(value_sink &&) = delete;
 
-    virtual ~value_sink() = default;
+    virtual ~value_sink()
+    {
+        destroy_buffered();
+    }
 
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
-        return end_ - seek_;
+        return size_;
     }
 
     [[nodiscard]] std::size_t unused_capacity_size() const noexcept
     {
-        return buffer_.size() - end_;
+        return capacity_ - size_;
+    }
+
+    /// Return values currently staged for the sink.
+    ///
+    /// The returned chunks are invalidated by any operation that drains,
+    /// flushes, or appends to this sink.
+    [[nodiscard]] const_value_chunk_view buffered() const noexcept
+    {
+        return buffered_chunks();
     }
 
     /// Accept one value into this sink.
@@ -144,9 +293,44 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::span<slot_type> buffered_slots() noexcept
+    [[nodiscard]] std::span<value_type> unused_capacity() noexcept
     {
-        return buffer_.subspan(seek_, buffered_size());
+        return detail::ring_unused_capacity(
+            buffer_,
+            capacity_,
+            seek_,
+            size_);
+    }
+
+    void advance_constructed(std::size_t n)
+    {
+        if (n > unused_capacity().size())
+            throw value_buffer_error{"value sink advanced past buffer capacity"};
+        size_ += n;
+    }
+
+    [[nodiscard]] const_value_chunk_view buffered_chunks() const noexcept
+    {
+        return detail::ring_chunks(
+            static_cast<const value_type *>(buffer_),
+            capacity_,
+            seek_,
+            size_);
+    }
+
+    [[nodiscard]] value_chunk_view buffered_values() noexcept
+    {
+        return detail::ring_chunks(buffer_, capacity_, seek_, size_);
+    }
+
+    void release_buffered_without_destroying() noexcept
+    {
+        seek_ = size_ = 0;
+    }
+
+    void consume_buffered_for_derived(std::size_t n)
+    {
+        consume_buffered(n);
     }
 
     /// Cold-path sink operation.
@@ -154,21 +338,21 @@ protected:
     /// Implementations accept a prefix of `values` and return how many values
     /// they accepted. Returning zero when any values are available is a protocol
     /// error for the base sink.
-    virtual hope<std::size_t> drain_more(std::span<slot_type> values) = 0;
+    virtual hope<std::size_t> drain_more(value_chunk_view values) = 0;
 
 private:
     void emplace_back(value_type value)
     {
         if (unused_capacity_size() == 0)
             throw value_buffer_error{"value sink buffer is full"};
-        buffer_[end_].emplace(std::move(value));
-        ++end_;
+        std::construct_at(buffer_ + write_index(), std::move(value));
+        ++size_;
     }
 
     void reset_if_empty() noexcept
     {
-        if (seek_ == end_)
-            seek_ = end_ = 0;
+        if (size_ == 0)
+            seek_ = 0;
     }
 
     static void require_progress(
@@ -185,57 +369,90 @@ private:
     {
         if (n > buffered_size())
             throw value_buffer_error{"value sink consumed past buffer"};
-        for (auto & slot : buffer_.subspan(seek_, n))
-            slot.reset();
-        seek_ += n;
+        destroy_prefix(n);
         reset_if_empty();
+    }
+
+    void destroy_buffered() noexcept
+    {
+        destroy_prefix(size_);
+        seek_ = 0;
     }
 
     task<void> flush_slow()
     {
-        while (buffered_size() != 0) {
-            auto values = buffered_slots();
-            auto accepted = co_await drain_more(values);
-            require_progress(accepted, values.size());
-            consume_buffered(accepted);
-        }
+        while (buffered_size() != 0)
+            co_await drain_buffered_once();
     }
 
     task<void> write_slow(value_type value)
     {
-        if (buffer_.empty()) {
-            auto slot = slot_type{std::move(value)};
-            auto accepted = co_await drain_more(std::span{&slot, 1});
+        if (capacity_ == 0) {
+            auto one = value_type{std::move(value)};
+            auto accepted = co_await drain_more(value_chunk_view{
+                std::span{&one, 1},
+            });
             require_progress(accepted, 1);
-            slot.reset();
             co_return;
         }
 
         while (unused_capacity_size() == 0)
-            co_await flush();
+            co_await drain_buffered_once();
 
         emplace_back(std::move(value));
     }
 
-    std::vector<slot_type> owned_buffer_;
-    std::span<slot_type> buffer_;
+    task<void> drain_buffered_once()
+    {
+        auto values = buffered_values();
+        auto accepted = co_await drain_more(values);
+        require_progress(accepted, values.size());
+        consume_buffered(accepted);
+    }
+
+    value_storage<value_type> owned_buffer_{0};
+    value_type * buffer_ = nullptr;
+    std::size_t capacity_ = 0;
     std::size_t seek_ = 0;
-    std::size_t end_ = 0;
+    std::size_t size_ = 0;
+
+    [[nodiscard]] std::size_t write_index() const noexcept
+    {
+        return detail::ring_write_index<value_type>(capacity_, seek_, size_);
+    }
+
+    void destroy_prefix(std::size_t n) noexcept
+    {
+        while (n != 0) {
+            auto take = std::min(n, capacity_ - seek_);
+            for (auto & value : std::span{buffer_ + seek_, take})
+                std::destroy_at(&value);
+            seek_ = (seek_ + take) % capacity_;
+            size_ -= take;
+            n -= take;
+        }
+    }
 };
 
-/// Sink that stores values in a fixed caller-owned slot buffer.
+/// Sink that stores values in fixed caller-owned raw storage.
 template<typename T>
 class fixed_value_sink final : public value_sink<T>
 {
 public:
-    using typename value_sink<T>::slot_type;
+    using typename value_sink<T>::storage_ref;
 
-    explicit fixed_value_sink(std::span<slot_type> buffer)
+    explicit fixed_value_sink(storage_ref buffer)
         : value_sink<T>(buffer)
     {}
 
+    void release_buffered() noexcept
+    {
+        this->release_buffered_without_destroying();
+    }
+
 private:
-    hope<std::size_t> drain_more(std::span<slot_type>) override
+    hope<std::size_t>
+    drain_more(typename value_sink<T>::value_chunk_view) override
     {
         throw value_buffer_error{"fixed value sink is full"};
     }
@@ -246,14 +463,15 @@ template<typename T>
 class discarding_value_sink final : public value_sink<T>
 {
 public:
-    using typename value_sink<T>::slot_type;
+    using typename value_sink<T>::storage_ref;
 
-    explicit discarding_value_sink(std::span<slot_type> buffer = {})
+    explicit discarding_value_sink(storage_ref buffer = {})
         : value_sink<T>(buffer)
     {}
 
 private:
-    hope<std::size_t> drain_more(std::span<slot_type> values) override
+    hope<std::size_t>
+    drain_more(typename value_sink<T>::value_chunk_view values) override
     {
         return hope<std::size_t>::ready(values.size());
     }
@@ -269,22 +487,23 @@ class container_value_sink final
 {
 public:
     using value_type = typename Container::value_type;
-    using slot_type = value_slot<value_type>;
 
     explicit container_value_sink(Container & container)
-        : value_sink<value_type>(std::span<slot_type>{})
+        : value_sink<value_type>(value_storage_ref<value_type>{})
         , container_(&container)
     {}
 
 private:
-    hope<std::size_t> drain_more(std::span<slot_type> values) override
+    hope<std::size_t> drain_more(
+        typename value_sink<value_type>::value_chunk_view values) override
     {
-        for (auto & value : values) {
-            if (!value)
-                throw value_buffer_error{"empty value slot"};
-            detail::append_value(*container_, std::move(*value));
+        auto total = std::size_t{0};
+        for (auto chunk : values) {
+            total += chunk.size();
+            for (auto & value : chunk)
+                detail::append_value(*container_, std::move(value));
         }
-        return hope<std::size_t>::ready(values.size());
+        return hope<std::size_t>::ready(total);
     }
 
     Container * container_;
@@ -299,10 +518,9 @@ class iterator_value_sink final : public value_sink<T>
 {
 public:
     using value_type = std::remove_cv_t<T>;
-    using slot_type = value_slot<value_type>;
 
     explicit iterator_value_sink(Output output)
-        : value_sink<T>(std::span<slot_type>{})
+        : value_sink<T>(value_storage_ref<value_type>{})
         , output_(std::move(output))
     {}
 
@@ -312,15 +530,18 @@ public:
     }
 
 private:
-    hope<std::size_t> drain_more(std::span<slot_type> values) override
+    hope<std::size_t> drain_more(
+        typename value_sink<T>::value_chunk_view values) override
     {
-        for (auto & value : values) {
-            if (!value)
-                throw value_buffer_error{"empty value slot"};
-            *output_ = std::move(*value);
-            ++output_;
+        auto total = std::size_t{0};
+        for (auto chunk : values) {
+            total += chunk.size();
+            for (auto & value : chunk) {
+                *output_ = std::move(value);
+                ++output_;
+            }
         }
-        return hope<std::size_t>::ready(values.size());
+        return hope<std::size_t>::ready(total);
     }
 
     Output output_;
@@ -329,27 +550,31 @@ private:
 /// Buffered asynchronous value source.
 ///
 /// This is the typed-value counterpart to `byte_reader`: lookahead lives in the
-/// source's reusable value slots, while `stream_more()` is the cold path that
+/// source's reusable value storage, while `stream_more()` is the cold path that
 /// produces more values from the concrete source.
 template<typename T>
 class value_source
 {
 public:
     using value_type = std::remove_cv_t<T>;
-    using slot_type = value_slot<value_type>;
+    using storage_ref = value_storage_ref<value_type>;
+    using value_chunk_view = value_chunks<value_type>;
+    using const_value_chunk_view = value_chunks<const value_type>;
 
-    explicit value_source(std::span<slot_type> buffer)
-        : buffer_(buffer)
+    explicit value_source(storage_ref buffer)
+        : buffer_(buffer.data)
+        , capacity_(buffer.size)
     {
-        if (buffer.empty())
+        if (capacity_ == 0)
             throw value_buffer_error{"value source buffer is empty"};
     }
 
     explicit value_source(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
-        , buffer_(owned_buffer_)
+        , buffer_(owned_buffer_.data())
+        , capacity_(owned_buffer_.size())
     {
-        if (owned_buffer_.empty())
+        if (capacity_ == 0)
             throw value_buffer_error{"value source buffer is empty"};
     }
 
@@ -359,16 +584,28 @@ public:
     value_source(value_source &&) = delete;
     value_source & operator=(value_source &&) = delete;
 
-    virtual ~value_source() = default;
+    virtual ~value_source()
+    {
+        destroy_buffered();
+    }
 
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
-        return end_ - seek_;
+        return size_;
     }
 
     [[nodiscard]] std::size_t unused_capacity_size() const noexcept
     {
-        return buffer_.size() - end_;
+        return capacity_ - size_;
+    }
+
+    /// Return currently buffered values.
+    ///
+    /// The returned chunks are invalidated by any operation that refills,
+    /// streams, discards, or consumes this source.
+    [[nodiscard]] const_value_chunk_view buffered() const noexcept
+    {
+        return buffered_chunks();
     }
 
     /// Ensure at least `n` values are buffered.
@@ -377,7 +614,7 @@ public:
     /// `value_end_of_stream`.
     hope<void> fill(std::size_t n)
     {
-        if (n > buffer_.size())
+        if (n > capacity_)
             throw value_buffer_error{"value source buffer is too small"};
         if (buffered_size() >= n)
             return hope<void>::ready();
@@ -387,11 +624,11 @@ public:
     /// Borrow the next value without consuming it.
     ///
     /// Returns `nullptr` at EOF. The pointer is invalidated by any operation
-    /// that refills, rebases, or consumes this source.
+    /// that refills or consumes this source.
     hope<const value_type *> peek()
     {
         if (buffered_size() != 0)
-            return hope<const value_type *>::ready(&*buffer_[seek_]);
+            return hope<const value_type *>::ready(buffer_ + seek_);
 
         auto read = fill_more();
         if (!read.is_ready())
@@ -399,10 +636,23 @@ public:
 
         auto result = read.take_ready();
         if (buffered_size() != 0)
-            return hope<const value_type *>::ready(&*buffer_[seek_]);
+            return hope<const value_type *>::ready(buffer_ + seek_);
         if (result.eof && result.values == 0)
             return hope<const value_type *>::ready(nullptr);
         return peek_slow();
+    }
+
+    /// Borrow the next `n` values without consuming them.
+    ///
+    /// The returned chunks remain valid only until the next operation that may
+    /// mutate this source's buffer.
+    hope<const_value_chunk_view> peek(std::size_t n)
+    {
+        if (n > capacity_)
+            throw value_buffer_error{"value source buffer is too small"};
+        if (buffered_size() >= n)
+            return hope<const_value_chunk_view>::ready(buffered().first(n));
+        return peek_slow(n);
     }
 
     /// Consume and return the next value.
@@ -507,17 +757,30 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::span<slot_type> unused_capacity() noexcept
+    [[nodiscard]] const_value_chunk_view buffered_chunks() const noexcept
     {
-        return buffer_.subspan(end_);
+        return detail::ring_chunks(
+            static_cast<const value_type *>(buffer_),
+            capacity_,
+            seek_,
+            size_);
+    }
+
+    [[nodiscard]] std::span<value_type> unused_capacity() noexcept
+    {
+        return detail::ring_unused_capacity(
+            buffer_,
+            capacity_,
+            seek_,
+            size_);
     }
 
     void emplace(value_type value)
     {
         if (unused_capacity_size() == 0)
             throw value_buffer_error{"value source buffer is full"};
-        buffer_[end_].emplace(std::move(value));
-        ++end_;
+        std::construct_at(buffer_ + write_index(), std::move(value));
+        ++size_;
     }
 
     /// Mandatory cold-path source operation.
@@ -543,46 +806,19 @@ protected:
         return discard_more_slow(limit);
     }
 
-    virtual void rebase_more(std::size_t)
-    {
-        auto pending = buffered_size();
-        if (seek_ != 0 && pending != 0) {
-            for (auto i = std::size_t{0}; i < pending; ++i) {
-                auto from = seek_ + i;
-                buffer_[i].emplace(std::move(*buffer_[from]));
-                buffer_[from].reset();
-            }
-        }
-        seek_ = 0;
-        end_ = pending;
-    }
-
 private:
-    void rebase(std::size_t capacity)
-    {
-        if (capacity > buffer_.size())
-            throw value_buffer_error{"value source buffer is too small"};
-        if (buffer_.size() - seek_ >= capacity)
-            return;
-        rebase_more(capacity);
-        if (buffer_.size() - seek_ < capacity)
-            throw value_buffer_error{"value source rebase failed"};
-    }
-
     void toss(std::size_t n)
     {
         if (n > buffered_size())
             throw value_buffer_error{"value source consumed past buffer"};
-        for (auto & slot : buffer_.subspan(seek_, n))
-            slot.reset();
-        seek_ += n;
+        destroy_prefix(n);
         reset_if_empty();
     }
 
     std::optional<value_type> take_buffered()
     {
         auto value = std::optional<value_type>{
-            std::move(*buffer_[seek_]),
+            std::move(buffer_[seek_]),
         };
         toss(1);
         return value;
@@ -591,26 +827,25 @@ private:
     void expect_buffered(const value_type & expected)
         requires std::equality_comparable<value_type>
     {
-        if (!(*buffer_[seek_] == expected))
+        if (!(buffer_[seek_] == expected))
             throw unexpected_value{"unexpected value"};
         toss(1);
     }
 
     void reset_if_empty() noexcept
     {
-        if (seek_ == end_)
-            seek_ = end_ = 0;
+        if (size_ == 0)
+            seek_ = 0;
     }
 
     hope<value_result> fill_more()
     {
-        if (buffered_size() == buffer_.size())
+        if (buffered_size() == capacity_)
             throw value_buffer_error{"value source buffer is full"};
-        rebase(buffered_size() + 1);
-        return fill_more_without_rebase();
+        return fill_more_into_capacity();
     }
 
-    hope<value_result> fill_more_without_rebase()
+    hope<value_result> fill_more_into_capacity()
     {
         auto dst = unused_capacity();
         if (dst.empty())
@@ -631,7 +866,8 @@ private:
         auto written = sink.buffered_size();
         if (written != result.values)
             throw value_buffer_error{"value source stream count mismatch"};
-        end_ += written;
+        sink.release_buffered();
+        size_ += written;
         return result;
     }
 
@@ -646,10 +882,9 @@ private:
 
     task<void> fill_slow(std::size_t n)
     {
-        rebase(n);
         while (buffered_size() < n) {
             auto before = buffered_size();
-            auto read = co_await fill_more_without_rebase();
+            auto read = co_await fill_more_into_capacity();
             if (read.eof && read.values == 0 && buffered_size() == before)
                 throw value_end_of_stream{"unexpected end of value input"};
         }
@@ -661,7 +896,7 @@ private:
             auto before = buffered_size();
             auto read = co_await fill_more();
             if (buffered_size() != 0)
-                co_return &*buffer_[seek_];
+                co_return buffer_ + seek_;
             if (read.eof && read.values == 0 && buffered_size() == before)
                 co_return nullptr;
         }
@@ -672,10 +907,16 @@ private:
         auto before = buffered_size();
         auto read = co_await std::move(first_read);
         if (buffered_size() != 0)
-            co_return &*buffer_[seek_];
+            co_return buffer_ + seek_;
         if (read.eof && read.values == 0 && buffered_size() == before)
             co_return nullptr;
         co_return co_await peek_slow();
+    }
+
+    task<const_value_chunk_view> peek_slow(std::size_t n)
+    {
+        co_await fill(n);
+        co_return buffered().first(n);
     }
 
     task<std::optional<value_type>> take_slow()
@@ -737,7 +978,7 @@ private:
         auto n = std::min(limit, buffered_size());
         auto moved = std::size_t{0};
         while (moved != n) {
-            auto value = std::move(*buffer_[seek_]);
+            auto value = std::move(buffer_[seek_]);
             toss(1);
             auto write = sink.write(std::move(value));
             ++moved;
@@ -762,10 +1003,34 @@ private:
         co_return co_await stream_more(sink, limit);
     }
 
-    std::vector<slot_type> owned_buffer_;
-    std::span<slot_type> buffer_;
+    void destroy_buffered() noexcept
+    {
+        destroy_prefix(size_);
+        seek_ = 0;
+    }
+
+    value_storage<value_type> owned_buffer_{0};
+    value_type * buffer_ = nullptr;
+    std::size_t capacity_ = 0;
     std::size_t seek_ = 0;
-    std::size_t end_ = 0;
+    std::size_t size_ = 0;
+
+    [[nodiscard]] std::size_t write_index() const noexcept
+    {
+        return detail::ring_write_index<value_type>(capacity_, seek_, size_);
+    }
+
+    void destroy_prefix(std::size_t n) noexcept
+    {
+        while (n != 0) {
+            auto take = std::min(n, capacity_ - seek_);
+            for (auto & value : std::span{buffer_ + seek_, take})
+                std::destroy_at(&value);
+            seek_ = (seek_ + take) % capacity_;
+            size_ -= take;
+            n -= take;
+        }
+    }
 };
 
 /// Source that repeatedly parses typed values from a byte reader.
@@ -774,7 +1039,7 @@ class byte_parser final : public value_source<T>
 {
 public:
     using value_type = std::remove_cv_t<T>;
-    using slot_type = value_slot<value_type>;
+    using storage_ref = value_storage_ref<value_type>;
     using parser_type = task<std::optional<value_type>> (*)(byte_reader &);
 
     byte_parser(
@@ -792,7 +1057,7 @@ public:
     byte_parser(
         byte_reader & reader,
         parser_type parser,
-        std::span<slot_type> buffer)
+        storage_ref buffer)
         : value_source<value_type>(buffer)
         , reader_(&reader)
         , parser_(parser)
@@ -837,11 +1102,11 @@ class value_range_source final
 public:
     using value_type =
         std::remove_cv_t<std::ranges::range_value_t<Values>>;
-    using slot_type = value_slot<value_type>;
+    using storage_ref = value_storage_ref<value_type>;
 
     template<std::ranges::viewable_range Range>
         requires std::constructible_from<Values, std::views::all_t<Range>>
-    value_range_source(Range && values, std::span<slot_type> buffer)
+    value_range_source(Range && values, storage_ref buffer)
         : value_source<value_type>(buffer)
         , values_(std::views::all(std::forward<Range>(values)))
         , value_(std::ranges::begin(values_))
@@ -904,7 +1169,7 @@ private:
 template<std::ranges::viewable_range Range>
 value_range_source(
     Range &&,
-    std::span<value_slot<std::ranges::range_value_t<std::views::all_t<Range>>>>)
+    value_storage_ref<std::ranges::range_value_t<std::views::all_t<Range>>>)
     -> value_range_source<std::views::all_t<Range>>;
 
 template<std::ranges::viewable_range Range>

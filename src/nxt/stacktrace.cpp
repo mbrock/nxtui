@@ -209,6 +209,31 @@ bool print_current_exception_trace(
 #endif
 }
 
+bool print_current_stacktrace(
+    std::ostream & out,
+    std::string_view indent,
+    std::string_view label,
+    std::size_t skip)
+{
+#ifdef NXT_HAVE_CPPTRACE
+    out << indent << label << ":\n";
+    print_stacktrace(
+        out,
+        cpptrace::generate_trace(static_cast<int>(skip) + 1),
+        std::string{indent});
+    return true;
+#elif NXT_HAVE_STD_STACKTRACE
+    out << indent << label << ":\n" << std::stacktrace::current();
+    (void) skip;
+    return true;
+#else
+    (void) skip;
+    out << indent << "stack trace unavailable "
+           "(cpptrace and standard <stacktrace> are not available)\n";
+    return false;
+#endif
+}
+
 [[noreturn]] void rethrow(std::exception_ptr failure)
 {
 #ifdef NXT_HAVE_CPPTRACE

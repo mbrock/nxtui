@@ -679,7 +679,7 @@ inline byte_parser<server_sent_event> sse_event_parser(
 
 inline byte_parser<server_sent_event> sse_event_parser(
     byte_reader & reader,
-    std::span<value_slot<server_sent_event>> buffer)
+    value_storage_ref<server_sent_event> buffer)
 {
     return byte_parser<server_sent_event>{
         reader,
