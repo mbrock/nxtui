@@ -3,7 +3,7 @@
 #include <nxtrt/fs.hpp>
 #include <nxtrt/scoped_process.hpp>
 #include <nxtrt/subprocess.hpp>
-#include <nxtrt/uring_wand.hpp>
+#include <nxtrt/wand/uring.hpp>
 #include <nxt/unique-fd.hpp>
 #include <nxtai/tool_process.hpp>
 

@@ -179,25 +179,25 @@ struct value_storage_ref
 };
 
 template<typename T>
-class value_storage
+class rack
 {
 public:
     using value_type = std::remove_cv_t<T>;
 
-    explicit value_storage(std::size_t size)
+    explicit rack(std::size_t size)
         : data_(size == 0 ? nullptr : allocator_.allocate(size))
         , size_(size)
     {}
 
-    value_storage(const value_storage &) = delete;
-    value_storage & operator=(const value_storage &) = delete;
+    rack(const rack &) = delete;
+    rack & operator=(const rack &) = delete;
 
-    value_storage(value_storage && other) noexcept
+    rack(rack && other) noexcept
         : data_(std::exchange(other.data_, nullptr))
         , size_(std::exchange(other.size_, 0))
     {}
 
-    value_storage & operator=(value_storage && other) noexcept
+    rack & operator=(rack && other) noexcept
     {
         if (this != &other) {
             deallocate();
@@ -207,7 +207,7 @@ public:
         return *this;
     }
 
-    ~value_storage()
+    ~rack()
     {
         deallocate();
     }
@@ -765,7 +765,7 @@ private:
         co_return out;
     }
 
-    value_storage<value_type> owned_buffer_{0};
+    rack<value_type> owned_buffer_{0};
     value_type * buffer_ = nullptr;
     std::size_t capacity_ = 0;
     std::size_t seek_ = 0;
@@ -1887,7 +1887,7 @@ private:
     task<std::optional<value_type>> take_direct_slow()
     {
         while (true) {
-            auto storage = value_storage<value_type>{1};
+            auto storage = rack<value_type>{1};
             auto out = fixed_sink<value_type>{storage};
             auto result = co_await stream_more(out, 1);
             auto written = out.buffered_size();
@@ -2059,7 +2059,7 @@ private:
         return out;
     }
 
-    value_storage<value_type> owned_buffer_{0};
+    rack<value_type> owned_buffer_{0};
     value_type * buffer_ = nullptr;
     std::size_t capacity_ = 0;
     std::size_t seek_ = 0;

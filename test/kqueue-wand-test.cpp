@@ -1,5 +1,5 @@
 #include <nxtrt/buffers.hpp>
-#include <nxtrt/kqueue_wand.hpp>
+#include <nxtrt/wand/kqueue.hpp>
 #include <nxt/unique-fd.hpp>
 
 #include "test.hpp"

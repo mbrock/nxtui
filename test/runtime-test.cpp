@@ -5,7 +5,7 @@
 #include <nxtrt/bell.hpp>
 #include <nxtrt/compression.hpp>
 #include <nxtrt/http.hpp>
-#include <nxtrt/kqueue_wand.hpp>
+#include <nxtrt/wand/kqueue.hpp>
 #include <nxtrt/sampling.hpp>
 #include <nxtrt/task.hpp>
 #include <nxtrt/terminal_app.hpp>
@@ -3668,7 +3668,7 @@ static suite runtime_tests{
         "wires"_test = [] {
             "buffer values until consumed"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = nxtrt::value_storage<int>{2};
+                auto storage = nxtrt::rack<int>{2};
                 auto events = nxtrt::wire<int>{storage};
 
                 expect(events.try_send(1));
@@ -3687,7 +3687,7 @@ static suite runtime_tests{
 
             "resumes a waiting consumer when a value is published"_test = [] {
                 auto rt = nxtrt::runtime{};
-                auto storage = nxtrt::value_storage<int>{64};
+                auto storage = nxtrt::rack<int>{64};
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
 
@@ -3704,7 +3704,7 @@ static suite runtime_tests{
 
             "close rejects publishers and drains consumers"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = nxtrt::value_storage<int>{64};
+                auto storage = nxtrt::rack<int>{64};
                 auto events = nxtrt::wire<int>{storage};
 
                 expect(events.try_send(1));
@@ -3726,7 +3726,7 @@ static suite runtime_tests{
 
             "close wakes pending consumers"_test = [] {
                 auto rt = nxtrt::runtime{};
-                auto storage = nxtrt::value_storage<int>{64};
+                auto storage = nxtrt::rack<int>{64};
                 auto events = nxtrt::wire<int>{storage};
                 auto finished = false;
 
@@ -3743,7 +3743,7 @@ static suite runtime_tests{
             };
 
             "try_next drains buffered values without awaiting"_test = [] {
-                auto storage = nxtrt::value_storage<int>{64};
+                auto storage = nxtrt::rack<int>{64};
                 auto events = nxtrt::wire<int>{storage};
 
                 expect(events.try_send(3));
@@ -3753,7 +3753,7 @@ static suite runtime_tests{
             };
 
             "tx and rx sides expose directional operations"_test = [] {
-                auto storage = nxtrt::value_storage<int>{1};
+                auto storage = nxtrt::rack<int>{1};
                 auto events = nxtrt::wire<int>{storage};
                 auto & tx = events.tx();
                 auto & rx = events.rx();
@@ -3775,7 +3775,7 @@ static suite runtime_tests{
 
             "wire receives through feed operations"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = nxtrt::value_storage<int>{2};
+                auto storage = nxtrt::rack<int>{2};
                 auto events = nxtrt::wire<int>{storage};
 
                 expect(events.try_send(8));
@@ -3798,7 +3798,7 @@ static suite runtime_tests{
 
             "wire bundles structure bind to rx and tx endpoints"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto storage = nxtrt::value_storage<int>{1};
+                auto storage = nxtrt::rack<int>{1};
                 auto [rx, tx] = nxtrt::wire<int>{storage};
 
                 expect(tx.try_send(21));
@@ -3813,7 +3813,7 @@ static suite runtime_tests{
 
             "tx side writes through sink operations"_test = [] {
                 auto rt = nxtrt::runtime{};
-                auto storage = nxtrt::value_storage<int>{1};
+                auto storage = nxtrt::rack<int>{1};
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
 
@@ -3834,7 +3834,7 @@ static suite runtime_tests{
             };
 
             "bounded queues reject immediate sends when full"_test = [] {
-                auto storage = nxtrt::value_storage<int>{1};
+                auto storage = nxtrt::rack<int>{1};
                 auto events = nxtrt::wire<int>{storage};
 
                 expect(events.try_send(1));
@@ -3843,7 +3843,7 @@ static suite runtime_tests{
 
             "zero-buffer wires rendezvous sender and receiver"_test = [] {
                 auto rt = nxtrt::runtime{};
-                auto storage = nxtrt::value_storage<int>{0};
+                auto storage = nxtrt::rack<int>{0};
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
                 auto sent = false;
@@ -3869,7 +3869,7 @@ static suite runtime_tests{
 
             "flush waits until accepted values are consumed"_test = [] {
                 auto rt = nxtrt::runtime{};
-                auto storage = nxtrt::value_storage<int>{2};
+                auto storage = nxtrt::rack<int>{2};
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
                 auto flushed = false;
@@ -3893,7 +3893,7 @@ static suite runtime_tests{
 
             "send then flush acts like an unbuffered write"_test = [] {
                 auto rt = nxtrt::runtime{};
-                auto storage = nxtrt::value_storage<int>{1};
+                auto storage = nxtrt::rack<int>{1};
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
                 auto flushed = false;

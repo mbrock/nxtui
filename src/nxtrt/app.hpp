@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/arch.hpp"
 #include "nxtrt/bell.hpp"
 #include "nxtrt/task.hpp"
 #include "nxtrt/wire.hpp"
@@ -7,11 +8,6 @@
 #include <nxtui/input.hpp>
 #include <nxtui/units.hpp>
 
-#if defined(__linux__)
-#include "nxtrt/uring_wand.hpp"
-#else
-#include "nxtrt/kqueue_wand.hpp"
-#endif
 
 #include <chrono>
 #include <optional>
@@ -19,16 +15,6 @@
 #include <utility>
 
 namespace nxtrt {
-
-#if defined(__linux__) && NXT_RT_HAS_LIBURING
-using platform_wand = uring_wand;
-inline constexpr bool has_platform_wand = true;
-#elif !defined(__linux__) && NXT_RT_HAS_KQUEUE
-using platform_wand = kqueue_wand;
-inline constexpr bool has_platform_wand = true;
-#else
-inline constexpr bool has_platform_wand = false;
-#endif
 
 namespace detail {
 
@@ -50,8 +36,7 @@ template<typename Fn>
 /// owner the UI runtime can be built around: one `deck`, one platform `wand`,
 /// a root-firm run entrypoint, and the app-level coordination primitives that
 /// the old `UIRuntime` currently gets from libcoro.
-#if (defined(__linux__) && NXT_RT_HAS_LIBURING) \
-    || (!defined(__linux__) && NXT_RT_HAS_KQUEUE)
+#if NXTRT_ARCH_HAS_WAND
 class runtime
 {
 public:
@@ -76,7 +61,7 @@ public:
         return deck_;
     }
 
-    [[nodiscard]] platform_wand & current_wand() noexcept
+    [[nodiscard]] arch::wand & current_wand() noexcept
     {
         return wand_;
     }
@@ -173,11 +158,11 @@ public:
     }
 
 private:
-    platform_wand wand_;
+    arch::wand wand_;
     deck deck_;
     bell damage_bell_;
-    value_storage<term_size> resize_wire_storage_{64};
-    value_storage<input_event> input_wire_storage_{64};
+    rack<term_size> resize_wire_storage_{64};
+    rack<input_event> input_wire_storage_{64};
     wire<term_size> resize_wire_;
     wire<input_event> input_wire_;
     bool stopping_ = false;

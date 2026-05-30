@@ -1,5 +1,5 @@
 #include <nxtrt/cares.hpp>
-#include <nxtrt/uring_wand.hpp>
+#include <nxtrt/wand/uring.hpp>
 
 #include "test.hpp"
 
