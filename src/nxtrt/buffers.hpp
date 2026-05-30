@@ -427,10 +427,22 @@ public:
             co_await write(std::forward<decltype(chunk)>(chunk));
     }
 
-    /// Write bytes or byte/text chunks, then flush the writer.
-    template<typename Chunks>
-        requires detail::byte_writer_chunk<Chunks>
-            || detail::byte_writer_chunk_range<Chunks>
+    /// Write borrowed UTF-8 text, then flush the writer.
+    task<void> write_all(std::string_view text)
+    {
+        co_await write(text);
+        co_await flush();
+    }
+
+    /// Write borrowed bytes, then flush the writer.
+    task<void> write_all(std::span<const std::byte> bytes)
+    {
+        co_await write(bytes);
+        co_await flush();
+    }
+
+    /// Write byte/text chunks, then flush the writer.
+    template<detail::byte_writer_chunk_range Chunks>
     task<void> write_all(Chunks && chunks)
     {
         co_await write(std::forward<Chunks>(chunks));
@@ -859,7 +871,8 @@ private:
 };
 
 template<typename Chunks>
-    requires detail::byte_writer_chunk<Chunks>
+    requires std::convertible_to<Chunks, std::string_view>
+        || std::convertible_to<Chunks, std::span<const std::byte>>
         || detail::byte_writer_chunk_range<Chunks>
 inline task<void> write_all(byte_writer & writer, Chunks && chunks)
 {

@@ -1,5 +1,6 @@
 #include <nxt/sparkline.hpp>
 #include <nxtui/tui_text.hpp>
+#include <nxtrt/app.hpp>
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/bell.hpp>
 #include <nxtrt/compression.hpp>
@@ -8,7 +9,6 @@
 #include <nxtrt/sampling.hpp>
 #include <nxtrt/task.hpp>
 #include <nxtrt/terminal_app.hpp>
-#include <nxtrt/ui_runtime.hpp>
 #include <nxtrt/wire.hpp>
 #include <nxtai/tool_batch.hpp>
 
@@ -547,165 +547,6 @@ nxtrt::task<void> record_task_stop_state_after_yield(
 {
     co_await nxtrt::yield();
     events.push_back(nxtrt::task_stop_requested() ? value : -value);
-}
-
-nxtrt::task<void> draw_busy_and_mark(bool & ran)
-{
-    co_await nxtrt::draw(nxtui::tui::text("busy"));
-    ran = true;
-    co_return;
-}
-
-nxtrt::task<void> spawn_widget_and_capture(
-    nxtrt::widget_slot & captured,
-    bool & ran)
-{
-    auto child = nxtrt::spawn_widget(
-        [&ran] {
-            return draw_busy_and_mark(ran);
-        });
-    captured = child.surface();
-    co_await nxtrt::draw(captured);
-    co_return;
-}
-
-nxtrt::task<void> run_spawned_widget_clear_test(
-    nxtrt::ui_runtime & runtime,
-    nxtrt::widget_slot root,
-    nxtrt::widget_slot & captured,
-    bool & ran)
-{
-    auto body = [&] {
-        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
-            &runtime,
-            [&] {
-                return nxtrt::with_widget_slot(
-                    root,
-                    [&] {
-                        return spawn_widget_and_capture(captured, ran);
-                    });
-            });
-    };
-    co_await nxtrt::with_zone(body);
-}
-
-nxtrt::task<int> draw_work_measure_and_stop(
-    nxtrt::widget_slot root,
-    nxtui::height_t & composed_height)
-{
-    co_await nxtrt::draw(nxtui::tui::text("work"));
-    co_await nxtrt::yield();
-    composed_height = root.height_hint().min;
-    nxtrt::require_current_zone().stop();
-    co_return 7;
-}
-
-nxtrt::task<void> draw_rate_until_stopped(bool & companion_stopped)
-{
-    co_await nxtrt::draw(nxtui::tui::text("rate"));
-    while (!nxtrt::stop_requested())
-        co_await nxtrt::yield();
-    companion_stopped = true;
-}
-
-nxtrt::task<nxtrt::catching_deed<int>> spawn_sibling_widgets(
-    nxtrt::widget_slot root,
-    bool & companion_stopped,
-    nxtui::height_t & composed_height)
-{
-    auto worker = nxtrt::spawn_widget(
-        [root, &composed_height] {
-            return draw_work_measure_and_stop(root, composed_height);
-        });
-    auto companion = nxtrt::spawn_widget(
-        [&companion_stopped] {
-            return draw_rate_until_stopped(companion_stopped);
-        });
-    co_await nxtrt::draw(
-        nxtui::tui::column(worker.surface(), companion.surface()));
-    co_return std::move(worker).cope();
-}
-
-nxtrt::task<nxtrt::catching_deed<int>>
-run_sibling_widget_compose_test(
-    nxtrt::ui_runtime & runtime,
-    nxtrt::widget_slot root,
-    bool & companion_stopped,
-    nxtui::height_t & composed_height)
-{
-    auto body = [&] {
-        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
-            &runtime,
-            [&] {
-                return nxtrt::with_widget_slot(
-                    root,
-                    [&] {
-                        return spawn_sibling_widgets(
-                            root,
-                            companion_stopped,
-                            composed_height);
-                    });
-            });
-    };
-    co_return co_await nxtrt::with_zone(body);
-}
-
-nxtrt::task<bool> draw_after_stopping_current_zone()
-{
-    nxtrt::require_current_zone().stop();
-    try {
-        co_await nxtrt::draw(nxtui::tui::text("after-stop"));
-    } catch (const nxtrt::operation_cancelled &) {
-        co_return true;
-    }
-    co_return false;
-}
-
-nxtrt::task<bool> print_after_stopping_current_zone()
-{
-    nxtrt::require_current_zone().stop();
-    try {
-        co_await nxtrt::print_block("after-stop\n");
-    } catch (const nxtrt::operation_cancelled &) {
-        co_return true;
-    }
-    co_return false;
-}
-
-nxtrt::task<bool> run_draw_after_stop_check(
-    nxtrt::ui_runtime & runtime,
-    nxtrt::widget_slot root)
-{
-    auto body = [&] {
-        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
-            &runtime,
-            [&] {
-                return nxtrt::with_widget_slot(
-                    root,
-                    [] {
-                        return draw_after_stopping_current_zone();
-                    });
-            });
-    };
-    co_return co_await nxtrt::with_zone(body);
-}
-
-nxtrt::task<bool> run_print_after_stop_check(
-    nxtrt::ui_runtime & runtime,
-    nxtrt::widget_slot root)
-{
-    auto body = [&] {
-        return nxtrt::with_env<nxtrt::current_ui_runtime_key>(
-            &runtime,
-            [&] {
-                return nxtrt::with_widget_slot(
-                    root,
-                    [] {
-                        return print_after_stopping_current_zone();
-                    });
-            });
-    };
-    co_return co_await nxtrt::with_zone(body);
 }
 
 // A custom awaitable exercising task::splice_onto. When `ready` holds it
@@ -1514,95 +1355,6 @@ static suite runtime_tests{
             "keeps the alternate screen opt-in"_test = [] {
                 auto options = nxtrt::terminal_app_options{};
                 expect(!options.alternate_screen);
-            };
-        };
-
-        "widget slots"_test = [] {
-            "child slots expose independently drawable surfaces"_test = [] {
-                auto runtime = nxtrt::ui_runtime{
-                    {.render = false,
-                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
-                auto root = runtime.surface();
-                auto child = runtime.make_surface();
-
-                root.publish(
-                    nxtui::tui::AnyLayout{
-                        nxtui::tui::row(child, nxtui::tui::text("!"))});
-                child.publish(nxtui::tui::AnyLayout{nxtui::tui::text("hi")});
-
-                expect(child.width_hint().min == 2 * nxtui::ch);
-                expect(root.width_hint().min == 3 * nxtui::ch);
-            };
-
-            "spawned child widgets clear their slot on exit"_test = [] {
-                auto runtime = nxtrt::ui_runtime{
-                    {.render = false,
-                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
-                auto root = runtime.surface();
-                auto captured =
-                    nxtui::tui::Slot<nxtui::tui::AnyLayout>{nxtui::tui::AnyLayout{}};
-                auto ran = false;
-                auto deck = nxtrt::deck{};
-
-                deck.sync_wait(
-                    run_spawned_widget_clear_test(
-                        runtime,
-                        root,
-                        captured,
-                        ran));
-
-                expect(ran);
-                expect(captured.width_hint().min == 0 * nxtui::ch);
-            };
-
-            "ambient child widgets compose as siblings"_test = [] {
-                auto runtime = nxtrt::ui_runtime{
-                    {.render = false,
-                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
-                auto root = runtime.surface();
-                auto deck = nxtrt::deck{};
-                auto companion_stopped = false;
-                auto composed_height = 0 * nxtui::ln;
-
-                auto worker_deed = deck.sync_wait(
-                    run_sibling_widget_compose_test(
-                        runtime,
-                        root,
-                        companion_stopped,
-                        composed_height));
-
-                auto result = std::move(worker_deed).get();
-                expect(result.has_value());
-                expect(*result == 7_i);
-                expect(companion_stopped);
-                expect(composed_height == 2 * nxtui::ln);
-            };
-
-            "draw observes zone stop before publishing"_test = [] {
-                auto runtime = nxtrt::ui_runtime{
-                    {.render = false,
-                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
-                auto root = runtime.surface();
-                auto deck = nxtrt::deck{};
-
-                auto cancelled = deck.sync_wait(
-                    run_draw_after_stop_check(runtime, root));
-
-                expect(cancelled);
-                expect(root.width_hint().min == 0 * nxtui::ch);
-            };
-
-            "print observes zone stop before enqueueing"_test = [] {
-                auto runtime = nxtrt::ui_runtime{
-                    {.render = false,
-                     .fallback_size = {16 * nxtui::ch, 4 * nxtui::ln}}};
-                auto root = runtime.surface();
-                auto deck = nxtrt::deck{};
-
-                auto cancelled = deck.sync_wait(
-                    run_print_after_stop_check(runtime, root));
-
-                expect(cancelled);
             };
         };
 
@@ -2846,6 +2598,18 @@ static suite runtime_tests{
                         });
 
                         expect(writer.text == "abcde");
+                        expect(writer.buffered_size() == std::size_t{0});
+                    };
+
+                    "writes and flushes string literals"_test = [] {
+                        auto deck = nxtrt::deck{};
+                        auto writer = chunking_string_sink{64, std::size_t{8}};
+
+                        deck.sync_wait([&]() -> nxtrt::task<void> {
+                            co_await writer.write_all("hello");
+                        });
+
+                        expect(writer.text == "hello");
                         expect(writer.buffered_size() == std::size_t{0});
                     };
 

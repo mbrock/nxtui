@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/buffers.hpp"
 #include "nxtrt/task.hpp"
 #include "nxt/unique-fd.hpp"
 
@@ -9,6 +10,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <span>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
@@ -16,6 +18,41 @@
 #include <utility>
 
 namespace nxtrt::net {
+
+class socket
+{
+public:
+    socket(
+        nxt::unique_fd fd,
+        std::span<std::byte> tx_buffer,
+        std::span<std::byte> rx_buffer,
+        int flags = 0)
+        : fd_(std::move(fd))
+        , input_(fd_.get(), rx_buffer, flags)
+        , output_(fd_.get(), tx_buffer, flags)
+    {
+    }
+
+    [[nodiscard]] int fd() const noexcept
+    {
+        return fd_.get();
+    }
+
+    [[nodiscard]] socket_source & input() noexcept
+    {
+        return input_;
+    }
+
+    [[nodiscard]] socket_sink & output() noexcept
+    {
+        return output_;
+    }
+
+private:
+    nxt::unique_fd fd_;
+    socket_source input_;
+    socket_sink output_;
+};
 
 inline void throw_errno(std::string_view what)
 {

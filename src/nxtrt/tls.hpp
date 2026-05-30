@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxtrt/buffers.hpp"
+#include "nxtrt/net.hpp"
 #include "nxtrt/task.hpp"
 #include "nxt/tls.hpp"
 #include "nxt/tls/cert.hpp"
@@ -78,6 +79,30 @@ public:
         : byte_reader(buffer_size)
         , reader_(reader)
         , writer_(writer)
+    {
+    }
+
+    tls13_client_session(
+        byte_reader & reader,
+        byte_writer & writer,
+        std::span<std::byte> buffer)
+        : byte_reader(buffer)
+        , reader_(reader)
+        , writer_(writer)
+    {
+    }
+
+    tls13_client_session(
+        net::socket & socket,
+        std::span<std::byte> buffer)
+        : tls13_client_session(socket.input(), socket.output(), buffer)
+    {
+    }
+
+    tls13_client_session(
+        net::socket & socket,
+        std::size_t buffer_size = 4096)
+        : tls13_client_session(socket.input(), socket.output(), buffer_size)
     {
     }
 

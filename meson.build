@@ -194,15 +194,10 @@ if get_option('llm_tool')
 
   executable('nxtllm',
     'src/nxtai/nxtllm.cpp',
-    'src/nxtai/trace_tui.cpp',
-    'src/nxtai/tool_tui.cpp',
-    'src/nxtai/agent.cpp',
-    'src/nxtai/stream.cpp',
-    'src/nxtai/tool_ui.cpp',
+    'src/nxt/stacktrace.cpp',
     include_directories : nxt_inc,
     dependencies : nxtllm_dependencies,
     cpp_args : nxt_stacktrace_cpp_args,
-    cpp_pch : 'src/nxtai/nxtllm_pch.hpp',
   )
 endif
 

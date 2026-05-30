@@ -17,10 +17,9 @@ task zones, and explicit UI/runtime capabilities.
 - DNS, HTTP, TLS, and socket experiments.
 - Linux subprocess wishes for piped children, pty children, pidfd waits, and
   pidfd signals.
-- OpenAI Responses request JSON, streaming, and basic tool-call batches.
+- OpenAI Responses request JSON and small SSE streaming clients.
 - Core terminal input types and parsing in `src/nxtui/input.hpp`.
-- The default `nxtllm` executable, including one-shot streaming and
-  `read_file`/`rg_search`/`bash` tool execution on `nxtrt`.
+- The default `nxtllm` executable as a minimal one-shot streaming client.
 
 The old application stack is no longer in the tree. The former `src/nxt/ai`
 LLM stack has also been removed; the surviving LLM code lives in
@@ -42,7 +41,7 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::scope` | `nxtrt::task_zone` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
-| old LLM entry point | `src/nxtai/nxtllm.cpp` | Done. The executable streams one-shot turns and runs tool batches; richer interactive HUD work remains. |
+| old LLM entry point | `src/nxtai/nxtllm.cpp` | Simplified. The executable is now a small one-shot SSE client without the old HUD/tool UI runtime path. |
 
 ## Completed Slices
 
@@ -61,17 +60,16 @@ LLM stack has also been removed; the surviving LLM code lives in
 
 4. Make OpenAI streaming use `src` networking. Done for the one-shot
    `nxtllm` path: it connects over `nxtrt` TCP/TLS, reads HTTP/SSE, and
-   collects completed output items.
+   writes text deltas to stdout.
 
-5. Port tool execution after streaming works. Done as
-   `src/nxtai/tool_batch.hpp`, `agent_tools.hpp`, and
-   `tool_process.hpp`. Batches fork one task per call in a zone and return
-   ordered `function_call_output` items.
+5. Port tool execution after streaming works. The neutral tool-call pieces live
+   in `src/nxtai/tool_batch.hpp`, `agent_tools.hpp`, and `tool_process.hpp`.
+   The old runtime UI wrapper has been removed.
 
 6. Re-enable `nxtllm` on the runtime. Done in
    `src/nxtai/nxtllm.cpp`: the executable builds by default, parses CLI
-   options, enters `nxtrt::runtime`, streams responses over the `src`
-   HTTP/TLS stack, and can complete a bash tool-call smoke test.
+   options, enters `nxtrt::runtime`, and streams Responses text over the `src`
+   HTTP/TLS stack.
 
 7. Use PTYs for live tool surfaces. Started with `nxt-shell-scope-demo`: the
    command runs through `spawn_pty`, feeds a `vterm` session, and renders as a
@@ -94,7 +92,8 @@ layer would hide the hard parts. Prefer explicit ports:
 
 The core migration is done. The remaining work is product shape:
 
-1. Build the richer interactive `nxtllm` HUD on top of the runtime UI pieces.
+1. Rebuild any richer interactive `nxtllm` UI as a separate observer over
+   stream events instead of reviving the old UI runtime.
 2. Decide which demos still carry their weight after the runtime consolidation.
 3. Keep request construction and JSON parsing runtime-neutral.
 4. Keep the default Meson build as the guardrail for runtime-only work.

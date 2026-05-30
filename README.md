@@ -30,8 +30,7 @@ process helpers:
   client stack
 - [`nxtrt::subprocess`][nxtrt-subprocess] and [`nxtrt::pty`][nxtrt-pty] for
   child process work
-- [`nxtrt::ui_runtime`][nxtrt-ui-runtime] and
-  [`nxtrt::terminal_app`][nxtrt-terminal-app] for terminal guest applications
+- [`nxtrt::terminal_app`][nxtrt-terminal-app] for terminal guest applications
 
 Start with the [runtime overview][rt-overview] for the conceptual model.
 
@@ -89,15 +88,13 @@ above it.
 ## nxtai
 
 [`nxtai`][nxtai] is the LLM/OpenAI layer. It builds OpenAI Responses requests,
-streams server-sent events over the `nxtrt` HTTP/TLS stack, runs tool-call
-batches, and provides the `nxtllm` executable.
+streams server-sent events over the `nxtrt` HTTP/TLS stack, and provides the
+small `nxtllm` executable.
 
 Useful entry points include
 [`nxtai::responses::openai_responses_request`][nxtai-request],
-[`nxtai::response_stream_result`][nxtai-stream-result],
-[`nxtai::tools::tool_registry`][nxtai-tool-registry], the OpenAI event/data
-types under [`nxtai::openai`][nxtai-openai], and built-in tools under
-[`nxtai::agent_tools`][nxtai-agent-tools].
+[`nxtai::tools::tool_registry`][nxtai-tool-registry], and the OpenAI event/data
+types under [`nxtai::openai`][nxtai-openai].
 
 ```sh
 build/nxtllm --dump-request "hello from nxtrt"
@@ -164,7 +161,6 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 [nxtrt-tls]: https://swa.sh/nxt/namespacenxtrt_1_1tls.html
 [nxtrt-subprocess]: https://swa.sh/nxt/namespacenxtrt_1_1subprocess.html
 [nxtrt-pty]: https://swa.sh/nxt/namespacenxtrt_1_1pty.html
-[nxtrt-ui-runtime]: https://swa.sh/nxt/classnxtrt_1_1ui__runtime.html
 [nxtrt-terminal-app]: https://swa.sh/nxt/classnxtrt_1_1terminal__app.html
 [rt-overview]: https://swa.sh/nxt/rt_overview.html
 [nxtui]: https://swa.sh/nxt/namespacenxtui.html
@@ -178,7 +174,5 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 [nxtui-terminal-compositor]: https://swa.sh/nxt/classnxtui_1_1tui_1_1_terminal_compositor.html
 [nxtai]: https://swa.sh/nxt/namespacenxtai.html
 [nxtai-request]: https://swa.sh/nxt/structnxtai_1_1responses_1_1openai__responses__request.html
-[nxtai-stream-result]: https://swa.sh/nxt/structnxtai_1_1response__stream__result.html
 [nxtai-tool-registry]: https://swa.sh/nxt/structnxtai_1_1tools_1_1tool__registry.html
 [nxtai-openai]: https://swa.sh/nxt/namespacenxtai_1_1openai.html
-[nxtai-agent-tools]: https://swa.sh/nxt/namespacenxtai_1_1agent__tools.html
