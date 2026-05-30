@@ -22,12 +22,12 @@ namespace nxtrt::debug {
 
 inline constexpr bool describe_wishes = NXT_RT_DESCRIBE_WISHES != 0;
 
-using zone_id = std::uint64_t;
+using firm_id = std::uint64_t;
 
-struct zone_snapshot
+struct firm_snapshot
 {
-    zone_id id = 0;
-    zone_id parent = 0;
+    firm_id id = 0;
+    firm_id parent = 0;
     std::size_t children = 0;
     bool stopping = false;
 };
@@ -42,9 +42,9 @@ struct wait_snapshot
 
 namespace detail {
 
-inline std::atomic<zone_id> next_zone_id = 1;
-inline std::mutex zones_mutex;
-inline std::vector<zone_snapshot> zones;
+inline std::atomic<firm_id> next_firm_id = 1;
+inline std::mutex firms_mutex;
+inline std::vector<firm_snapshot> firms;
 inline std::mutex waits_mutex;
 inline std::vector<wait_snapshot> waits;
 inline volatile std::sig_atomic_t dump_requested = 0;
@@ -56,9 +56,9 @@ inline void signal_handler(int) noexcept
 
 } // namespace detail
 
-[[nodiscard]] inline zone_id allocate_zone_id() noexcept
+[[nodiscard]] inline firm_id allocate_firm_id() noexcept
 {
-    return detail::next_zone_id.fetch_add(1, std::memory_order_relaxed);
+    return detail::next_firm_id.fetch_add(1, std::memory_order_relaxed);
 }
 
 inline void install_signal_dump(int signal = SIGUSR1)
@@ -78,35 +78,35 @@ inline void install_signal_dump(int signal = SIGUSR1)
     return true;
 }
 
-inline void register_zone(zone_snapshot zone)
+inline void register_firm(firm_snapshot firm)
 {
-    auto lock = std::scoped_lock{detail::zones_mutex};
-    detail::zones.push_back(zone);
+    auto lock = std::scoped_lock{detail::firms_mutex};
+    detail::firms.push_back(firm);
 }
 
-inline void unregister_zone(zone_id id)
+inline void unregister_firm(firm_id id)
 {
-    auto lock = std::scoped_lock{detail::zones_mutex};
-    std::erase_if(detail::zones, [id](const zone_snapshot & zone) {
-        return zone.id == id;
+    auto lock = std::scoped_lock{detail::firms_mutex};
+    std::erase_if(detail::firms, [id](const firm_snapshot & firm) {
+        return firm.id == id;
     });
 }
 
-inline void update_zone(zone_snapshot zone)
+inline void update_firm(firm_snapshot firm)
 {
-    auto lock = std::scoped_lock{detail::zones_mutex};
-    for (auto & existing : detail::zones) {
-        if (existing.id == zone.id) {
-            existing = zone;
+    auto lock = std::scoped_lock{detail::firms_mutex};
+    for (auto & existing : detail::firms) {
+        if (existing.id == firm.id) {
+            existing = firm;
             return;
         }
     }
 }
 
-[[nodiscard]] inline std::vector<zone_snapshot> snapshot_zones()
+[[nodiscard]] inline std::vector<firm_snapshot> snapshot_firms()
 {
-    auto lock = std::scoped_lock{detail::zones_mutex};
-    return detail::zones;
+    auto lock = std::scoped_lock{detail::firms_mutex};
+    return detail::firms;
 }
 
 inline void park_task(task_id task, std::uint64_t token, std::string wish)
@@ -185,7 +185,7 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
 }
 
 [[nodiscard]] inline std::string format_runtime_dump(
-    std::vector<zone_snapshot> zones,
+    std::vector<firm_snapshot> firms,
     std::vector<wait_snapshot> waits,
     std::vector<task_id> ready_tasks)
 {
@@ -204,13 +204,13 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
     }
     out << "\n";
 
-    out << "  zones: " << zones.size() << "\n";
-    for (auto const & zone : zones) {
-        out << "    zone " << zone.id;
-        if (zone.parent != 0)
-            out << " parent " << zone.parent;
-        out << " children " << zone.children;
-        if (zone.stopping)
+    out << "  firms: " << firms.size() << "\n";
+    for (auto const & firm : firms) {
+        out << "    firm " << firm.id;
+        if (firm.parent != 0)
+            out << " parent " << firm.parent;
+        out << " children " << firm.children;
+        if (firm.stopping)
             out << " stopping";
         out << "\n";
     }
@@ -226,13 +226,13 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
 }
 
 inline void print_runtime_dump(
-    std::vector<zone_snapshot> zones,
+    std::vector<firm_snapshot> firms,
     std::vector<wait_snapshot> waits,
     std::vector<task_id> ready_tasks)
 {
     std::cerr << "\n"
               << format_runtime_dump(
-                     std::move(zones),
+                     std::move(firms),
                      std::move(waits),
                      std::move(ready_tasks));
     std::cerr << std::flush;

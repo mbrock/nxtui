@@ -63,7 +63,7 @@ Field declarations resolve overloaded properties from the enclosing signature
 domain, so a signature can stay close to the ontology wording:
 
 ```racket
-signature zone
+signature firm
   spawned set task
   issued set deed
 ```
@@ -71,7 +71,7 @@ signature zone
 Use `follow` for outgoing relation paths and `matching` for inverse lookups:
 
 ```racket
-all ([z zone] [t (z spawned)])
+all ([z firm] [t (z spawned)])
   lone ([d (z issued)])
     == (d observes) t
 ```

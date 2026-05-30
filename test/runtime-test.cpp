@@ -814,11 +814,11 @@ record_after_bell(
     out.push_back(value);
 }
 
-nxtrt::task<void> record_current_zone(
-    std::vector<nxtrt::task_zone *> & zones)
+nxtrt::task<void> record_current_firm(
+    std::vector<nxtrt::firm *> & firms)
 {
     co_await nxtrt::yield();
-    zones.push_back(nxtrt::current_zone());
+    firms.push_back(nxtrt::current_firm());
 }
 
 nxtrt::task<bool> read_task_stop_after_yield()
@@ -846,7 +846,7 @@ nxtrt::task<void> throw_after_yield(std::vector<int> & events, int value)
 {
     events.push_back(value * 10 + 1);
     co_await nxtrt::yield();
-    throw nxtrt::runtime_error{"zone child boom"};
+    throw nxtrt::runtime_error{"firm child boom"};
 }
 
 nxtrt::task<int> value_after_yield(int value)
@@ -877,7 +877,7 @@ nxtrt::task<int> value_after_two_yields_or_stop(
 nxtrt::task<int> throw_int_after_yield()
 {
     co_await nxtrt::yield();
-    throw nxtrt::runtime_error{"zone child int boom"};
+    throw nxtrt::runtime_error{"firm child int boom"};
 }
 
 nxtrt::task<void> record_stop_state_after_yield(
@@ -1630,7 +1630,7 @@ static suite runtime_tests{
                 auto child =
                     deck.sync_wait([]()
                         -> nxtrt::task<nxtrt::catching_deed<int>> {
-                        co_return co_await nxtrt::with_zone(
+                        co_return co_await nxtrt::with_firm(
                             []()
                                 -> nxtrt::task<
                                     nxtrt::catching_deed<int>> {
@@ -1643,6 +1643,7 @@ static suite runtime_tests{
                                             nxtrt::fork(
                                                 read_ambient_int_after_yield())
                                                 .cope();
+                                        co_await nxtrt::join();
                                         co_return std::move(child);
                                     });
                             });
@@ -1673,10 +1674,11 @@ static suite runtime_tests{
                         co_await nxtrt::with_env<
                             nxtrt::trace_current_span_key>(
                             root.span_id(), [&]() -> nxtrt::task<void> {
-                            co_await nxtrt::with_zone(
+                            co_await nxtrt::with_firm(
                                 [&]() -> nxtrt::task<void> {
                                 nxtrt::fork(traced_child("child-a"));
                                 nxtrt::fork(traced_child("child-b"));
+                                co_await nxtrt::join();
                                 co_return;
                             });
                         });
@@ -1729,16 +1731,16 @@ static suite runtime_tests{
             };
         };
 
-        "zones"_test = [] {
-            "bind the current zone while the body runs"_test = [] {
+        "firms"_test = [] {
+            "bind the current firm while the body runs"_test = [] {
                 auto deck = nxtrt::deck{};
 
                 auto seen = deck.sync_wait([]() -> nxtrt::task<bool> {
-                    co_return co_await nxtrt::with_zone(
+                    co_return co_await nxtrt::with_firm(
                         []() -> nxtrt::task<bool> {
-                            auto * before = nxtrt::current_zone();
+                            auto * before = nxtrt::current_firm();
                             co_await nxtrt::yield();
-                            auto * after = nxtrt::current_zone();
+                            auto * after = nxtrt::current_firm();
                             co_return before != nullptr && before == after;
                         });
                 });
@@ -1746,14 +1748,15 @@ static suite runtime_tests{
                 expect(seen);
             };
 
-            "join forked tasks before the zone exits"_test = [] {
+            "join forked tasks before the firm exits"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         nxtrt::fork(record_after_yield(events, 1));
                         events.push_back(2);
+                        co_await nxtrt::join();
                         co_return;
                     });
                     events.push_back(3);
@@ -1763,25 +1766,106 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{2, 11, 12, 3});
             };
 
-            "let forked tasks inherit the current zone"_test = [] {
+            "reject firm bodies that return before joining"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto zones = std::vector<nxtrt::task_zone *>{};
-                auto expected = static_cast<nxtrt::task_zone *>(nullptr);
+                auto message = std::string{};
+
+                try {
+                    deck.sync_wait([]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_firm(
+                            []() -> nxtrt::task<void> {
+                                nxtrt::fork(value_after_yield(1));
+                                co_return;
+                            });
+                    });
+                } catch (const std::exception & e) {
+                    message = e.what();
+                }
+
+                expect(message.contains("unjoined children"));
+                expect(message.contains("co_await nxtrt::join()"));
+            };
+
+            "firm subclasses are directly awaitable"_test = [] {
+                struct child_firm : nxtrt::firm
+                {
+                    explicit child_firm(std::vector<int> & events)
+                        : events(events)
+                    {}
+
+                    std::vector<int> & events;
+
+                    nxtrt::task<int> operator()()
+                    {
+                        auto child = fork(value_after_yield(7));
+                        events.push_back(1);
+                        co_await join();
+                        events.push_back(2);
+                        co_return std::move(child).get();
+                    }
+                };
+
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto result =
+                    deck.sync_wait([&]() -> nxtrt::task<int> {
+                    co_return co_await child_firm{events};
+                });
+
+                expect(result == 7_i);
+                expect(events == std::vector<int>{1, 2});
+            };
+
+            "policy firms can be subclassed"_test = [] {
+                struct first_success_firm : nxtrt::stop_on_success
+                {
+                    explicit first_success_firm(std::vector<int> & events)
+                        : events(events)
+                    {}
+
+                    std::vector<int> & events;
+
+                    nxtrt::task<nxtrt::deed<int>> operator()()
+                    {
+                        auto child = fork(value_after_yield(5));
+                        fork(record_stop_state_after_two_yields(events, 9));
+                        co_await join();
+                        co_return std::move(child);
+                    }
+                };
+
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto child =
+                    deck.sync_wait([&]()
+                        -> nxtrt::task<nxtrt::deed<int>> {
+                        co_return co_await first_success_firm{events};
+                    });
+
+                expect(std::move(child).get() == 5_i);
+                expect(events == std::vector<int>{9});
+            };
+
+            "let forked tasks inherit the current firm"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto firms = std::vector<nxtrt::firm *>{};
+                auto expected = static_cast<nxtrt::firm *>(nullptr);
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
-                        expected = nxtrt::current_zone();
-                        nxtrt::fork(record_current_zone(zones));
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
+                        expected = nxtrt::current_firm();
+                        nxtrt::fork(record_current_firm(firms));
+                        co_await nxtrt::join();
                         co_return;
                     });
                     co_return;
                 });
 
                 expect(expected != nullptr);
-                expect(zones == std::vector<nxtrt::task_zone *>{expected});
+                expect(firms == std::vector<nxtrt::firm *>{expected});
             };
 
-            "allow children to fork more work into the same zone"_test = [] {
+            "allow children to fork more work into the same firm"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
@@ -1794,8 +1878,9 @@ static suite runtime_tests{
                 };
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         nxtrt::fork(parent());
+                        co_await nxtrt::join();
                         co_return;
                     });
                     events.push_back(4);
@@ -1805,7 +1890,7 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{1, 3, 21, 22, 4});
             };
 
-            "reject fork outside a zone"_test = [] {
+            "reject fork outside a firm"_test = [] {
                 auto deck = nxtrt::deck{};
 
                 auto rejected = deck.sync_wait([]() -> nxtrt::task<bool> {
@@ -1829,10 +1914,11 @@ static suite runtime_tests{
 
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::with_zone(
+                        co_await nxtrt::with_firm(
                             [&]() -> nxtrt::task<void> {
                                 nxtrt::fork(throw_after_yield(events, 0));
                                 nxtrt::fork(record_after_yield(events, 2));
+                                co_await nxtrt::join();
                                 co_return;
                             });
                         co_return;
@@ -1852,11 +1938,12 @@ static suite runtime_tests{
 
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::with_zone(
+                        co_await nxtrt::with_firm(
                             [&]() -> nxtrt::task<void> {
                                 nxtrt::fork(throw_after_yield(events, 1));
                                 nxtrt::fork(throw_after_yield(events, 2));
                                 nxtrt::fork(record_after_yield(events, 3));
+                                co_await nxtrt::join();
                                 co_return;
                             });
                         co_return;
@@ -1876,10 +1963,11 @@ static suite runtime_tests{
                 auto child =
                     deck.sync_wait([]()
                         -> nxtrt::task<nxtrt::deed<int>> {
-                        co_return co_await nxtrt::with_zone(
+                        co_return co_await nxtrt::with_firm(
                             []() -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
                                     nxtrt::fork(value_after_yield(42));
+                                co_await nxtrt::join();
                                 co_return std::move(child);
                             });
                     });
@@ -1895,12 +1983,13 @@ static suite runtime_tests{
 
                 auto children =
                     deck.sync_wait([]() -> nxtrt::task<children_type> {
-                        co_return co_await nxtrt::with_zone(
+                        co_return co_await nxtrt::with_firm(
                             []() -> nxtrt::task<children_type> {
                                 auto first =
                                     nxtrt::fork(value_after_yield(10));
                                 auto second =
                                     nxtrt::fork(value_after_yield(20));
+                                co_await nxtrt::join();
                                 co_return children_type{
                                     std::move(first),
                                     std::move(second)};
@@ -1918,10 +2007,11 @@ static suite runtime_tests{
                 auto child =
                     deck.sync_wait([]()
                         -> nxtrt::task<nxtrt::deed<int>> {
-                        co_return co_await nxtrt::with_zone(
+                        co_return co_await nxtrt::with_firm(
                             []() -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
                                     nxtrt::fork(throw_int_after_yield());
+                                co_await nxtrt::join();
                                 co_return std::move(child);
                             });
                     });
@@ -1936,17 +2026,18 @@ static suite runtime_tests{
                 expect(threw);
             };
 
-            "allow observed deed failures inside the zone"_test = [] {
+            "allow observed deed failures inside the firm"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto observed = false;
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         auto child =
                             nxtrt::fork(throw_int_after_yield());
                         co_await nxtrt::yield();
                         co_await nxtrt::yield();
                         observed = child.exception() != nullptr;
+                        co_await nxtrt::join();
                         co_return;
                     });
                 });
@@ -1960,13 +2051,14 @@ static suite runtime_tests{
                 auto child =
                     deck.sync_wait([]()
                         -> nxtrt::task<nxtrt::catching_deed<int>> {
-                        co_return co_await nxtrt::with_zone(
+                        co_return co_await nxtrt::with_firm(
                             []()
                                 -> nxtrt::task<
                                     nxtrt::catching_deed<int>> {
                                 auto child =
                                     nxtrt::fork(throw_int_after_yield())
                                         .cope();
+                                co_await nxtrt::join();
                                 co_return std::move(child);
                             });
                     });
@@ -1981,13 +2073,14 @@ static suite runtime_tests{
                 auto child =
                     deck.sync_wait([]()
                         -> nxtrt::task<nxtrt::catching_deed<int>> {
-                        co_return co_await nxtrt::with_zone(
+                        co_return co_await nxtrt::with_firm(
                             []()
                                 -> nxtrt::task<
                                     nxtrt::catching_deed<int>> {
                                 auto child =
                                     nxtrt::fork(value_after_yield(99))
                                         .cope();
+                                co_await nxtrt::join();
                                 co_return std::move(child);
                             });
                     });
@@ -2002,10 +2095,11 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         nxtrt::fork(
                             record_stop_state_after_yield(events, 1));
-                        nxtrt::require_current_zone().stop();
+                        nxtrt::require_current_firm().stop();
+                        co_await nxtrt::join();
                         co_return;
                     });
                 });
@@ -2013,13 +2107,13 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{1});
             };
 
-            "reject fork after zone stop"_test = [] {
+            "reject fork after firm stop"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto rejected = false;
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
-                        nxtrt::require_current_zone().stop();
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
+                        nxtrt::require_current_firm().stop();
                         try {
                             nxtrt::fork(value_after_yield(1));
                         } catch (const std::exception &) {
@@ -2032,19 +2126,19 @@ static suite runtime_tests{
                 expect(rejected);
             };
 
-            "request child stop when the zone body fails"_test = [] {
+            "request child stop when the firm body fails"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::with_zone(
+                        co_await nxtrt::with_firm(
                             [&]() -> nxtrt::task<void> {
                                 nxtrt::fork(
                                     record_stop_state_after_yield(events, 2));
                                 throw nxtrt::runtime_error{
-                                    "zone body boom"};
+                                    "firm body boom"};
                             });
                     });
                 } catch (const std::exception &) {
@@ -2055,15 +2149,16 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{2});
             };
 
-            "request task stop on forked children when the zone stops"_test = [] {
+            "request task stop on forked children when the firm stops"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         nxtrt::fork(
                             record_task_stop_state_after_yield(events, 3));
-                        nxtrt::require_current_zone().stop();
+                        nxtrt::require_current_firm().stop();
+                        co_await nxtrt::join();
                         co_return;
                     });
                 });
@@ -2071,34 +2166,36 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{3});
             };
 
-            "child cancellation is not a zone failure after stop"_test = [] {
+            "child cancellation is not a firm failure after stop"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         nxtrt::fork(
                             value_after_two_yields_or_stop(events, 4));
                         co_await nxtrt::yield();
-                        nxtrt::require_current_zone().stop();
+                        nxtrt::require_current_firm().stop();
+                        co_await nxtrt::join();
                     });
                 });
 
                 expect(events == std::vector<int>{4});
             };
 
-            "child cancellation remains failure before zone stop"_test = [] {
+            "child cancellation remains failure before firm stop"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto threw = false;
 
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::with_zone(
+                        co_await nxtrt::with_firm(
                             []() -> nxtrt::task<void> {
                                 nxtrt::fork(
                                     []() -> nxtrt::task<void> {
                                         throw nxtrt::operation_cancelled{};
                                     }());
+                                co_await nxtrt::join();
                                 co_return;
                             });
                     });
@@ -2141,16 +2238,17 @@ static suite runtime_tests{
                 std::move(task).result();
             };
 
-            "stop a hosted zone when its parent task is stopped"_test = [] {
+            "stop a hosted firm when its parent task is stopped"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 auto task = [&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
                         nxtrt::fork(
                             record_stop_state_after_yield(events, 4));
                         events.push_back(100);
                         co_await nxtrt::yield();
+                        co_await nxtrt::join();
                         co_return;
                     });
                 }();
@@ -2166,21 +2264,22 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{100, 4});
             };
 
-            "stop-on-failure fork policy stops siblings"_test = [] {
+            "stop-on-failure firm stops siblings"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto threw = false;
 
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::with_zone(
-                            nxtrt::stop_on_failure{},
+                        co_await nxtrt::detail::make_firm_body<
+                            nxtrt::stop_on_failure>(
                             [&](auto & policy) -> nxtrt::task<void> {
                                 policy.fork(throw_after_yield(events, 1));
                                 policy.fork(
                                     record_stop_state_after_two_yields(
                                         events,
                                         2));
+                                co_await policy.join();
                                 co_return;
                             });
                     });
@@ -2192,15 +2291,15 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{11, 2});
             };
 
-            "stop-on-success fork policy stops siblings"_test = [] {
+            "stop-on-success firm stops siblings"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
                 auto child =
                     deck.sync_wait([&]()
                         -> nxtrt::task<nxtrt::deed<int>> {
-                        co_return co_await nxtrt::with_zone(
-                            nxtrt::stop_on_success{},
+                        co_return co_await nxtrt::detail::make_firm_body<
+                            nxtrt::stop_on_success>(
                             [&](auto & policy)
                                 -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
@@ -2209,6 +2308,7 @@ static suite runtime_tests{
                                     record_stop_state_after_two_yields(
                                         events,
                                         3));
+                                co_await policy.join();
                                 co_return std::move(child);
                             });
                     });
@@ -3612,6 +3712,7 @@ static suite runtime_tests{
                     co_await nxtrt::yield();
                     expect(seen.empty());
                     expect(co_await events.send(7));
+                    co_await nxtrt::join();
                 });
 
                 expect(seen == std::vector<int>{7});
@@ -3649,6 +3750,7 @@ static suite runtime_tests{
                     nxtrt::fork(record_closed_wire(events, finished));
                     co_await nxtrt::yield();
                     events.close();
+                    co_await nxtrt::join();
                 });
 
                 expect(events.closed());
@@ -3741,6 +3843,7 @@ static suite runtime_tests{
                     nxtrt::fork(record_next_wire_value(events, seen));
                     while (seen.size() != 2)
                         co_await nxtrt::yield();
+                    co_await nxtrt::join();
                 });
 
                 expect(seen == std::vector<int>{12, 13});
@@ -3773,6 +3876,7 @@ static suite runtime_tests{
                     nxtrt::fork(record_next_wire_value(events, seen));
                     while (!sent)
                         co_await nxtrt::yield();
+                    co_await nxtrt::join();
                 });
 
                 expect(sent);
@@ -3796,6 +3900,7 @@ static suite runtime_tests{
                     nxtrt::fork(record_next_wire_value(events, seen));
                     while (!flushed)
                         co_await nxtrt::yield();
+                    co_await nxtrt::join();
                 });
 
                 expect(flushed);
@@ -3818,6 +3923,7 @@ static suite runtime_tests{
                     nxtrt::fork(record_next_wire_value(events, seen));
                     while (!flushed)
                         co_await nxtrt::yield();
+                    co_await nxtrt::join();
                 });
 
                 expect(flushed);
@@ -3837,6 +3943,7 @@ static suite runtime_tests{
                     co_await nxtrt::yield();
                     expect(values.empty());
                     ready.ring();
+                    co_await nxtrt::join();
                 });
 
                 expect(values == std::vector<int>{1, 2});
@@ -3860,6 +3967,7 @@ static suite runtime_tests{
                     co_await nxtrt::yield();
                     expect(values == std::vector<int>{1});
                     ready.ring();
+                    co_await nxtrt::join();
                 });
 
                 expect(values == std::vector<int>{1, 2});

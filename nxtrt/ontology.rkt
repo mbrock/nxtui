@@ -5,7 +5,7 @@
 
 (provide nxt
          deck
-         zone
+         firm
          task
          wish
          exec

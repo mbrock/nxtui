@@ -508,7 +508,7 @@ private:
     }
 };
 
-struct stream_zone_body
+struct stream_firm_body
 {
     nxtai::responses::openai_responses_request request;
     nxtrt::bytesink & output;
@@ -571,8 +571,8 @@ nxtrt::task<int> run_nxtllm(cli_options options)
         throw nxtrt::runtime_error{"OPENAI_API_KEY is not set"};
     }
 
-    co_await nxtrt::with_zone(
-        stream_zone_body{
+    co_await nxtrt::with_firm(
+        stream_firm_body{
             .request = std::move(request),
             .output = output,
         });

@@ -16,7 +16,7 @@ the whole tree has a well-defined fate.
 
 This suggests a native Emacs embedding where =nxtrt::task= coroutines
 run cooperatively with Emacs Lisp execution, preserving runtime/editor
-context through =nxtrt::env= and task zones across =co_await=
+context through =nxtrt::env= and firms across =co_await=
 suspension points.
 
 ** Brief introduction to nxt UI
@@ -51,7 +51,7 @@ The current =yard= and =scope= system already provides bounded child
 lifetimes, cancellation tokens, live surfaces, output routing, and trace
 span attribution.  The new =nxtrt= runtime is the intended
 structured-concurrency substrate: coroutine promises carry an ambient
-environment, task zones own child relations, stop propagates through the
+environment, firms own child relations, stop propagates through the
 tree, and context is restored across awaits.
 
 One concrete demonstration is the =nxtllm= OpenAI agent harness.  It
@@ -86,7 +86,7 @@ Emacs already has rich notions of place and dynamic extent:
 - child surfaces
 - cancellation scopes
 - trace spans
-- =nxtrt= task zones
+- =nxtrt= firms
 - ambient =nxtrt::env= bindings
 - typed runtime/editor capabilities
 - stop propagation through a frame tree
@@ -330,7 +330,7 @@ like =save-excursion= restores point after temporary buffer motion.
 ** Context preservation
 
 The useful part of the removed custom task experiment now belongs in
-=nxtrt=: the promise owns an environment snapshot, task zones describe
+=nxtrt=: the promise owns an environment snapshot, firms describe
 parent/child lifetime, and await boundaries restore the ambient context
 needed by editor and UI capabilities.
 

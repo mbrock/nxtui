@@ -226,8 +226,8 @@ nxtrt::task<void> run_echo_load(
     co_await state->done;
     if (state->timed_out)
         throw nxtrt::timeout_error{};
-    if (auto * zone = nxtrt::current_zone())
-        zone->stop();
+    if (auto * firm = nxtrt::current_firm())
+        firm->stop();
 }
 
 struct echo_load_factory
@@ -367,32 +367,6 @@ void print_result(
         << "}\n";
 }
 
-void print_exception_tree(
-    std::exception_ptr failure,
-    std::string indent = "  ")
-{
-    if (!failure)
-        return;
-
-    try {
-        nxtrt::rethrow(failure);
-    } catch (const nxtrt::exception_group & group) {
-        std::cerr << indent << group.what() << "\n";
-        auto const & exceptions = group.exceptions();
-        auto const shown = std::min(exceptions.size(), std::size_t{5});
-        for (auto i = std::size_t{0}; i < shown; ++i)
-            print_exception_tree(exceptions[i], indent + "  ");
-        if (exceptions.size() > shown)
-            std::cerr << indent << "  ... "
-                      << (exceptions.size() - shown)
-                      << " more failures\n";
-    } catch (const std::exception & e) {
-        std::cerr << indent << e.what() << "\n";
-    } catch (...) {
-        std::cerr << indent << "unknown exception\n";
-    }
-}
-
 } // namespace
 
 int main(int argc, char ** argv)
@@ -419,7 +393,8 @@ int main(int argc, char ** argv)
         return 0;
     } catch (...) {
         std::cerr << "nxt-echo-bench:\n";
-        print_exception_tree(std::current_exception());
+        std::cerr << nxtrt::format_exception_tree(std::current_exception())
+                  << "\n";
         return 1;
     }
 }

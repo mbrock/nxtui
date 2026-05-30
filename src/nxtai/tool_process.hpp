@@ -127,10 +127,10 @@ capture(
 
     auto capture = nxtrt::catching_deed<void>{};
     auto monitor = nxtrt::catching_deed<void>{};
-    co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
         capture =
             nxtrt::fork(
-                nxtrt::detail::stop_zone_on_completion(
+                nxtrt::detail::stop_firm_on_completion(
                     nxtrt::finally(
                         capture_output(state, options.max_capture_bytes),
                         [state]() {
@@ -145,6 +145,7 @@ capture(
                     options.scope.sample_interval,
                     options.scope.max_samples))
                 .cope();
+        co_await nxtrt::join();
         co_return;
     });
 

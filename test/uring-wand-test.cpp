@@ -93,14 +93,15 @@ nxtrt::task<int> timeout_value(int value)
 
 nxtrt::task<std::vector<int>> many_short_timeouts()
 {
-    auto deeds = co_await nxtrt::with_zone(
-        nxtrt::stop_on_failure{},
+    auto deeds = co_await nxtrt::detail::make_firm_body<
+        nxtrt::stop_on_failure>(
         [](auto & policy)
             -> nxtrt::task<std::vector<nxtrt::catching_deed<int>>> {
             auto out = std::vector<nxtrt::catching_deed<int>>{};
             out.reserve(32);
             for (auto i = 0; i != 32; ++i)
                 out.push_back(policy.fork(timeout_value(i)).cope());
+            co_await policy.join();
             co_return out;
         });
 
@@ -385,12 +386,14 @@ static suite uring_wand_tests{
                 expect(value == 42_i);
             };
 
-            "runtime owns a root zone and app wires"_test = [] {
+            "runtime owns a root firm and app wires"_test = [] {
                 auto rt = nxtrt::runtime{};
 
                 auto child = rt.run([]() -> nxtrt::task<nxtrt::deed<int>> {
-                    expect(nxtrt::current_zone() != nullptr);
-                    co_return nxtrt::fork(app_child_value(41));
+                    expect(nxtrt::current_firm() != nullptr);
+                    auto child = nxtrt::fork(app_child_value(41));
+                    co_await nxtrt::join();
+                    co_return std::move(child);
                 });
 
                 expect(std::move(child).get() == 41_i);

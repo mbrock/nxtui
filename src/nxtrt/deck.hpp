@@ -1,6 +1,5 @@
 #pragma once
 
-#include "nxtrt/debug.hpp"
 #include "nxtrt/ids.hpp"
 #include "nxtrt/env.hpp"
 #include "nxtrt/trace.hpp"
@@ -11,15 +10,13 @@
 #include <deque>
 #include <functional>
 #include <string>
-#include <stdexcept>
 #include <type_traits>
-#include <vector>
 
 namespace nxtrt {
 
 template<typename T = void>
 class task;
-class task_zone;
+class firm;
 class deck;
 struct yield_awaiter;
 
@@ -54,17 +51,8 @@ template<typename Fn>
 concept stored_task_factory =
     std::invocable<Fn &> && is_task_v<std::invoke_result_t<Fn &>>;
 
-template<typename Fn, typename Policy>
-concept stored_policy_task_factory =
-    std::invocable<Fn &, Policy &>
-    && is_task_v<std::invoke_result_t<Fn &, Policy &>>;
-
 template<typename Fn>
 using stored_task_result_t = task_result_t<std::invoke_result_t<Fn &>>;
-
-template<typename Fn, typename Policy>
-using stored_policy_task_result_t =
-    task_result_t<std::invoke_result_t<Fn &, Policy &>>;
 
 namespace detail {
 
@@ -244,7 +232,7 @@ private:
     friend struct detail::promise_base;
     template<typename T>
     friend class task;
-    friend class task_zone;
+    friend class firm;
     friend struct parked_task;
     friend struct yield_awaiter;
     /// @endcond

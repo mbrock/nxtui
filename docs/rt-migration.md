@@ -4,7 +4,7 @@ The application/runtime surface has moved from the old `nxtio` stack onto
 `nxtrt`. `libcoro` has been removed from the Meson build and from
 `subprojects`, and the remaining `nxtio` sources have been deleted. The old
 custom task prototype is gone; its useful ideas now belong in `nxtrt::env`,
-task zones, and explicit UI/runtime capabilities.
+firms, and explicit UI/runtime capabilities.
 
 ## Current Shape
 
@@ -13,7 +13,7 @@ task zones, and explicit UI/runtime capabilities.
 - `nxtrt::task<T>` for lazy coroutine tasks.
 - `nxtrt::deck` for pumpable execution.
 - `nxtrt::wand` implementations for platform waiting.
-- `nxtrt::with_zone`, `fork`, `deed`, `when_all`, and timeout helpers.
+- `nxtrt::with_firm`, `fork`, `deed`, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments.
 - Linux subprocess wishes for piped children, pty children, pidfd waits, and
   pidfd signals.
@@ -36,9 +36,9 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::queue<T>` | `nxtrt::wire<T>` | Done. Used for UI input, resize, and tool streams. |
 | `nxt::event` | `nxtrt::bell` | Done. Used for damage notifications and small UI coordination points. |
 | `nxtio/input.hpp` | `nxtui/input.hpp` | Done. The compatibility include has been removed. |
-| `nxt::latch` | zone join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
-| `spawn_detached` | `nxtrt::fork` in a zone | Detached work should still be owned by a root zone. |
-| `nxt::scope` | `nxtrt::task_zone` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
+| `nxt::latch` | firm join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
+| `spawn_detached` | `nxtrt::fork` in a firm | Detached work should still be owned by a root firm. |
+| `nxt::scope` | `nxtrt::firm` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
 | old LLM entry point | `src/nxtai/nxtllm.cpp` | Simplified. The executable is now a small one-shot SSE client without the old HUD/tool UI runtime path. |
@@ -49,7 +49,7 @@ LLM stack has also been removed; the surviving LLM code lives in
    `nxtrt::wire<T>` and manual-reset `nxtrt::bell`.
 
 2. Introduce a runtime facade beside terminal UI helpers. Done as
-   `nxtrt::runtime`: it owns a `deck`, platform `wand`, root-zone run
+   `nxtrt::runtime`: it owns a `deck`, platform `wand`, root-firm run
    entrypoint, damage bell, input wire, resize wire, and `sleep`.
    `nxtrt::terminal_app` and the runtime demos layer terminal/compositor
    ownership on top of it.

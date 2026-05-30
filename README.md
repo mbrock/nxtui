@@ -17,7 +17,7 @@ The public surface is organized around three root namespaces:
 
 [`nxtrt`][nxtrt] is the base runtime. It provides lazy coroutine
 [`task<T>`][nxtrt-task] values, an explicit cooperative [`deck`][nxtrt-deck],
-platform [`wand`][nxtrt-wand] backends, structured [`task_zone`][nxtrt-zone]
+platform [`wand`][nxtrt-wand] backends, structured [`firm`][nxtrt-firm]
 ownership, [`deed<T>`][nxtrt-deed] handles, [`channel<T>`][nxtrt-channel],
 [`event`][nxtrt-event], and low-level awaitable operations under
 [`nxtrt::op`][nxtrt-op].
@@ -151,7 +151,7 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 [nxtrt-task]: https://swa.sh/nxt/classnxtrt_1_1task.html
 [nxtrt-deck]: https://swa.sh/nxt/classnxtrt_1_1deck.html
 [nxtrt-wand]: https://swa.sh/nxt/classnxtrt_1_1wand.html
-[nxtrt-zone]: https://swa.sh/nxt/classnxtrt_1_1task__zone.html
+[nxtrt-firm]: https://swa.sh/nxt/classnxtrt_1_1firm.html
 [nxtrt-deed]: https://swa.sh/nxt/classnxtrt_1_1deed.html
 [nxtrt-channel]: https://swa.sh/nxt/classnxtrt_1_1channel.html
 [nxtrt-event]: https://swa.sh/nxt/classnxtrt_1_1event.html

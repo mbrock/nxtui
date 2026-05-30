@@ -17,8 +17,8 @@ lifetime or completion-signal bug, not the timer. Verify that the worker task
 can actually set the `done` flag it is supposed to set.
 
 When a sibling task needs to stop the main work in a scope, make the main work
-a forked child owned by that scope. A zone body is not automatically the same
-thing as one of the zone's child deeds.
+a forked child owned by that scope. A firm body is not automatically the same
+thing as one of the firm's child deeds.
 
 Do not paper over freezes by repeatedly running the whole test suite. Reproduce
 the failing app path, inspect the parked tasks/wishes, and fix the concrete
@@ -34,7 +34,7 @@ expectations, and `run` blocks are small witness/debugging scenarios.
 
 `nxtrt/model.rkt` is only the CLI wrapper for that model, and
 `nxtrt/ontology.rkt` is the ontology export wrapper. When changing deck,
-wish/exec, task, deed, or task-zone semantics, update `nxtrt/runtime.rkt`
+wish/exec, task, deed, or firm semantics, update `nxtrt/runtime.rkt`
 alongside the C++ code so the executable model keeps describing the runtime you
 mean to have. The model currently focuses on exec lifecycle semantics; add wand
 vocabulary only when modeling wand-level scheduling, ownership, or backend

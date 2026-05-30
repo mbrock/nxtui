@@ -2,7 +2,7 @@
 
 ontology nxt "https://swa.sh/nxt#"
   class deck
-  class zone
+  class firm
   class task
   class wish
   class exec
@@ -33,7 +33,7 @@ ontology nxt "https://swa.sh/nxt#"
 model runtime-model
   signature deck
     has-ready var set task
-  signature zone
+  signature firm
     spawned set task
     issued set deed
   signature task
@@ -61,13 +61,13 @@ model runtime-model
     observes one task
 
   predicate structural-invariants
-    all ([z zone] [t (z spawned)])
+    all ([z firm] [t (z spawned)])
       some ([d (z issued)])
         == (d observes) t
-    all ([z zone] [t (z spawned)])
+    all ([z firm] [t (z spawned)])
       lone ([d (z issued)])
         == (d observes) t
-    all ([z zone] [d (z issued)])
+    all ([z firm] [d (z issued)])
       in (d observes) (z spawned)
     all ([a exec] [s (intersect (a has-lifecycle) prepared-state)])
       no (a has-parked-phase)
@@ -111,7 +111,7 @@ model runtime-model
         in (a has-lifecycle) parked-state
 
   predicate rich-runtime-shape
-    some ([d deck] [z zone])
+    some ([d deck] [z firm])
       some (d has-ready)
       ge (count (z spawned)) 2
       all ([a exec])
@@ -119,10 +119,10 @@ model runtime-model
       some ([a exec] [t (z spawned)])
         == (a (has-continuation (task exec))) t
 
-  run rich-runtime-shape-witness :for ([1 deck zone wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed])
+  run rich-runtime-shape-witness :for ([1 deck firm wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed])
     structural-invariants
     rich-runtime-shape
-  run rich-runtime-trace-witness :for ([1 deck zone wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed]) :trace-length 5
+  run rich-runtime-trace-witness :for ([1 deck firm wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed]) :trace-length 5
     always structural-invariants
     always lifecycle-transitions
     rich-runtime-shape

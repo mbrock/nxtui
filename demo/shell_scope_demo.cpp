@@ -347,7 +347,7 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
     auto sampler = nxtrt::catching_deed<void>{};
     auto renderer = nxtrt::catching_deed<void>{};
     try {
-        co_await nxtrt::with_zone([&]() -> nxtrt::task<void> {
+        co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
             reader = nxtrt::fork(read_pty_until_done(pty, state)).cope();
             input = nxtrt::fork(pump_stdin_to_pty(pty, state)).cope();
             sampler = nxtrt::fork(sample_cgroup_until_done(state)).cope();
@@ -356,6 +356,7 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
 
             while (!state.process_done)
                 co_await nxtrt::op::timeout::after(frame_interval);
+            co_await nxtrt::join();
         });
     } catch (...) {
         failure = std::current_exception();

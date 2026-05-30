@@ -64,6 +64,7 @@ struct promise_base
         template<typename Promise>
         void await_suspend(std::coroutine_handle<Promise> coroutine) noexcept
         {
+            coroutine.promise().run_completion_callback();
             coroutine.promise().resume_continuation();
         }
 
@@ -162,6 +163,16 @@ struct promise_base
             current->current_deck->enqueue(continuation, continuation_promise);
     }
 
+    void run_completion_callback() noexcept
+    {
+        if (!completion_callback)
+            return;
+        try {
+            completion_callback();
+        } catch (...) {
+        }
+    }
+
     void enqueue_self(std::coroutine_handle<> handle)
     {
         auto * current = detail::current_env;
@@ -182,6 +193,8 @@ struct promise_base
     std::unique_ptr<stop_callback_type> parent_stop_callback;
     /// Cancels the current parked wish when this task is stopped.
     std::unique_ptr<stop_callback_type> wait_stop_callback;
+    /// Optional hook used by firms to observe children at final suspend.
+    std::function<void()> completion_callback;
 
 private:
     std::stop_source stop_;
@@ -724,7 +737,7 @@ public:
             current == nullptr ? nullptr : current->current_promise;
         if (awaiting_promise == nullptr || promise_ == nullptr)
             throw runtime_error{
-                "nxtrt zone join used without a running task"};
+                "nxtrt firm join used without a running task"};
 
         promise_->set_continuation(awaiting, awaiting_promise);
     }
@@ -746,12 +759,14 @@ struct child_record_base
     virtual ~child_record_base() = default;
 
     [[nodiscard]] virtual bool done() const noexcept = 0;
+    [[nodiscard]] virtual bool joined() const noexcept = 0;
     [[nodiscard]] virtual std::exception_ptr failure() = 0;
     [[nodiscard]] virtual task<void> join() = 0;
     virtual void request_stop() noexcept = 0;
 
     bool contained = false;
     bool observed = false;
+    bool completion_reported = false;
 };
 
 template<typename T>
@@ -774,11 +789,16 @@ struct child_record final : child_record_base
         return !handle || handle.done();
     }
 
+    [[nodiscard]] bool joined() const noexcept override
+    {
+        return joined_;
+    }
+
     [[nodiscard]] task<void> join() override
     {
-        if (!joined && handle && !handle.done())
+        if (!joined_ && handle && !handle.done())
             co_await started_handle_awaiter{handle};
-        joined = true;
+        joined_ = true;
     }
 
     [[nodiscard]] std::exception_ptr failure() override
@@ -812,11 +832,11 @@ struct child_record final : child_record_base
     {
         if (!done())
             throw runtime_error{
-                "nxtrt deed result read before zone join"};
+                "nxtrt deed result read before firm join"};
     }
 
     handle_type handle;
-    bool joined = false;
+    bool joined_ = false;
     bool result_taken = false;
 };
 
@@ -840,11 +860,16 @@ struct child_record<void> final : child_record_base
         return !handle || handle.done();
     }
 
+    [[nodiscard]] bool joined() const noexcept override
+    {
+        return joined_;
+    }
+
     [[nodiscard]] task<void> join() override
     {
-        if (!joined && handle && !handle.done())
+        if (!joined_ && handle && !handle.done())
             co_await started_handle_awaiter{handle};
-        joined = true;
+        joined_ = true;
     }
 
     [[nodiscard]] std::exception_ptr failure() override
@@ -878,11 +903,11 @@ struct child_record<void> final : child_record_base
     {
         if (!done())
             throw runtime_error{
-                "nxtrt deed result read before zone join"};
+                "nxtrt deed result read before firm join"};
     }
 
     handle_type handle;
-    bool joined = false;
+    bool joined_ = false;
     bool result_taken = false;
 };
 
@@ -913,7 +938,7 @@ public:
     [[nodiscard]] catching_deed<T> cope() &&;
 
 private:
-    friend class task_zone;
+    friend class firm;
     friend class catching_deed<T>;
 
     explicit deed(std::shared_ptr<detail::child_record<T>> record) noexcept
@@ -955,7 +980,7 @@ public:
     [[nodiscard]] catching_deed<void> cope() &&;
 
 private:
-    friend class task_zone;
+    friend class firm;
     friend class catching_deed<void>;
 
     explicit deed(
@@ -1071,14 +1096,14 @@ inline catching_deed<void> deed<void>::cope() &&
     return catching_deed<void>{std::move(child)};
 }
 
-class task_zone
+class firm
 {
 public:
-    task_zone()
-        : debug_id_(debug::allocate_zone_id())
+    firm()
+        : debug_id_(debug::allocate_firm_id())
     {
-        debug::register_zone(
-            debug::zone_snapshot{
+        debug::register_firm(
+            debug::firm_snapshot{
                 .id = debug_id_,
                 .parent = debug_parent_,
                 .children = children_.size(),
@@ -1086,15 +1111,24 @@ public:
             });
     }
 
-    ~task_zone()
+    ~firm()
     {
-        debug::unregister_zone(debug_id_);
+        if (debug_id_ != 0)
+            debug::unregister_firm(debug_id_);
     }
 
-    task_zone(const task_zone &) = delete;
-    task_zone & operator=(const task_zone &) = delete;
-    task_zone(task_zone &&) = delete;
-    task_zone & operator=(task_zone &&) = delete;
+    firm(const firm &) = delete;
+    firm & operator=(const firm &) = delete;
+    firm(firm && other) noexcept
+        : children_(std::move(other.children_))
+        , stop_(std::move(other.stop_))
+        , debug_id_(std::exchange(other.debug_id_, 0))
+        , debug_parent_(std::exchange(other.debug_parent_, 0))
+        , stopping_(std::exchange(other.stopping_, false))
+    {
+        debug_update();
+    }
+    firm & operator=(firm &&) = delete;
 
     void stop() noexcept
     {
@@ -1128,13 +1162,13 @@ public:
             current == nullptr ? nullptr : current->current_deck;
         if (current == nullptr || active_deck == nullptr)
             throw runtime_error{
-                "nxtrt zone fork used without a running deck"};
+                "nxtrt firm fork used without a running deck"};
         if (stopping_)
-            throw runtime_error{"nxtrt zone fork used after stop"};
+            throw runtime_error{"nxtrt firm fork used after stop"};
 
         auto handle = child.release();
         if (!handle || handle.done())
-            throw runtime_error{"nxtrt zone fork used with empty task"};
+            throw runtime_error{"nxtrt firm fork used with empty task"};
 
         auto record = std::shared_ptr<detail::child_record<T>>{};
         try {
@@ -1143,6 +1177,11 @@ public:
             // current immutable environment snapshot.
             promise.env.copy_entries_from(*current);
             record = std::make_shared<detail::child_record<T>>(handle);
+            promise.completion_callback = [this, weak_record =
+                std::weak_ptr<detail::child_record<T>>{record}] {
+                if (auto child = weak_record.lock())
+                    report_child_finished(*child);
+            };
         } catch (...) {
             handle.destroy();
             throw;
@@ -1156,22 +1195,45 @@ public:
 
     [[nodiscard]] task<void> join();
 
-    [[nodiscard]] debug::zone_id debug_id() const noexcept
+    [[nodiscard]] bool has_unjoined_children() const noexcept
+    {
+        for (auto const & child : children_) {
+            if (!child->joined())
+                return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] debug::firm_id debug_id() const noexcept
     {
         return debug_id_;
     }
 
-    void debug_parent(debug::zone_id parent) noexcept
+    void debug_parent(debug::firm_id parent) noexcept
     {
         debug_parent_ = parent;
         debug_update();
     }
 
+protected:
+    virtual void child_finished(
+        detail::child_record_base &,
+        std::exception_ptr) noexcept
+    {}
+
 private:
+    void report_child_finished(detail::child_record_base & child) noexcept
+    {
+        if (child.completion_reported)
+            return;
+        child.completion_reported = true;
+        child_finished(child, child.failure());
+    }
+
     void debug_update() const
     {
-        debug::update_zone(
-            debug::zone_snapshot{
+        debug::update_firm(
+            debug::firm_snapshot{
                 .id = debug_id_,
                 .parent = debug_parent_,
                 .children = children_.size(),
@@ -1181,31 +1243,36 @@ private:
 
     std::vector<std::shared_ptr<detail::child_record_base>> children_;
     std::stop_source stop_;
-    debug::zone_id debug_id_ = 0;
-    debug::zone_id debug_parent_ = 0;
+    debug::firm_id debug_id_ = 0;
+    debug::firm_id debug_parent_ = 0;
     bool stopping_ = false;
 };
 
-struct task_zone_key
+struct firm_key
 {
-    using value_type = task_zone *;
-    static constexpr auto name = "task-zone";
+    using value_type = firm *;
+    static constexpr auto name = "firm";
 };
 
-inline task_zone * current_zone() noexcept
+inline firm * current_firm() noexcept
 {
-    auto value = env_get<task_zone_key>();
+    auto value = env_get<firm_key>();
     if (!value)
         return nullptr;
     return *value;
 }
 
-inline task_zone & require_current_zone()
+inline firm & require_current_firm()
 {
-    auto * zone = current_zone();
-    if (zone == nullptr)
-        throw runtime_error{"nxtrt operation used without task zone"};
-    return *zone;
+    auto * firm = current_firm();
+    if (firm == nullptr)
+        throw runtime_error{"nxtrt operation used without firm"};
+    return *firm;
+}
+
+[[nodiscard]] inline task<void> join()
+{
+    co_await require_current_firm().join();
 }
 
 inline deck * current_deck() noexcept
@@ -1232,17 +1299,17 @@ inline bool task_stop_requested() noexcept
 
 inline std::stop_token current_stop_token() noexcept
 {
-    auto * zone = current_zone();
-    if (zone == nullptr)
+    auto * firm = current_firm();
+    if (firm == nullptr)
         return current_task_stop_token();
-    return zone->stop_token();
+    return firm->stop_token();
 }
 
 inline bool stop_requested() noexcept
 {
-    auto * zone = current_zone();
+    auto * firm = current_firm();
     return task_stop_requested()
-        || (zone != nullptr && zone->stop_requested());
+        || (firm != nullptr && firm->stop_requested());
 }
 
 inline void throw_if_stop_requested()
@@ -1254,7 +1321,7 @@ inline void throw_if_stop_requested()
 template<typename T>
 deed<T> fork(task<T> child)
 {
-    return require_current_zone().fork(std::move(child));
+    return require_current_firm().fork(std::move(child));
 }
 
 template<typename T>
@@ -1600,96 +1667,83 @@ template<typename T, typename Adaptor>
     return std::move(adaptor)(std::move(child));
 }
 
-class stop_on_failure
+class stop_on_failure : public firm
 {
 public:
-    stop_on_failure()
-        : state_(std::make_shared<state>())
-    {}
-
-    template<typename T>
-    deed<T> fork(task<T> child)
-    {
-        return nxtrt::fork(wrap(state_, std::move(child)));
-    }
+    stop_on_failure() = default;
+    stop_on_failure(stop_on_failure &&) noexcept = default;
+    stop_on_failure & operator=(stop_on_failure &&) = delete;
 
     [[nodiscard]] std::exception_ptr first_failure() const noexcept
     {
-        return state_->first_failure;
+        return first_failure_;
     }
 
 private:
-    struct state
+    void child_finished(
+        detail::child_record_base &,
+        std::exception_ptr failure) noexcept override
     {
-        std::exception_ptr first_failure;
-    };
-
-    template<typename T>
-    static task<T> wrap(std::shared_ptr<state> state, task<T> child)
-    {
-        try {
-            if constexpr (std::is_void_v<T>) {
-                co_await child;
-                co_return;
-            } else {
-                co_return co_await child;
-            }
-        } catch (...) {
-            if (!state->first_failure)
-                state->first_failure = std::current_exception();
-            if (auto * zone = current_zone())
-                zone->stop();
-            throw;
-        }
+        if (!failure)
+            return;
+        if (!first_failure_)
+            first_failure_ = failure;
+        stop();
     }
 
-    std::shared_ptr<state> state_;
+    std::exception_ptr first_failure_;
 };
 
-class stop_on_success
+class stop_on_success : public firm
 {
 public:
-    stop_on_success()
-        : state_(std::make_shared<state>())
-    {}
-
-    template<typename T>
-    deed<T> fork(task<T> child)
-    {
-        return nxtrt::fork(wrap(state_, std::move(child)));
-    }
+    stop_on_success() = default;
+    stop_on_success(stop_on_success &&) noexcept = default;
+    stop_on_success & operator=(stop_on_success &&) = delete;
 
     [[nodiscard]] bool succeeded() const noexcept
     {
-        return state_->succeeded;
+        return succeeded_;
     }
 
 private:
-    struct state
+    void child_finished(
+        detail::child_record_base &,
+        std::exception_ptr failure) noexcept override
     {
-        bool succeeded = false;
-    };
-
-    template<typename T>
-    static task<T> wrap(std::shared_ptr<state> state, task<T> child)
-    {
-        if constexpr (std::is_void_v<T>) {
-            co_await child;
-            state->succeeded = true;
-            require_current_zone().stop();
-            co_return;
-        } else {
-            auto value = co_await child;
-            state->succeeded = true;
-            require_current_zone().stop();
-            co_return value;
-        }
+        if (failure)
+            return;
+        succeeded_ = true;
+        stop();
     }
 
-    std::shared_ptr<state> state_;
+    bool succeeded_ = false;
 };
 
 namespace detail {
+
+template<typename Base, typename Fn>
+class firm_body : public Base
+{
+public:
+    explicit firm_body(Fn fn)
+        : fn_(std::move(fn))
+    {}
+
+    auto operator()()
+    {
+        return std::invoke(fn_, static_cast<Base &>(*this));
+    }
+
+private:
+    Fn fn_;
+};
+
+template<typename Base, typename Fn>
+[[nodiscard]] firm_body<Base, std::decay_t<Fn>> make_firm_body(Fn && fn)
+{
+    return firm_body<Base, std::decay_t<Fn>>{std::forward<Fn>(fn)};
+}
 
 template<typename, typename T>
 using repeat_type = T;
@@ -1749,21 +1803,21 @@ void take_first_void_success_or_throw(
 }
 
 template<typename T>
-task<T> stop_zone_on_completion(task<T> child)
+task<T> stop_firm_on_completion(task<T> child)
 {
     try {
         if constexpr (std::is_void_v<T>) {
             co_await child;
-            require_current_zone().stop();
+            require_current_firm().stop();
             co_return;
         } else {
             auto value = co_await child;
-            require_current_zone().stop();
+            require_current_firm().stop();
             co_return value;
         }
     } catch (...) {
-        if (auto * zone = current_zone())
-            zone->stop();
+        if (auto * firm = current_firm())
+            firm->stop();
         throw;
     }
 }
@@ -1805,13 +1859,14 @@ when_all(Tasks... tasks)
     using deeds_type = std::tuple<catching_deed<task_result_t<Tasks>>...>;
     constexpr auto count = sizeof...(Tasks);
 
-    auto deeds = co_await with_zone(
-        stop_on_failure{},
+    auto deeds = co_await detail::make_firm_body<stop_on_failure>(
         [... tasks = std::move(tasks)](
             auto & policy) mutable -> task<deeds_type> {
-            co_return deeds_type{
+            auto deeds = deeds_type{
                 policy.fork(std::move(tasks)).cope()...,
             };
+            co_await policy.join();
+            co_return deeds;
         });
 
     co_return detail::take_all_or_throw(
@@ -1830,13 +1885,13 @@ when_all_range(Range tasks)
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
     using deed_type = catching_deed<result_type>;
 
-    auto deeds = co_await with_zone(
-        stop_on_failure{},
+    auto deeds = co_await detail::make_firm_body<stop_on_failure>(
         [tasks = std::move(tasks)](auto & policy) mutable
             -> task<std::vector<deed_type>> {
             auto out = std::vector<deed_type>{};
             for (auto child : tasks)
                 out.push_back(policy.fork(std::move(child)).cope());
+            co_await policy.join();
             co_return out;
         });
 
@@ -1870,8 +1925,7 @@ wait_any_range(Range tasks)
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
     using deed_type = catching_deed<result_type>;
 
-    auto deeds = co_await with_zone(
-        stop_on_success{},
+    auto deeds = co_await detail::make_firm_body<stop_on_success>(
         [tasks = std::move(tasks)](auto & policy) mutable
             -> task<std::vector<deed_type>> {
             auto out = std::vector<deed_type>{};
@@ -1879,6 +1933,7 @@ wait_any_range(Range tasks)
                 out.push_back(policy.fork(std::move(child)).cope());
             if (out.empty())
                 throw runtime_error{"wait_any_range used with no tasks"};
+            co_await policy.join();
             co_return out;
         });
 
@@ -1904,15 +1959,16 @@ template<typename T, typename... Rest>
             detail::repeat_type<Rest, catching_deed<T>>...>;
     constexpr auto count = std::size_t{1 + sizeof...(Rest)};
 
-    auto deeds = co_await with_zone(
-        stop_on_success{},
+    auto deeds = co_await detail::make_firm_body<stop_on_success>(
         [first = std::move(first),
          ... rest = std::move(rest)](
             auto & policy) mutable -> task<deeds_type> {
-            co_return deeds_type{
+            auto deeds = deeds_type{
                 policy.fork(std::move(first)).cope(),
                 policy.fork(std::move(rest)).cope()...,
             };
+            co_await policy.join();
+            co_return deeds;
         });
 
     if constexpr (std::is_void_v<T>) {
@@ -1941,19 +1997,21 @@ template<typename T>
     using deeds_type =
         std::tuple<catching_deed<T>, catching_deed<void>>;
 
-    auto deeds = co_await with_zone(
+    auto deeds = co_await with_firm(
         [duration, body = std::move(body)]() mutable
             -> task<deeds_type> {
             auto body_deed =
-                fork(detail::stop_zone_on_completion(std::move(body)))
+                fork(detail::stop_firm_on_completion(std::move(body)))
                     .cope();
             auto timeout_deed =
-                fork(detail::stop_zone_on_completion(
+                fork(detail::stop_firm_on_completion(
                     timeout_after(duration))).cope();
-            co_return deeds_type{
+            auto deeds = deeds_type{
                 std::move(body_deed),
                 std::move(timeout_deed),
             };
+            co_await join();
+            co_return deeds;
         });
 
     auto body_result = std::move(std::get<0>(deeds)).get();
@@ -1979,126 +2037,207 @@ template<typename T>
 
 namespace detail {
 
-template<stored_task_factory Fn>
-[[nodiscard]] task<stored_task_result_t<Fn>>
-run_zone_body(task_zone & zone, Fn fn)
+template<typename T>
+class owning_task_awaiter
 {
-    auto exceptions = std::vector<std::exception_ptr>{};
+public:
+    explicit owning_task_awaiter(task<T> child)
+        : child_(std::move(child))
+        , inner_(child_.operator co_await())
+    {}
 
-    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
-        try {
-            co_await std::invoke(fn);
-        } catch (...) {
-            exceptions.push_back(std::current_exception());
-            zone.stop();
-        }
+    [[nodiscard]] bool await_ready()
+    {
+        return inner_.await_ready();
+    }
 
-        try {
-            co_await zone.join();
-        } catch (...) {
-            exceptions.push_back(std::current_exception());
-        }
-        if (!exceptions.empty())
-            throw_exceptions("zone body failed", std::move(exceptions));
-    } else {
-        using result_type = std::remove_cv_t<stored_task_result_t<Fn>>;
-        auto result = std::optional<result_type>{};
+    void await_suspend(std::coroutine_handle<> awaiting)
+    {
+        inner_.await_suspend(awaiting);
+    }
 
-        try {
-            result.emplace(co_await std::invoke(fn));
-        } catch (...) {
-            exceptions.push_back(std::current_exception());
-            zone.stop();
-        }
+    decltype(auto) await_resume()
+    {
+        return inner_.await_resume();
+    }
 
-        try {
-            co_await zone.join();
-        } catch (...) {
-            exceptions.push_back(std::current_exception());
-        }
-        if (!exceptions.empty())
-            throw_exceptions("zone body failed", std::move(exceptions));
-        co_return std::move(*result);
+private:
+    task<T> child_;
+    decltype(std::declval<task<T> &>().operator co_await()) inner_;
+};
+
+[[nodiscard]] inline std::exception_ptr unjoined_firm_children_error()
+{
+    try {
+        throw runtime_error{
+            "nxtrt firm body returned with unjoined children; "
+            "co_await nxtrt::join() inside the firm body "
+            "before locals captured by forked children go out of scope"};
+    } catch (...) {
+        return std::current_exception();
     }
 }
 
+template<stored_task_factory Fn>
+[[nodiscard]] task<stored_task_result_t<Fn>>
+run_firm_body(firm & firm, Fn fn)
+{
+    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
+        auto body_failure = std::exception_ptr{};
+        try {
+            co_await std::invoke(fn);
+        } catch (...) {
+            body_failure = std::current_exception();
+        }
+        if (!body_failure && firm.has_unjoined_children())
+            body_failure = unjoined_firm_children_error();
+
+        if (!body_failure)
+            co_return;
+
+        auto exceptions = std::vector<std::exception_ptr>{body_failure};
+        firm.stop();
+        try {
+            co_await firm.join();
+        } catch (...) {
+            exceptions.push_back(std::current_exception());
+        }
+        throw_exceptions("firm body failed", std::move(exceptions));
+    } else {
+        using result_type = std::remove_cv_t<stored_task_result_t<Fn>>;
+        auto result = std::optional<result_type>{};
+        auto body_failure = std::exception_ptr{};
+        try {
+            result.emplace(co_await std::invoke(fn));
+        } catch (...) {
+            body_failure = std::current_exception();
+        }
+        if (!body_failure && firm.has_unjoined_children())
+            body_failure = unjoined_firm_children_error();
+        if (!body_failure)
+            co_return std::move(*result);
+
+        auto exceptions = std::vector<std::exception_ptr>{body_failure};
+        firm.stop();
+        try {
+            co_await firm.join();
+        } catch (...) {
+            exceptions.push_back(std::current_exception());
+        }
+        throw_exceptions("firm body failed", std::move(exceptions));
+    }
+}
+
+template<typename Firm>
+struct firm_invoker
+{
+    Firm * firm = nullptr;
+
+    auto operator()() const
+    {
+        return std::invoke(*firm);
+    }
+};
+
 } // namespace detail
 
-inline task<void> task_zone::join()
+template<typename Firm>
+    requires std::derived_from<Firm, firm>
+        && stored_task_factory<Firm>
+[[nodiscard]] task<stored_task_result_t<Firm>>
+run_firm(Firm firm_scope)
+{
+    if (auto * parent = current_firm())
+        firm_scope.debug_parent(parent->debug_id());
+    auto body = detail::run_firm_body(
+        firm_scope,
+        detail::firm_invoker<Firm>{&firm_scope});
+    auto stop_firm = [&firm_scope] {
+        firm_scope.stop();
+    };
+    auto stop_firm_callback =
+        std::stop_callback{current_task_stop_token(), stop_firm};
+
+    auto run_bound = [body = std::move(body)]() mutable {
+        return std::move(body);
+    };
+
+    if constexpr (std::is_void_v<stored_task_result_t<Firm>>) {
+        co_await with_env<firm_key>(&firm_scope, std::move(run_bound));
+    } else {
+        co_return co_await with_env<firm_key>(
+            &firm_scope,
+            std::move(run_bound));
+    }
+}
+
+template<typename Firm>
+    requires std::derived_from<Firm, firm>
+        && stored_task_factory<Firm>
+[[nodiscard]] auto operator co_await(Firm firm_scope)
+{
+    using result_type = stored_task_result_t<Firm>;
+    return detail::owning_task_awaiter<result_type>{
+        run_firm(std::move(firm_scope))};
+}
+
+inline task<void> firm::join()
 {
     auto exceptions = std::vector<std::exception_ptr>{};
     for (auto i = std::size_t{0}; i < children_.size(); ++i) {
+        auto failure = std::exception_ptr{};
         try {
             auto & child = *children_[i];
             co_await child.join();
+            failure = child.failure();
+            report_child_finished(child);
             auto const exported = children_[i].use_count() > 1;
             if (!child.contained && !child.observed && !exported) {
-                if (auto failure = child.failure();
-                    failure
+                if (failure
                     && !(stop_requested()
                          && is_operation_cancelled(failure)))
-                    exceptions.push_back(std::move(failure));
+                    exceptions.push_back(failure);
             }
         } catch (...) {
-            auto failure = std::current_exception();
+            failure = std::current_exception();
+            report_child_finished(*children_[i]);
             if (!(stop_requested() && is_operation_cancelled(failure)))
-                exceptions.push_back(std::move(failure));
+                exceptions.push_back(failure);
         }
     }
 
     if (!exceptions.empty())
-        throw_exceptions("zone tasks failed", std::move(exceptions));
+        throw_exceptions("firm tasks failed", std::move(exceptions));
 }
 
 template<typename Fn>
     requires stored_task_factory<std::decay_t<Fn>>
 [[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
-with_zone(Fn && fn)
+with_firm(Fn && fn)
 {
     using factory_type = std::decay_t<Fn>;
-    auto zone = task_zone{};
-    if (auto * parent = current_zone())
-        zone.debug_parent(parent->debug_id());
-    auto body = detail::run_zone_body(
-        zone,
+    auto firm_scope = firm{};
+    if (auto * parent = current_firm())
+        firm_scope.debug_parent(parent->debug_id());
+    auto body = detail::run_firm_body(
+        firm_scope,
         factory_type{std::forward<Fn>(fn)});
-    auto stop_zone = [&zone] {
-        zone.stop();
+    auto stop_firm = [&firm_scope] {
+        firm_scope.stop();
     };
-    auto stop_zone_callback =
-        std::stop_callback{current_task_stop_token(), stop_zone};
+    auto stop_firm_callback =
+        std::stop_callback{current_task_stop_token(), stop_firm};
 
     auto run_bound = [body = std::move(body)]() mutable {
         return std::move(body);
     };
 
     if constexpr (std::is_void_v<stored_task_result_t<factory_type>>) {
-        co_await with_env<task_zone_key>(&zone, std::move(run_bound));
+        co_await with_env<firm_key>(&firm_scope, std::move(run_bound));
     } else {
-        co_return co_await with_env<task_zone_key>(
-            &zone,
+        co_return co_await with_env<firm_key>(
+            &firm_scope,
             std::move(run_bound));
-    }
-}
-
-template<typename Policy, typename Fn>
-    requires stored_policy_task_factory<std::decay_t<Fn>, Policy>
-[[nodiscard]] task<stored_policy_task_result_t<std::decay_t<Fn>, Policy>>
-with_zone(Policy policy, Fn && fn)
-{
-    using factory_type = std::decay_t<Fn>;
-
-    auto run_with_policy =
-        [policy = std::move(policy),
-         fn = factory_type{std::forward<Fn>(fn)}]() mutable {
-        return std::invoke(fn, policy);
-    };
-
-    if constexpr (
-        std::is_void_v<stored_policy_task_result_t<factory_type, Policy>>) {
-        co_await with_zone(std::move(run_with_policy));
-    } else {
-        co_return co_await with_zone(std::move(run_with_policy));
     }
 }
 
@@ -2132,9 +2271,10 @@ inline task<poll_until_deeds> fork_poll_until_race(
     task<poll_until_result> deadline)
 {
     auto ready_deed =
-        fork(stop_zone_on_completion(std::move(ready))).cope();
+        fork(stop_firm_on_completion(std::move(ready))).cope();
     auto deadline_deed =
-        fork(stop_zone_on_completion(std::move(deadline))).cope();
+        fork(stop_firm_on_completion(std::move(deadline))).cope();
+    co_await join();
     co_return poll_until_deeds{
         std::move(ready_deed),
         std::move(deadline_deed),
@@ -2162,8 +2302,8 @@ inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
 
 /// Wait until an fd is ready or a timeout expires.
 ///
-/// This composes ordinary `op::poll` and `op::timeout` wishes in a child zone.
-/// The winning child stops the zone, so the losing wish is cancelled through
+/// This composes ordinary `op::poll` and `op::timeout` wishes in a child firm.
+/// The winning child stops the firm, so the losing wish is cancelled through
 /// the same path as any other task race.
 [[nodiscard]] inline task<poll_until_result> poll_until_after(
     int fd,
@@ -2175,7 +2315,7 @@ inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
         .events = events,
     });
     auto deadline = detail::poll_deadline(timeout);
-    auto deeds = co_await with_zone(
+    auto deeds = co_await with_firm(
         [ready = std::move(ready),
          deadline = std::move(deadline)]() mutable {
             return detail::fork_poll_until_race(
@@ -2230,7 +2370,7 @@ inline std::string deck::runtime_dump_text() const
     }
 
     return debug::format_runtime_dump(
-        debug::snapshot_zones(),
+        debug::snapshot_firms(),
         debug::snapshot_waits(),
         std::move(ready));
 }

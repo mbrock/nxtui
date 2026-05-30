@@ -60,7 +60,7 @@ auto frame_layout(int tick, nxtui::Size size)
             nxtui::tui::flex_fill(nxtui::Rgba8::bright_black())),
         nxtui::tui::hrule(),
         nxtui::tui::text(
-            "running without libcoro: deck + wand + root zone",
+            "running without libcoro: deck + wand + root firm",
             nxtui::tui::fg(nxtui::Rgba8::bright_cyan())),
         nxtui::tui::text(
             "frame " + std::to_string(tick)

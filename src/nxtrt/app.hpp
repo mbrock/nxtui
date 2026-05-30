@@ -33,12 +33,12 @@ inline constexpr bool has_platform_wand = false;
 namespace detail {
 
 template<typename Fn>
-[[nodiscard]] task<stored_task_result_t<Fn>> run_in_root_zone(Fn fn)
+[[nodiscard]] task<stored_task_result_t<Fn>> run_in_root_firm(Fn fn)
 {
     if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
-        co_await with_zone(std::move(fn));
+        co_await with_firm(std::move(fn));
     } else {
-        co_return co_await with_zone(std::move(fn));
+        co_return co_await with_firm(std::move(fn));
     }
 }
 
@@ -48,7 +48,7 @@ template<typename Fn>
 ///
 /// This is intentionally not the terminal UI runtime yet. It is the common
 /// owner the UI runtime can be built around: one `deck`, one platform `wand`,
-/// a root-zone run entrypoint, and the app-level coordination primitives that
+/// a root-firm run entrypoint, and the app-level coordination primitives that
 /// the old `UIRuntime` currently gets from libcoro.
 #if (defined(__linux__) && NXT_RT_HAS_LIBURING) \
     || (!defined(__linux__) && NXT_RT_HAS_KQUEUE)
@@ -155,7 +155,7 @@ public:
     run(Fn && fn)
     {
         return run(
-            detail::run_in_root_zone(
+            detail::run_in_root_firm(
                 std::decay_t<Fn>{std::forward<Fn>(fn)}));
     }
 

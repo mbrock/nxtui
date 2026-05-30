@@ -233,7 +233,7 @@ nxtrt::task<void> write_sse_event(
     co_await out.flush();
 }
 
-nxtrt::task<void> stream_openai_sse_with_zone(
+nxtrt::task<void> stream_openai_sse_with_firm(
     cli_options options,
     std::string api_key)
 {
@@ -285,24 +285,25 @@ nxtrt::task<void> stream_openai_sse_with_zone(
         if (event->data == "[DONE]")
             break;
     }
+    co_await nxtrt::join();
 }
 
-struct openai_sse_zone_body
+struct openai_sse_firm_body
 {
     cli_options options;
     std::string api_key;
 
     nxtrt::task<void> operator()()
     {
-        return stream_openai_sse_with_zone(
+        return stream_openai_sse_with_firm(
             std::move(options), std::move(api_key));
     }
 };
 
 nxtrt::task<void> stream_openai_sse(cli_options options, std::string api_key)
 {
-    co_await nxtrt::with_zone(
-        openai_sse_zone_body{
+    co_await nxtrt::with_firm(
+        openai_sse_firm_body{
             .options = std::move(options),
             .api_key = std::move(api_key),
         });

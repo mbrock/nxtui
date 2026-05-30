@@ -14,7 +14,7 @@ remain the exact reference for the corresponding C++ declarations.
 
 The core value is @ref nxtrt::task "task<T>": a lazy coroutine frame that
 uniquely owns its state until it is moved into another task, awaited by a
-parent task, forked into a zone, or driven by a deck.
+parent task, forked into a firm, or driven by a deck.
 
 Tasks do not run on construction. They run when a @ref nxtrt::deck "deck"
 puts their coroutine handle on its ready queue and later resumes that handle.
@@ -55,29 +55,29 @@ Concrete API:
 - @ref nxtrt::task "nxtrt::task<T>"
 - @ref nxtrt::task_id "nxtrt::task_id"
 
-## Zones {#rt_zone}
+## Firms {#rt_firm}
 
-Zones provide structured concurrency. A zone is an extent in which tasks can be
-forked, joined, stopped together, and observed after the zone has reached a
+Firms provide structured concurrency. A firm is an extent in which tasks can be
+forked, joined, stopped together, and observed after the firm has reached a
 join point.
 
-Forking a task into a zone starts child work without immediately awaiting it.
-The zone keeps enough shared state to stop children, join them, and surface
+Forking a task into a firm starts child work without immediately awaiting it.
+The firm keeps enough shared state to stop children, join them, and surface
 their results or exceptions in a controlled order.
 
 Higher-level helpers such as `when_all`, `wait_any`, and `with_timeout` are
-written in terms of zones. They are not separate schedulers; they are
+written in terms of firms. They are not separate schedulers; they are
 composition patterns over the same task and deck machinery.
 
 Concrete API:
 
-- @ref nxtrt::task_zone "nxtrt::task_zone"
+- @ref nxtrt::firm "nxtrt::firm"
 
 ## Deeds {#rt_deed}
 
-A deed is the caller's handle to a task forked into a zone. It is deliberately
-not the same thing as a task: the zone owns and joins the child work, while the
-deed lets user code recover the child's result after the zone has reached the
+A deed is the caller's handle to a task forked into a firm. It is deliberately
+not the same thing as a task: the firm owns and joins the child work, while the
+deed lets user code recover the child's result after the firm has reached the
 appropriate point.
 
 `deed<T>` rethrows child failure when read. `catching_deed<T>` carries an
