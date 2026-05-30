@@ -415,7 +415,7 @@ private:
         }
     }
 
-    hope<read_result> stream_more(
+    hope<read_result> stream_bytes_more(
         byte_writer & writer,
         std::size_t limit) override
     {
@@ -438,7 +438,7 @@ private:
         if (!chunk)
             co_return read_result{.bytes = 0, .eof = true};
 
-        co_await writer.write(*chunk);
+        co_await nxtrt::write(writer, *chunk);
 
         co_return read_result{
             .bytes = chunk->size(),
@@ -578,7 +578,7 @@ private:
         }
     }
 
-    hope<read_result> stream_more(
+    hope<read_result> stream_bytes_more(
         byte_writer & writer,
         std::size_t limit) override
     {

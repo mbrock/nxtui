@@ -8,6 +8,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstring>
+#include <format>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -55,9 +56,9 @@ void append_value(Container & container, T value)
 
 } // namespace detail
 
-struct value_buffer_error : runtime_error
+struct value_buffer_error : buffer_error
 {
-    using runtime_error::runtime_error;
+    using buffer_error::buffer_error;
 };
 
 struct value_end_of_stream : value_buffer_error
@@ -336,7 +337,39 @@ public:
         return flush_slow();
     }
 
-protected:
+    hope<void> rebase(std::size_t preserve, std::size_t capacity)
+    {
+        require_preserved_capacity(preserve, capacity);
+        if (unused_capacity().size() >= capacity)
+            return hope<void>::ready();
+        return rebase_slow(preserve, capacity);
+    }
+
+    hope<std::span<value_type>>
+    writable_slice_greedy_preserve(
+        std::size_t preserve,
+        std::size_t minimum)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto ready = rebase(preserve, minimum);
+        if (ready.is_ready())
+            return hope<std::span<value_type>>::ready(unused_capacity());
+        return writable_slice_greedy_preserve_slow(std::move(ready));
+    }
+
+    hope<std::span<value_type>>
+    writable_slice_preserve(std::size_t preserve, std::size_t len)
+        requires std::same_as<value_type, std::byte>
+    {
+        auto slice = writable_slice_greedy_preserve(preserve, len);
+        if (slice.is_ready()) {
+            auto out = slice.take_ready().first(len);
+            advance_constructed(len);
+            return hope<std::span<value_type>>::ready(out);
+        }
+        return writable_slice_preserve_slow(std::move(slice), len);
+    }
+
     [[nodiscard]] std::size_t storage_capacity() const noexcept
     {
         return capacity_;
@@ -358,6 +391,7 @@ protected:
         size_ += n;
     }
 
+protected:
     [[nodiscard]] const_value_chunk_view buffered_chunks() const noexcept
     {
         return detail::ring_chunks(
@@ -385,9 +419,13 @@ protected:
     /// Cold-path sink operation.
     ///
     /// Implementations accept a prefix of `values` and return how many values
-    /// they accepted. Returning zero when any values are available is a protocol
-    /// error for the base sink.
-    virtual hope<std::size_t> drain_more(value_chunk_view values) = 0;
+    /// they accepted. When `splat` is greater than one, the last chunk is
+    /// logically repeated that many times after all earlier chunks.
+    /// Returning zero when any values are available is a protocol error for the
+    /// base sink.
+    virtual hope<std::size_t> drain_more(
+        value_chunk_view values,
+        std::size_t splat) = 0;
 
 private:
     void emplace_back(value_type value)
@@ -443,6 +481,14 @@ private:
             seek_ = 0;
     }
 
+    void require_preserved_capacity(
+        std::size_t preserve,
+        std::size_t capacity) const
+    {
+        if (preserve > capacity_ || capacity > capacity_ - preserve)
+            throw value_buffer_error{"value sink buffer is too small"};
+    }
+
     static void require_progress(
         std::size_t accepted,
         std::size_t available)
@@ -479,7 +525,7 @@ private:
             auto one = value_type{std::move(value)};
             auto accepted = co_await drain_more(value_chunk_view{
                 std::span{&one, 1},
-            });
+            }, 1);
             require_progress(accepted, 1);
             co_return;
         }
@@ -493,8 +539,20 @@ private:
     task<void> write_slow(std::span<const value_type> values)
         requires std::copy_constructible<value_type>
     {
-        for (auto value : values)
-            co_await write(value_type{value});
+        if (capacity_ != 0 && values.size() < capacity_) {
+            if (auto free = unused_capacity_size();
+                free != 0 && values.size() > free) {
+                append_to_buffer(values.first(free));
+                values = values.subspan(free);
+            }
+            while (values.size() > unused_capacity_size())
+                co_await drain_buffered_once();
+            append_to_buffer(values);
+            co_return;
+        }
+
+        co_await flush();
+        co_await write_direct_slow(values);
     }
 
     template<std::size_t Inline>
@@ -510,16 +568,123 @@ private:
         std::size_t splat)
         requires std::copy_constructible<value_type>
     {
-        for (auto i = std::size_t{0}; i < splat; ++i)
-            co_await write(pattern);
+        if (capacity_ == 0) {
+            co_await write_splat_direct_slow(pattern, splat);
+            co_return;
+        }
+
+        auto count = repeated_size(pattern.size(), splat);
+        if (count < capacity_) {
+            while (count > unused_capacity_size())
+                co_await drain_buffered_once();
+            append_splat_to_buffer(pattern, splat);
+            co_return;
+        }
+
+        co_await flush();
+        co_await write_splat_direct_slow(pattern, splat);
+    }
+
+    task<void> write_direct_slow(std::span<const value_type> values)
+        requires std::copy_constructible<value_type>
+    {
+        auto copy = std::vector<value_type>{values.begin(), values.end()};
+        auto rest = std::span{copy};
+        while (!rest.empty()) {
+            auto accepted = co_await drain_more(value_chunk_view{rest}, 1);
+            require_progress(accepted, rest.size());
+            rest = rest.subspan(accepted);
+        }
+    }
+
+    task<void> write_splat_direct_slow(
+        std::span<const value_type> pattern,
+        std::size_t splat)
+        requires std::copy_constructible<value_type>
+    {
+        auto values = std::vector<value_type>{pattern.begin(), pattern.end()};
+        auto offset = std::size_t{0};
+        while (splat != 0) {
+            auto chunks = std::array{
+                std::span<value_type>{},
+                std::span<value_type>{},
+            };
+            auto count = std::size_t{0};
+            auto effective_splat = splat;
+            if (offset != 0) {
+                chunks[count++] = std::span{values}.subspan(offset);
+                --effective_splat;
+            }
+            if (effective_splat != 0)
+                chunks[count++] = std::span{values};
+
+            auto available =
+                (offset == 0 ? 0 : values.size() - offset)
+                + values.size() * effective_splat;
+            auto accepted = co_await drain_more(
+                value_chunk_view{std::span{chunks}.first(count)},
+                effective_splat == 0 ? 1 : effective_splat);
+            require_progress(accepted, available);
+
+            if (offset != 0) {
+                auto partial = values.size() - offset;
+                if (accepted < partial) {
+                    offset += accepted;
+                    continue;
+                }
+                accepted -= partial;
+                offset = 0;
+                --splat;
+            }
+
+            auto whole = accepted / values.size();
+            splat -= whole;
+            auto rest = accepted % values.size();
+            if (rest != 0) {
+                offset = rest;
+                --splat;
+            }
+        }
     }
 
     task<void> drain_buffered_once()
     {
         auto values = buffered_values();
-        auto accepted = co_await drain_more(values);
+        auto accepted = co_await drain_more(values, 1);
         require_progress(accepted, values.size());
         consume_buffered(accepted);
+    }
+
+    task<void> rebase_slow(std::size_t preserve, std::size_t capacity)
+    {
+        while (unused_capacity().size() < capacity) {
+            auto values = buffered_values();
+            auto drainable = values.size() - std::min(preserve, values.size());
+            if (drainable == 0)
+                throw value_buffer_error{"value sink buffer is too small"};
+
+            auto prefix = values.first(drainable);
+            auto accepted = co_await drain_more(prefix, 1);
+            require_progress(accepted, drainable);
+            consume_buffered(accepted);
+        }
+    }
+
+    task<std::span<value_type>>
+    writable_slice_greedy_preserve_slow(hope<void> ready)
+    {
+        co_await std::move(ready);
+        co_return unused_capacity();
+    }
+
+    task<std::span<value_type>>
+    writable_slice_preserve_slow(
+        hope<std::span<value_type>> slice,
+        std::size_t len)
+    {
+        auto out = (co_await std::move(slice)).first(len);
+        advance_constructed(len);
+        co_return out;
     }
 
     value_storage<value_type> owned_buffer_{0};
@@ -564,7 +729,9 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(typename value_sink<T>::value_chunk_view) override
+    drain_more(
+        typename value_sink<T>::value_chunk_view,
+        std::size_t) override
     {
         throw value_buffer_error{"fixed value sink is full"};
     }
@@ -583,9 +750,26 @@ public:
 
 private:
     hope<std::size_t>
-    drain_more(typename value_sink<T>::value_chunk_view values) override
+    drain_more(
+        typename value_sink<T>::value_chunk_view values,
+        std::size_t splat) override
     {
-        return hope<std::size_t>::ready(values.size());
+        return hope<std::size_t>::ready(splatted_size(values, splat));
+    }
+
+    static std::size_t splatted_size(
+        typename value_sink<T>::value_chunk_view values,
+        std::size_t splat)
+    {
+        if (values.empty())
+            return 0;
+
+        auto total = std::size_t{0};
+        auto chunks = values.chunks();
+        for (auto chunk : chunks.first(chunks.size() - 1))
+            total += chunk.size();
+        total += chunks.back().size() * splat;
+        return total;
     }
 };
 
@@ -607,13 +791,38 @@ public:
 
 private:
     hope<std::size_t> drain_more(
-        typename value_sink<value_type>::value_chunk_view values) override
+        typename value_sink<value_type>::value_chunk_view values,
+        std::size_t splat) override
     {
         auto total = std::size_t{0};
-        for (auto chunk : values) {
-            total += chunk.size();
+        auto move_chunk = [&](auto chunk) {
             for (auto & value : chunk)
                 detail::append_value(*container_, std::move(value));
+            total += chunk.size();
+        };
+        auto copy_chunk = [&](auto chunk) {
+            if constexpr (std::copy_constructible<value_type>) {
+                for (auto & value : chunk)
+                    detail::append_value(*container_, value_type{value});
+                total += chunk.size();
+            } else {
+                throw value_buffer_error{
+                    "value sink cannot splat move-only values",
+                };
+            }
+        };
+
+        if (values.empty())
+            return hope<std::size_t>::ready(0);
+
+        auto chunks = values.chunks();
+        for (auto chunk : chunks.first(chunks.size() - 1))
+            move_chunk(chunk);
+        if (splat == 1) {
+            move_chunk(chunks.back());
+        } else {
+            for (auto i = std::size_t{0}; i < splat; ++i)
+                copy_chunk(chunks.back());
         }
         return hope<std::size_t>::ready(total);
     }
@@ -643,21 +852,189 @@ public:
 
 private:
     hope<std::size_t> drain_more(
-        typename value_sink<T>::value_chunk_view values) override
+        typename value_sink<T>::value_chunk_view values,
+        std::size_t splat) override
     {
         auto total = std::size_t{0};
-        for (auto chunk : values) {
-            total += chunk.size();
+        auto move_chunk = [&](auto chunk) {
             for (auto & value : chunk) {
                 *output_ = std::move(value);
                 ++output_;
             }
+            total += chunk.size();
+        };
+        auto copy_chunk = [&](auto chunk) {
+            if constexpr (std::copy_constructible<value_type>) {
+                for (auto & value : chunk) {
+                    *output_ = value_type{value};
+                    ++output_;
+                }
+                total += chunk.size();
+            } else {
+                throw value_buffer_error{
+                    "value sink cannot splat move-only values",
+                };
+            }
+        };
+
+        if (values.empty())
+            return hope<std::size_t>::ready(0);
+
+        auto chunks = values.chunks();
+        for (auto chunk : chunks.first(chunks.size() - 1))
+            move_chunk(chunk);
+        if (splat == 1) {
+            move_chunk(chunks.back());
+        } else {
+            for (auto i = std::size_t{0}; i < splat; ++i)
+                copy_chunk(chunks.back());
         }
         return hope<std::size_t>::ready(total);
     }
 
     Output output_;
 };
+
+/// Write values and flush the sink.
+template<typename T>
+hope<void> write(value_sink<T> & sink, std::remove_cv_t<T> value)
+{
+    return sink.write(std::move(value));
+}
+
+template<typename T>
+hope<void> write(
+    value_sink<T> & sink,
+    std::span<const std::remove_cv_t<T>> values)
+    requires std::copy_constructible<std::remove_cv_t<T>>
+{
+    return sink.write(values);
+}
+
+template<typename T, std::size_t Inline>
+hope<void> write(
+    value_sink<T> & sink,
+    value_chunks<const std::remove_cv_t<T>, Inline> values)
+    requires std::copy_constructible<std::remove_cv_t<T>>
+{
+    return sink.write(values);
+}
+
+template<typename T>
+hope<void> write_splat(
+    value_sink<T> & sink,
+    std::span<const std::remove_cv_t<T>> pattern,
+    std::size_t splat)
+    requires std::copy_constructible<std::remove_cv_t<T>>
+{
+    return sink.write_splat(pattern, splat);
+}
+
+template<typename T>
+task<void> write_all(value_sink<T> & sink, std::remove_cv_t<T> value)
+{
+    co_await sink.write(std::move(value));
+    co_await sink.flush();
+}
+
+template<typename T>
+task<void> write_all(
+    value_sink<T> & sink,
+    std::span<const std::remove_cv_t<T>> values)
+    requires std::copy_constructible<std::remove_cv_t<T>>
+{
+    co_await sink.write(values);
+    co_await sink.flush();
+}
+
+template<typename T, std::size_t Inline>
+task<void> write_all(
+    value_sink<T> & sink,
+    value_chunks<const std::remove_cv_t<T>, Inline> values)
+    requires std::copy_constructible<std::remove_cv_t<T>>
+{
+    co_await sink.write(values);
+    co_await sink.flush();
+}
+
+inline hope<void> write(
+    value_sink<std::byte> & sink,
+    std::string_view text)
+{
+    return sink.write(as_bytes(text));
+}
+
+inline hope<void> write(value_sink<std::byte> & sink, const char * text)
+{
+    return write(sink, std::string_view{text});
+}
+
+inline task<void> write(value_sink<std::byte> & sink, std::string text)
+{
+    co_await write(sink, std::string_view{text});
+}
+
+inline hope<void> write_splat(
+    value_sink<std::byte> & sink,
+    std::string_view pattern,
+    std::size_t splat)
+{
+    return sink.write_splat(as_bytes(pattern), splat);
+}
+
+inline task<void> write_all(
+    value_sink<std::byte> & sink,
+    std::string_view text)
+{
+    co_await write(sink, text);
+    co_await sink.flush();
+}
+
+inline task<void> write_all(
+    value_sink<std::byte> & sink,
+    std::string text)
+{
+    co_await write_all(sink, std::string_view{text});
+}
+
+template<typename... Args>
+task<void> print(
+    value_sink<std::byte> & sink,
+    std::format_string<Args...> fmt,
+    Args &&... args)
+{
+    co_await write(sink, std::format(fmt, std::forward<Args>(args)...));
+}
+
+template<typename... Args>
+task<void> print_all(
+    value_sink<std::byte> & sink,
+    std::format_string<Args...> fmt,
+    Args &&... args)
+{
+    co_await print(sink, fmt, std::forward<Args>(args)...);
+    co_await sink.flush();
+}
+
+template<typename... Args>
+task<void> print(
+    value_sink<char> & sink,
+    std::format_string<Args...> fmt,
+    Args &&... args)
+{
+    auto text = std::format(fmt, std::forward<Args>(args)...);
+    co_await sink.write(std::span<const char>{text});
+}
+
+template<typename... Args>
+task<void> print_all(
+    value_sink<char> & sink,
+    std::format_string<Args...> fmt,
+    Args &&... args)
+{
+    co_await print(sink, fmt, std::forward<Args>(args)...);
+    co_await sink.flush();
+}
 
 /// Buffered asynchronous value source.
 ///

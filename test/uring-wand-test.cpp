@@ -244,8 +244,8 @@ nxtrt::task<std::size_t> write_with_socket_sink_count(
     std::string_view text)
 {
     auto sink = nxtrt::socket_sink{fd, 0, std::size_t{4}};
-    co_await sink.write(text);
-    co_await sink.write(std::string_view{"!"});
+    co_await nxtrt::write(sink, text);
+    co_await nxtrt::write(sink, std::string_view{"!"});
     co_await sink.flush();
     co_return sink.sent_size();
 }

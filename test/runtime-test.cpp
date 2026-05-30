@@ -217,7 +217,7 @@ struct empty_then_string_source final : nxtrt::byte_reader
     {}
 
 private:
-    nxtrt::hope<nxtrt::read_result> stream_more(
+    nxtrt::hope<nxtrt::read_result> stream_bytes_more(
         nxtrt::byte_writer & writer,
         std::size_t limit) override
     {
@@ -246,7 +246,7 @@ private:
         auto dst = writer.unused_capacity();
         if (!dst.empty())
             n = std::min(n, dst.size());
-        auto write = writer.write(rest.substr(0, n));
+        auto write = nxtrt::write(writer, rest.substr(0, n));
         if (!write.is_ready())
             return stream_write_slow(std::move(write), n);
         offset += n;
@@ -294,7 +294,7 @@ struct chunking_string_sink final : nxtrt::byte_writer
 private:
     nxtrt::hope<std::size_t>
     drain_more(
-        std::span<const std::span<const std::byte>> chunks,
+        value_chunk_view chunks,
         std::size_t splat) override
     {
         if (chunks.empty())
@@ -308,13 +308,14 @@ private:
             remaining -= take;
         };
 
-        for (auto chunk : chunks.first(chunks.size() - 1)) {
+        auto spans = chunks.chunks();
+        for (auto chunk : spans.first(spans.size() - 1)) {
             append(chunk);
             if (remaining == 0)
                 return nxtrt::hope<std::size_t>::ready(n);
         }
         for (auto i = std::size_t{0}; i < splat && remaining != 0; ++i)
-            append(chunks.back());
+            append(spans.back());
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -346,7 +347,7 @@ struct shared_string_sink final : nxtrt::byte_writer
 private:
     nxtrt::hope<std::size_t>
     drain_more(
-        std::span<const std::span<const std::byte>> chunks,
+        value_chunk_view chunks,
         std::size_t splat) override
     {
         if (chunks.empty())
@@ -360,13 +361,14 @@ private:
             remaining -= take;
         };
 
-        for (auto chunk : chunks.first(chunks.size() - 1)) {
+        auto spans = chunks.chunks();
+        for (auto chunk : spans.first(spans.size() - 1)) {
             append(chunk);
             if (remaining == 0)
                 return nxtrt::hope<std::size_t>::ready(n);
         }
         for (auto i = std::size_t{0}; i < splat && remaining != 0; ++i)
-            append(chunks.back());
+            append(spans.back());
         return nxtrt::hope<std::size_t>::ready(n);
     }
 
@@ -451,16 +453,32 @@ struct collecting_int_sink final : nxtrt::value_sink<int>
 
 private:
     nxtrt::hope<std::size_t>
-    drain_more(nxtrt::value_sink<int>::value_chunk_view values) override
+    drain_more(
+        nxtrt::value_sink<int>::value_chunk_view values,
+        std::size_t splat) override
     {
         auto n = std::size_t{0};
-        for (auto chunk : values) {
+        auto append = [&](auto chunk) {
             for (auto & value : chunk) {
                 if (n == limit)
-                    return nxtrt::hope<std::size_t>::ready(n);
+                    return false;
                 collected.push_back(value);
                 ++n;
             }
+            return true;
+        };
+
+        if (values.empty())
+            return nxtrt::hope<std::size_t>::ready(0);
+
+        auto chunks = values.chunks();
+        for (auto chunk : chunks.first(chunks.size() - 1)) {
+            if (!append(chunk))
+                return nxtrt::hope<std::size_t>::ready(n);
+        }
+        for (auto i = std::size_t{0}; i < splat; ++i) {
+            if (!append(chunks.back()))
+                return nxtrt::hope<std::size_t>::ready(n);
         }
         return nxtrt::hope<std::size_t>::ready(n);
     }
@@ -983,11 +1001,11 @@ inline nxtrt::task<void>
 write_three_buffered_bytes(nxtrt::byte_writer & writer, std::vector<int> & events)
 {
     events.push_back(1);
-    co_await writer.write("a"sv);
+    co_await nxtrt::write(writer, "a"sv);
     events.push_back(2);
-    co_await writer.write("b"sv);
+    co_await nxtrt::write(writer, "b"sv);
     events.push_back(3);
-    co_await writer.write("c"sv);
+    co_await nxtrt::write(writer, "c"sv);
     events.push_back(4);
 }
 
@@ -2866,11 +2884,11 @@ static suite runtime_tests{
                             chunking_string_sink{64, std::span{storage}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write(std::string{"ab"});
+                            co_await nxtrt::write(writer, std::string{"ab"});
                             expect(writer.text.empty());
-                            co_await writer.write(std::string{"cd"});
+                            co_await nxtrt::write(writer, std::string{"cd"});
                             expect(writer.text.empty());
-                            co_await writer.write(std::string{"e"});
+                            co_await nxtrt::write(writer, std::string{"e"});
                             expect(writer.text == "abcd");
                             co_await writer.flush();
                         });
@@ -2905,9 +2923,9 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{64, std::size_t{4}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write(std::string{"ab"});
+                            co_await nxtrt::write(writer, std::string{"ab"});
                             expect(writer.text.empty());
-                            co_await writer.write(std::string{"cd"});
+                            co_await nxtrt::write(writer, std::string{"cd"});
                             expect(writer.text.empty());
                             co_await writer.flush();
                         });
@@ -2922,7 +2940,7 @@ static suite runtime_tests{
                             std::vector<std::string>{"ab", "cd", "e"};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write(chunks);
+                            co_await nxtrt::write(writer, chunks);
                             expect(writer.text == "abcd");
                             co_await writer.flush();
                         });
@@ -2937,7 +2955,7 @@ static suite runtime_tests{
                             std::vector<std::string>{"ab", "cd", "e"};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write_all(chunks);
+                            co_await nxtrt::write_all(writer, chunks);
                         });
 
                         expect(writer.text == "abcde");
@@ -2949,7 +2967,7 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{64, std::size_t{8}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write_all("hello");
+                            co_await nxtrt::write_all(writer, "hello");
                         });
 
                         expect(writer.text == "hello");
@@ -2961,7 +2979,7 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{64, std::size_t{16}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.print("{}={:02}", "n", 7);
+                            co_await nxtrt::print(writer, "{}={:02}", "n", 7);
                             expect(writer.text.empty());
                             co_await writer.flush();
                         });
@@ -2974,7 +2992,7 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{64, std::size_t{16}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.print_all("{} {}", "hello", 42);
+                            co_await nxtrt::print_all(writer, "{} {}", "hello", 42);
                         });
 
                         expect(writer.text == "hello 42");
@@ -2986,9 +3004,9 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{3, std::size_t{4}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write("ab"sv);
+                            co_await nxtrt::write(writer, "ab"sv);
                             expect(writer.text.empty());
-                            co_await writer.write("cdef"sv);
+                            co_await nxtrt::write(writer, "cdef"sv);
                         });
 
                         expect(writer.text == "abcdef");
@@ -3000,7 +3018,7 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{64, std::size_t{8}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write_splat("ab"sv, 3);
+                            co_await nxtrt::write_splat(writer, "ab"sv, 3);
                             expect(writer.text.empty());
                             co_await writer.flush();
                         });
@@ -3013,8 +3031,8 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{4, std::size_t{2}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write("x"sv);
-                            co_await writer.write_splat("ab"sv, 3);
+                            co_await nxtrt::write(writer, "x"sv);
+                            co_await nxtrt::write_splat(writer, "ab"sv, 3);
                         });
 
                         expect(writer.text == "xababab");
@@ -3026,13 +3044,13 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{2, std::size_t{6}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write("abcdef"sv);
+                            co_await nxtrt::write(writer, "abcdef"sv);
                             co_await writer.rebase(2, 3);
                             expect(writer.text == "abcd");
                             expect(byte_value_chunks_text(writer.buffered()) == "ef");
                             expect(writer.unused_capacity().size() >= std::size_t{3});
 
-                            co_await writer.write("XYZ"sv);
+                            co_await nxtrt::write(writer, "XYZ"sv);
                             co_await writer.flush();
                         });
 
@@ -3044,7 +3062,7 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{2, std::size_t{6}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write("abcdef"sv);
+                            co_await nxtrt::write(writer, "abcdef"sv);
                             auto out =
                                 co_await writer.writable_slice_preserve(2, 3);
                             std::memcpy(out.data(), "XYZ", out.size());
@@ -3084,7 +3102,7 @@ static suite runtime_tests{
                             });
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write(chunks);
+                            co_await nxtrt::write(writer, chunks);
                             co_await writer.flush();
                         });
 
@@ -3101,7 +3119,7 @@ static suite runtime_tests{
                         };
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write(chunks);
+                            co_await nxtrt::write(writer, chunks);
                             co_await writer.flush();
                         });
 
@@ -3118,7 +3136,7 @@ static suite runtime_tests{
                         };
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write_all(chunks);
+                            co_await nxtrt::write_all(writer, chunks);
                         });
 
                         expect(writer.text == "abcdef");
@@ -3164,9 +3182,9 @@ static suite runtime_tests{
                         };
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write(std::string{"abc"});
+                            co_await nxtrt::write(writer, std::string{"abc"});
                             expect(text->empty());
-                            co_await writer.write(std::string{"de"});
+                            co_await nxtrt::write(writer, std::string{"de"});
                             expect(*text == "abcd");
                             co_await writer.flush();
                         });
@@ -3181,7 +3199,7 @@ static suite runtime_tests{
                         auto writer = chunking_string_sink{2, std::size_t{0}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write("abcde"sv);
+                            co_await nxtrt::write(writer, "abcde"sv);
                             expect(writer.text == "abcde");
                             expect(writer.buffered_size() == std::size_t{0});
                             co_await writer.flush();
@@ -3196,7 +3214,7 @@ static suite runtime_tests{
                             chunking_string_sink{64, std::span<std::byte>{}};
 
                         deck.sync_wait([&]() -> nxtrt::task<void> {
-                            co_await writer.write("ab"sv);
+                            co_await nxtrt::write(writer, "ab"sv);
                             expect(writer.text == "ab");
                             expect(writer.buffered_size() == std::size_t{0});
                             co_await writer.flush();
@@ -3313,6 +3331,18 @@ static suite runtime_tests{
                 }());
 
                 expect(sink.collected == std::vector<int>{1, 2, 3, 8, 9, 8, 9});
+            };
+
+            "zero-storage sinks drain splatted value chunks"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto sink = collecting_int_sink{64, std::size_t{0}};
+                auto pattern = std::array{4, 5};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await sink.write_splat(std::span<const int>{pattern}, 3);
+                }());
+
+                expect(sink.collected == std::vector<int>{4, 5, 4, 5, 4, 5});
             };
 
             "stream_all moves source values into sinks"_test = [] {

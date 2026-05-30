@@ -138,7 +138,7 @@ public:
             return ready_task(nxt::tls::make_tls13_client_hello(host));
         });
         co_await span("client_hello.write", [&] {
-            return writer_.write_all(hello.record);
+            return nxtrt::write_all(writer_, hello.record);
         });
 
         auto record = co_await span("server_hello.read", [&] {
@@ -236,7 +236,7 @@ public:
         co_await span("client_finished.write", [&]() -> task<> {
             auto record = nxt::tls::seal_tls13_record(
                 handshake_keys.client, 22, client_finished);
-            co_await writer_.write_all(record);
+            co_await nxtrt::write_all(writer_, record);
         });
         nxt::tls::put_bytes(transcript, client_finished);
         handshaken_ = true;
@@ -246,7 +246,7 @@ public:
     task<> write_all(std::span<const std::byte> bytes)
     {
         require_handshake();
-        co_await writer_.write_all(
+        co_await nxtrt::write_all(writer_,
             nxt::tls::seal_tls13_record(
                 application_keys_.client, 23, bytes));
     }
@@ -270,7 +270,7 @@ public:
     }
 
 private:
-    hope<read_result> stream_more(
+    hope<read_result> stream_bytes_more(
         byte_writer & writer,
         std::size_t limit) override
     {

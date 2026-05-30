@@ -297,15 +297,15 @@ std::size_t current_breadcrumb_depth()
 nxtrt::task<void>
 write_indent(nxtrt::byte_writer & output, std::size_t depth)
 {
-    co_await output.write_splat("  ", depth);
+    co_await nxtrt::write_splat(output, "  ", depth);
 }
 
 nxtrt::task<void> write_indented_line(
     nxtrt::byte_writer & output, std::size_t depth, std::string_view text)
 {
     co_await write_indent(output, depth);
-    co_await output.write(text);
-    co_await output.write(std::string_view{"\n"});
+    co_await nxtrt::write(output, text);
+    co_await nxtrt::write(output, std::string_view{"\n"});
 }
 
 nxtrt::task<void> write_indented_block(
@@ -335,9 +335,9 @@ nxtrt::task<void> write_sse_event_debug(
     std::size_t depth)
 {
     co_await write_indent(output, depth);
-    co_await output.print_all("* {}\n", event.type);
+    co_await nxtrt::print_all(output, "* {}\n", event.type);
     co_await write_indented_block(output, depth, event.data);
-    co_await output.write_all("\n");
+    co_await nxtrt::write_all(output, "\n");
 }
 
 struct breadcrumb_output
@@ -367,7 +367,7 @@ struct breadcrumb_output
     {
         co_await render_current();
         co_await write_indent(output, current_breadcrumb_depth());
-        co_await output.print_all("<<{}>>\n", text);
+        co_await nxtrt::print_all(output, "<<{}>>\n", text);
     }
 
 private:
@@ -392,9 +392,9 @@ private:
     {
         co_await write_indent(output, depth);
         if (closing)
-            co_await output.print("[/{}]\n", name);
+            co_await nxtrt::print(output, "[/{}]\n", name);
         else
-            co_await output.print("[{}]\n", name);
+            co_await nxtrt::print(output, "[{}]\n", name);
     }
 };
 
@@ -546,7 +546,7 @@ private:
         auto client = openai_response_stream_client{events, transcript};
 
         co_await client.stream_response();
-        co_await output.write_all("\n");
+        co_await nxtrt::write_all(output, "\n");
     }
 };
 
@@ -562,7 +562,7 @@ nxtrt::task<int> run_nxtllm(cli_options options)
         make_request(options, co_await read_env_string("OPENAI_API_KEY"));
 
     if (options.dump_request) {
-        co_await output.print_all(
+        co_await nxtrt::print_all(output,
             "{}\n", nxtai::responses::openai_responses_body(request));
         co_return EXIT_SUCCESS;
     }

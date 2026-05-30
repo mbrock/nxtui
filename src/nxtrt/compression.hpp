@@ -101,7 +101,7 @@ private:
         return std::string{fallback};
     }
 
-    hope<read_result> stream_more(
+    hope<read_result> stream_bytes_more(
         byte_writer & writer,
         std::size_t limit) override
     {
@@ -254,7 +254,7 @@ public:
     }
 
 private:
-    hope<read_result> stream_more(
+    hope<read_result> stream_bytes_more(
         byte_writer & writer,
         std::size_t limit) override
     {
@@ -390,7 +390,7 @@ public:
     }
 
 private:
-    hope<read_result> stream_more(
+    hope<read_result> stream_bytes_more(
         byte_writer & writer,
         std::size_t limit) override
     {
