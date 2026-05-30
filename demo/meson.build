@@ -27,14 +27,11 @@ if ls_demo_available
   )
 endif
 
-nxt_cares_dep = dependency('libcares', required : false)
-
-if ls_demo_available and nxt_cares_dep.found()
+if ls_demo_available
   http_client_demo_available = true
   http_client_demo_dependencies = ls_demo_dependencies + [
     nxt_core_dep,
-    nxt_cares_dep,
-  ]
+  ] + nxt_dns_deps
 endif
 
 if http_client_demo_available
@@ -42,17 +39,15 @@ if http_client_demo_available
     'http_client_demo.cpp',
     include_directories : nxt_inc,
     dependencies : http_client_demo_dependencies,
+    cpp_args : nxt_dns_args,
   )
 
   executable('nxt-openai-sse-demo',
     'openai_sse_demo.cpp',
     include_directories : nxt_inc,
     dependencies : http_client_demo_dependencies,
+    cpp_args : nxt_dns_args,
   )
 else
   message('no HTTP demo dependencies found; skipping nxt-http-client-demo')
-endif
-
-if not nxt_cares_dep.found()
-  message('libcares not found; skipping nxt-http-client-demo')
 endif

@@ -9,3 +9,6 @@ option('llm_tool', type : 'boolean', value : true,
 
 option('benchmarks', type : 'boolean', value : false,
   description : 'Build benchmark executables')
+
+option('cares', type : 'feature', value : 'auto',
+  description : 'Use system c-ares for DNS when available')

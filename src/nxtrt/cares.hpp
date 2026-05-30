@@ -2,21 +2,27 @@
 
 #include "nxtrt/task.hpp"
 
-#include <ares.h>
-
-#include <chrono>
 #include <cstring>
+#include <netdb.h>
 #include <memory>
-#include <poll.h>
+#include <netinet/in.h>
 #include <stdexcept>
 #include <string>
-#include <sys/select.h>
 #include <sys/socket.h>
 #include <utility>
 #include <vector>
 
+#if defined(NXTRT_HAVE_CARES)
+#include <ares.h>
+
+#include <chrono>
+#include <poll.h>
+#include <sys/select.h>
+#endif
+
 namespace nxtrt {
 
+#if defined(NXTRT_HAVE_CARES)
 #if defined(__GNUC__) || defined(__clang__)
 #define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN \
     _Pragma("GCC diagnostic push") \
@@ -25,6 +31,7 @@ namespace nxtrt {
 #else
 #define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
 #define NXT_RT_CARES_IGNORE_DEPRECATED_END
+#endif
 #endif
 
 struct resolved_address
@@ -40,6 +47,61 @@ struct resolved_address
         return reinterpret_cast<sockaddr const *>(&address);
     }
 };
+
+inline std::vector<resolved_address>
+resolved_addresses_from(addrinfo * result)
+{
+    auto addresses = std::vector<resolved_address>{};
+    for (auto * node = result; node != nullptr; node = node->ai_next) {
+        if (node->ai_addr == nullptr
+            || node->ai_addrlen > sizeof(sockaddr_storage))
+            continue;
+
+        auto address = resolved_address{
+            .family = node->ai_family,
+            .socktype = node->ai_socktype,
+            .protocol = node->ai_protocol,
+            .address = {},
+            .address_size = static_cast<socklen_t>(node->ai_addrlen),
+        };
+        std::memcpy(&address.address, node->ai_addr, node->ai_addrlen);
+        addresses.push_back(address);
+    }
+    return addresses;
+}
+
+class libc_resolver
+{
+public:
+    task<std::vector<resolved_address>> getaddrinfo(
+        std::string name,
+        std::string service,
+        int family = AF_UNSPEC,
+        int socktype = SOCK_STREAM,
+        int protocol = 0)
+    {
+        auto hints = addrinfo{};
+        hints.ai_family = family;
+        hints.ai_socktype = socktype;
+        hints.ai_protocol = protocol;
+        auto * result = static_cast<addrinfo *>(nullptr);
+        auto rc = ::getaddrinfo(
+            name.c_str(),
+            service.empty() ? nullptr : service.c_str(),
+            &hints,
+            &result);
+        auto cleanup = std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)>{
+            result,
+            ::freeaddrinfo};
+        if (rc != 0)
+            throw runtime_error{
+                "getaddrinfo failed: " + std::string{::gai_strerror(rc)}};
+
+        co_return resolved_addresses_from(result);
+    }
+};
+
+#if defined(NXTRT_HAVE_CARES)
 
 class cares_resolver
 {
@@ -250,5 +312,6 @@ private:
 
 #undef NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
 #undef NXT_RT_CARES_IGNORE_DEPRECATED_END
+#endif
 
 } // namespace nxtrt

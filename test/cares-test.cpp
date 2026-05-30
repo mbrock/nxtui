@@ -1,4 +1,4 @@
-#include <nxtrt/cares.hpp>
+#include <nxtrt/net_dns.hpp>
 #include <nxtrt/wand/uring.hpp>
 
 #include "test.hpp"
@@ -24,12 +24,11 @@ T pump_until_done(
 
 nxtrt::task<std::vector<nxtrt::resolved_address>> resolve_localhost()
 {
-    auto resolver = nxtrt::cares_resolver{};
-    co_return co_await resolver.getaddrinfo("localhost", "80");
+    co_return co_await nxtrt::net::resolve_tcp("localhost", "80");
 }
 
-static suite cares_tests{
-    "c-ares", [] {
+static suite dns_tests{
+    "DNS", [] {
         "resolver"_test = [] {
             "localhost resolves to IPv4 loopback"_test = [] {
                 auto wand = nxtrt::uring_wand{};

@@ -25,9 +25,12 @@ utf8proc_dep = dependency(
 zlib_dep = dependency('zlib')
 zstd_dep = dependency('libzstd', required : false)
 brotli_dep = dependency('libbrotlidec', required : false)
+cares_dep = dependency('libcares', required : get_option('cares'))
 
 nxt_compression_deps = [zlib_dep]
 nxt_compression_args = []
+nxt_dns_deps = []
+nxt_dns_args = []
 
 if zstd_dep.found()
   message('zstd decompression available')
@@ -39,6 +42,14 @@ if brotli_dep.found()
   message('brotli decompression available')
   nxt_compression_deps += brotli_dep
   nxt_compression_args += '-DNXTRT_HAVE_BROTLI=1'
+endif
+
+if cares_dep.found()
+  message('c-ares DNS resolver available')
+  nxt_dns_deps += cares_dep
+  nxt_dns_args += '-DNXTRT_HAVE_CARES=1'
+else
+  message('c-ares DNS resolver not available; using libc getaddrinfo')
 endif
 
 nxt_mdspan_args = [
@@ -166,16 +177,14 @@ endif
 if get_option('llm_tool')
   nxtllm_dependencies = [nxt_core_dep]
   nxtllm_dependencies += nxt_stacktrace_deps
-
-  nxt_llm_cares_dep = dependency('libcares', required : true)
-  nxtllm_dependencies += nxt_llm_cares_dep
+  nxtllm_dependencies += nxt_dns_deps
 
   executable('nxtllm',
     'src/nxtai/nxtllm.cpp',
     'src/nxt/stacktrace.cpp',
     include_directories : nxt_inc,
     dependencies : nxtllm_dependencies,
-    cpp_args : nxt_stacktrace_cpp_args,
+    cpp_args : nxt_stacktrace_cpp_args + nxt_dns_args,
   )
 endif
 
@@ -260,12 +269,9 @@ if get_option('tests')
   if host_machine.system() == 'linux'
     nxt_test_sources += files('test/epoll-wand-test.cpp')
     nxt_test_sources += files('test/uring-wand-test.cpp')
-
-    nxt_test_cares_dep = dependency('libcares', required : false)
-    if nxt_test_cares_dep.found()
-      nxt_test_sources += files('test/cares-test.cpp')
-      nxt_test_deps += nxt_test_cares_dep
-    endif
+    nxt_test_sources += files('test/cares-test.cpp')
+    nxt_test_deps += nxt_dns_deps
+    nxt_test_cpp_args += nxt_dns_args
   elif host_machine.system() in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
     nxt_test_sources += files('test/kqueue-wand-test.cpp')
   endif

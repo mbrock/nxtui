@@ -5,6 +5,8 @@
 
 #include <ranges>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace nxtrt::net {
 
@@ -24,12 +26,25 @@ inline task<nxt::unique_fd> connect(resolved_address address)
     co_return std::move(fd);
 }
 
+inline task<std::vector<resolved_address>> resolve_tcp(
+    std::string host,
+    std::string service)
+{
+#if defined(NXTRT_HAVE_CARES)
+    auto resolver = cares_resolver{};
+#else
+    auto resolver = libc_resolver{};
+#endif
+    co_return co_await resolver.getaddrinfo(
+        std::move(host),
+        std::move(service));
+}
+
 inline task<nxt::unique_fd> connect_tcp(
     std::string host,
     std::string service)
 {
-    auto resolver = cares_resolver{};
-    auto addresses = co_await resolver.getaddrinfo(host, service);
+    auto addresses = co_await resolve_tcp(host, service);
     if (addresses.empty())
         throw runtime_error{"no addresses resolved for " + host};
 
