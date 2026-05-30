@@ -171,29 +171,40 @@ else
   endif
 endif
 
+nxt_stacktrace_lib = library('nxt-stacktrace',
+  'src/nxt/stacktrace.cpp',
+  include_directories : nxt_inc,
+  dependencies : nxt_stacktrace_deps,
+  cpp_args : nxt_stacktrace_cpp_args,
+)
+
+nxt_stacktrace_dep = declare_dependency(
+  link_with : nxt_stacktrace_lib,
+  dependencies : nxt_stacktrace_deps,
+  compile_args : nxt_stacktrace_cpp_args,
+)
+
 if get_option('demo')
   subdir('demo')
 endif
 
 if get_option('llm_tool')
   nxtllm_dependencies = [nxt_core_dep]
-  nxtllm_dependencies += nxt_stacktrace_deps
+  nxtllm_dependencies += nxt_stacktrace_dep
   nxtllm_dependencies += nxt_dns_deps
 
   executable('nxtllm',
     'src/nxtai/nxtllm.cpp',
-    'src/nxt/stacktrace.cpp',
     include_directories : nxt_inc,
     dependencies : nxtllm_dependencies,
-    cpp_args : nxt_stacktrace_cpp_args + nxt_dns_args,
+    cpp_args : nxt_dns_args,
   )
 endif
 
 if get_option('benchmarks')
   nxt_bench_deps = [nxt_core_dep]
-  nxt_bench_deps += nxt_stacktrace_deps
+  nxt_bench_deps += nxt_stacktrace_dep
   nxt_bench_cpp_args = []
-  nxt_bench_cpp_args += nxt_stacktrace_cpp_args
   nxt_bench_cpp_args += [
     '-DNXT_RT_ENABLE_TRACE=0',
     '-fno-omit-frame-pointer',
@@ -217,13 +228,11 @@ if get_option('tests')
 	    'test/include-test.cpp',
     'test/runtime-test.cpp',
     'test/terminal-test.cpp',
-    'src/nxt/stacktrace.cpp',
     'test/test-main.cpp',
   )
   nxt_test_deps = []
   nxt_test_deps += nxt_core_dep
-  nxt_test_deps += utf8proc_dep
-  nxt_test_deps += nxt_stacktrace_deps
+  nxt_test_deps += nxt_stacktrace_dep
   nxt_test_cpp_args = []
 
   nxt_crypto_dep = dependency('libcrypto', required : false)
@@ -281,7 +290,7 @@ if get_option('tests')
     nxt_test_sources,
     include_directories : [nxt_inc, nxt_test_inc],
     dependencies : nxt_test_deps,
-    cpp_args : nxt_stacktrace_cpp_args + nxt_test_cpp_args,
+    cpp_args : nxt_test_cpp_args,
   )
   test('nxt-tests', nxt_tests)
 endif
