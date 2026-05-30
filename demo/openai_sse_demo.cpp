@@ -278,7 +278,7 @@ nxtrt::task<void> stream_openai_sse_with_zone(
         throw nxtrt::runtime_error{
             "OpenAI Responses expected text/event-stream"};
 
-    auto body = nxtrt::http::read_response_body(tls, head);
+    auto body = nxtrt::http::response_body_decoding_reader(tls, head);
     auto stdout_writer = nxtrt::standard_output_writer(64 * 1024);
     while (auto event = co_await nxtrt::http::parse_sse_event(body)) {
         co_await write_sse_event(stdout_writer, *event);

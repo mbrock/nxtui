@@ -17,5 +17,6 @@
 #include "nxtrt/task.hpp"
 #include "nxtrt/terminal_app.hpp"
 #include "nxtrt/trace.hpp"
+#include "nxtrt/value-buffers.hpp"
 #include "nxtrt/wire.hpp"
 #include "nxtrt/wish.hpp"

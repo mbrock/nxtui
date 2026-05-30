@@ -9,6 +9,7 @@
 #include <nxtrt/sampling.hpp>
 #include <nxtrt/task.hpp>
 #include <nxtrt/terminal_app.hpp>
+#include <nxtrt/value-buffers.hpp>
 #include <nxtrt/wire.hpp>
 #include <nxtai/tool_batch.hpp>
 
@@ -17,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <ranges>
 #include <stdexcept>
@@ -372,6 +374,216 @@ public:
     std::shared_ptr<std::string> text;
     std::size_t limit = 1;
 };
+
+struct int_value_source final : nxtrt::value_source<int>
+{
+    int_value_source(
+        std::vector<int> values,
+        std::span<nxtrt::value_slot<int>> buffer)
+        : nxtrt::value_source<int>(buffer)
+        , values(std::move(values))
+    {}
+
+    int_value_source(std::vector<int> values, std::size_t buffer_size = 1)
+        : nxtrt::value_source<int>(buffer_size)
+        , values(std::move(values))
+    {}
+
+private:
+    nxtrt::hope<nxtrt::value_result> stream_more(
+        nxtrt::value_sink<int> & sink,
+        std::size_t limit) override
+    {
+        if (limit == 0)
+            return nxtrt::hope<nxtrt::value_result>::ready(
+                nxtrt::value_result{});
+        if (offset == values.size())
+            return nxtrt::hope<nxtrt::value_result>::ready(
+                nxtrt::value_result{.eof = true});
+
+        auto write = sink.write(values[offset]);
+        if (write.is_ready()) {
+            ++offset;
+            ++reads;
+            return nxtrt::hope<nxtrt::value_result>::ready(
+                nxtrt::value_result{
+                .values = 1,
+                .eof = offset == values.size(),
+            });
+        }
+
+        return stream_write_slow(std::move(write));
+    }
+
+    nxtrt::task<nxtrt::value_result> stream_write_slow(
+        nxtrt::hope<void> write)
+    {
+        co_await std::move(write);
+        ++offset;
+        ++reads;
+        co_return nxtrt::value_result{
+            .values = 1,
+            .eof = offset == values.size(),
+        };
+    }
+
+public:
+    std::vector<int> values;
+    std::size_t offset = 0;
+    std::size_t reads = 0;
+};
+
+struct collecting_int_sink final : nxtrt::value_sink<int>
+{
+    explicit collecting_int_sink(
+        std::size_t limit,
+        std::size_t buffer_size = 64)
+        : nxtrt::value_sink<int>(buffer_size)
+        , limit(limit)
+    {}
+
+    collecting_int_sink(
+        std::size_t limit,
+        std::span<nxtrt::value_slot<int>> buffer)
+        : nxtrt::value_sink<int>(buffer)
+        , limit(limit)
+    {}
+
+private:
+    nxtrt::hope<std::size_t>
+    drain_more(std::span<nxtrt::value_slot<int>> values) override
+    {
+        auto n = std::min(limit, values.size());
+        for (auto & value : values.first(n))
+            collected.push_back(*value);
+        return nxtrt::hope<std::size_t>::ready(n);
+    }
+
+public:
+    std::vector<int> collected;
+    std::size_t limit = 1;
+};
+
+nxtrt::task<void> check_value_source_peek(int_value_source & source)
+{
+    auto first = co_await source.peek();
+    expect(first != nullptr);
+    expect(*first == 1_i);
+    expect(source.reads == std::size_t{1});
+
+    auto again = co_await source.peek();
+    expect(again != nullptr);
+    expect(*again == 1_i);
+    expect(source.reads == std::size_t{1});
+
+    auto taken = co_await source.take();
+    expect(taken && *taken == 1_i);
+    expect(source.buffered_size() == std::size_t{0});
+
+    auto next = co_await source.take();
+    expect(next && *next == 2_i);
+    expect(source.reads == std::size_t{2});
+}
+
+nxtrt::task<const int *> peek_int_value(nxtrt::value_source<int> & source)
+{
+    co_return co_await source.peek();
+}
+
+nxtrt::task<void> check_value_source_one_methods(
+    nxtrt::value_source<int> & source)
+{
+    auto first = co_await source.peek_one();
+    expect(first != nullptr);
+    expect(*first == 7_i);
+    expect(source.buffered_size() == std::size_t{1});
+
+    auto taken = co_await source.take_one();
+    expect(taken == 7_i);
+    expect(source.buffered_size() == std::size_t{0});
+}
+
+nxtrt::task<int> take_one_int_value(nxtrt::value_source<int> & source)
+{
+    co_return co_await source.take_one();
+}
+
+nxtrt::task<void> write_int_values(
+    nxtrt::value_sink<int> & sink,
+    int first,
+    int second)
+{
+    co_await sink.write(first);
+    co_await sink.write(second);
+}
+
+nxtrt::task<void> check_sink_buffers_until_flush(
+    collecting_int_sink & sink)
+{
+    co_await sink.write(1);
+    co_await sink.write(2);
+    expect(sink.collected.empty());
+    co_await sink.flush();
+}
+
+nxtrt::task<void> check_range_source_lookahead(
+    nxtrt::value_source<int> & source)
+{
+    auto first = co_await source.peek();
+    expect(first != nullptr);
+    expect(*first == 5_i);
+    auto taken = co_await source.take();
+    expect(taken && *taken == 5_i);
+    auto second = co_await source.take();
+    expect(second && *second == 6_i);
+}
+
+nxtrt::task<void> discard_expected_prefix(nxtrt::value_source<int> & source)
+{
+    co_await source.discard_all(1, 2);
+}
+
+nxtrt::task<void> discard_mismatched_prefix(nxtrt::value_source<int> & source)
+{
+    co_await source.discard_all(1, 4);
+}
+
+nxtrt::task<std::optional<int>> take_int_value(
+    nxtrt::value_source<int> & source)
+{
+    co_return co_await source.take();
+}
+
+nxtrt::task<void> discard_past_eof(nxtrt::value_source<int> & source)
+{
+    co_await source.discard_all(1, 2);
+}
+
+nxtrt::task<std::optional<int>> parse_digit_value(
+    nxtrt::byte_reader & reader)
+{
+    try {
+        auto byte = co_await reader.take_string_view(1);
+        co_return byte.front() - '0';
+    } catch (const nxtrt::end_of_stream &) {
+        co_return std::nullopt;
+    }
+}
+
+nxtrt::task<std::vector<nxtrt::http::server_sent_event>>
+read_sse_events_from_response(nxtrt::byte_reader & reader)
+{
+    auto head = co_await nxtrt::http::read_response_head(reader);
+    auto body = nxtrt::http::response_body_decoding_reader(reader, head);
+    auto events = nxtrt::http::sse_event_parser(body);
+    auto out = std::vector<nxtrt::http::server_sent_event>{};
+
+    out.push_back(co_await events.take_one());
+    auto end = co_await events.take();
+    expect(!end);
+
+    co_return out;
+}
 
 struct echo_tool
 {
@@ -2865,6 +3077,174 @@ static suite runtime_tests{
             };
         };
 
+        "value sources and sinks"_test = [] {
+            "peek fills the source buffer without consuming"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto storage = std::array<nxtrt::value_slot<int>, 1>{};
+                auto source = int_value_source{
+                    std::vector<int>{1, 2},
+                    std::span{storage},
+                };
+
+                deck.sync_wait(check_value_source_peek(source));
+            };
+
+            "peek returns null at eof"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{}, 1};
+
+                auto event = deck.sync_wait(peek_int_value(source));
+
+                expect(event == nullptr);
+            };
+
+            "peek_one and take_one throw at eof"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{7}, 1};
+
+                deck.sync_wait(check_value_source_one_methods(source));
+
+                auto rejected = false;
+                try {
+                    (void)deck.sync_wait(take_one_int_value(source));
+                } catch (const nxtrt::value_end_of_stream &) {
+                    rejected = true;
+                }
+
+                expect(rejected);
+            };
+
+            "sink buffers values until flush"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto storage = std::array<nxtrt::value_slot<int>, 2>{};
+                auto sink = collecting_int_sink{64, std::span{storage}};
+
+                deck.sync_wait(check_sink_buffers_until_flush(sink));
+
+                expect(sink.collected == std::vector<int>{1, 2});
+            };
+
+            "stream_all moves source values into sinks"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{1, 2, 3}, 1};
+                auto sink = collecting_int_sink{64, std::size_t{2}};
+
+                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+
+                expect(streamed == std::size_t{3});
+                expect(sink.collected == std::vector<int>{1, 2, 3});
+            };
+
+            "container sinks append without internal storage"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto values = std::vector<int>{};
+                auto sink = nxtrt::container_value_sink{values};
+
+                deck.sync_wait(write_int_values(sink, 1, 2));
+                expect(sink.buffered_size() == std::size_t{0});
+
+                expect(values == std::vector<int>{1, 2});
+            };
+
+            "iterator sinks write through output iterators"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto values = std::vector<int>{};
+                auto sink = nxtrt::iterator_value_sink<
+                    int,
+                    decltype(std::back_inserter(values))>{
+                    std::back_inserter(values),
+                };
+
+                deck.sync_wait(write_int_values(sink, 3, 4));
+
+                expect(values == std::vector<int>{3, 4});
+            };
+
+            "range sources stream lazy views"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto values = std::vector<int>{};
+                auto source = nxtrt::value_range_source{
+                    std::views::iota(1, 4)
+                        | std::views::transform([](int n) {
+                            return n * 10;
+                        }),
+                    std::size_t{1},
+                };
+                auto sink = nxtrt::container_value_sink{values};
+
+                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+
+                expect(streamed == std::size_t{3});
+                expect(values == std::vector<int>{10, 20, 30});
+            };
+
+            "byte parsers stream parsed values from byte readers"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto chunks = std::array{"123"sv};
+                auto storage = std::array<std::byte, 4>{};
+                auto reader = text_source(chunks, std::span{storage});
+                auto source =
+                    nxtrt::byte_parser<int>{reader, parse_digit_value};
+                auto values = std::vector<int>{};
+                auto sink = nxtrt::container_value_sink{values};
+
+                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+
+                expect(streamed == std::size_t{3});
+                expect(values == std::vector<int>{1, 2, 3});
+            };
+
+            "range source lookahead uses source storage"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto storage = std::array<nxtrt::value_slot<int>, 1>{};
+                auto source = nxtrt::value_range_source{
+                    std::views::iota(5, 7),
+                    std::span{storage},
+                };
+
+                deck.sync_wait(check_range_source_lookahead(source));
+            };
+
+            "discard_all consumes expected values"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{1, 2, 3}, 1};
+
+                deck.sync_wait(discard_expected_prefix(source));
+                auto rest = deck.sync_wait(take_int_value(source));
+                expect(rest && *rest == 3_i);
+            };
+
+            "discard_all leaves mismatched values buffered"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{1, 2, 3}, 1};
+                auto rejected = false;
+
+                try {
+                    deck.sync_wait(discard_mismatched_prefix(source));
+                } catch (const nxtrt::unexpected_value &) {
+                    rejected = true;
+                }
+
+                expect(rejected);
+                auto next = deck.sync_wait(take_int_value(source));
+                expect(next && *next == 2_i);
+            };
+
+            "discard_all throws at eof"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_value_source{std::vector<int>{1}, 1};
+                auto rejected = false;
+
+                try {
+                    deck.sync_wait(discard_past_eof(source));
+                } catch (const nxtrt::value_end_of_stream &) {
+                    rejected = true;
+                }
+
+                expect(rejected);
+            };
+        };
+
         "wires"_test = [] {
             "buffer values until consumed"_test = [] {
                 auto deck = nxtrt::deck{};
@@ -3116,7 +3496,7 @@ static suite runtime_tests{
                         expect(first.status == 200_i);
                         expect(nxtrt::http::is_chunked(first));
 
-                        auto body = nxtrt::http::read_response_body(
+                        auto body = nxtrt::http::response_body_decoding_reader(
                             reader, first);
                         auto text = std::string{};
                         while (auto chunk = co_await body.next())
@@ -3152,7 +3532,7 @@ static suite runtime_tests{
                                     reader);
                             expect(first.status == 200_i);
 
-                            auto body = nxtrt::http::read_response_body(
+                            auto body = nxtrt::http::response_body_decoding_reader(
                                 reader, first);
                             auto text = std::string{};
                             while (auto chunk = co_await body.next())
@@ -3191,7 +3571,7 @@ static suite runtime_tests{
                                 reader);
                         expect(head.status == 200_i);
 
-                        auto body = nxtrt::http::read_response_body(
+                        auto body = nxtrt::http::response_body_decoding_reader(
                             reader, head);
                         auto event =
                             co_await nxtrt::http::parse_sse_event(body);
@@ -3225,7 +3605,7 @@ static suite runtime_tests{
                                 co_await nxtrt::http::read_response_head(
                                     reader);
                             auto body =
-                                nxtrt::http::read_response_body(
+                                nxtrt::http::response_body_decoding_reader(
                                     reader, head);
                             auto text = std::string{};
                             while (auto chunk = co_await body.next())
@@ -3256,7 +3636,7 @@ static suite runtime_tests{
                                 co_await nxtrt::http::read_response_head(
                                     reader);
                             auto body =
-                                nxtrt::http::read_response_body(
+                                nxtrt::http::response_body_decoding_reader(
                                     reader, head);
                             auto text = std::string{};
                             while (auto chunk = co_await body.next())
@@ -3288,7 +3668,7 @@ static suite runtime_tests{
                                 co_await nxtrt::http::read_response_head(
                                     reader);
                             auto body =
-                                nxtrt::http::read_response_body(
+                                nxtrt::http::response_body_decoding_reader(
                                     reader, head);
                             auto text = std::string{};
                             while (auto chunk = co_await body.next())
@@ -3314,22 +3694,12 @@ static suite runtime_tests{
                 auto head_storage = std::array<std::byte, 256>{};
                 auto reader = text_source(chunks, std::span{head_storage});
 
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    auto head =
-                        co_await nxtrt::http::read_response_head(reader);
-                    auto body =
-                        nxtrt::http::read_response_body(reader, head);
+                auto events =
+                    deck.sync_wait(read_sse_events_from_response(reader));
 
-                    auto event =
-                        co_await nxtrt::http::parse_sse_event(body);
-                    expect(event.has_value());
-                    expect(event->type == "response.output_text.delta");
-                    expect(event->data == "{\"delta\":\"hi\"}");
-
-                    auto end =
-                        co_await nxtrt::http::parse_sse_event(body);
-                    expect(!end);
-                });
+                expect(events.size() == std::size_t{1});
+                expect(events[0].type == "response.output_text.delta");
+                expect(events[0].data == "{\"delta\":\"hi\"}");
             };
         };
     }};

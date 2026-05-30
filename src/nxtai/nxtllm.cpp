@@ -66,17 +66,6 @@ struct openai_unexpected_content_type : nxtrt::runtime_error
     std::optional<std::string> actual;
 };
 
-struct openai_terminal_event : nxtrt::runtime_error
-{
-    explicit openai_terminal_event(std::string type)
-        : nxtrt::runtime_error{"OpenAI Responses terminal event"}
-        , type(std::move(type))
-    {
-    }
-
-    std::string type;
-};
-
 struct openai_unexpected_event : nxtrt::runtime_error
 {
     openai_unexpected_event(std::string expected, std::string actual)
@@ -251,145 +240,134 @@ nxtrt::task<nxtrt::http::response_head> open_response_stream(
 
 nxtrt::task<void> write_sse_event_debug(
     nxtrt::byte_writer & output,
-    const nxtrt::http::server_sent_event & event)
+    nxtrt::http::server_sent_event event)
 {
     co_await output.print_all("[{}]\n{}\n\n", event.type, event.data);
 }
 
+namespace openai_response_scope {
+
+inline constexpr auto response = std::string_view{"response"};
+inline constexpr auto output_item = std::string_view{"response.output_item"};
+inline constexpr auto content_part = std::string_view{"response.content_part"};
+inline constexpr auto output_text = std::string_view{"response.output_text"};
+
+} // namespace openai_response_scope
+
+namespace openai_response_event {
+
+inline constexpr auto response_created =
+    std::string_view{"response.created"};
+inline constexpr auto response_in_progress =
+    std::string_view{"response.in_progress"};
+inline constexpr auto response_completed =
+    std::string_view{"response.completed"};
+inline constexpr auto output_item_added =
+    std::string_view{"response.output_item.added"};
+inline constexpr auto output_item_done =
+    std::string_view{"response.output_item.done"};
+inline constexpr auto content_part_added =
+    std::string_view{"response.content_part.added"};
+inline constexpr auto content_part_done =
+    std::string_view{"response.content_part.done"};
+inline constexpr auto output_text_delta =
+    std::string_view{"response.output_text.delta"};
+inline constexpr auto output_text_done =
+    std::string_view{"response.output_text.done"};
+
+} // namespace openai_response_event
+
 struct openai_response_stream_client
 {
-    nxtrt::byte_reader & body;
+    using event_type = nxtrt::http::server_sent_event;
+
+    nxtrt::value_source<event_type> & events;
     nxtrt::byte_writer & output;
-    std::optional<nxtrt::http::server_sent_event> pending = std::nullopt;
 
     nxtrt::task<void> stream_response()
     {
-        co_await output.write_all("[response]\n");
-        co_await write_sse_event_debug(
-            output,
-            co_await expect_event("response.created"));
-
-        while (true) {
-            auto event = co_await next_event();
-            fail_on_terminal_event(event);
-
-            if (event.type == "response.in_progress") {
-                co_await write_sse_event_debug(output, event);
-            } else if (event.type == "response.output_item.added") {
-                pending = std::move(event);
-                co_await stream_output_item();
-            } else if (event.type == "response.completed") {
-                co_await write_sse_event_debug(output, event);
-                break;
-            } else {
-                co_await write_sse_event_debug(output, event);
-            }
-        }
-
-        co_await output.write_all("[/response]\n");
+        co_await open_scope(openai_response_scope::response);
+        co_await write_expected_event(
+            openai_response_event::response_created);
+        co_await write_expected_event(
+            openai_response_event::response_in_progress);
+        co_await stream_output_item();
+        co_await write_expected_event(
+            openai_response_event::response_completed);
+        co_await close_scope(openai_response_scope::response);
     }
 
 private:
-    nxtrt::task<nxtrt::http::server_sent_event> next_event()
+    nxtrt::task<void> open_scope(std::string_view name)
     {
-        if (pending) {
-            auto event = std::move(*pending);
-            pending.reset();
-            co_return event;
-        }
-
-        auto event = co_await nxtrt::http::parse_sse_event(body);
-        if (!event)
-            throw openai_unexpected_event{"SSE event", "end of stream"};
-        if (event->data == "[DONE]")
-            throw openai_unexpected_event{"response.completed", "[DONE]"};
-        co_return std::move(*event);
+        co_await output.print_all("[{}]\n", name);
     }
 
-    nxtrt::task<nxtrt::http::server_sent_event> expect_event(
-        std::string_view type)
+    nxtrt::task<void> close_scope(std::string_view name)
     {
-        auto event = co_await next_event();
-        fail_on_terminal_event(event);
-        if (event.type != type)
+        co_await output.print_all("[/{}]\n", name);
+    }
+
+    nxtrt::task<event_type> expect_event(std::string_view type)
+    {
+        auto * event = co_await events.peek_one();
+        if (event->type != type)
             throw openai_unexpected_event{
                 std::string{type},
-                std::move(event.type),
+                event->type,
             };
-        co_return event;
+        co_return co_await events.take_one();
     }
 
-    static void fail_on_terminal_event(
-        const nxtrt::http::server_sent_event & event)
+    nxtrt::task<void> write_expected_event(std::string_view type)
     {
-        if (event.type == "response.failed"
-            || event.type == "response.incomplete")
-            throw openai_terminal_event{event.type};
+        co_await write_sse_event_debug(output, co_await expect_event(type));
     }
+
+    // all the stream_* have the same structure of open_scope(x); ...; close_scope(x);
+    // XXX: use an `env` to track a stack of scope tags instead
+    // with a helper task wrapper thing
 
     nxtrt::task<void> stream_output_item()
     {
-        co_await output.write_all("[response.output_item]\n");
-        co_await write_sse_event_debug(
-            output,
-            co_await expect_event("response.output_item.added"));
-
-        while (true) {
-            auto event = co_await next_event();
-            fail_on_terminal_event(event);
-
-            if (event.type == "response.content_part.added") {
-                pending = std::move(event);
-                co_await stream_content_part();
-            } else if (event.type == "response.output_item.done") {
-                co_await write_sse_event_debug(output, event);
-                break;
-            } else {
-                co_await write_sse_event_debug(output, event);
-            }
-        }
-
-        co_await output.write_all("[/response.output_item]\n");
+        co_await open_scope(openai_response_scope::output_item);
+        co_await write_expected_event(
+            openai_response_event::output_item_added);
+        co_await stream_content_part();
+        co_await write_expected_event(
+            openai_response_event::output_item_done);
+        co_await close_scope(openai_response_scope::output_item);
     }
 
     nxtrt::task<void> stream_content_part()
     {
-        co_await output.write_all("[response.content_part]\n");
-        co_await write_sse_event_debug(
-            output,
-            co_await expect_event("response.content_part.added"));
+        co_await open_scope(openai_response_scope::content_part);
+        co_await write_expected_event(
+            openai_response_event::content_part_added);
 
         co_await stream_output_text();
 
-        co_await write_sse_event_debug(
-            output,
-            co_await expect_event("response.content_part.done"));
-        co_await output.write_all("[/response.content_part]\n");
+        co_await write_expected_event(
+            openai_response_event::content_part_done);
+        co_await close_scope(openai_response_scope::content_part);
     }
 
     nxtrt::task<void> stream_output_text()
     {
-        co_await output.write_all("[response.output_text]\n");
+        co_await open_scope(openai_response_scope::output_text);
 
-        while (true) {
-            auto event = co_await next_event();
-            fail_on_terminal_event(event);
-
-            if (event.type == "response.output_text.delta") {
-                auto text =
-                    nxtai::tools::json_string_member(event.data, "delta")
-                        .value_or(std::string{});
-                co_await output.print_all("<<{}>>\n", text);
-            } else if (event.type == "response.output_text.done") {
-                co_await write_sse_event_debug(output, event);
-                break;
-            } else {
-                pending = std::move(event);
-                break;
-            }
+        while ((co_await events.peek_one())->type
+               == openai_response_event::output_text_delta) {
+            auto event = co_await events.take_one();
+            auto text =
+                nxtai::tools::json_string_member(event.data, "delta")
+                    .value_or(std::string{});
+            co_await output.print_all("<<{}>>\n", text);
         }
 
-        co_await output.write_all("[/response.output_text]\n");
+        co_await write_expected_event(
+            openai_response_event::output_text_done);
+        co_await close_scope(openai_response_scope::output_text);
     }
 };
 
@@ -424,10 +402,12 @@ private:
 
         auto head = co_await open_response_stream(tls, request_text);
 
-        auto body = nxtrt::http::read_response_body(tls, head);
-        auto client = openai_response_stream_client{body, output};
-        co_await client.stream_response();
+        auto body = nxtrt::http::response_body_decoding_reader{tls, head};
+        auto events = nxtrt::http::sse_event_parser(body);
 
+        auto client = openai_response_stream_client{events, output};
+
+        co_await client.stream_response();
         co_await output.write_all("\n");
     }
 };
@@ -504,14 +484,6 @@ int report_exception(const openai_unexpected_content_type & error)
     return EXIT_FAILURE;
 }
 
-int report_exception(const openai_terminal_event & error)
-{
-    std::cerr << "nxtllm: OpenAI Responses terminal event: " << error.type
-              << '\n';
-    nxt::debug::print_current_exception_trace(std::cerr, "  ");
-    return EXIT_FAILURE;
-}
-
 int report_exception(const std::exception & error)
 {
     std::cerr << "nxtllm: " << exception_message(error) << '\n';
@@ -537,9 +509,6 @@ int main(int argc, char ** argv)
         [&](const missing_prompt & e) { exit_code = report_exception(e); },
         [&](const openai_http_error & e) { exit_code = report_exception(e); },
         [&](const openai_unexpected_content_type & e) {
-            exit_code = report_exception(e);
-        },
-        [&](const openai_terminal_event & e) {
             exit_code = report_exception(e);
         },
         [&](const std::exception & e) { exit_code = report_exception(e); },

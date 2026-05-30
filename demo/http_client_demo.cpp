@@ -107,7 +107,7 @@ nxtrt::task<void> fetch(nxtrt::http::url url)
     auto head = co_await nxtrt::http::read_response_head(*transport);
     report_head(head);
 
-    auto body = nxtrt::http::read_response_body(*transport, head);
+    auto body = nxtrt::http::response_body_decoding_reader(*transport, head);
     auto decoded = co_await drain_to_stdout(body);
 
     auto encoding = nxtrt::http::header_value(head, "content-encoding");

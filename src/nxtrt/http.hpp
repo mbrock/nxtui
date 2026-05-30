@@ -2,6 +2,7 @@
 
 #include "nxtrt/buffers.hpp"
 #include "nxtrt/compression.hpp"
+#include "nxtrt/value-buffers.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -511,10 +512,10 @@ private:
     bool done_ = false;
 };
 
-class response_body_reader final : public byte_reader
+class response_body_decoding_reader final : public byte_reader
 {
 public:
-    response_body_reader(
+    response_body_decoding_reader(
         byte_reader & reader,
         const response_head & head,
         std::size_t buffer_size = 4096)
@@ -525,7 +526,7 @@ public:
         configure(head, buffer_size);
     }
 
-    response_body_reader(
+    response_body_decoding_reader(
         byte_reader & reader,
         const response_head & head,
         std::span<std::byte> buffer)
@@ -595,20 +596,6 @@ private:
     byte_reader * active_;
 };
 
-inline response_body_reader
-read_response_body(byte_reader & reader, const response_head & head)
-{
-    return response_body_reader{reader, head};
-}
-
-inline response_body_reader read_response_body(
-    byte_reader & reader,
-    const response_head & head,
-    std::span<std::byte> buffer)
-{
-    return response_body_reader{reader, head, buffer};
-}
-
 inline task<std::optional<server_sent_event>>
 parse_sse_event(byte_reader & reader)
 {
@@ -677,6 +664,28 @@ parse_sse_event(byte_reader & reader)
                 event.retry_ms = retry;
         }
     }
+}
+
+inline byte_parser<server_sent_event> sse_event_parser(
+    byte_reader & reader,
+    std::size_t buffer_size = 1)
+{
+    return byte_parser<server_sent_event>{
+        reader,
+        parse_sse_event,
+        buffer_size,
+    };
+}
+
+inline byte_parser<server_sent_event> sse_event_parser(
+    byte_reader & reader,
+    std::span<value_slot<server_sent_event>> buffer)
+{
+    return byte_parser<server_sent_event>{
+        reader,
+        parse_sse_event,
+        buffer,
+    };
 }
 
 } // namespace nxtrt::http
