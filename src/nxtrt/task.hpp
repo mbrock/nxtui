@@ -1402,6 +1402,8 @@ constexpr decltype(auto) get_awaiter(A && a)
 {
     if constexpr (requires { static_cast<A &&>(a).operator co_await(); })
         return static_cast<A &&>(a).operator co_await();
+    else if constexpr (requires { operator co_await(static_cast<A &&>(a)); })
+        return operator co_await(static_cast<A &&>(a));
     else
         return static_cast<A &&>(a);
 }
@@ -2428,6 +2430,26 @@ inline running_wish_context current_wish_context() noexcept
     };
 }
 
+template<typename Wish>
+auto prepare_wish_awaitable(Wish const & wish)
+{
+    auto context = current_wish_context();
+    if (context.active_deck == nullptr
+        || context.active_wand == nullptr
+        || context.running == nullptr) {
+        auto message = std::string{"nxtrt "};
+        message.append(Wish::name);
+        message.append(" wish awaited without a running wand");
+        throw runtime_error{std::move(message)};
+    }
+
+    op::trace_wish(wish);
+    return context.active_wand->prepare(
+        *context.active_deck,
+        *context.running,
+        wish);
+}
+
 } // namespace detail
 
 template<typename T>
@@ -2455,279 +2477,15 @@ inline void waiter<T>::await_suspend(
     running->cancel_wait_on_stop(*active_wand, token_);
 }
 
-inline waiter<void> op::manual::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt manual wish awaited without a running wand"};
+namespace op {
 
-    trace("wish manual prepare token={}", token);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
+template<awaitable_wish Wish>
+inline waiter<typename Wish::result_type> operator co_await(Wish const & wish)
+{
+    return detail::prepare_wish_awaitable(wish);
 }
 
-inline waiter<int> op::openat::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt openat wish awaited without a running wand"};
-
-    trace("wish openat prepare path={}", path);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-#if defined(__linux__)
-inline waiter<statx_result> op::statx::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt statx wish awaited without a running wand"};
-
-    trace("wish statx prepare path={}", path);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<std::size_t> op::getdents64::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt getdents64 wish awaited without a running wand"};
-
-    trace("wish getdents64 prepare fd={} bytes={}", fd, buffer.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<piped_child> op::spawn_piped::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt spawn-piped wish awaited without a running wand"};
-
-    trace("wish spawn-piped prepare argv={}", argv.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<pty_child> op::spawn_pty::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt spawn-pty wish awaited without a running wand"};
-
-    trace("wish spawn-pty prepare argv={}", argv.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<child_result> op::wait_child::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt wait-child wish awaited without a running wand"};
-
-    trace("wish wait-child prepare pidfd={}", pidfd);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<void> op::signal_child::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt signal-child wish awaited without a running wand"};
-
-    trace("wish signal-child prepare pidfd={} signal={}", pidfd, signal);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-#endif
-
-inline waiter<std::size_t> op::read_some::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt read wish awaited without a running wand"};
-
-    trace("wish read prepare fd={} bytes={}", fd, buffer.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<std::size_t> op::write_some::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt write wish awaited without a running wand"};
-
-    trace("wish write prepare fd={} bytes={}", fd, buffer.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<std::size_t> op::recv_some::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt recv wish awaited without a running wand"};
-
-    trace("wish recv prepare fd={} bytes={}", fd, buffer.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<std::size_t> op::send_some::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt send wish awaited without a running wand"};
-
-    trace("wish send prepare fd={} bytes={}", fd, buffer.size());
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<void> op::connect::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt connect wish awaited without a running wand"};
-
-    trace("wish connect prepare fd={}", fd);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<int> op::accept::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt accept wish awaited without a running wand"};
-
-    trace("wish accept prepare fd={}", fd);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<int> op::poll::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt poll wish awaited without a running wand"};
-
-    trace("wish poll prepare fd={} events={}", fd, events);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<void> op::timeout::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt timeout wish awaited without a running wand"};
-
-    trace("wish timeout prepare");
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
-
-inline waiter<poll_until_result> op::poll_until::operator co_await() const
-{
-    auto context = detail::current_wish_context();
-    if (context.active_deck == nullptr
-        || context.active_wand == nullptr
-        || context.running == nullptr)
-        throw runtime_error{
-            "nxtrt poll-until wish awaited without a running wand"};
-
-    trace("wish poll-until prepare fd={} events={}", fd, events);
-    return context.active_wand->prepare(
-        *context.active_deck,
-        *context.running,
-        *this);
-}
+} // namespace op
 
 struct yield_awaiter
 {

@@ -2,8 +2,11 @@
 
 #include "nxtrt/debug.hpp"
 #include "nxtrt/exceptions.hpp"
+#include "nxtrt/trace.hpp"
 #include "nxt/unique-fd.hpp"
 
+#include <array>
+#include <concepts>
 #include <csignal>
 #include <coroutine>
 #include <chrono>
@@ -15,6 +18,7 @@
 #include <memory>
 #include <poll.h>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -256,6 +260,87 @@ struct pty_child
 
 namespace op {
 
+struct wish_arg
+{
+    using value_type =
+        std::variant<std::intmax_t, std::uintmax_t, std::string_view>;
+
+    std::string_view name;
+    value_type value;
+
+    template<std::integral T>
+    constexpr wish_arg(std::string_view name, T value) noexcept
+        : name(name)
+        , value(make_value(value))
+    {}
+
+    constexpr wish_arg(std::string_view name, std::string_view value) noexcept
+        : name(name)
+        , value(value)
+    {}
+
+private:
+    template<std::integral T>
+    static constexpr value_type make_value(T value) noexcept
+    {
+        if constexpr (std::is_signed_v<T>)
+            return static_cast<std::intmax_t>(value);
+        else
+            return static_cast<std::uintmax_t>(value);
+    }
+};
+
+template<std::ranges::input_range Args>
+std::string format_wish_args(Args const & args)
+{
+    auto out = std::string{};
+    auto first = true;
+    for (auto const & arg : args) {
+        if (!first)
+            out += ' ';
+        first = false;
+        out += arg.name;
+        out += '=';
+        std::visit(
+            [&](auto const & value) {
+                if constexpr (std::same_as<
+                                  std::remove_cvref_t<decltype(value)>,
+                                  std::string_view>)
+                    out += value;
+                else
+                    out += std::to_string(value);
+            },
+            arg.value);
+    }
+    return out;
+}
+
+template<typename Wish>
+void trace_wish(Wish const & wish)
+{
+    auto args = wish.args();
+    if (std::ranges::empty(args)) {
+        trace("{}", Wish::name);
+    } else {
+        trace("{} {}", Wish::name, format_wish_args(args));
+    }
+}
+
+template<typename Wish>
+concept awaitable_wish =
+    requires(
+        std::remove_cvref_t<Wish> & staged,
+        Wish const & wish,
+        uring_submission & submission) {
+        typename Wish::result_type;
+        { Wish::name } -> std::convertible_to<std::string_view>;
+        wish.args();
+        { staged.stage_uring(submission) } -> std::same_as<bool>;
+    };
+
+template<awaitable_wish Wish>
+waiter<typename Wish::result_type> operator co_await(Wish const & wish);
+
 /// Closed operation type for deterministic/manual tests.
 ///
 /// This is deliberately more like a tiny SQE recipe than a generic variant:
@@ -267,8 +352,12 @@ struct manual
 
     wait_token token = 0;
 
+    auto args() const
+    {
+        return std::array{wish_arg{"token", token}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<void> operator co_await() const;
 };
 
 struct openat
@@ -281,8 +370,12 @@ struct openat
     int flags = O_RDONLY;
     mode_t mode = 0;
 
+    auto args() const
+    {
+        return std::array{wish_arg{"path", std::string_view{path}}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<int> operator co_await() const;
 };
 
 #if defined(__linux__)
@@ -297,8 +390,12 @@ struct statx
     unsigned mask = STATX_BASIC_STATS;
     statx_result result{};
 
+    auto args() const
+    {
+        return std::array{wish_arg{"path", std::string_view{path}}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<statx_result> operator co_await() const;
 };
 
 struct getdents64
@@ -309,8 +406,14 @@ struct getdents64
     int fd = -1;
     std::span<std::byte> buffer;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"bytes", buffer.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<std::size_t> operator co_await() const;
 };
 
 struct spawn_piped
@@ -321,8 +424,12 @@ struct spawn_piped
     std::vector<std::string> argv;
     std::shared_ptr<piped_child> child = std::make_shared<piped_child>();
 
+    auto args() const
+    {
+        return std::array{wish_arg{"argv", argv.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<piped_child> operator co_await() const;
 };
 
 struct spawn_pty
@@ -335,8 +442,12 @@ struct spawn_pty
     std::size_t rows = 24;
     std::shared_ptr<pty_child> child = std::make_shared<pty_child>();
 
+    auto args() const
+    {
+        return std::array{wish_arg{"argv", argv.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<pty_child> operator co_await() const;
 };
 
 struct wait_child
@@ -347,8 +458,12 @@ struct wait_child
     int pidfd = -1;
     siginfo_t info{};
 
+    auto args() const
+    {
+        return std::array{wish_arg{"pidfd", pidfd}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<child_result> operator co_await() const;
 };
 
 struct signal_child
@@ -359,8 +474,14 @@ struct signal_child
     int pidfd = -1;
     int signal = SIGTERM;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"pidfd", pidfd},
+            wish_arg{"signal", signal}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<void> operator co_await() const;
 };
 #endif
 
@@ -373,8 +494,14 @@ struct read_some
     std::span<std::byte> buffer;
     off_t offset = -1;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"bytes", buffer.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<std::size_t> operator co_await() const;
 };
 
 struct write_some
@@ -386,8 +513,14 @@ struct write_some
     std::span<const std::byte> buffer;
     off_t offset = -1;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"bytes", buffer.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<std::size_t> operator co_await() const;
 };
 
 struct recv_some
@@ -399,8 +532,14 @@ struct recv_some
     std::span<std::byte> buffer;
     int flags = 0;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"bytes", buffer.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<std::size_t> operator co_await() const;
 };
 
 struct send_some
@@ -412,8 +551,14 @@ struct send_some
     std::span<const std::byte> buffer;
     int flags = 0;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"bytes", buffer.size()}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<std::size_t> operator co_await() const;
 };
 
 struct connect
@@ -424,6 +569,11 @@ struct connect
     int fd = -1;
     sockaddr_storage address{};
     socklen_t address_size = 0;
+
+    auto args() const
+    {
+        return std::array{wish_arg{"fd", fd}};
+    }
 
     static connect from(
         int fd,
@@ -448,7 +598,6 @@ struct connect
     }
 
     bool stage_uring(uring_submission & submission);
-    waiter<void> operator co_await() const;
 };
 
 /// Accept one connection from a listening socket.
@@ -463,8 +612,12 @@ struct accept
     int fd = -1;
     int flags = 0;
 
+    auto args() const
+    {
+        return std::array{wish_arg{"fd", fd}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<int> operator co_await() const;
 };
 
 struct poll
@@ -475,8 +628,14 @@ struct poll
     int fd = -1;
     short events = 0;
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"events", events}};
+    }
+
     bool stage_uring(uring_submission & submission);
-    waiter<int> operator co_await() const;
 };
 
 struct timeout
@@ -486,6 +645,11 @@ struct timeout
 
     kernel_timespec duration{};
 
+    auto args() const
+    {
+        return std::array<wish_arg, 0>{};
+    }
+
     static timeout after(std::chrono::nanoseconds duration)
     {
         return timeout{
@@ -494,7 +658,6 @@ struct timeout
     }
 
     bool stage_uring(uring_submission & submission);
-    waiter<void> operator co_await() const;
 };
 
 /// Backend-specific fused poll/deadline wish.
@@ -510,6 +673,13 @@ struct poll_until
     short events = 0;
     kernel_timespec timeout{};
 
+    auto args() const
+    {
+        return std::array{
+            wish_arg{"fd", fd},
+            wish_arg{"events", events}};
+    }
+
     static poll_until after(
         int fd,
         short events,
@@ -523,7 +693,6 @@ struct poll_until
     }
 
     bool stage_uring(uring_submission & submission);
-    waiter<poll_until_result> operator co_await() const;
 };
 
 } // namespace op
