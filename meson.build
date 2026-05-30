@@ -8,8 +8,6 @@ project('nxtui', 'cpp', 'c',
   meson_version : '>= 1.1',
 )
 
-cmake = import('cmake')
-
 nxt_section_args = [
   '-ffunction-sections',
   '-fdata-sections',
@@ -17,23 +15,6 @@ nxt_section_args = [
 
 add_project_arguments(nxt_section_args, language : ['c', 'cpp'])
 add_project_link_arguments('-Wl,--gc-sections', language : ['cpp'])
-
-nxt_awslc_options = cmake.subproject_options()
-nxt_awslc_options.add_cmake_defines({
-  'BUILD_LIBSSL': false,
-  'BUILD_TESTING': false,
-  'BUILD_TOOL': false,
-  'DISABLE_GO': true,
-  'DISABLE_PERL': true,
-  'CMAKE_C_FLAGS': ' '.join(nxt_section_args),
-  'CMAKE_CXX_FLAGS': ' '.join(nxt_section_args),
-})
-
-nxt_awslc_project = cmake.subproject(
-  'aws-lc',
-  options : nxt_awslc_options,
-)
-nxt_awslc_dep = nxt_awslc_project.dependency('crypto')
 
 utf8proc_dep = dependency(
   'libutf8proc',
@@ -256,14 +237,54 @@ if get_option('tests')
     'test/runtime-test.cpp',
     'test/terminal-test.cpp',
     'src/nxt/stacktrace.cpp',
-    'src/nxt/crypto/mlkem_awslc.cpp',
     'test/test-main.cpp',
   )
   nxt_test_deps = []
   nxt_test_deps += nxt_core_dep
-  nxt_test_deps += nxt_awslc_dep
   nxt_test_deps += utf8proc_dep
   nxt_test_deps += nxt_stacktrace_deps
+  nxt_test_cpp_args = []
+
+  nxt_crypto_dep = dependency('libcrypto', required : false)
+  nxt_test_libcrypto_probe = '''
+    #include <openssl/ec.h>
+    #include <openssl/ec_key.h>
+    #include <openssl/ecdsa.h>
+    #include <openssl/evp.h>
+    #include <openssl/nid.h>
+    #include <openssl/rsa.h>
+    int main() {
+      return EVP_PKEY_RSA != 0 && NID_X9_62_prime256v1 != 0;
+    }
+  '''
+  if nxt_crypto_dep.found() and cpp.compiles(
+    nxt_test_libcrypto_probe,
+    dependencies : [nxt_crypto_dep],
+    name : 'libcrypto test fixture API')
+    nxt_test_deps += nxt_crypto_dep
+    nxt_test_cpp_args += '-DNXT_HAVE_TEST_LIBCRYPTO=1'
+  endif
+
+  nxt_mlkem_probe = '''
+    #include <openssl/evp.h>
+    #include <openssl/nid.h>
+    int main() {
+      EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_KEM, nullptr);
+      return ctx != nullptr && NID_MLKEM768 != 0
+        && EVP_PKEY_CTX_kem_set_params(ctx, NID_MLKEM768);
+    }
+  '''
+  if nxt_crypto_dep.found() and cpp.compiles(
+    nxt_mlkem_probe,
+    dependencies : [nxt_crypto_dep],
+    name : 'libcrypto ML-KEM-768 EVP API')
+    message('ML-KEM-768 test support available via system libcrypto')
+    nxt_test_sources += files('src/nxt/crypto/mlkem_libcrypto.cpp')
+    nxt_test_deps += nxt_crypto_dep
+    nxt_test_cpp_args += '-DNXT_HAVE_MLKEM768=1'
+  else
+    message('ML-KEM-768 test support not available')
+  endif
 
   if host_machine.system() == 'linux'
     nxt_test_sources += files('test/epoll-wand-test.cpp')
@@ -292,7 +313,7 @@ if get_option('tests')
     nxt_test_sources,
     include_directories : [nxt_inc, nxt_test_inc],
     dependencies : nxt_test_deps,
-    cpp_args : nxt_stacktrace_cpp_args,
+    cpp_args : nxt_stacktrace_cpp_args + nxt_test_cpp_args,
   )
   test('nxt-tests', nxt_tests)
 endif

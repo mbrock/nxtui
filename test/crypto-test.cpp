@@ -4,12 +4,14 @@
 
 #include "test.hpp"
 
-#include <openssl/ec.h>
-#include <openssl/ec_key.h>
-#include <openssl/ecdsa.h>
-#include <openssl/evp.h>
-#include <openssl/nid.h>
-#include <openssl/rsa.h>
+#ifdef NXT_HAVE_TEST_LIBCRYPTO
+#    include <openssl/ec.h>
+#    include <openssl/ec_key.h>
+#    include <openssl/ecdsa.h>
+#    include <openssl/evp.h>
+#    include <openssl/nid.h>
+#    include <openssl/rsa.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -74,6 +76,7 @@ bool equal_bytes(const std::array<std::byte, N> & a, std::span<const std::byte> 
     return std::ranges::equal(a, b);
 }
 
+#ifdef NXT_HAVE_TEST_LIBCRYPTO
 struct ec_key_deleter
 {
     void operator()(EC_KEY * key) const noexcept
@@ -105,6 +108,7 @@ struct evp_md_ctx_deleter
         EVP_MD_CTX_free(ctx);
     }
 };
+#endif
 
 nxtrt::task<void> write_sha256_sink_chunks(nxtrt::sha256_sink & sink)
 {
@@ -285,6 +289,7 @@ static suite crypto_tests{
             expect(!nxt::crypto::x25519dh(secret_key, zero_point));
         };
 
+#ifdef NXT_HAVE_MLKEM768
         "round-trips ML-KEM-768 encapsulated shared secrets"_test = [] {
             auto alice = nxt::crypto::mlkem768_keygen();
             auto bob = nxt::crypto::mlkem768_encaps(alice.public_key);
@@ -294,7 +299,9 @@ static suite crypto_tests{
             expect(alice_secret.has_value());
             expect(*alice_secret == bob.shared_secret);
         };
+#endif
 
+#ifdef NXT_HAVE_TEST_LIBCRYPTO
         "verifies P-256 ECDSA signatures over SHA-256 digests"_test = [] {
             auto key = std::unique_ptr<EC_KEY, ec_key_deleter>{
                 EC_KEY_new_by_curve_name(NID_X9_62_prime256v1)};
@@ -410,6 +417,7 @@ static suite crypto_tests{
             message[0] ^= std::byte{1};
             expect(!nxt::crypto::rsa_pss_verify(spki, message, sig, 256));
         };
+#endif
     }};
 
 }
