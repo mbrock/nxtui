@@ -98,7 +98,6 @@ nxt_inc = include_directories(
   'vendor/mdspan/include',
 )
 nxt_core_deps = []
-nxt_core_deps += nxt_awslc_dep
 nxt_core_deps += utf8proc_dep
 nxt_core_deps += nxt_libvterm_dep
 nxt_core_deps += nxt_compression_deps
@@ -257,10 +256,12 @@ if get_option('tests')
     'test/runtime-test.cpp',
     'test/terminal-test.cpp',
     'src/nxt/stacktrace.cpp',
+    'src/nxt/crypto/mlkem_awslc.cpp',
     'test/test-main.cpp',
   )
   nxt_test_deps = []
   nxt_test_deps += nxt_core_dep
+  nxt_test_deps += nxt_awslc_dep
   nxt_test_deps += utf8proc_dep
   nxt_test_deps += nxt_stacktrace_deps
 
