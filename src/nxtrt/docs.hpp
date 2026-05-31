@@ -6,4 +6,6 @@
 Experimental async runtime primitives for `src`.
 
 Start with @ref rt_overview "the runtime overview" for the conceptual model.
+The longer notes continue through @ref rt_holding "holding work",
+@ref rt_game "the game", and @ref rt_occurrents "occurrent structure".
 */

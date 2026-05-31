@@ -75,6 +75,9 @@ bench-uring-trace: bench-build
 	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-trace
 
 spec:
+	@echo "== rdf-forge ontology syntax =="
+	racket rdf-forge/tests/bfo-sketch-test.rkt
+	@echo
 	@echo "== baseline runtime spec =="
 	racket nxtrt/model.rkt --run-all
 	@echo

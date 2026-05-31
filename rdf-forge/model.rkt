@@ -280,6 +280,174 @@
                  (term-option value 'range)))
           (ontology-declared-terms ont)))
 
+(define (ontology-axioms ont kind)
+  (filter (lambda (value)
+            (and (ontology-axiom? value)
+                 (eq? (ontology-axiom-kind value) kind)))
+          (ontology-declared-terms ont)))
+
+(define (ontology-model-property-terms ont)
+  (filter (lambda (value)
+            (and (term? value)
+                 (eq? (term-kind value) 'property)))
+          (ontology-declared-terms ont)))
+
+(define (ontology-find-property ont local)
+  (define matches
+    (filter (lambda (value)
+              (and (eq? (term-rdf-name value) local)
+                   (term-option value 'domain)
+                   (term-option value 'range)))
+            (ontology-model-property-terms ont)))
+  (case (length matches)
+    [(1) (car matches)]
+    [else #f]))
+
+(define (ontology-class-list-term ont local)
+  (for/first ([value (in-list (ontology-class-terms ont))]
+              #:when (eq? (term-local value) local))
+    value))
+
+(define (ontology-generated-predicate-name ont local)
+  (string->symbol
+   (format "%ontology-~a-~a" (ontology-prefix ont) local)))
+
+(define (ontology-generated-predicate? pred)
+  (string-prefix? (symbol->string (forge-predicate-name pred)) "%ontology-"))
+
+(define (ontology-transitive-predicate property)
+  (define domain (term-option property 'domain))
+  (define range (term-option property 'range))
+  (and domain
+       range
+       (eq? domain range)
+       (predicate
+        (ontology-generated-predicate-name (term-ontology property)
+                                           (string->symbol
+                                            (format "~a-transitive"
+                                                    (term-rdf-name property))))
+        (forge-quant
+         'all
+         (list (cons 'x domain))
+         (in (follow 'x property property)
+             (follow 'x property))))))
+
+(define (ontology-inverse-predicate property inverse)
+  (define domain (term-option property 'domain))
+  (define range (term-option property 'range))
+  (define inverse-domain (term-option inverse 'domain))
+  (define inverse-range (term-option inverse 'range))
+  (and domain
+       range
+       inverse-domain
+       inverse-range
+       (predicate
+        (ontology-generated-predicate-name (term-ontology property)
+                                           (string->symbol
+                                            (format "~a-inverse-of-~a"
+                                                    (term-rdf-name property)
+                                                    (term-rdf-name inverse))))
+        (forge-quant
+         'all
+         (list (cons 'x domain)
+               (cons 'y range))
+         (&& (=> (in 'y (follow 'x property))
+                 (in 'x (follow 'y inverse)))
+             (=> (in 'x (follow 'y inverse))
+                 (in 'y (follow 'x property))))))))
+
+(define (ontology-property-option-predicates ont)
+  (filter
+   values
+   (append
+    (for/list ([property (in-list (ontology-model-property-terms ont))]
+               #:when (term-option property 'transitive?))
+      (ontology-transitive-predicate property))
+    (for/list ([property (in-list (ontology-model-property-terms ont))]
+               #:when (term-option property 'inverse-of))
+      (ontology-inverse-predicate property (term-option property 'inverse-of))))))
+
+(define (ontology-subclass-some-predicate ont axiom)
+  (define args (ontology-axiom-args axiom))
+  (define class (list-ref args 0))
+  (define property (list-ref args 1))
+  (define filler (list-ref args 2))
+  (predicate
+   (ontology-generated-predicate-name ont
+                                      (string->symbol
+                                       (format "~a-some-~a"
+                                               (term-local class)
+                                               (term-rdf-name property))))
+   (forge-quant
+    'all
+    (list (cons 'x class))
+    (some (intersect (follow 'x property) filler)))))
+
+(define (ontology-subclass-only-predicate ont axiom)
+  (define args (ontology-axiom-args axiom))
+  (define class (list-ref args 0))
+  (define property (list-ref args 1))
+  (define filler (list-ref args 2))
+  (predicate
+   (ontology-generated-predicate-name ont
+                                      (string->symbol
+                                       (format "~a-only-~a"
+                                               (term-local class)
+                                               (term-rdf-name property))))
+   (forge-quant
+    'all
+    (list (cons 'x class))
+    (in (follow 'x property) filler))))
+
+(define (ontology-property-chain-predicate ont axiom)
+  (define args (ontology-axiom-args axiom))
+  (define property (car args))
+  (define steps (cdr args))
+  (define domain (term-option property 'domain))
+  (and domain
+       (predicate
+        (ontology-generated-predicate-name ont
+                                           (string->symbol
+                                            (format "~a-property-chain"
+                                                    (term-rdf-name property))))
+        (forge-quant
+         'all
+         (list (cons 'x domain))
+         (in (apply follow 'x steps)
+             (follow 'x property))))))
+
+(define (ontology-class-list-predicate ont axiom kind)
+  (define args (ontology-axiom-args axiom))
+  (define class (car args))
+  (define members (cdr args))
+  (define set-expr
+    (case kind
+      [(union) (apply union members)]
+      [(intersection) (apply intersect members)]))
+  (predicate
+   (ontology-generated-predicate-name ont
+                                      (string->symbol
+                                       (format "~a-equivalent-~a"
+                                               (term-local class)
+                                               kind)))
+   (&& (in class set-expr)
+       (in set-expr class))))
+
+(define (ontology->predicates ont)
+  (append
+   (ontology-property-option-predicates ont)
+   (map (lambda (axiom) (ontology-subclass-some-predicate ont axiom))
+        (ontology-axioms ont 'subclass-some))
+   (map (lambda (axiom) (ontology-subclass-only-predicate ont axiom))
+        (ontology-axioms ont 'subclass-only))
+   (filter values
+           (map (lambda (axiom) (ontology-property-chain-predicate ont axiom))
+                (ontology-axioms ont 'property-chain)))
+   (map (lambda (axiom) (ontology-class-list-predicate ont axiom 'union))
+        (ontology-axioms ont 'equivalent-union))
+   (map (lambda (axiom) (ontology-class-list-predicate ont axiom 'intersection))
+        (ontology-axioms ont 'equivalent-intersection))))
+
 (define (ontology->signatures ont)
   (define class-terms (ontology-class-terms ont))
   (define fields-by-domain
@@ -330,7 +498,7 @@
         [(ontology? part)
          (values options
                  (append (reverse (ontology->signatures part)) signatures)
-                 predicates
+                 (append (reverse (ontology->predicates part)) predicates)
                  checks
                  runs)]
         [(forge-predicate? part)
@@ -611,6 +779,10 @@
     (hash-set! predicate-map
                (forge-predicate-name pred)
                (compile-forge-expr (forge-predicate-body pred) sig-map relation-map predicate-map)))
+  (define ontology-constraint-bodies
+    (for/list ([pred (in-list (forge-model-predicates model))]
+               #:when (ontology-generated-predicate? pred))
+      (hash-ref predicate-map (forge-predicate-name pred))))
   (define sigs
     (for/list ([sig (in-list (forge-model-signatures model))])
       (hash-ref sig-map (forge-signature-term sig))))
@@ -621,8 +793,9 @@
   (define options (forge-option-hash model #:run-sterling run-sterling #:export-run export-run #:export-xml export-xml))
   (define temporal? (eq? (forge-model-language model) 'forge/temporal))
   (define field-constraints-body
-    (and (not (null? field-constraints))
-         (apply f:&&/func field-constraints)))
+    (let ([constraints (append field-constraints ontology-constraint-bodies)])
+      (and (not (null? constraints))
+           (apply f:&&/func constraints))))
   (define field-constraints-for-run
     (and field-constraints-body
          (if temporal?

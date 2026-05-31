@@ -13,6 +13,9 @@ extract_all = true
 paths = [
     '../test',
     'rt-overview.md',
+    'rt-holding.md',
+    'rt-game.md',
+    'rt-occurrents.md',
 ]
 recursive_paths = [
     '../src',

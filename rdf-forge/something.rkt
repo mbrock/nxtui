@@ -26,7 +26,24 @@
          ontology
          class
          variant
+         disjoint
+         equivalent-union
+         equivalent-intersection
+         subclass-some
+         subclass-only
+         property-chain
+         logical-axiom
+         annotation-property
          property
+         inverse-of
+         subproperty-of
+         transitive
+         symmetric
+         asymmetric
+         reflexive
+         irreflexive
+         functional
+         inverse-functional
          option
          field
          one
@@ -294,6 +311,24 @@
      (list #'name)]
     [((~datum variant) parent:id (child:id ...))
      (cons #'parent (syntax->list #'(child ...)))]
+    [((~datum disjoint) class:id ...)
+     '()]
+    [((~datum equivalent-union) class:id member:id ...)
+     '()]
+    [((~datum equivalent-intersection) class:id member:id ...)
+     '()]
+    [((~datum subclass-some) class:id property:id filler:id)
+     '()]
+    [((~datum subclass-only) class:id property:id filler:id)
+     '()]
+    [((~datum property-chain) property:id (step:id ...))
+     '()]
+    [((~datum property-chain) property:id step:id ...)
+     '()]
+    [((~datum logical-axiom) name:id subject:id option ...)
+     '()]
+    [((~datum annotation-property) name:id option ...)
+     '()]
     [((~datum property) name:id option ...)
      (list #'name)]
     [((~datum a) domain:id relation:id (~datum some) range:id)
@@ -309,6 +344,95 @@
     [((~datum a) domain:id (~datum varyingly) relation:id
       (~datum a) range:id (~datum or) (~datum not))
      (list #'relation)]))
+
+(define-for-syntax (property-clause-option? stx)
+  (define datum (syntax->datum stx))
+  (or (memq datum
+            '(transitive
+              symmetric
+              asymmetric
+              reflexive
+              irreflexive
+              functional
+              inverse-functional))
+      (and (pair? datum)
+           (memq (car datum) '(inverse-of subproperty-of))
+           (= (length datum) 2)
+           (symbol? (cadr datum)))))
+
+(define-for-syntax (annotation-clause? stx)
+  (define datum (syntax->datum stx))
+  (or (and (pair? datum)
+           (= (length datum) 2)
+           (memq (car datum)
+                 '(label
+                   comment
+                   pref-label
+                   alt-label
+                   definition
+                   example
+                   clif-label
+                   fol-axiom
+                   nl-axiom
+                   elucidation)))
+      (and (pair? datum)
+           (= (length datum) 3)
+           (eq? (car datum) 'annotation)
+           (symbol? (cadr datum)))))
+
+(define-for-syntax (annotation-property-clause? stx)
+  (define datum (syntax->datum stx))
+  (or (annotation-clause? stx)
+      (and (pair? datum)
+           (= (length datum) 2)
+           (eq? (car datum) 'subproperty-of)
+           (symbol? (cadr datum)))))
+
+(define-for-syntax (annotation-property-clauses? clauses-stx)
+  (andmap annotation-property-clause? (syntax->list clauses-stx)))
+
+(define-for-syntax (logical-axiom-clause? stx)
+  (define datum (syntax->datum stx))
+  (and (pair? datum)
+       (= (length datum) 2)
+       (memq (car datum) '(label comment nl fol nl-axiom fol-axiom))))
+
+(define-for-syntax (logical-axiom-clauses? clauses-stx)
+  (andmap logical-axiom-clause? (syntax->list clauses-stx)))
+
+(define-for-syntax (property-clause-domain? stx)
+  (define datum (syntax->datum stx))
+  (and (list? datum)
+       (not (and (pair? datum)
+                 (memq (car datum)
+                       '(inverse-of
+                         subproperty-of
+                         transitive
+                         symmetric
+                         asymmetric
+                         reflexive
+                         irreflexive
+                         functional
+                         inverse-functional))))
+       (or (and (= (length datum) 2)
+                (andmap symbol? datum))
+           (and (= (length datum) 3)
+                (symbol? (first datum))
+                (memq (second datum) '(one lone set))
+                (symbol? (third datum)))
+           (and (= (length datum) 4)
+                (symbol? (first datum))
+                (eq? (second datum) 'var)
+                (memq (third datum) '(one lone set))
+                (symbol? (fourth datum))))))
+
+(define-for-syntax (property-block-clause? stx)
+  (or (property-clause-option? stx)
+      (annotation-clause? stx)
+      (property-clause-domain? stx)))
+
+(define-for-syntax (property-block-clauses? clauses-stx)
+  (andmap property-block-clause? (syntax->list clauses-stx)))
 
 (define-syntax (ontology stx)
   (syntax-parse stx
@@ -328,16 +452,47 @@
      #'(o:define-variant ont name (first rest ...))]
     [(_ ont:id ((~datum class) name:id))
      #'(o:define-class ont name)]
+    [(_ ont:id ((~datum class) name:id ((~datum block) clause ...)))
+     #'(o:define-class ont name (clause ...))]
+    [(_ ont:id ((~datum class) name:id #:subclass-of parent:id ((~datum block) clause ...)))
+     #'(o:define-class ont name #:subclass-of parent (clause ...))]
     [(_ ont:id ((~datum class) name:id option ...))
      #'(o:define-class ont name option ...)]
     [(_ ont:id ((~datum variant) parent:id (child:id ...)))
      #'(o:define-variant ont parent (child ...))]
+    [(_ ont:id ((~datum disjoint) class:id ...))
+     #'(o:define-disjoint ont class ...)]
+    [(_ ont:id ((~datum equivalent-union) class:id member:id ...))
+     #'(o:define-equivalent-union ont class member ...)]
+    [(_ ont:id ((~datum equivalent-intersection) class:id member:id ...))
+     #'(o:define-equivalent-intersection ont class member ...)]
+    [(_ ont:id ((~datum subclass-some) class:id property:id filler:id))
+     #'(o:define-subclass-some ont class property filler)]
+    [(_ ont:id ((~datum subclass-only) class:id property:id filler:id))
+     #'(o:define-subclass-only ont class property filler)]
+    [(_ ont:id ((~datum property-chain) property:id (step:id ...)))
+     #'(o:define-property-chain ont property (step ...))]
+    [(_ ont:id ((~datum property-chain) property:id step:id ...))
+     #'(o:define-property-chain ont property step ...)]
+    [(_ ont:id ((~datum logical-axiom) name:id subject:id ((~datum block) clause ...)))
+     #:when (logical-axiom-clauses? #'(clause ...))
+     #'(o:define-logical-axiom ont name subject (clause ...))]
+    [(_ ont:id ((~datum annotation-property) name:id ((~datum block) clause ...)))
+     #:when (annotation-property-clauses? #'(clause ...))
+     #'(o:define-annotation-property ont name (clause ...))]
+    [(_ ont:id ((~datum annotation-property) name:id))
+     #'(o:define-annotation-property ont name)]
     [(_ ont:id ((~datum property) name:id ((~datum block) clause ...)))
+     #:when (property-block-clauses? #'(clause ...))
      #'(o:define-property ont name (clause ...))]
     [(_ ont:id ((~datum property) name:id ((~datum block))))
      #'(o:define-property ont name)]
+    [(_ ont:id ((~datum property) name:id option:keyword value ...))
+     #'(o:define-property ont name option value ...)]
     [(_ ont:id ((~datum property) name:id))
      #'(o:define-property ont name)]
+    [(_ ont:id ((~datum property) name:id option ...))
+     #'(o:define-property ont name option ...)]
     [(_ ont:id ((~datum property) name:id (domain:id range:id) ...))
      #'(o:define-property ont name ((domain range) ...))]
     [(_ ont:id ((~datum a) domain:id relation:id (~datum some) range:id))
@@ -360,8 +515,59 @@
 (define-syntax (variant stx)
   (raise-syntax-error 'variant "variant is only valid inside an ontology block" stx))
 
+(define-syntax (disjoint stx)
+  (raise-syntax-error 'disjoint "disjoint is only valid inside an ontology block" stx))
+
+(define-syntax (equivalent-union stx)
+  (raise-syntax-error 'equivalent-union "equivalent-union is only valid inside an ontology block" stx))
+
+(define-syntax (equivalent-intersection stx)
+  (raise-syntax-error 'equivalent-intersection "equivalent-intersection is only valid inside an ontology block" stx))
+
+(define-syntax (subclass-some stx)
+  (raise-syntax-error 'subclass-some "subclass-some is only valid inside an ontology block" stx))
+
+(define-syntax (subclass-only stx)
+  (raise-syntax-error 'subclass-only "subclass-only is only valid inside an ontology block" stx))
+
+(define-syntax (property-chain stx)
+  (raise-syntax-error 'property-chain "property-chain is only valid inside an ontology block" stx))
+
+(define-syntax (logical-axiom stx)
+  (raise-syntax-error 'logical-axiom "logical-axiom is only valid inside an ontology block" stx))
+
+(define-syntax (annotation-property stx)
+  (raise-syntax-error 'annotation-property "annotation-property is only valid inside an ontology block" stx))
+
 (define-syntax (property stx)
   (raise-syntax-error 'property "property is only valid inside an ontology block" stx))
+
+(define-syntax (inverse-of stx)
+  (raise-syntax-error 'inverse-of "inverse-of is only valid inside a property block" stx))
+
+(define-syntax (subproperty-of stx)
+  (raise-syntax-error 'subproperty-of "subproperty-of is only valid inside a property block" stx))
+
+(define-syntax (transitive stx)
+  (raise-syntax-error 'transitive "transitive is only valid inside a property block" stx))
+
+(define-syntax (symmetric stx)
+  (raise-syntax-error 'symmetric "symmetric is only valid inside a property block" stx))
+
+(define-syntax (asymmetric stx)
+  (raise-syntax-error 'asymmetric "asymmetric is only valid inside a property block" stx))
+
+(define-syntax (reflexive stx)
+  (raise-syntax-error 'reflexive "reflexive is only valid inside a property block" stx))
+
+(define-syntax (irreflexive stx)
+  (raise-syntax-error 'irreflexive "irreflexive is only valid inside a property block" stx))
+
+(define-syntax (functional stx)
+  (raise-syntax-error 'functional "functional is only valid inside a property block" stx))
+
+(define-syntax (inverse-functional stx)
+  (raise-syntax-error 'inverse-functional "inverse-functional is only valid inside a property block" stx))
 
 (define-syntax (option stx)
   (syntax-parse stx
