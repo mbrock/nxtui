@@ -324,6 +324,36 @@ static suite mtproto_tests{
                 )")));
         };
 
+        "derives MT public key fingerprints without PEM parsing"_test = [] {
+            auto modulus = hex(R"(
+                c8c11d635691fac091dd9489aedced2932aa8a0bcefef05fa800892d9b52ed03
+                200865c9e97211cb2ee6c7ae96d3fb0e15aeffd66019b44a08a240cfdd2868
+                a85e1f54d6fa5deaa041f6941ddf302690d61dc476385c2fa655142353cb4
+                e4b59f6e5b6584db76fe8b1370263246c010c93d011014113ebdf987d093f
+                9d37c2be48352d69a1683f8f6e6c2167983c761e3ab169fde5daaa1212
+                3fa1beab621e4da5935e9c198f82f35eae583a99386d8110ea6bd1abb0
+                f568759f62694419ea5f69847c43462abef858b4cb5edc84e7b9226cd7
+                bd7e183aa974a712c079dde85b9dc063b8a5c08e8f859c0ee5dcd824
+                c7807f20153361a7f63cfd2a433a1be7f5
+            )");
+            auto scratch = std::array<std::byte, 264>{};
+
+            auto key = nxt::mt::auth::make_public_key(
+                modulus,
+                65537,
+                scratch);
+
+            expect(key.fingerprint == 0xb25898df208d2603ULL);
+            auto keys = std::array{key};
+            auto fingerprints = std::array<std::uint64_t, 2>{
+                0,
+                0xb25898df208d2603ULL,
+            };
+            expect(
+                nxt::mt::auth::select_public_key(keys, fingerprints)
+                == &keys[0]);
+        };
+
         "writes req_pq_multi and decodes resPQ into borrowed views"_test = [] {
             auto nonce = hex("4e44b426241e8b839153122d44585ac6");
             auto request = std::array<std::byte, 20>{};

@@ -4,6 +4,7 @@
 #include <nxt/mt/tl.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -25,6 +26,80 @@ inline constexpr std::uint32_t set_client_dh_params_constructor = 0xf5045f1f;
 inline constexpr std::uint32_t dh_gen_ok_constructor = 0x3bcbf734;
 inline constexpr std::uint32_t dh_gen_retry_constructor = 0x46dc1fb9;
 inline constexpr std::uint32_t dh_gen_fail_constructor = 0xa69dae02;
+
+inline std::size_t unsigned_be_size(unsigned value) noexcept
+{
+    auto size = std::size_t{1};
+    while ((value >>= 8) != 0)
+        size++;
+    return size;
+}
+
+inline void write_unsigned_be(
+    std::span<std::byte> out,
+    unsigned value)
+{
+    if (out.size() != unsigned_be_size(value))
+        throw protocol_error{"invalid unsigned integer output size"};
+    for (auto i = std::size_t{0}; i < out.size(); i++) {
+        auto shift = static_cast<unsigned>((out.size() - 1 - i) * 8);
+        out[i] = static_cast<std::byte>(value >> shift);
+    }
+}
+
+inline std::size_t public_key_fingerprint_size(
+    std::span<const std::byte> modulus,
+    unsigned exponent) noexcept
+{
+    return tl::bytes_size(modulus.size())
+        + tl::bytes_size(unsigned_be_size(exponent));
+}
+
+inline std::uint64_t read_u64_le(std::span<const std::byte> input)
+{
+    if (input.size() != 8)
+        throw protocol_error{"invalid little-endian uint64"};
+    auto value = std::uint64_t{0};
+    for (auto i = std::size_t{0}; i < input.size(); i++) {
+        value |= static_cast<std::uint64_t>(
+                     std::to_integer<std::uint8_t>(input[i]))
+                 << (8 * i);
+    }
+    return value;
+}
+
+inline std::uint64_t public_key_fingerprint(
+    std::span<const std::byte> modulus,
+    unsigned exponent,
+    std::span<std::byte> scratch)
+{
+    auto exponent_bytes = std::array<std::byte, sizeof(unsigned)>{};
+    auto exponent_size = unsigned_be_size(exponent);
+    auto exponent_span = std::span{exponent_bytes}.first(exponent_size);
+    write_unsigned_be(exponent_span, exponent);
+
+    auto needed = public_key_fingerprint_size(modulus, exponent);
+    if (scratch.size() < needed)
+        throw protocol_error{"public key fingerprint scratch is too small"};
+    auto writer = byte_writer{scratch.first(needed)};
+    tl::write_bytes(writer, modulus);
+    tl::write_bytes(writer, exponent_span);
+
+    auto digest = nxt::crypto::sha1(writer.written());
+    return read_u64_le(std::span<const std::byte>{digest}.subspan(12, 8));
+}
+
+inline public_key make_public_key(
+    std::span<const std::byte> modulus,
+    unsigned exponent,
+    std::span<std::byte> scratch)
+{
+    return public_key{
+        .modulus = modulus,
+        .exponent = exponent,
+        .fingerprint = public_key_fingerprint(modulus, exponent, scratch),
+    };
+}
 
 struct res_pq_view
 {
