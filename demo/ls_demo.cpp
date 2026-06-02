@@ -90,7 +90,7 @@ nxtrt::task<void> list_path_to_stdout(std::string path)
 
 } // namespace
 
-int main(int argc, char ** argv)
+int nxt_ls_demo_main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
@@ -107,3 +107,10 @@ try {
     std::cerr << "nxt-ls-demo: " << error.what() << '\n';
     return 1;
 }
+
+#if !defined(NXT_EMBEDDED_MAIN)
+int main(int argc, char ** argv)
+{
+    return nxt_ls_demo_main(argc, argv);
+}
+#endif

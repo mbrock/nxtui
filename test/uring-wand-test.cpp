@@ -331,7 +331,7 @@ nxtrt::task<nxtrt::child_result> cleanup_sleeping_shell_after_cancel(
 }
 
 template<typename T>
-T pump_until_done(
+T uring_pump_until_done(
     nxtrt::deck & deck,
     nxtrt::uring_wand & wand,
     nxtrt::task<T> & task)
@@ -340,7 +340,7 @@ T pump_until_done(
     return std::move(task).result();
 }
 
-void pump_until_done(
+void uring_pump_until_done(
     nxtrt::deck & deck,
     nxtrt::uring_wand & wand,
     nxtrt::task<void> & task)
@@ -445,7 +445,7 @@ static suite uring_wand_tests{
                 auto task = echo_over_socketpair(first.get(), second.get());
 
                 deck.start(task);
-                auto echoed = pump_until_done(deck, wand, task);
+                auto echoed = uring_pump_until_done(deck, wand, task);
 
                 expect(echoed == "socket wish smoke");
             };
@@ -468,7 +468,7 @@ static suite uring_wand_tests{
                 auto task = read_socket_source_count(rx.get());
 
                 deck.start(task);
-                auto result = pump_until_done(deck, wand, task);
+                auto result = uring_pump_until_done(deck, wand, task);
 
                 expect(result.first == "received");
                 expect(result.second == std::size_t{8});
@@ -487,7 +487,7 @@ static suite uring_wand_tests{
                 auto task = poll_after_socket_send(first.get(), second.get());
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                uring_pump_until_done(deck, wand, task);
 
                 expect(task.done());
             };
@@ -513,7 +513,7 @@ static suite uring_wand_tests{
                         sizeof(address)) != 0)
                     throw std::runtime_error{"client connect failed"};
 
-                auto accepted = pump_until_done(deck, wand, task);
+                auto accepted = uring_pump_until_done(deck, wand, task);
                 expect(accepted.get() >= 0);
             };
         };
@@ -525,7 +525,7 @@ static suite uring_wand_tests{
                 auto task = stat_current_directory();
 
                 deck.start(task);
-                auto stat = pump_until_done(deck, wand, task);
+                auto stat = uring_pump_until_done(deck, wand, task);
 
                 expect((stat.stx_mask & STATX_TYPE) != 0);
                 expect(S_ISDIR(stat.stx_mode));
@@ -537,7 +537,7 @@ static suite uring_wand_tests{
                 auto task = read_current_directory_names();
 
                 deck.start(task);
-                auto names = pump_until_done(deck, wand, task);
+                auto names = uring_pump_until_done(deck, wand, task);
 
                 expect(std::ranges::find(names, ".") != names.end());
                 expect(std::ranges::find(names, "..") != names.end());
@@ -549,7 +549,7 @@ static suite uring_wand_tests{
                 auto task = nxtrt::fs::list_path(".");
 
                 deck.start(task);
-                auto entries = pump_until_done(deck, wand, task);
+                auto entries = uring_pump_until_done(deck, wand, task);
 
                 auto dot = std::ranges::find(
                     entries,
@@ -574,7 +574,7 @@ static suite uring_wand_tests{
                 auto task = write_to_fd(tx.get(), "wishful stdout");
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                uring_pump_until_done(deck, wand, task);
 
                 auto buffer = std::array<char, 32>{};
                 auto n = ::read(rx.get(), buffer.data(), buffer.size());
@@ -598,7 +598,7 @@ static suite uring_wand_tests{
                 auto task = write_with_socket_sink_count(tx.get(), "counted");
 
                 deck.start(task);
-                auto counted = pump_until_done(deck, wand, task);
+                auto counted = uring_pump_until_done(deck, wand, task);
 
                 auto buffer = std::array<char, 32>{};
                 auto n = ::read(rx.get(), buffer.data(), buffer.size());
@@ -617,7 +617,7 @@ static suite uring_wand_tests{
                     "printf 'out'; printf 'err' >&2");
 
                 deck.start(task);
-                auto child = pump_until_done(deck, wand, task);
+                auto child = uring_pump_until_done(deck, wand, task);
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 0_i);
@@ -632,7 +632,7 @@ static suite uring_wand_tests{
                 auto task = capture_shell("printf 'nope'; exit 7");
 
                 deck.start(task);
-                auto child = pump_until_done(deck, wand, task);
+                auto child = uring_pump_until_done(deck, wand, task);
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 7_i);
@@ -648,7 +648,7 @@ static suite uring_wand_tests{
                     "else printf 'stdin-eof'; fi");
 
                 deck.start(task);
-                auto child = pump_until_done(deck, wand, task);
+                auto child = uring_pump_until_done(deck, wand, task);
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 0_i);
@@ -662,7 +662,7 @@ static suite uring_wand_tests{
                 auto task = capture_shell("printf 'abcdefgh'; exit 7", 5);
 
                 deck.start(task);
-                auto child = pump_until_done(deck, wand, task);
+                auto child = uring_pump_until_done(deck, wand, task);
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 7_i);
@@ -698,7 +698,7 @@ static suite uring_wand_tests{
                 auto task = terminate_sleeping_shell();
 
                 deck.start(task);
-                auto status = pump_until_done(deck, wand, task);
+                auto status = uring_pump_until_done(deck, wand, task);
 
                 expect(status.signaled);
                 expect(status.signal == SIGTERM);
@@ -710,7 +710,7 @@ static suite uring_wand_tests{
                 auto task = run_shell_in_pty();
 
                 deck.start(task);
-                auto status = pump_until_done(deck, wand, task);
+                auto status = uring_pump_until_done(deck, wand, task);
 
                 expect(status.exited);
                 expect(status.exit_code == 0_i);
@@ -732,7 +732,7 @@ static suite uring_wand_tests{
 
                 expect(spawned);
                 task.request_stop();
-                auto status = pump_until_done(deck, wand, task);
+                auto status = uring_pump_until_done(deck, wand, task);
 
                 expect(status.signaled);
                 expect(status.signal == SIGTERM);
@@ -746,7 +746,7 @@ static suite uring_wand_tests{
                 auto task = timeout_once();
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                uring_pump_until_done(deck, wand, task);
 
                 expect(task.done());
             };
@@ -757,7 +757,7 @@ static suite uring_wand_tests{
                 auto task = many_short_timeouts();
 
                 deck.start(task);
-                auto values = pump_until_done(deck, wand, task);
+                auto values = uring_pump_until_done(deck, wand, task);
 
                 expect(task.done());
                 expect(values.size() == std::size_t{32});
@@ -777,7 +777,7 @@ static suite uring_wand_tests{
                     poll_until_after_socket_send(first.get(), second.get());
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                uring_pump_until_done(deck, wand, task);
 
                 expect(task.done());
             };
@@ -795,7 +795,7 @@ static suite uring_wand_tests{
                 auto task = poll_until_timeout(second.get());
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                uring_pump_until_done(deck, wand, task);
 
                 expect(task.done());
             };
@@ -835,7 +835,7 @@ static suite uring_wand_tests{
                     poll_after_send_with_timeout(first.get(), second.get());
 
                 deck.start(task);
-                pump_until_done(deck, wand, task);
+                uring_pump_until_done(deck, wand, task);
 
                 expect(task.done());
             };
@@ -856,7 +856,7 @@ static suite uring_wand_tests{
 
                 auto timed_out = false;
                 try {
-                    pump_until_done(deck, wand, task);
+                    uring_pump_until_done(deck, wand, task);
                 } catch (const nxtrt::timeout_error &) {
                     timed_out = true;
                 }

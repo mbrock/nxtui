@@ -384,7 +384,7 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
 
 } // namespace
 
-int main(int argc, char ** argv)
+int nxt_shell_scope_demo_main(int argc, char ** argv)
 try {
     auto command = std::string{};
     if (argc > 1) {
@@ -403,3 +403,10 @@ try {
     std::cerr << "nxt-shell-scope-demo: " << error.what() << '\n';
     return 1;
 }
+
+#if !defined(NXT_EMBEDDED_MAIN)
+int main(int argc, char ** argv)
+{
+    return nxt_shell_scope_demo_main(argc, argv);
+}
+#endif

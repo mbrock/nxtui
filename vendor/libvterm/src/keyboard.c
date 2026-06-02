@@ -2,6 +2,8 @@
 
 #include <stdio.h>
 
+#undef VTERM_UTF8_PREFIX
+#define VTERM_UTF8_PREFIX keyboard
 #include "utf8.h"
 
 void vterm_keyboard_unichar(VTerm *vt, uint32_t c, VTermModifier mod)

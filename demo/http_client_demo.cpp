@@ -33,7 +33,7 @@
 namespace {
 
 // Every encoding this build can decode, so the server is free to pick its best.
-std::string accept_encoding_header()
+std::string http_client_accept_encoding_header()
 {
     auto value = std::string{"gzip, deflate"};
 #if defined(NXTRT_HAVE_ZSTD)
@@ -55,7 +55,7 @@ std::string build_request(const nxtrt::http::url & url)
             {
                 {"User-Agent", "nxt-curl/0"},
                 {"Accept", "*/*"},
-                {"Accept-Encoding", accept_encoding_header()},
+                {"Accept-Encoding", http_client_accept_encoding_header()},
             },
         .body = {},
     };
@@ -118,7 +118,7 @@ nxtrt::task<void> fetch(nxtrt::http::url url)
 
 } // namespace
 
-int main(int argc, char ** argv)
+int nxt_http_client_demo_main(int argc, char ** argv)
 try {
     auto url = nxtrt::http::parse_url(
         argc > 1 ? std::string_view{argv[1]}
@@ -139,3 +139,10 @@ try {
     std::cerr << "nxt-curl: " << error.what() << '\n';
     return 1;
 }
+
+#if !defined(NXT_EMBEDDED_MAIN)
+int main(int argc, char ** argv)
+{
+    return nxt_http_client_demo_main(argc, argv);
+}
+#endif

@@ -11,7 +11,7 @@
 
 /* Some convenient wrappers to make callback functions easier */
 
-static void putglyph(VTermState *state, const uint32_t chars[], int width, VTermPos pos)
+static void state_putglyph(VTermState *state, const uint32_t chars[], int width, VTermPos pos)
 {
   VTermGlyphInfo info = {
     .chars = chars,
@@ -41,7 +41,7 @@ static void updatecursor(VTermState *state, VTermPos *oldpos, int cancel_phantom
       return;
 }
 
-static void erase(VTermState *state, VTermRect rect, int selective)
+static void state_erase(VTermState *state, VTermRect rect, int selective)
 {
   if(rect.end_col == state->cols) {
     /* If we're erasing the final cells of any lines, cancel the continuation
@@ -365,7 +365,7 @@ static int on_text(const char bytes[], size_t len, void *user)
 #endif
 
       /* Now render it */
-      putglyph(state, state->combine_chars, state->combine_width, state->combine_pos);
+      state_putglyph(state, state->combine_chars, state->combine_width, state->combine_pos);
     }
     else {
       DEBUG_LOG("libvterm: TODO: Skip over split char+combining\n");
@@ -433,7 +433,7 @@ static int on_text(const char bytes[], size_t len, void *user)
       scroll(state, rect, 0, -1);
     }
 
-    putglyph(state, chars, width, state->pos);
+    state_putglyph(state, chars, width, state->pos);
 
     if(i == npoints - 1) {
       /* End of the buffer. Save the chars in case we have to combine with
@@ -677,7 +677,7 @@ static int on_escape(const char *bytes, size_t len, void *user)
         uint32_t E[] = { 'E', 0 };
         for(pos.row = 0; pos.row < state->rows; pos.row++)
           for(pos.col = 0; pos.col < ROWWIDTH(state, pos.row); pos.col++)
-            putglyph(state, E, 1, pos);
+            state_putglyph(state, E, 1, pos);
         break;
       }
 
@@ -1093,14 +1093,14 @@ static int on_csi(const char *leader, const long args[], int argcount, const cha
       rect.start_row = state->pos.row; rect.end_row = state->pos.row + 1;
       rect.start_col = state->pos.col; rect.end_col = state->cols;
       if(rect.end_col > rect.start_col)
-        erase(state, rect, selective);
+        state_erase(state, rect, selective);
 
       rect.start_row = state->pos.row + 1; rect.end_row = state->rows;
       rect.start_col = 0;
       for(int row = rect.start_row; row < rect.end_row; row++)
         set_lineinfo(state, row, FORCE, DWL_OFF, DHL_OFF);
       if(rect.end_row > rect.start_row)
-        erase(state, rect, selective);
+        state_erase(state, rect, selective);
       break;
 
     case 1:
@@ -1109,12 +1109,12 @@ static int on_csi(const char *leader, const long args[], int argcount, const cha
       for(int row = rect.start_row; row < rect.end_row; row++)
         set_lineinfo(state, row, FORCE, DWL_OFF, DHL_OFF);
       if(rect.end_col > rect.start_col)
-        erase(state, rect, selective);
+        state_erase(state, rect, selective);
 
       rect.start_row = state->pos.row; rect.end_row = state->pos.row + 1;
                           rect.end_col = state->pos.col + 1;
       if(rect.end_row > rect.start_row)
-        erase(state, rect, selective);
+        state_erase(state, rect, selective);
       break;
 
     case 2:
@@ -1122,7 +1122,7 @@ static int on_csi(const char *leader, const long args[], int argcount, const cha
       rect.start_col = 0; rect.end_col = state->cols;
       for(int row = rect.start_row; row < rect.end_row; row++)
         set_lineinfo(state, row, FORCE, DWL_OFF, DHL_OFF);
-      erase(state, rect, selective);
+      state_erase(state, rect, selective);
       break;
 
     case 3:
@@ -1152,7 +1152,7 @@ static int on_csi(const char *leader, const long args[], int argcount, const cha
     }
 
     if(rect.end_col > rect.start_col)
-      erase(state, rect, selective);
+      state_erase(state, rect, selective);
 
     break;
 
@@ -1237,7 +1237,7 @@ static int on_csi(const char *leader, const long args[], int argcount, const cha
     rect.end_col   = state->pos.col + count;
     UBOUND(rect.end_col, THISROWWIDTH(state));
 
-    erase(state, rect, 0);
+    state_erase(state, rect, 0);
     break;
 
   case 0x5a: // CBT - ECMA-48 8.3.7
@@ -1263,7 +1263,7 @@ static int on_csi(const char *leader, const long args[], int argcount, const cha
     col = state->pos.col + count;
     UBOUND(col, row_width);
     while (state->pos.col < col) {
-      putglyph(state, state->combine_chars, state->combine_width, state->pos);
+      state_putglyph(state, state->combine_chars, state->combine_width, state->pos);
       state->pos.col += state->combine_width;
     }
     if (state->pos.col + state->combine_width >= row_width) {
@@ -2160,7 +2160,7 @@ void vterm_state_reset(VTermState *state, int hard)
     state->at_phantom = 0;
 
     VTermRect rect = { 0, state->rows, 0, state->cols };
-    erase(state, rect, 0);
+    state_erase(state, rect, 0);
   }
 }
 
@@ -2246,7 +2246,7 @@ int vterm_state_set_termprop(VTermState *state, VTermProp prop, VTermValue *val)
         .end_row = state->rows,
         .end_col = state->cols,
       };
-      erase(state, rect, 0);
+      state_erase(state, rect, 0);
     }
     return 1;
   case VTERM_PROP_MOUSE:

@@ -116,7 +116,7 @@ static int lookup_colour(const VTermState *state, int palette, const long args[]
 
 // Some conveniences
 
-static void setpenattr(VTermState *state, VTermAttr attr, VTermValueType type, VTermValue *val)
+static void pen_setpenattr(VTermState *state, VTermAttr attr, VTermValueType type, VTermValue *val)
 {
 #ifdef DEBUG
   if(type != vterm_get_attr_type(attr)) {
@@ -132,19 +132,19 @@ static void setpenattr(VTermState *state, VTermAttr attr, VTermValueType type, V
 static void setpenattr_bool(VTermState *state, VTermAttr attr, int boolean)
 {
   VTermValue val = { .boolean = boolean };
-  setpenattr(state, attr, VTERM_VALUETYPE_BOOL, &val);
+  pen_setpenattr(state, attr, VTERM_VALUETYPE_BOOL, &val);
 }
 
 static void setpenattr_int(VTermState *state, VTermAttr attr, int number)
 {
   VTermValue val = { .number = number };
-  setpenattr(state, attr, VTERM_VALUETYPE_INT, &val);
+  pen_setpenattr(state, attr, VTERM_VALUETYPE_INT, &val);
 }
 
 static void setpenattr_col(VTermState *state, VTermAttr attr, VTermColor color)
 {
   VTermValue val = { .color = color };
-  setpenattr(state, attr, VTERM_VALUETYPE_COLOR, &val);
+  pen_setpenattr(state, attr, VTERM_VALUETYPE_COLOR, &val);
 }
 
 static void set_pen_col_ansi(VTermState *state, VTermAttr attr, long col)

@@ -75,6 +75,23 @@ endif
 subdir('bench')
 subdir('test')
 
+if get_option('demo') and get_option('tests') and get_option('llm_tool')
+  nxt_dev = executable('nxt-dev',
+    [
+      'src/nxt-dev.cpp',
+      'src/nxtai/nxtllm.cpp',
+      'demo/ls_demo.cpp',
+      'demo/tui_demo.cpp',
+      'demo/shell_scope_demo.cpp',
+      'demo/http_client_demo.cpp',
+      'demo/openai_sse_demo.cpp',
+    ] + nxt_test_sources,
+    include_directories : [nxt_inc, include_directories('test')],
+    dependencies : nxt_test_deps,
+    cpp_args : ['-DNXT_EMBEDDED_MAIN=1'] + nxt_test_cpp_args + nxt_dns_args,
+  )
+endif
+
 if get_option('llm_tool')
   custom_target('nxtllm-root-link',
     output : 'nxtllm',

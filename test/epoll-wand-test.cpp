@@ -20,7 +20,7 @@ using namespace boost::ut;
 
 #if NXT_RT_HAS_EPOLL
 
-void pump_until_done(
+void epoll_pump_until_done(
     nxtrt::deck & deck,
     nxtrt::epoll_wand & wand,
     nxtrt::task<void> & task)
@@ -87,7 +87,7 @@ static suite epoll_wand_tests{
             auto task = epoll_timeout_once();
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            epoll_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };
@@ -101,7 +101,7 @@ static suite epoll_wand_tests{
                 sockets[1].get());
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            epoll_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };
@@ -113,7 +113,7 @@ static suite epoll_wand_tests{
             auto task = epoll_poll_until_timeout(sockets[1].get());
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            epoll_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };

@@ -75,7 +75,7 @@ std::array<std::byte, N> counting_bytes(std::uint8_t first = 0)
 }
 
 template<std::ranges::viewable_range Range>
-auto text_source(Range && chunks, std::span<std::byte> storage)
+auto mtproto_text_source(Range && chunks, std::span<std::byte> storage)
 {
     return nxtrt::byte_span_feed{
         std::forward<Range>(chunks),
@@ -170,7 +170,7 @@ static suite mtproto_tests{
             auto deck = nxtrt::deck{};
             auto chunks = std::array{"\x81\0\0\0\x01"sv, "abcd"sv};
             auto storage = std::array<std::byte, 16>{};
-            auto source = text_source(chunks, std::span{storage});
+            auto source = mtproto_text_source(chunks, std::span{storage});
 
             auto payload = deck.sync_wait(read_frame_text(source));
 

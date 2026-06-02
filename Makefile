@@ -1,16 +1,23 @@
-.PHONY: all setup build full test freebsd-test bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
+.PHONY: all setup setup-unity build dev full test freebsd-test bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
 
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/nxt-echo-bench
 BENCH_CPP_ARGS ?=
+NXT_MESON_LINK_ARGS ?= $(shell command -v mold >/dev/null 2>&1 && printf '%s' '-Dc_link_args=-fuse-ld=mold -Dcpp_link_args=-fuse-ld=mold')
 
 all: build
 
 setup:
-	meson setup build
+	meson setup build $(NXT_MESON_LINK_ARGS)
+
+setup-unity:
+	meson setup build -Dunity=on $(NXT_MESON_LINK_ARGS)
 
 build:
 	meson compile -C build nxtllm
+
+dev:
+	meson compile -C build nxt-dev
 
 full:
 	meson compile -C build
@@ -30,14 +37,16 @@ bench-build:
 			-Dtests=false \
 			-Ddemo=false \
 			-Dllm_tool=false \
-			-Dcpp_args='$(BENCH_CPP_ARGS)'; \
+			-Dcpp_args='$(BENCH_CPP_ARGS)' \
+			$(NXT_MESON_LINK_ARGS); \
 	else \
 		meson configure "$(BENCH_BUILD_DIR)" \
 			-Dbenchmarks=true \
 			-Dtests=false \
 			-Ddemo=false \
 			-Dllm_tool=false \
-			-Dcpp_args='$(BENCH_CPP_ARGS)'; \
+			-Dcpp_args='$(BENCH_CPP_ARGS)' \
+			$(NXT_MESON_LINK_ARGS); \
 	fi
 	meson compile -C "$(BENCH_BUILD_DIR)" "$(notdir $(BENCH_BIN))"
 

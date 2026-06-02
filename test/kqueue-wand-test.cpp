@@ -24,7 +24,7 @@ using namespace boost::ut;
 #if NXT_RT_HAS_KQUEUE
 
 template<typename T>
-T pump_until_done(
+T kqueue_pump_until_done(
     nxtrt::deck & deck,
     nxtrt::kqueue_wand & wand,
     nxtrt::task<T> & task)
@@ -33,7 +33,7 @@ T pump_until_done(
     return std::move(task).result();
 }
 
-void pump_until_done(
+void kqueue_pump_until_done(
     nxtrt::deck & deck,
     nxtrt::kqueue_wand & wand,
     nxtrt::task<void> & task)
@@ -195,7 +195,7 @@ static suite kqueue_wand_tests{
             auto task = timeout_once();
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            kqueue_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };
@@ -209,7 +209,7 @@ static suite kqueue_wand_tests{
                 sockets[1].get());
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            kqueue_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };
@@ -221,7 +221,7 @@ static suite kqueue_wand_tests{
             auto task = native_poll_until_timeout(sockets[1].get());
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            kqueue_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };
@@ -247,7 +247,7 @@ static suite kqueue_wand_tests{
                     sizeof(address)) != 0)
                 throw std::runtime_error{"client connect failed"};
 
-            auto accepted = pump_until_done(deck, wand, task);
+            auto accepted = kqueue_pump_until_done(deck, wand, task);
             expect(accepted.get() >= 0);
         };
 
@@ -260,7 +260,7 @@ static suite kqueue_wand_tests{
                 sockets[1].get());
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            kqueue_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };
@@ -274,7 +274,7 @@ static suite kqueue_wand_tests{
                 sockets[1].get());
 
             deck.start(task);
-            pump_until_done(deck, wand, task);
+            kqueue_pump_until_done(deck, wand, task);
 
             expect(task.done());
         };

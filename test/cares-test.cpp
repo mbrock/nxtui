@@ -13,7 +13,7 @@ namespace nxt::test {
 using namespace boost::ut;
 
 template<typename T>
-T pump_until_done(
+T cares_pump_until_done(
     nxtrt::deck & deck,
     nxtrt::uring_wand & wand,
     nxtrt::task<T> & task)
@@ -36,7 +36,7 @@ static suite dns_tests{
                 auto task = resolve_localhost();
 
                 deck.start(task);
-                auto addresses = pump_until_done(deck, wand, task);
+                auto addresses = cares_pump_until_done(deck, wand, task);
 
                 expect(!addresses.empty())
                     << "localhost should resolve to at least one address";

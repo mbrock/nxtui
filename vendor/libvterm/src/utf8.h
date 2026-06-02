@@ -1,3 +1,16 @@
+#undef utf8_seqlen
+#undef fill_utf8
+
+#ifndef VTERM_UTF8_PREFIX
+#define VTERM_UTF8_PREFIX vterm
+#endif
+
+#define VTERM_UTF8_JOIN2(a, b) a##b
+#define VTERM_UTF8_JOIN(a, b) VTERM_UTF8_JOIN2(a, b)
+#define VTERM_UTF8_NAME(name) VTERM_UTF8_JOIN(VTERM_UTF8_PREFIX, _##name)
+#define utf8_seqlen VTERM_UTF8_NAME(utf8_seqlen)
+#define fill_utf8 VTERM_UTF8_NAME(fill_utf8)
+
 /* The following functions copied and adapted from libtermkey
  *
  * http://www.leonerd.org.uk/code/libtermkey/

@@ -120,7 +120,7 @@ nxtrt::task<void> run_demo()
 
 } // namespace
 
-int main()
+int nxt_tui_demo_main(int, char **)
 try {
     auto rt = nxtrt::runtime{};
     rt.run(run_demo());
@@ -130,3 +130,10 @@ try {
     std::cerr << "nxt-tui-demo: " << error.what() << '\n';
     return 1;
 }
+
+#if !defined(NXT_EMBEDDED_MAIN)
+int main(int argc, char ** argv)
+{
+    return nxt_tui_demo_main(argc, argv);
+}
+#endif

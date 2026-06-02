@@ -156,7 +156,7 @@ nxtrt::task<std::string> read_env_string(const char * name)
     co_return env_string(name);
 }
 
-std::string accept_encoding_header()
+std::string nxtllm_accept_encoding_header()
 {
     auto value = std::string{"gzip, deflate"};
 #if defined(NXTRT_HAVE_ZSTD)
@@ -193,7 +193,7 @@ openai_request(const nxtai::responses::openai_responses_request & request)
             {
                 {"User-Agent", "nxtllm/0"},
                 {"Accept", "text/event-stream"},
-                {"Accept-Encoding", accept_encoding_header()},
+                {"Accept-Encoding", nxtllm_accept_encoding_header()},
                 {"Content-Type", "application/json"},
                 {"Authorization", "Bearer " + request.api_key},
                 {"Connection", "close"},
@@ -639,7 +639,7 @@ int report_unknown_exception()
     return EXIT_FAILURE;
 }
 
-int main(int argc, char ** argv)
+int nxtllm_main(int argc, char ** argv)
 {
     auto exit_code = EXIT_FAILURE;
     nxt::debug::try_catch(
@@ -658,3 +658,10 @@ int main(int argc, char ** argv)
         [&] { exit_code = report_unknown_exception(); });
     return exit_code;
 }
+
+#if !defined(NXT_EMBEDDED_MAIN)
+int main(int argc, char ** argv)
+{
+    return nxtllm_main(argc, argv);
+}
+#endif

@@ -11,7 +11,7 @@ namespace {
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
-constexpr auto k = std::array<u32, 64>{
+constexpr auto sha256_k = std::array<u32, 64>{
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
     0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
@@ -30,7 +30,7 @@ constexpr auto k = std::array<u32, 64>{
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 };
 
-u32 load32_be(const std::byte * bytes)
+u32 sha256_load32_be(const std::byte * bytes)
 {
     return (u32{static_cast<unsigned char>(bytes[0])} << 24)
          | (u32{static_cast<unsigned char>(bytes[1])} << 16)
@@ -38,7 +38,7 @@ u32 load32_be(const std::byte * bytes)
          | u32{static_cast<unsigned char>(bytes[3])};
 }
 
-void store32_be(std::byte * out, u32 value)
+void sha256_store32_be(std::byte * out, u32 value)
 {
     out[0] = static_cast<std::byte>(value >> 24);
     out[1] = static_cast<std::byte>(value >> 16);
@@ -46,11 +46,11 @@ void store32_be(std::byte * out, u32 value)
     out[3] = static_cast<std::byte>(value);
 }
 
-void compress(std::array<u32, 8> & state, const std::byte block[64])
+void sha256_compress(std::array<u32, 8> & state, const std::byte block[64])
 {
     auto w = std::array<u32, 64>{};
     for (auto i = 0; i < 16; i++)
-        w[i] = load32_be(block + 4 * i);
+        w[i] = sha256_load32_be(block + 4 * i);
     for (auto i = 16; i < 64; i++) {
         const auto s0 = std::rotr(w[i - 15], 7) ^ std::rotr(w[i - 15], 18)
                       ^ (w[i - 15] >> 3);
@@ -71,7 +71,7 @@ void compress(std::array<u32, 8> & state, const std::byte block[64])
     for (auto i = 0; i < 64; i++) {
         const auto s1 = std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25);
         const auto ch = (e & f) ^ (~e & g);
-        const auto temp1 = h + s1 + ch + k[i] + w[i];
+        const auto temp1 = h + s1 + ch + sha256_k[i] + w[i];
         const auto s0 = std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22);
         const auto maj = (a & b) ^ (a & c) ^ (b & c);
         const auto temp2 = s0 + maj;
@@ -121,13 +121,13 @@ void sha256_state::update(std::span<const std::byte> input)
         buffered_ += take;
         input = input.subspan(take);
         if (buffered_ == buffer_.size()) {
-            compress(state_, buffer_.data());
+            sha256_compress(state_, buffer_.data());
             buffered_ = 0;
         }
     }
 
     while (input.size() >= buffer_.size()) {
-        compress(state_, input.data());
+        sha256_compress(state_, input.data());
         input = input.subspan(buffer_.size());
     }
 
@@ -150,13 +150,13 @@ std::array<std::byte, sha256_len> sha256_state::finalize() const
     for (auto i = 0; i < 8; i++)
         block[final_size - 1 - i] = static_cast<std::byte>(bit_size >> (8 * i));
 
-    compress(state, block.data());
+    sha256_compress(state, block.data());
     if (final_size == 128)
-        compress(state, block.data() + 64);
+        sha256_compress(state, block.data() + 64);
 
     auto out = std::array<std::byte, sha256_len>{};
     for (auto i = 0; i < 8; i++)
-        store32_be(out.data() + 4 * i, state[i]);
+        sha256_store32_be(out.data() + 4 * i, state[i]);
     return out;
 }
 

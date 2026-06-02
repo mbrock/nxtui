@@ -90,7 +90,7 @@ cli_options parse_cli(int argc, char ** argv)
     return options;
 }
 
-std::string accept_encoding_header()
+std::string openai_sse_accept_encoding_header()
 {
     auto value = std::string{"gzip, deflate"};
 #if defined(NXTRT_HAVE_ZSTD)
@@ -136,7 +136,7 @@ nxtrt::http::request openai_request(
             {
                 {"User-Agent", "nxt-openai-sse-demo/0"},
                 {"Accept", "text/event-stream"},
-                {"Accept-Encoding", accept_encoding_header()},
+                {"Accept-Encoding", openai_sse_accept_encoding_header()},
                 {"Content-Type", "application/json"},
                 {"Authorization", "Bearer " + std::string{api_key}},
                 {"Connection", "close"},
@@ -329,7 +329,7 @@ void write_stderr(std::string_view text)
 
 } // namespace
 
-int main(int argc, char ** argv)
+int nxt_openai_sse_demo_main(int argc, char ** argv)
 try {
     auto options = parse_cli(argc, argv);
     auto * api_key = std::getenv("OPENAI_API_KEY");
@@ -355,3 +355,10 @@ try {
     write_stderr(std::format("nxt-openai-sse-demo: {}\n", error.what()));
     return 1;
 }
+
+#if !defined(NXT_EMBEDDED_MAIN)
+int main(int argc, char ** argv)
+{
+    return nxt_openai_sse_demo_main(argc, argv);
+}
+#endif

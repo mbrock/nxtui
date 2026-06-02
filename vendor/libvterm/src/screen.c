@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "rect.h"
+#undef VTERM_UTF8_PREFIX
+#define VTERM_UTF8_PREFIX screen
 #include "utf8.h"
 
 #define UNICODE_SPACE 0x20
@@ -171,7 +173,7 @@ static void damagescreen(VTermScreen *screen)
   damagerect(screen, rect);
 }
 
-static int putglyph(VTermGlyphInfo *info, VTermPos pos, void *user)
+static int screen_putglyph(VTermGlyphInfo *info, VTermPos pos, void *user)
 {
   VTermScreen *screen = user;
   ScreenCell *cell = getcell(screen, pos.row, pos.col);
@@ -317,7 +319,7 @@ static int erase_user(VTermRect rect, int selective, void *user)
   return 1;
 }
 
-static int erase(VTermRect rect, int selective, void *user)
+static int screen_erase(VTermRect rect, int selective, void *user)
 {
   erase_internal(rect, selective, user);
   return erase_user(rect, 0, user);
@@ -417,7 +419,7 @@ static int movecursor(VTermPos pos, VTermPos oldpos, int visible, void *user)
   return 0;
 }
 
-static int setpenattr(VTermAttr attr, VTermValue *val, void *user)
+static int screen_setpenattr(VTermAttr attr, VTermValue *val, void *user)
 {
   VTermScreen *screen = user;
 
@@ -853,12 +855,12 @@ static int sb_clear(void *user) {
 }
 
 static VTermStateCallbacks state_cbs = {
-  .putglyph    = &putglyph,
+  .putglyph    = &screen_putglyph,
   .movecursor  = &movecursor,
   .premove     = &premove,
   .scrollrect  = &scrollrect,
-  .erase       = &erase,
-  .setpenattr  = &setpenattr,
+  .erase       = &screen_erase,
+  .setpenattr  = &screen_setpenattr,
   .settermprop = &settermprop,
   .bell        = &bell,
   .resize      = &resize,

@@ -1,5 +1,7 @@
 #include "vterm_internal.h"
 
+#undef VTERM_UTF8_PREFIX
+#define VTERM_UTF8_PREFIX mouse
 #include "utf8.h"
 
 static void output_mouse(VTermState *state, int code, int pressed, int modifiers, int col, int row)
