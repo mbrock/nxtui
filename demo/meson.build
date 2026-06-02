@@ -11,7 +11,7 @@ if ls_demo_available
   executable('nxt-ls-demo',
     'ls_demo.cpp',
     include_directories : nxt_inc,
-    dependencies : ls_demo_dependencies,
+    dependencies : ls_demo_dependencies + [nxt_core_dep],
   )
 
   executable('nxt-tui-demo',

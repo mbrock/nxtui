@@ -2351,4 +2351,9 @@ task<std::size_t> stream_all(
     co_return total;
 }
 
+extern template class sink<std::byte>;
+extern template class feed<std::byte>;
+extern template class fixed_sink<std::byte>;
+extern template class discarding_sink<std::byte>;
+
 } // namespace nxtrt

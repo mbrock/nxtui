@@ -4,7 +4,6 @@
 #include "nxtrt/exceptions.hpp"
 #include "nxtrt/task.hpp"
 #include "nxtrt/value-buffers.hpp"
-#include "nxtrt/wish_ops.hpp"
 
 #include <concepts>
 #include <cstddef>
@@ -14,8 +13,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <sys/types.h>
 #include <type_traits>
-#include <unistd.h>
 #include <utility>
 
 namespace nxtrt {
@@ -23,29 +22,15 @@ namespace nxtrt {
 template<typename Read>
 concept byte_read_task = detail::value_read_task<std::byte, Read>;
 
-inline task<std::size_t> send_some(
+task<std::size_t> send_some(
     int fd,
     std::span<const std::byte> buffer,
-    int flags = 0)
-{
-    co_return co_await op::send_some{
-        .fd = fd,
-        .buffer = buffer,
-        .flags = flags,
-    };
-}
+    int flags = 0);
 
-inline task<std::size_t> write_some(
+task<std::size_t> write_some(
     int fd,
     std::span<const std::byte> buffer,
-    off_t offset = -1)
-{
-    co_return co_await op::write_some{
-        .fd = fd,
-        .buffer = buffer,
-        .offset = offset,
-    };
-}
+    off_t offset = -1);
 
 namespace detail {
 
@@ -186,57 +171,23 @@ private:
     hope<std::size_t>
     drain_more(
         value_chunk_view chunks,
-        std::size_t splat) override
-    {
-        return drain_more_task(chunks, splat);
-    }
+        std::size_t splat) override;
 
     task<std::size_t>
     drain_more_task(
         value_chunk_view chunks,
-        std::size_t splat)
-    {
-        auto src = first_nonempty(chunks, splat);
-        while (true) {
-            try {
-                co_return co_await op::write_some{
-                    .fd = fd_,
-                    .buffer = src,
-                    .offset = -1,
-                };
-            } catch (const interrupted_system_call &) {
-            }
-        }
-    }
+        std::size_t splat);
 
     static std::span<const std::byte> first_nonempty(
         value_chunk_view chunks,
-        std::size_t splat) noexcept
-    {
-        if (chunks.empty())
-            return {};
-        auto spans = chunks.chunks();
-        for (auto chunk : spans.first(spans.size() - 1)) {
-            if (!chunk.empty())
-                return chunk;
-        }
-        if (splat != 0 && !spans.back().empty())
-            return spans.back();
-        return {};
-    }
+        std::size_t splat) noexcept;
 
     int fd_ = -1;
 };
 
-inline fd_sink standard_output(std::size_t buffer_size = 4096)
-{
-    return fd_sink{STDOUT_FILENO, buffer_size};
-}
+fd_sink standard_output(std::size_t buffer_size = 4096);
 
-inline fd_sink standard_output_sink(std::size_t buffer_size = 4096)
-{
-    return standard_output(buffer_size);
-}
+fd_sink standard_output_sink(std::size_t buffer_size = 4096);
 
 /// Writer for a connected socket.
 class socket_sink final : public bytesink
@@ -270,46 +221,16 @@ private:
     hope<std::size_t>
     drain_more(
         value_chunk_view chunks,
-        std::size_t splat) override
-    {
-        return drain_more_task(chunks, splat);
-    }
+        std::size_t splat) override;
 
     task<std::size_t>
     drain_more_task(
         value_chunk_view chunks,
-        std::size_t splat)
-    {
-        auto src = first_nonempty(chunks, splat);
-        while (true) {
-            try {
-                auto n = co_await op::send_some{
-                    .fd = fd_,
-                    .buffer = src,
-                    .flags = flags_,
-                };
-                sent_ += n;
-                co_return n;
-            } catch (const interrupted_system_call &) {
-            }
-        }
-    }
+        std::size_t splat);
 
     static std::span<const std::byte> first_nonempty(
         value_chunk_view chunks,
-        std::size_t splat) noexcept
-    {
-        if (chunks.empty())
-            return {};
-        auto spans = chunks.chunks();
-        for (auto chunk : spans.first(spans.size() - 1)) {
-            if (!chunk.empty())
-                return chunk;
-        }
-        if (splat != 0 && !spans.back().empty())
-            return spans.back();
-        return {};
-    }
+        std::size_t splat) noexcept;
 
     int fd_ = -1;
     int flags_ = 0;
@@ -741,19 +662,7 @@ public:
         , fd_(fd)
     {}
 
-    task<std::size_t> read_into(junk<std::byte> dst)
-    {
-        while (true) {
-            try {
-                co_return co_await op::read_some{
-                    .fd = fd_,
-                    .buffer = dst.as_writable_bytes(),
-                    .offset = -1,
-                };
-            } catch (const interrupted_system_call &) {
-            }
-        }
-    }
+    task<std::size_t> read_into(junk<std::byte> dst);
 
 private:
     friend base;
@@ -791,21 +700,7 @@ public:
         return received_;
     }
 
-    task<std::size_t> read_into(junk<std::byte> dst)
-    {
-        while (true) {
-            try {
-                auto n = co_await op::recv_some{
-                    .fd = fd_,
-                    .buffer = dst.as_writable_bytes(),
-                    .flags = flags_,
-                };
-                received_ += n;
-                co_return n;
-            } catch (const interrupted_system_call &) {
-            }
-        }
-    }
+    task<std::size_t> read_into(junk<std::byte> dst);
 
 private:
     friend base;
@@ -839,19 +734,8 @@ task<std::size_t> for_each_chunk(
 ///
 /// Returns the number of bytes accepted by the writer. Concrete writers that
 /// count actual backend writes may expose their own count after `flush()`.
-inline task<std::size_t> stream_all(
+task<std::size_t> stream_all(
     bytefeed & reader,
-    bytesink & writer)
-{
-    auto total = std::size_t{0};
-    while (true) {
-        auto result = co_await reader.stream(writer);
-        total += value_count(result);
-        if (is_eof(result))
-            break;
-    }
-    co_await writer.flush();
-    co_return total;
-}
+    bytesink & writer);
 
 } // namespace nxtrt

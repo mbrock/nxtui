@@ -79,16 +79,23 @@ if get_option('demo') and get_option('tests') and get_option('llm_tool')
   nxt_dev = executable('nxt-dev',
     [
       'src/nxt-dev.cpp',
+      'src/nxt/stacktrace.cpp',
       'src/nxtai/nxtllm.cpp',
       'demo/ls_demo.cpp',
       'demo/tui_demo.cpp',
       'demo/shell_scope_demo.cpp',
       'demo/http_client_demo.cpp',
       'demo/openai_sse_demo.cpp',
-    ] + nxt_test_sources,
+    ] + nxt_core_sources + nxt_test_sources,
     include_directories : [nxt_inc, include_directories('test')],
-    dependencies : nxt_test_deps,
-    cpp_args : ['-DNXT_EMBEDDED_MAIN=1'] + nxt_test_cpp_args + nxt_dns_args,
+    dependencies : nxt_core_deps + nxt_stacktrace_deps + nxt_test_extra_deps,
+    cpp_args : [
+      '-DNXT_EMBEDDED_MAIN=1',
+    ] + nxt_mdspan_args
+      + nxt_compression_args
+      + nxt_stacktrace_cpp_args
+      + nxt_test_cpp_args
+      + nxt_dns_args,
   )
 endif
 

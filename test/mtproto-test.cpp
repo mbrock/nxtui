@@ -282,7 +282,7 @@ static suite mtproto_tests{
                 "\x01" "abcd" "\x01" "efgh" "\x01" "ijkl"sv,
             };
             auto storage = std::array<std::byte, 10>{};
-            auto source = text_source(chunks, std::span{storage});
+            auto source = mtproto_text_source(chunks, std::span{storage});
 
             deck.sync_wait(check_abridged_reel_ring_feed(source));
         };

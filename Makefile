@@ -1,8 +1,11 @@
-.PHONY: all setup setup-unity build dev full test freebsd-test bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
+.PHONY: all setup setup-unity build dev full test freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
 
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/nxt-echo-bench
 BENCH_CPP_ARGS ?=
+DEPS_FILE ?=
+DEPS_DEPTH ?= 4
+DEPS_FLAGS ?=
 NXT_MESON_LINK_ARGS ?= $(shell command -v mold >/dev/null 2>&1 && printf '%s' '-Dc_link_args=-fuse-ld=mold -Dcpp_link_args=-fuse-ld=mold')
 
 all: build
@@ -14,10 +17,9 @@ setup-unity:
 	meson setup build -Dunity=on $(NXT_MESON_LINK_ARGS)
 
 build:
-	meson compile -C build nxtllm
-
-dev:
 	meson compile -C build nxt-dev
+
+dev: build
 
 full:
 	meson compile -C build
@@ -25,6 +27,14 @@ full:
 test:
 	meson compile -C build nxt-tests
 	meson test -C build
+
+deps:
+	@scripts/include-graph --summary --depth "$(DEPS_DEPTH)" $(DEPS_FLAGS) $(DEPS_FILE)
+
+deps-dot:
+	@mkdir -p build
+	@scripts/include-graph --dot > build/include-graph.dot
+	@printf "wrote build/include-graph.dot\n"
 
 freebsd-test:
 	scripts/freebsd-vm test

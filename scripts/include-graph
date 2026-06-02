@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+import argparse
+import collections
+import os
+import re
+import sys
+
+
+INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]')
+DEFAULT_ROOTS = ("src", "test", "demo", "bench")
+SOURCE_SUFFIXES = (".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".h")
+
+
+def repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def rel(path, root):
+    return os.path.relpath(path, root)
+
+
+def find_files(root, dirs):
+    files = []
+    for directory in dirs:
+        full_dir = os.path.join(root, directory)
+        if not os.path.isdir(full_dir):
+            continue
+        for current, _, names in os.walk(full_dir):
+            for name in names:
+                if name.endswith(SOURCE_SUFFIXES):
+                    files.append(rel(os.path.join(current, name), root))
+    return sorted(files)
+
+
+def build_index(files):
+    by_rel = {path: path for path in files}
+    by_name = collections.defaultdict(list)
+    for path in files:
+        by_name[os.path.basename(path)].append(path)
+    return by_rel, by_name
+
+
+def resolve_include(owner, delimiter, include, root, by_rel, by_name):
+    if delimiter == '"':
+        candidate = os.path.normpath(os.path.join(os.path.dirname(owner), include))
+        if candidate in by_rel:
+            return candidate
+
+    for prefix in ("src", "test", "demo", "bench"):
+        candidate = os.path.normpath(os.path.join(prefix, include))
+        if candidate in by_rel:
+            return candidate
+
+    matches = by_name.get(os.path.basename(include), ())
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
+def read_includes(root, files):
+    by_rel, by_name = build_index(files)
+    graph = {path: [] for path in files}
+    external = collections.defaultdict(list)
+
+    for path in files:
+        full_path = os.path.join(root, path)
+        try:
+            with open(full_path, encoding="utf-8") as handle:
+                for line in handle:
+                    match = INCLUDE_RE.match(line)
+                    if not match:
+                        continue
+                    delimiter, include = match.groups()
+                    target = resolve_include(path, delimiter, include, root, by_rel, by_name)
+                    if target:
+                        graph[path].append(target)
+                    else:
+                        external[path].append(include)
+        except UnicodeDecodeError:
+            continue
+
+    for path in graph:
+        graph[path] = sorted(set(graph[path]))
+    return graph, external
+
+
+def reverse_graph(graph):
+    reverse = collections.defaultdict(list)
+    for owner, includes in graph.items():
+        for include in includes:
+            reverse[include].append(owner)
+    return {path: sorted(set(owners)) for path, owners in reverse.items()}
+
+
+def transitive_closure(graph, root):
+    seen = set()
+    stack = list(graph.get(root, ()))
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(graph.get(node, ()))
+    return seen
+
+
+def print_tree(graph, root, max_depth):
+    def walk(node, depth, active, seen):
+        prefix = "  " * depth
+        if depth == 0:
+            print(node)
+        if max_depth is not None and depth >= max_depth:
+            return
+        for child in graph.get(node, ()):
+            marker = ""
+            if child in active:
+                marker = " (cycle)"
+            elif child in seen:
+                marker = " (seen)"
+            print(f"{prefix}  -> {child}{marker}")
+            if marker:
+                continue
+            seen.add(child)
+            walk(child, depth + 1, active | {child}, seen)
+
+    walk(root, 0, {root}, {root})
+
+
+def print_summary(graph, limit):
+    reverse = reverse_graph(graph)
+    rows = []
+    for path in graph:
+        direct_in = len(reverse.get(path, ()))
+        direct_out = len(graph.get(path, ()))
+        transitive_out = len(transitive_closure(graph, path))
+        rows.append((direct_in, transitive_out, direct_out, path))
+
+    rows.sort(key=lambda row: (-row[0], -row[1], row[3]))
+    print("Most included local files")
+    print(f"{'in':>4} {'out':>4} {'tout':>5}  file")
+    print(f"{'--':>4} {'---':>4} {'----':>5}  ----")
+    for direct_in, transitive_out, direct_out, path in rows[:limit]:
+        if direct_in == 0 and transitive_out == 0 and direct_out == 0:
+            continue
+        print(f"{direct_in:4d} {direct_out:4d} {transitive_out:5d}  {path}")
+
+
+def print_reverse(graph, target, transitive):
+    reverse = reverse_graph(graph)
+    if not transitive:
+        for owner in reverse.get(target, ()):
+            print(owner)
+        return
+
+    users = []
+    for path in graph:
+        if target in transitive_closure(graph, path):
+            users.append(path)
+    for owner in sorted(users):
+        print(owner)
+
+
+def print_dot(graph):
+    print("digraph includes {")
+    print('  rankdir="LR";')
+    for owner, includes in sorted(graph.items()):
+        if not includes:
+            print(f'  "{owner}";')
+        for include in includes:
+            print(f'  "{owner}" -> "{include}";')
+    print("}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Print the local C/C++ include dependency graph.")
+    parser.add_argument(
+        "roots", nargs="*", help="files to print as transitive include trees")
+    parser.add_argument(
+        "--dir", action="append", dest="dirs",
+        help="source directory to scan, repeatable; defaults to src/test/demo/bench")
+    parser.add_argument(
+        "--summary", action="store_true",
+        help="print high fan-in and transitive fan-out files")
+    parser.add_argument(
+        "--reverse", metavar="FILE",
+        help="print files that include FILE")
+    parser.add_argument(
+        "--transitive", action="store_true",
+        help="make --reverse include indirect users too")
+    parser.add_argument(
+        "--dot", action="store_true",
+        help="print Graphviz DOT instead of text")
+    parser.add_argument(
+        "--limit", type=int, default=30,
+        help="summary row limit")
+    parser.add_argument(
+        "--depth", type=int, default=None,
+        help="maximum tree depth")
+    args = parser.parse_args()
+
+    root = repo_root()
+    files = find_files(root, args.dirs or DEFAULT_ROOTS)
+    graph, _ = read_includes(root, files)
+
+    if args.dot:
+        print_dot(graph)
+        return 0
+
+    if args.reverse:
+        target = os.path.normpath(args.reverse)
+        if target not in graph:
+            print(f"unknown local file: {target}", file=sys.stderr)
+            return 2
+        print_reverse(graph, target, args.transitive)
+        return 0
+
+    if args.summary or not args.roots:
+        print_summary(graph, args.limit)
+
+    for index, root_file in enumerate(args.roots):
+        target = os.path.normpath(root_file)
+        if target not in graph:
+            print(f"unknown local file: {target}", file=sys.stderr)
+            return 2
+        if args.summary or index > 0:
+            print()
+        print_tree(graph, target, args.depth)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -13,6 +13,7 @@ if get_option('tests')
     nxt_core_dep,
     nxt_stacktrace_dep,
   ]
+  nxt_test_extra_deps = []
   nxt_test_cpp_args = []
 
   nxt_crypto_dep = dependency('libcrypto', required : false)
@@ -32,6 +33,7 @@ if get_option('tests')
     dependencies : [nxt_crypto_dep],
     name : 'libcrypto test fixture API')
     nxt_test_deps += nxt_crypto_dep
+    nxt_test_extra_deps += nxt_crypto_dep
     nxt_test_cpp_args += '-DNXT_HAVE_TEST_LIBCRYPTO=1'
   endif
 
@@ -51,6 +53,7 @@ if get_option('tests')
     message('ML-KEM-768 test support available via system libcrypto')
     nxt_test_sources += files('../src/nxt/crypto/mlkem_libcrypto.cpp')
     nxt_test_deps += nxt_crypto_dep
+    nxt_test_extra_deps += nxt_crypto_dep
     nxt_test_cpp_args += '-DNXT_HAVE_MLKEM768=1'
   else
     message('ML-KEM-768 test support not available')
@@ -63,6 +66,7 @@ if get_option('tests')
       'cares-test.cpp',
     )
     nxt_test_deps += nxt_dns_deps
+    nxt_test_extra_deps += nxt_dns_deps
     nxt_test_cpp_args += nxt_dns_args
   elif host_machine.system() in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
     nxt_test_sources += files('kqueue-wand-test.cpp')
