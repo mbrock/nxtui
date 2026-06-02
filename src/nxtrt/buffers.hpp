@@ -448,6 +448,156 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 
 using bytefeed = feed<std::byte>;
 
+/// Causal frame facade over a `feed<Stock>`.
+///
+/// `reel` is the feed-moving half of @ref rfc_reels_reel
+/// "RFC 0001: Reels / Reel". It owns no source stock and caches no frame marks:
+/// `visible()` returns a fresh @ref chop_view over `source_.buffered()`, while
+/// `peek()` only fills the underlying feed until enough complete chops are
+/// visible. Frame projections stay borrowed from the source feed and are invalid
+/// after the next reel/feed operation that may mutate its buffer.
+template<
+    typename Stock,
+    typename Frame,
+    chop_scanner<Stock, Frame> Scanner =
+        static_chop_scanner<Stock, Frame>>
+class reel
+{
+public:
+    using stock_type = Stock;
+    using frame_type = Frame;
+    using scanner_type = Scanner;
+    using source_type = feed<Stock>;
+    using view_type = chop_view<Stock, Frame, Scanner>;
+
+    explicit reel(source_type & source, Scanner scanner = {})
+        : source_(source)
+        , scanner_(std::move(scanner))
+    {}
+
+    [[nodiscard]] view_type visible() const
+    {
+        return chop<Stock, Frame>(source_.buffered(), scanner_);
+    }
+
+    hope<view_type> peek(std::size_t minimum_count = 1)
+    {
+        try {
+            while (!visible().has_at_least(minimum_count)) {
+                auto target = next_fill_target();
+                auto fill = source_.fill(target);
+                if (!fill.is_ready())
+                    return peek_slow(minimum_count, std::move(fill));
+            }
+        } catch (const value_end_of_stream &) {
+        }
+
+        return hope<view_type>::ready(visible());
+    }
+
+    hope<void> discard_prefix(std::size_t extent)
+    {
+        if (extent == 0)
+            return hope<void>::ready();
+
+        auto discarded = source_.discard(extent);
+        if (discarded.is_ready()) {
+            auto n = value_count(discarded.take_ready());
+            if (n > extent)
+                throw buffer_error{"frame discard overreported extent"};
+            if (n == extent)
+                return hope<void>::ready();
+            if (n == 0)
+                throw value_end_of_stream{
+                    "unexpected end of frame input",
+                };
+            return discard_prefix_slow(extent - n);
+        }
+
+        return discard_prefix_slow(std::move(discarded), extent);
+    }
+
+    hope<void> discard(frame_chop<Frame> const & frame)
+    {
+        return discard_prefix(frame.extent);
+    }
+
+private:
+    task<view_type> peek_slow(
+        std::size_t minimum_count,
+        hope<void> first_fill)
+    {
+        try {
+            co_await std::move(first_fill);
+            while (!visible().has_at_least(minimum_count))
+                co_await source_.fill(next_fill_target());
+        } catch (const value_end_of_stream &) {
+        }
+        co_return visible();
+    }
+
+    task<void> discard_prefix_slow(std::size_t remaining)
+    {
+        while (remaining != 0) {
+            auto discarded = co_await source_.discard(remaining);
+            auto n = value_count(discarded);
+            if (n > remaining)
+                throw buffer_error{"frame discard overreported extent"};
+            if (n == 0)
+                throw value_end_of_stream{
+                    "unexpected end of frame input",
+                };
+            remaining -= n;
+        }
+    }
+
+    task<void> discard_prefix_slow(
+        hope<fare_t> first_discard,
+        std::size_t remaining)
+    {
+        auto discarded = co_await std::move(first_discard);
+        auto n = value_count(discarded);
+        if (n > remaining)
+            throw buffer_error{"frame discard overreported extent"};
+        if (n == 0)
+            throw value_end_of_stream{
+                "unexpected end of frame input",
+            };
+        co_await discard_prefix_slow(remaining - n);
+    }
+
+    [[nodiscard]] std::size_t next_fill_target() const
+    {
+        auto stock = source_.buffered();
+        auto offset = std::size_t{0};
+
+        while (true) {
+            auto suffix = stock.subspan(offset);
+            if (suffix.empty())
+                return offset + 1;
+
+            auto scan = std::invoke(scanner_, suffix);
+            if (auto * frame = std::get_if<frame_chop<Frame>>(&scan)) {
+                if (frame->extent == 0)
+                    throw buffer_error{"chop scanner returned zero extent"};
+                if (frame->extent > suffix.size())
+                    throw buffer_error{
+                        "chop scanner overreported extent",
+                    };
+                offset += frame->extent;
+                continue;
+            }
+
+            auto need = std::get<chop_need_more>(scan);
+            auto requested = offset + need.minimum_buffered;
+            return std::max(requested, stock.size() + 1);
+        }
+    }
+
+    source_type & source_;
+    Scanner scanner_;
+};
+
 /// Reader backed by a callable returning `task<fare_t>` or
 /// `task<std::size_t>`. Count-only reads treat zero bytes as EOF.
 template<byte_read_task Read>

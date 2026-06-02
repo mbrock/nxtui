@@ -7,11 +7,15 @@
 #include <cstddef>
 #include <cstring>
 #include <expected>
+#include <functional>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <string_view>
+#include <utility>
+#include <variant>
 
 namespace nxtrt {
 
@@ -163,6 +167,28 @@ public:
         return out;
     }
 
+    [[nodiscard]] buffer_chunks subspan(
+        std::size_t offset,
+        std::size_t count = std::numeric_limits<std::size_t>::max()) const
+    {
+        auto out = buffer_chunks{};
+        for (auto chunk : chunks()) {
+            if (offset >= chunk.size()) {
+                offset -= chunk.size();
+                continue;
+            }
+
+            auto rest = chunk.subspan(offset);
+            offset = 0;
+            auto take = std::min(count, rest.size());
+            out.append(rest.first(take));
+            count -= take;
+            if (count == 0)
+                break;
+        }
+        return out;
+    }
+
     [[nodiscard]] std::optional<chunk_type> single_span() const noexcept
     {
         if (count_ == 0)
@@ -188,6 +214,229 @@ private:
 
 template<typename T = std::byte, std::size_t Inline = 2>
 using byte_chunks = buffer_chunks<T, Inline>;
+
+/// Scanner response for a frame whose complete source stock is not visible yet.
+///
+/// `minimum_buffered` is relative to the chunk view passed to the scanner.
+/// A length-prefixed scanner can ask for the whole next frame immediately,
+/// while a delimiter scanner can ask for one more visible source value.
+struct chop_need_more
+{
+    std::size_t minimum_buffered = 0;
+};
+
+/// One visible frame projection and the source prefix it occupies.
+///
+/// This is the `(extent, frame)` pair described in
+/// @ref rfc_reels_chop "RFC 0001: Reels / Chop". The frame borrows from the
+/// chunks used to construct it; the extent is what lets the next scan start at
+/// the following frame boundary.
+template<typename Frame>
+struct frame_chop
+{
+    std::size_t extent = 0;
+    Frame frame;
+};
+
+template<typename Frame>
+using chop_scan_result = std::variant<frame_chop<Frame>, chop_need_more>;
+
+template<typename Scanner, typename Stock, typename Frame>
+concept chop_scanner =
+    requires(
+        const Scanner & scanner,
+        buffer_chunks<const Stock> stock) {
+        { std::invoke(scanner, stock) }
+            -> std::same_as<chop_scan_result<Frame>>;
+    };
+
+template<typename Stock, typename Frame>
+struct static_chop_scanner
+{
+    chop_scan_result<Frame> operator()(
+        buffer_chunks<const Stock> stock) const
+    {
+        return Frame::scan(stock);
+    }
+};
+
+/// Stateless lopping view over visible source stock.
+///
+/// `chop_view` is the pure range part of @ref rfc_reels_chop
+/// "RFC 0001: Reels / Chop". It stores only the current source chunks and a
+/// scanner, then recomputes frame boundaries as iteration advances. It does
+/// not own storage, cache marks, or model frames as queued values.
+template<
+    typename Stock,
+    typename Frame,
+    chop_scanner<Stock, Frame> Scanner =
+        static_chop_scanner<Stock, Frame>>
+class chop_view
+    : public std::ranges::view_interface<
+        chop_view<Stock, Frame, Scanner>>
+{
+public:
+    using stock_type = Stock;
+    using value_type = frame_chop<Frame>;
+
+    chop_view() = default;
+
+    chop_view(
+        buffer_chunks<const Stock> stock,
+        Scanner scanner = {})
+        : stock_(stock)
+        , scanner_(std::move(scanner))
+    {}
+
+    class iterator
+    {
+    public:
+        using iterator_concept = std::input_iterator_tag;
+        using iterator_category = std::input_iterator_tag;
+        using value_type = frame_chop<Frame>;
+        using difference_type = std::ptrdiff_t;
+
+        iterator() = default;
+
+        iterator(const chop_view * parent, std::size_t offset)
+            : parent_(parent)
+            , offset_(offset)
+        {
+            refresh();
+        }
+
+        [[nodiscard]] const value_type & operator*() const noexcept
+        {
+            return *current_;
+        }
+
+        [[nodiscard]] const value_type * operator->() const noexcept
+        {
+            return &*current_;
+        }
+
+        iterator & operator++()
+        {
+            offset_ += current_->extent;
+            refresh();
+            return *this;
+        }
+
+        void operator++(int)
+        {
+            (void)++*this;
+        }
+
+        [[nodiscard]] friend bool operator==(
+            const iterator & it,
+            std::default_sentinel_t) noexcept
+        {
+            return !it.current_.has_value();
+        }
+
+    private:
+        void refresh()
+        {
+            current_.reset();
+            if (parent_ == nullptr)
+                return;
+
+            auto suffix = parent_->stock_.subspan(offset_);
+            if (suffix.empty())
+                return;
+
+            auto scan = std::invoke(parent_->scanner_, suffix);
+            auto * complete = std::get_if<value_type>(&scan);
+            if (complete == nullptr)
+                return;
+
+            if (complete->extent == 0)
+                throw buffer_error{"chop scanner returned zero extent"};
+            if (complete->extent > suffix.size())
+                throw buffer_error{"chop scanner overreported extent"};
+            current_ = std::move(*complete);
+        }
+
+        const chop_view * parent_ = nullptr;
+        std::size_t offset_ = 0;
+        std::optional<value_type> current_;
+    };
+
+    [[nodiscard]] iterator begin() const
+    {
+        return iterator{this, 0};
+    }
+
+    [[nodiscard]] std::default_sentinel_t end() const noexcept
+    {
+        return {};
+    }
+
+    [[nodiscard]] bool empty() const
+    {
+        return begin() == end();
+    }
+
+    [[nodiscard]] std::size_t count() const
+    {
+        auto n = std::size_t{0};
+        for (auto const & ignored : *this) {
+            (void)ignored;
+            ++n;
+        }
+        return n;
+    }
+
+    [[nodiscard]] bool has_at_least(std::size_t n) const
+    {
+        if (n == 0)
+            return true;
+        for (auto const & ignored : *this) {
+            (void)ignored;
+            if (--n == 0)
+                return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::size_t extent(
+        std::size_t max_count = std::numeric_limits<std::size_t>::max()) const
+    {
+        auto out = std::size_t{0};
+        for (auto const & item : *this) {
+            if (max_count == 0)
+                break;
+            out += item.extent;
+            --max_count;
+        }
+        return out;
+    }
+
+private:
+    buffer_chunks<const Stock> stock_;
+    Scanner scanner_{};
+};
+
+template<
+    typename Stock,
+    typename Frame,
+    typename Scanner = static_chop_scanner<Stock, Frame>>
+    requires chop_scanner<Scanner, Stock, Frame>
+[[nodiscard]] chop_view<Stock, Frame, Scanner> chop(
+    buffer_chunks<const Stock> stock,
+    Scanner scanner = {})
+{
+    return {stock, std::move(scanner)};
+}
+
+template<std::ranges::input_range Chops>
+[[nodiscard]] std::size_t chop_extent(Chops && chops)
+{
+    auto out = std::size_t{0};
+    for (auto && item : chops)
+        out += item.extent;
+    return out;
+}
 
 namespace detail {
 
