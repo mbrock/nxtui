@@ -189,6 +189,39 @@ static suite mtproto_tests{
             expect(text(std::span<const std::byte>{out}.subspan(1)) == "abcd");
         };
 
+        "writes and reads runtime plain messages through abridged frames"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto out = std::vector<std::byte>{};
+            auto sink = nxtrt::container_sink{out};
+            auto last_message_id = std::optional<std::uint64_t>{};
+            auto message_storage = std::array<std::byte, 32>{};
+
+            deck.sync_wait(nxtrt::mtproto::write_plain_abridged_frame(
+                sink,
+                bytes("ping"),
+                last_message_id,
+                message_storage,
+                1'693'436'740'000'000'000ULL));
+
+            expect(last_message_id.has_value());
+            expect(out.size() == std::size_t{25});
+            expect(std::to_integer<unsigned>(out[0]) == 6);
+
+            auto source_chunks =
+                std::array{std::span<const std::byte>{out}};
+            auto source_storage = std::array<std::byte, 64>{};
+            auto source = nxtrt::byte_span_feed{
+                source_chunks,
+                std::span{source_storage},
+            };
+
+            auto message =
+                deck.sync_wait(nxtrt::mtproto::read_plain_abridged_frame(source));
+
+            expect(message.message_id == *last_message_id);
+            expect(text(message.body) == "ping");
+        };
+
         "derives MT auth key metadata and message keys"_test = [] {
             auto key_data = counting_bytes<256>();
             auto key = nxt::mt::make_auth_key(key_data);

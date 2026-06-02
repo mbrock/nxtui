@@ -2,11 +2,13 @@
 
 #include "nxtrt/buffers.hpp"
 #include "nxtrt/task.hpp"
+#include "nxt/mt/message.hpp"
 #include "nxt/mt/transport.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace nxtrt::mtproto {
@@ -70,6 +72,37 @@ task<std::span<const std::byte>> read_abridged_frame(Reader & reader)
 
         co_return co_await reader.take(words * 4);
     }
+}
+
+inline task<void> write_plain_abridged_frame(
+    bytesink & writer,
+    std::span<const std::byte> body,
+    std::optional<std::uint64_t> & last_message_id,
+    std::span<std::byte> storage,
+    std::uint64_t now_ns = nxt::mt::now_nanoseconds())
+{
+    auto message_size = nxt::mt::plain_message_size(body);
+    if (storage.size() < message_size)
+        throw nxt::mt::protocol_error{"plain message storage is too small"};
+
+    auto message_id = nxt::mt::next_message_id(last_message_id, now_ns);
+    auto message_writer = nxt::mt::byte_writer{storage.first(message_size)};
+    nxt::mt::write_plain_message(
+        message_writer,
+        nxt::mt::plain_message_view{
+            .message_id = message_id,
+            .body = body,
+        });
+
+    co_await write_abridged_frame(writer, message_writer.written());
+    last_message_id = message_id;
+}
+
+template<typename Reader>
+task<nxt::mt::plain_message_view> read_plain_abridged_frame(Reader & reader)
+{
+    auto frame = co_await read_abridged_frame(reader);
+    co_return nxt::mt::read_plain_message(frame);
 }
 
 } // namespace nxtrt::mtproto
