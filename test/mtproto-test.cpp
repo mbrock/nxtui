@@ -1,6 +1,9 @@
 #include <nxt/mt/auth.hpp>
 #include <nxt/mt/crypto.hpp>
+#include <nxt/mt/encrypted_packet.hpp>
 #include <nxt/mt/message.hpp>
+#include <nxt/mt/session.hpp>
+#include <nxt/mt/telegram.hpp>
 #include <nxt/mt/tl.hpp>
 #include <nxt/mt/transport.hpp>
 #include <nxtrt/deck.hpp>
@@ -510,6 +513,172 @@ static suite mtproto_tests{
                 nxt::mt::sender::client,
                 opened);
             expect(std::ranges::equal(view, plaintext));
+        };
+
+        "encodes encrypted session packets with explicit padding"_test = [] {
+            auto key = nxt::mt::make_auth_key(counting_bytes<256>());
+            auto packet = nxt::mt::encrypted_packet{
+                .salt = 11,
+                .session_id = 22,
+                .message_id = 33,
+                .seq_no = 1,
+                .body = nxt::mt::bytes{
+                    std::byte{'p'},
+                    std::byte{'o'},
+                    std::byte{'n'},
+                    std::byte{'g'},
+                },
+                .padding = {},
+            };
+            auto padding = std::vector<std::byte>(1024, std::byte{0x55});
+
+            auto encrypted = nxt::mt::encode_encrypted_packet(
+                packet,
+                key,
+                nxt::mt::sender::client,
+                padding);
+            auto decoded = nxt::mt::decode_encrypted_packet(
+                encrypted,
+                key,
+                nxt::mt::sender::client,
+                22);
+
+            expect(decoded.salt == 11);
+            expect(decoded.session_id == 22);
+            expect(decoded.message_id == 33);
+            expect(decoded.seq_no == 1);
+            expect(text(decoded.body) == "pong");
+            expect(decoded.padding.size() == std::size_t{28});
+        };
+
+        "turns encrypted RPC responses into session events and ACK effects"_test = [] {
+            auto key = nxt::mt::make_auth_key(counting_bytes<256>());
+            auto client = nxt::mt::session{
+                .key = key,
+                .server_salt = 123,
+                .session_id = 456,
+                .time_offset = 0,
+                .last_message_id = std::nullopt,
+                .sent_content_messages = 0,
+                .pending_requests = {},
+            };
+            auto padding = std::vector<std::byte>(1024, std::byte{0x33});
+            auto query = nxt::mt::telegram::updates_get_state();
+            auto sent = nxt::mt::send_request(
+                std::move(client),
+                1'693'436'740'000'000'000ULL,
+                std::move(query),
+                "updates.getState",
+                padding);
+            client = std::move(sent.next);
+            expect(sent.request_id != 0);
+            expect(client.pending_requests.size() == std::size_t{1});
+
+            auto result_body = nxt::mt::bytes{};
+            nxt::mt::telegram::append_u32(
+                result_body,
+                nxt::mt::rpc_result_constructor);
+            nxt::mt::telegram::append_i64(result_body, sent.request_id);
+            nxt::mt::telegram::append_u32(
+                result_body,
+                nxt::mt::telegram::updates_state_constructor);
+            nxt::mt::telegram::append_i32(result_body, 10);
+            nxt::mt::telegram::append_i32(result_body, 0);
+            nxt::mt::telegram::append_i32(result_body, 20);
+            nxt::mt::telegram::append_i32(result_body, 1);
+            nxt::mt::telegram::append_i32(result_body, 3);
+
+            auto server_packet = nxt::mt::encrypted_packet{
+                .salt = 123,
+                .session_id = 456,
+                .message_id = 1'693'436'741ULL << 32,
+                .seq_no = 1,
+                .body = std::move(result_body),
+                .padding = {},
+            };
+            auto encrypted = nxt::mt::encode_encrypted_packet(
+                server_packet,
+                key,
+                nxt::mt::sender::server,
+                padding);
+            auto received = nxt::mt::receive_packet(
+                std::move(client),
+                encrypted,
+                1'693'436'742'000'000'000ULL,
+                padding);
+
+            auto saw_result = false;
+            auto saw_request_result = false;
+            auto saw_ack = false;
+            for (const auto & effect : received.effects) {
+                auto note = std::get_if<nxt::mt::notify_session>(&effect);
+                if (note == nullptr)
+                    continue;
+                if (auto * rpc = std::get_if<nxt::mt::rpc_result>(&note->event)) {
+                    saw_result = rpc->request_msg_id == sent.request_id;
+                    auto state = nxt::mt::telegram::read_updates_state(rpc->result);
+                    expect(state.pts == 10);
+                    expect(state.seq == 1);
+                }
+                if (auto * rpc = std::get_if<nxt::mt::rpc_request_result>(
+                        &note->event)) {
+                    saw_request_result =
+                        rpc->request == "updates.getState"
+                        && rpc->request_msg_id == sent.request_id;
+                }
+                if (std::holds_alternative<nxt::mt::msgs_ack_sent>(note->event))
+                    saw_ack = true;
+            }
+
+            expect(saw_result);
+            expect(saw_request_result);
+            expect(saw_ack);
+            expect(received.next.pending_requests.empty());
+        };
+
+        "decodes Telegram rpc_error and migration hints"_test = [] {
+            auto body = nxt::mt::bytes{};
+            nxt::mt::telegram::append_u32(
+                body,
+                nxt::mt::telegram::rpc_error_constructor);
+            nxt::mt::telegram::append_i32(body, 303);
+            nxt::mt::telegram::append_string(body, "USER_MIGRATE_4");
+
+            auto error = nxt::mt::telegram::read_rpc_error(body);
+
+            expect(error.code == 303);
+            expect(error.message == "USER_MIGRATE_4");
+            expect(
+                nxt::mt::telegram::migrate_dc_from_error(error.message)
+                == std::optional<std::int32_t>{4});
+            expect(!nxt::mt::telegram::migrate_dc_from_error("AUTH_RESTART"));
+        };
+
+        "summarizes Telegram update difference envelopes"_test = [] {
+            auto empty = nxt::mt::bytes{};
+            nxt::mt::telegram::append_u32(
+                empty,
+                nxt::mt::telegram::updates_difference_empty_constructor);
+            nxt::mt::telegram::append_i32(empty, 100);
+            nxt::mt::telegram::append_i32(empty, 7);
+
+            auto empty_summary =
+                nxt::mt::telegram::summarize_updates_difference(empty);
+            expect(
+                empty_summary.constructor
+                == nxt::mt::telegram::updates_difference_empty_constructor);
+            expect(empty_summary.date == 100);
+            expect(empty_summary.seq == 7);
+
+            auto too_long = nxt::mt::bytes{};
+            nxt::mt::telegram::append_u32(
+                too_long,
+                nxt::mt::telegram::updates_difference_too_long_constructor);
+            nxt::mt::telegram::append_i32(too_long, 302);
+
+            auto too_long_summary =
+                nxt::mt::telegram::summarize_updates_difference(too_long);
+            expect(too_long_summary.pts == 302);
         };
 
         "encrypts auth exchange data with hash using caller scratch"_test = [] {

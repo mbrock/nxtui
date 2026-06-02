@@ -7,6 +7,8 @@
 #include "nxt/crypto.hpp"
 #include "nxt/mt/auth.hpp"
 #include "nxt/mt/message.hpp"
+#include "nxt/mt/session.hpp"
+#include "nxt/mt/telegram.hpp"
 #include "nxt/mt/tl.hpp"
 #include "nxt/mt/transport.hpp"
 
@@ -634,6 +636,82 @@ inline task<auth_session> connect_and_auth(
 
     co_await write_abridged_client_prefix(socket.output());
     co_return co_await perform_auth(socket.output(), socket.input());
+}
+
+inline nxt::mt::session make_session(auth_session auth)
+{
+    return nxt::mt::session{
+        .key = std::move(auth.key),
+        .server_salt = auth.server_salt,
+        .session_id = auth.session_id,
+        .time_offset = auth.time_offset,
+        .last_message_id = std::nullopt,
+        .sent_content_messages = 0,
+        .pending_requests = {},
+    };
+}
+
+inline task<void> execute_session_effects(
+    bytesink & writer,
+    const std::vector<nxt::mt::session_effect> & effects)
+{
+    for (const auto & effect : effects) {
+        auto send = std::get_if<nxt::mt::send_encrypted>(&effect);
+        if (send != nullptr)
+            co_await write_abridged_frame(writer, send->payload);
+    }
+}
+
+template<typename Reader>
+task<std::vector<nxt::mt::session_effect>> receive_next_session_effects(
+    bytesink & writer,
+    Reader & reader,
+    nxt::mt::session & session)
+{
+    auto frame = co_await read_abridged_frame(reader);
+    auto receive_padding = nxt::crypto::random(1024);
+    auto received = nxt::mt::receive_packet(
+        std::move(session),
+        frame,
+        nxt::mt::now_nanoseconds(),
+        receive_padding);
+    session = std::move(received.next);
+    co_await execute_session_effects(writer, received.effects);
+    co_return std::move(received.effects);
+}
+
+template<typename Reader>
+task<nxt::mt::bytes> invoke_raw(
+    bytesink & writer,
+    Reader & reader,
+    nxt::mt::session & session,
+    nxt::mt::bytes body,
+    std::string request_name)
+{
+    auto padding = nxt::crypto::random(1024);
+    auto sent = nxt::mt::send_request(
+        std::move(session),
+        nxt::mt::now_nanoseconds(),
+        std::move(body),
+        std::move(request_name),
+        padding);
+    session = std::move(sent.next);
+    auto request_id = sent.request_id;
+    co_await execute_session_effects(writer, sent.effects);
+
+    while (true) {
+        auto effects =
+            co_await receive_next_session_effects(writer, reader, session);
+
+        for (const auto & effect : effects) {
+            auto note = std::get_if<nxt::mt::notify_session>(&effect);
+            if (note == nullptr)
+                continue;
+            auto rpc = std::get_if<nxt::mt::rpc_result>(&note->event);
+            if (rpc != nullptr && rpc->request_msg_id == request_id)
+                co_return rpc->result;
+        }
+    }
 }
 
 } // namespace nxtrt::mtproto
