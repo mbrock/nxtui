@@ -6,6 +6,7 @@ if get_option('tests')
     'include-test.cpp',
     'runtime-test.cpp',
     'terminal-test.cpp',
+    'mtproto-test.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [

@@ -46,7 +46,6 @@ struct test_definition
 };
 
 inline std::vector<test_result> tests;
-inline std::vector<test_definition> test_definitions;
 inline std::vector<test_result *> active_tests;
 inline std::vector<int> active_path;
 inline std::vector<int> sibling_counts;
@@ -63,6 +62,12 @@ enum class run_phase
 };
 
 inline run_phase phase = run_phase::execution;
+
+inline std::vector<test_definition> & test_definitions()
+{
+    static auto definitions = std::vector<test_definition>{};
+    return definitions;
+}
 
 inline std::string format_ms(double elapsed_ms)
 {
@@ -408,14 +413,14 @@ struct suite
     template<typename F>
     suite(F && f)
     {
-        test_definitions.push_back(
+        test_definitions().push_back(
             {.name = "<anonymous suite>", .body = std::forward<F>(f)});
     }
 
     template<typename F>
     suite(std::string_view name, F && f)
     {
-        test_definitions.push_back(
+        test_definitions().push_back(
             {.name = name, .body = std::forward<F>(f)});
     }
 };
@@ -536,7 +541,7 @@ inline void reset_run_state()
 inline void run_registered_tests()
 {
     sibling_counts.push_back(0);
-    for (const auto & definition : test_definitions)
+    for (const auto & definition : test_definitions())
         test_case{definition.name} = definition.body;
     sibling_counts.pop_back();
 }
