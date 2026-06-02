@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -32,6 +33,19 @@ std::string text(std::span<const std::byte> bytes)
     return std::string{
         reinterpret_cast<const char *>(bytes.data()),
         bytes.size()};
+}
+
+std::string text(nxtrt::byte_chunks<const std::byte> chunks)
+{
+    auto out = std::string{};
+    for (auto chunk : chunks)
+        out += text(chunk);
+    return out;
+}
+
+std::byte byte_value(unsigned value)
+{
+    return std::byte{static_cast<unsigned char>(value)};
 }
 
 int hex_digit(char ch)
@@ -94,6 +108,44 @@ nxtrt::task<void>
 write_frame(nxtrt::bytesink & sink, std::span<const std::byte> payload)
 {
     co_await nxtrt::mtproto::write_abridged_frame(sink, payload);
+}
+
+template<std::ranges::input_range Chops>
+std::vector<std::string> abridged_payload_texts(Chops && chops)
+{
+    auto out = std::vector<std::string>{};
+    for (auto && item : chops) {
+        if (item.frame.is_payload())
+            out.push_back(text(item.frame.payload));
+    }
+    return out;
+}
+
+nxtrt::task<void>
+check_abridged_reel_ring_feed(nxtrt::bytefeed & source)
+{
+    auto frames = nxtrt::mtproto::abridged_reel{source};
+
+    auto first = co_await frames.peek(2);
+    expect(
+        abridged_payload_texts(first)
+        == std::vector<std::string>{"abcd", "efgh"});
+    expect(first.extent(1) == std::size_t{5});
+    co_await frames.discard_prefix(first.extent(1));
+
+    auto wrapped = co_await frames.peek(2);
+    expect(source.buffered().chunk_count() == std::size_t{2});
+    expect(
+        abridged_payload_texts(wrapped | std::views::take(2))
+        == std::vector<std::string>{"efgh", "ijkl"});
+    expect(
+        nxtrt::chop_extent(wrapped | std::views::take(2))
+        == std::size_t{10});
+
+    co_await frames.discard_prefix(
+        nxtrt::chop_extent(wrapped | std::views::take(2)));
+    auto eof = co_await frames.peek();
+    expect(eof.empty());
 }
 
 } // namespace
@@ -164,6 +216,67 @@ static suite mtproto_tests{
             expect(decoded != nullptr);
             expect(text(decoded->bytes) == "abcd");
             expect(reader.empty());
+        };
+
+        "projects abridged transport frames as reel chops"_test = [] {
+            auto bytes = std::array{
+                byte_value(0x81),
+                byte_value(0x02),
+                byte_value(0x03),
+                byte_value(0x04),
+                byte_value(2),
+                byte_value('a'),
+                byte_value('b'),
+                byte_value('c'),
+                byte_value('d'),
+                byte_value('e'),
+                byte_value('f'),
+                byte_value('g'),
+                byte_value('h'),
+            };
+            auto all = std::span<const std::byte>{
+                bytes.data(),
+                bytes.size(),
+            };
+            auto spans = std::array{
+                all.first(5),
+                all.subspan(5),
+            };
+            auto chunks = nxtrt::byte_chunks<const std::byte>{
+                std::span{spans},
+            };
+
+            auto frames =
+                nxtrt::chop<std::byte, nxtrt::mtproto::abridged_frame_view>(
+                    chunks);
+            auto it = frames.begin();
+
+            expect(it != frames.end());
+            expect(it->frame.is_quick_ack());
+            expect(
+                *it->frame.quick_ack_token
+                == nxt::mt::byte_swap32(0x04030281));
+            ++it;
+
+            expect(it != frames.end());
+            expect(it->frame.is_payload());
+            expect(text(it->frame.payload) == "abcdefgh");
+            expect(it->extent == std::size_t{9});
+            ++it;
+
+            expect(it == frames.end());
+            expect(frames.extent() == std::size_t{13});
+        };
+
+        "peeks abridged runtime frames as borrowed reel views"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto chunks = std::array{
+                "\x01" "abcd" "\x01" "efgh" "\x01" "ijkl"sv,
+            };
+            auto storage = std::array<std::byte, 10>{};
+            auto source = text_source(chunks, std::span{storage});
+
+            deck.sync_wait(check_abridged_reel_ring_feed(source));
         };
 
         "reads abridged runtime frames from a bytefeed"_test = [] {

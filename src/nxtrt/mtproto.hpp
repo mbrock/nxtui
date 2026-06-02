@@ -13,6 +13,104 @@
 
 namespace nxtrt::mtproto {
 
+namespace detail {
+
+inline std::uint8_t abridged_u8(
+    byte_chunks<const std::byte> bytes,
+    std::size_t index)
+{
+    for (auto chunk : bytes) {
+        if (index < chunk.size())
+            return std::to_integer<std::uint8_t>(chunk[index]);
+        index -= chunk.size();
+    }
+    throw nxt::mt::protocol_error{"short abridged frame"};
+}
+
+} // namespace detail
+
+struct abridged_frame_view
+{
+    std::optional<std::uint32_t> quick_ack_token;
+    byte_chunks<const std::byte> payload;
+
+    [[nodiscard]] bool is_quick_ack() const noexcept
+    {
+        return quick_ack_token.has_value();
+    }
+
+    [[nodiscard]] bool is_payload() const noexcept
+    {
+        return !quick_ack_token.has_value();
+    }
+
+    static chop_scan_result<abridged_frame_view> scan(
+        byte_chunks<const std::byte> bytes)
+    {
+        if (bytes.size() < 1)
+            return chop_need_more{.minimum_buffered = 1};
+
+        auto first = detail::abridged_u8(bytes, 0);
+        if (first >= 0x80) {
+            if (bytes.size() < 4)
+                return chop_need_more{.minimum_buffered = 4};
+
+            auto raw = static_cast<std::uint32_t>(first)
+                     | (static_cast<std::uint32_t>(
+                            detail::abridged_u8(bytes, 1))
+                        << 8)
+                     | (static_cast<std::uint32_t>(
+                            detail::abridged_u8(bytes, 2))
+                        << 16)
+                     | (static_cast<std::uint32_t>(
+                            detail::abridged_u8(bytes, 3))
+                        << 24);
+            return frame_chop<abridged_frame_view>{
+                .extent = 4,
+                .frame = abridged_frame_view{
+                    .quick_ack_token = nxt::mt::byte_swap32(raw),
+                    .payload = {},
+                },
+            };
+        }
+
+        auto header = std::size_t{1};
+        auto words = std::size_t{first};
+        if (first == 0x7f) {
+            if (bytes.size() < 4)
+                return chop_need_more{.minimum_buffered = 4};
+
+            words = static_cast<std::size_t>(
+                detail::abridged_u8(bytes, 1)
+                | (static_cast<std::uint32_t>(
+                       detail::abridged_u8(bytes, 2))
+                   << 8)
+                | (static_cast<std::uint32_t>(
+                       detail::abridged_u8(bytes, 3))
+                   << 16));
+            header = 4;
+        }
+
+        if (words >= nxt::mt::abridged_max_words)
+            throw nxt::mt::protocol_error{"abridged payload is too large"};
+
+        auto payload_size = words * 4;
+        auto extent = header + payload_size;
+        if (bytes.size() < extent)
+            return chop_need_more{.minimum_buffered = extent};
+
+        return frame_chop<abridged_frame_view>{
+            .extent = extent,
+            .frame = abridged_frame_view{
+                .quick_ack_token = std::nullopt,
+                .payload = bytes.subspan(header, payload_size),
+            },
+        };
+    }
+};
+
+using abridged_reel = reel<std::byte, abridged_frame_view>;
+
 inline task<void> write_abridged_client_prefix(bytesink & writer)
 {
     auto prefix = std::array{nxt::mt::abridged_client_prefix};
