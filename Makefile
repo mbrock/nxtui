@@ -1,7 +1,7 @@
 .PHONY: all setup setup-unity build dev full test freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
 
 BENCH_BUILD_DIR ?= build-bench-release
-BENCH_BIN ?= $(BENCH_BUILD_DIR)/nxt-echo-bench
+BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
 BENCH_CPP_ARGS ?=
 DEPS_FILE ?=
 DEPS_DEPTH ?= 4

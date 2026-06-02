@@ -228,6 +228,7 @@ nxtrt::task<void> run_echo_load(
         throw nxtrt::timeout_error{};
     if (auto * firm = nxtrt::current_firm())
         firm->stop();
+    co_await nxtrt::join();
 }
 
 struct echo_load_factory

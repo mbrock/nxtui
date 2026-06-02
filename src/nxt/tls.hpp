@@ -305,6 +305,57 @@ struct tls_record
     bytes payload;
 };
 
+inline std::uint8_t tls_chunk_u8(
+    nxtrt::byte_chunks<const std::byte> bytes,
+    std::size_t index)
+{
+    for (auto chunk : bytes) {
+        if (index < chunk.size())
+            return std::to_integer<std::uint8_t>(chunk[index]);
+        index -= chunk.size();
+    }
+    throw nxtrt::runtime_error{"truncated TLS record"};
+}
+
+inline std::uint16_t tls_chunk_u16(
+    nxtrt::byte_chunks<const std::byte> bytes,
+    std::size_t index)
+{
+    return static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(tls_chunk_u8(bytes, index)) << 8)
+        | tls_chunk_u8(bytes, index + 1));
+}
+
+struct tls_record_view
+{
+    std::uint8_t type = 0;
+    std::uint16_t version = 0;
+    nxtrt::byte_chunks<const std::byte> payload;
+
+    static nxtrt::chop_scan_result<tls_record_view> scan(
+        nxtrt::byte_chunks<const std::byte> bytes)
+    {
+        if (bytes.size() < 5)
+            return nxtrt::chop_need_more{.minimum_buffered = 5};
+
+        auto length = static_cast<std::size_t>(tls_chunk_u16(bytes, 3));
+        auto extent = std::size_t{5} + length;
+        if (bytes.size() < extent)
+            return nxtrt::chop_need_more{.minimum_buffered = extent};
+
+        return nxtrt::frame_chop<tls_record_view>{
+            .extent = extent,
+            .frame = tls_record_view{
+                .type = tls_chunk_u8(bytes, 0),
+                .version = tls_chunk_u16(bytes, 1),
+                .payload = bytes.subspan(5, length),
+            },
+        };
+    }
+};
+
+using tls_record_reel = nxtrt::reel<std::byte, tls_record_view>;
+
 struct tls13_server_hello
 {
     bytes handshake;
@@ -681,6 +732,40 @@ open_tls13_record(tls13_read_keys & keys, tls_record const & record)
     plaintext->pop_back();
     return tls13_plaintext{
         .content = std::move(*plaintext),
+        .inner_type = inner_type,
+    };
+}
+
+struct tls13_plaintext_view
+{
+    std::span<std::byte> content;
+    std::uint8_t inner_type = 0;
+};
+
+inline tls13_plaintext_view
+open_tls13_record_in_place(
+    tls13_read_keys & keys,
+    std::uint8_t type,
+    std::uint16_t version,
+    std::span<std::byte> payload)
+{
+    require_tls(type == 23, "expected encrypted application_data record");
+    auto aad = tls13_record_aad(
+        type, version, static_cast<std::uint16_t>(payload.size()));
+    auto nonce = tls13_record_nonce(keys.iv, keys.sequence++);
+    auto plaintext =
+        nxt::crypto::aes128gcm_open_in_place(keys.aead, nonce, aad, payload);
+    require_tls(plaintext.has_value(), "failed to decrypt TLS record");
+
+    auto content = *plaintext;
+    while (!content.empty() && content.back() == std::byte{0})
+        content = content.first(content.size() - 1);
+    require_tls(!content.empty(), "decrypted TLS record has no inner type");
+
+    auto inner_type = std::to_integer<std::uint8_t>(content.back());
+    content = content.first(content.size() - 1);
+    return tls13_plaintext_view{
+        .content = content,
         .inner_type = inner_type,
     };
 }

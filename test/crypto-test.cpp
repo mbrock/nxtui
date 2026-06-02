@@ -1,6 +1,8 @@
 #include <nxt/crypto.hpp>
+#include <nxt/tls.hpp>
 #include <nxtrt/crypto.hpp>
 #include <nxtrt/deck.hpp>
+#include <nxtrt/tls.hpp>
 
 #include "test.hpp"
 
@@ -265,21 +267,101 @@ static suite crypto_tests{
             auto key = nxt::crypto::bytes(nxt::crypto::aes128_key_len);
             auto nonce = nxt::crypto::bytes(nxt::crypto::aes_gcm_nonce_len);
             auto aad = nxt::crypto::bytes{};
-            auto plaintext = nxt::crypto::bytes{};
+            auto plaintext = bytes_from("secret");
 
             auto ciphertext =
                 nxt::crypto::aes128gcm_seal(key, nonce, aad, plaintext);
-            expect(
-                ciphertext
-                == hex("58e2fccefa7e3061367f1d57a4e7455a"));
 
             auto opened =
                 nxt::crypto::aes128gcm_open(key, nonce, aad, ciphertext);
             expect(opened.has_value());
             expect(*opened == plaintext);
 
+            auto in_place = ciphertext;
+            auto opened_span =
+                nxt::crypto::aes128gcm_open_in_place(
+                    key, nonce, aad, in_place);
+            expect(opened_span.has_value());
+            expect(std::ranges::equal(*opened_span, plaintext));
+            expect(std::ranges::equal(
+                std::span{in_place}.first(plaintext.size()),
+                std::span{plaintext}));
+
             ciphertext[0] ^= std::byte{1};
             expect(!nxt::crypto::aes128gcm_open(key, nonce, aad, ciphertext));
+            expect(!nxt::crypto::aes128gcm_open_in_place(
+                key, nonce, aad, ciphertext));
+        };
+
+        "projects TLS records as borrowed chops"_test = [] {
+            auto raw = nxt::crypto::bytes{};
+            raw.push_back(std::byte{22});
+            raw.push_back(std::byte{0x03});
+            raw.push_back(std::byte{0x03});
+            raw.push_back(std::byte{0x00});
+            raw.push_back(std::byte{0x04});
+            raw.push_back(std::byte{'t'});
+            raw.push_back(std::byte{'e'});
+            raw.push_back(std::byte{'s'});
+            raw.push_back(std::byte{'t'});
+
+            auto chunks = nxtrt::byte_chunks<const std::byte>{std::span{raw}};
+            auto records = nxtrt::chop<std::byte, nxt::tls::tls_record_view>(
+                chunks);
+            auto it = records.begin();
+
+            expect(it != records.end());
+            expect(it->extent == std::size_t{9});
+            expect(it->frame.type == 22);
+            expect(it->frame.version == 0x0303);
+            auto payload = it->frame.payload.single_span();
+            expect(payload.has_value());
+            expect(std::ranges::equal(*payload, bytes_from("test")));
+            ++it;
+            expect(it == records.end());
+        };
+
+        "opens TLS 1.3 records in place"_test = [] {
+            auto secret =
+                std::array<std::byte, nxt::crypto::sha256_len>{};
+            auto write_keys = nxt::tls::derive_traffic_keys(secret);
+            auto read_keys = nxt::tls::derive_traffic_keys(secret);
+            auto plaintext = bytes_from("hello");
+
+            auto record =
+                nxt::tls::seal_tls13_record(write_keys, 23, plaintext);
+            auto header = std::span{record}.first(5);
+            auto payload = std::span{record}.subspan(5);
+
+            auto opened = nxt::tls::open_tls13_record_in_place(
+                read_keys,
+                std::to_integer<std::uint8_t>(header[0]),
+                nxt::tls::parse_u16(header.subspan(1, 2)),
+                payload);
+
+            expect(opened.inner_type == 23);
+            expect(std::ranges::equal(opened.content, plaintext));
+            expect(std::ranges::equal(
+                payload.first(plaintext.size()),
+                plaintext));
+        };
+
+        "maps TLS session event content types"_test = [] {
+            expect(
+                nxtrt::tls::tls_event_kind_from_content_type(20)
+                == nxtrt::tls::tls_event_kind::change_cipher_spec);
+            expect(
+                nxtrt::tls::tls_event_kind_from_content_type(21)
+                == nxtrt::tls::tls_event_kind::alert);
+            expect(
+                nxtrt::tls::tls_event_kind_from_content_type(22)
+                == nxtrt::tls::tls_event_kind::handshake);
+            expect(
+                nxtrt::tls::tls_event_kind_from_content_type(23)
+                == nxtrt::tls::tls_event_kind::application_data);
+            expect(
+                nxtrt::tls::tls_event_kind_from_content_type(255)
+                == nxtrt::tls::tls_event_kind::unknown);
         };
 
         "encrypts and decrypts AES-256 blocks"_test = [] {

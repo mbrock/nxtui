@@ -380,6 +380,34 @@ std::optional<bytes> aes128gcm_open_impl(
     return out;
 }
 
+std::optional<std::span<std::byte>> aes128gcm_open_in_place_impl(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<std::byte> ciphertext)
+{
+    require_initialized(
+        ctx.initialized_,
+        "AES-128-GCM context is not initialized");
+    require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
+    if (ciphertext.size() < aes_gcm_tag_len)
+        return std::nullopt;
+
+    auto text = ciphertext.first(ciphertext.size() - aes_gcm_tag_len);
+    auto tag = std::span<const std::byte>{ciphertext}.last(aes_gcm_tag_len);
+    auto acc = ghash_finish(ctx, aad, text);
+    auto s = block{};
+    auto j0 = initial_counter(nonce);
+    aes_encrypt_block(ctx.round_keys_, 10, j0, s);
+    for (auto i = 0; i < 16; i++)
+        acc[i] ^= s[i];
+    if (!tag_equal(acc, tag))
+        return std::nullopt;
+
+    crypt_ctr(ctx, j0, text, text);
+    return text;
+}
+
 bytes aes128gcm_seal_impl(
     const aes128gcm_context & ctx,
     std::span<const std::byte> nonce,

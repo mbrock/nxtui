@@ -448,6 +448,11 @@ std::optional<bytes> aes128gcm_open_impl(
     std::span<const std::byte> nonce,
     std::span<const std::byte> aad,
     std::span<const std::byte> ciphertext);
+std::optional<std::span<std::byte>> aes128gcm_open_in_place_impl(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<std::byte> ciphertext);
 bytes aes128gcm_seal_impl(
     const aes128gcm_context & ctx,
     std::span<const std::byte> nonce,
@@ -543,6 +548,25 @@ std::optional<bytes> aes128gcm_open(
     std::span<const std::byte> ciphertext)
 {
     return aes128gcm_open_impl(ctx, nonce, aad, ciphertext);
+}
+
+std::optional<std::span<std::byte>> aes128gcm_open_in_place(
+    std::span<const std::byte> key,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<std::byte> ciphertext)
+{
+    auto ctx = aes128gcm_context{key};
+    return aes128gcm_open_in_place(ctx, nonce, aad, ciphertext);
+}
+
+std::optional<std::span<std::byte>> aes128gcm_open_in_place(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<std::byte> ciphertext)
+{
+    return aes128gcm_open_in_place_impl(ctx, nonce, aad, ciphertext);
 }
 
 bytes aes128gcm_seal(

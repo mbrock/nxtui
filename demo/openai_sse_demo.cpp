@@ -10,7 +10,6 @@
 #include <nxtrt/http.hpp>
 #include <nxtrt/net_dns.hpp>
 #include <nxtrt/tls.hpp>
-#include <nxtrt/wire.hpp>
 #include <nxt/json.hpp>
 
 #if defined(__linux__)
@@ -162,65 +161,6 @@ bool response_content_type_is(
     return nxtrt::http::iequals(media_type, expected);
 }
 
-struct tls_handshake_event
-{
-    nxtrt::tls::handshake_progress_kind kind =
-        nxtrt::tls::handshake_progress_kind::event;
-    std::string name;
-};
-
-std::string_view tls_handshake_event_kind_name(
-    nxtrt::tls::handshake_progress_kind kind)
-{
-    switch (kind) {
-    case nxtrt::tls::handshake_progress_kind::begin:
-        return "begin";
-    case nxtrt::tls::handshake_progress_kind::end:
-        return "end";
-    case nxtrt::tls::handshake_progress_kind::event:
-        return "event";
-    }
-    return "event";
-}
-
-class tls_handshake_event_tx
-{
-public:
-    explicit tls_handshake_event_tx(
-        nxtrt::wire_tx<tls_handshake_event> & events) noexcept
-        : events_(events)
-    {}
-
-    nxtrt::task<void> operator()(
-        const nxtrt::tls::handshake_progress & progress)
-    {
-        auto sent = co_await events_.send(
-            tls_handshake_event{
-                .kind = progress.kind,
-                .name = std::string{progress.name},
-            });
-        if (sent)
-            co_await events_.flush();
-    }
-
-private:
-    nxtrt::wire_tx<tls_handshake_event> & events_;
-};
-
-nxtrt::task<void> print_tls_handshake_events(
-    nxtrt::wire_rx<tls_handshake_event> & events)
-{
-    auto out = nxtrt::standard_output_sink(4096);
-    while (auto event = co_await events.next()) {
-        co_await nxtrt::print(
-            out,
-            "tls: {} {}\n",
-            tls_handshake_event_kind_name(event->kind),
-            event->name);
-        co_await out.flush();
-    }
-}
-
 nxtrt::task<void> write_sse_event(
     nxtrt::bytesink & out,
     const nxtrt::http::server_sent_event & event)
@@ -255,20 +195,7 @@ nxtrt::task<void> stream_openai_sse_with_firm(
         std::size_t{64 * 1024},
     };
 
-    auto tls_event_storage = std::array<tls_handshake_event, 128>{};
-    auto tls_events =
-        nxtrt::wire<tls_handshake_event>{std::span{tls_event_storage}};
-    auto & tls_tx = tls_events.tx();
-    nxtrt::fork(print_tls_handshake_events(tls_events.rx()));
-    try {
-        co_await tls.handshake(
-            "api.openai.com",
-            tls_handshake_event_tx{tls_tx});
-        tls_tx.close();
-    } catch (...) {
-        tls_tx.close();
-        throw;
-    }
+    co_await tls.handshake("api.openai.com");
 
     co_await tls.write_all(request_text);
 
@@ -293,7 +220,6 @@ nxtrt::task<void> stream_openai_sse_with_firm(
         if (event->data == "[DONE]")
             break;
     }
-    co_await nxtrt::join();
 }
 
 struct openai_sse_firm_body

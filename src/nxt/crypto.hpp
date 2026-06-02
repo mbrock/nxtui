@@ -114,6 +114,11 @@ private:
         std::span<const std::byte> nonce,
         std::span<const std::byte> aad,
         std::span<const std::byte> ciphertext);
+    friend std::optional<std::span<std::byte>> aes128gcm_open_in_place(
+        const aes128gcm_context & ctx,
+        std::span<const std::byte> nonce,
+        std::span<const std::byte> aad,
+        std::span<std::byte> ciphertext);
     friend bytes aes128gcm_seal(
         const aes128gcm_context & ctx,
         std::span<const std::byte> nonce,
@@ -191,6 +196,16 @@ void random(std::span<std::byte> out);
     std::span<const std::byte> nonce,
     std::span<const std::byte> aad,
     std::span<const std::byte> ciphertext);
+[[nodiscard]] std::optional<std::span<std::byte>> aes128gcm_open_in_place(
+    std::span<const std::byte> key,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<std::byte> ciphertext);
+[[nodiscard]] std::optional<std::span<std::byte>> aes128gcm_open_in_place(
+    const aes128gcm_context & ctx,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> aad,
+    std::span<std::byte> ciphertext);
 [[nodiscard]] bytes aes128gcm_seal(
     std::span<const std::byte> key,
     std::span<const std::byte> nonce,
