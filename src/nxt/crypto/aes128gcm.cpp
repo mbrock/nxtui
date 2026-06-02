@@ -29,6 +29,13 @@ constexpr auto sbox = std::array<u8, 256>{
     0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16,
 };
 
+constexpr auto inv_sbox = [] {
+    auto out = std::array<u8, 256>{};
+    for (auto i = std::size_t{0}; i < sbox.size(); i++)
+        out[sbox[i]] = static_cast<u8>(i);
+    return out;
+}();
+
 u8 xtime(u8 value)
 {
     return static_cast<u8>((value << 1) ^ ((value >> 7) * 0x1b));
@@ -49,9 +56,18 @@ u8 gmul(u8 a, u8 b)
     return out;
 }
 
-void require_size(std::span<const std::byte> value, std::size_t size, const char * message)
+void require_size(
+    std::span<const std::byte> value,
+    std::size_t size,
+    const char * message)
 {
     if (value.size() != size)
+        throw crypto_error{message};
+}
+
+void require_initialized(bool initialized, const char * message)
+{
+    if (!initialized)
         throw crypto_error{message};
 }
 
@@ -60,40 +76,156 @@ u8 byte(std::byte value)
     return std::to_integer<u8>(value);
 }
 
-void aes_encrypt_block(const aes128gcm_context & ctx, block const & in, block & out)
+void add_round_key(
+    block & state,
+    std::span<const std::byte> round_keys,
+    int round)
+{
+    auto key = round_keys.subspan(static_cast<std::size_t>(round) * 16, 16);
+    for (auto i = 0; i < 16; i++)
+        state[i] ^= key[i];
+}
+
+void shift_rows(block & state)
+{
+    constexpr auto sr = std::array<int, 16>{
+        0,5,10,15,
+        4,9,14,3,
+        8,13,2,7,
+        12,1,6,11,
+    };
+    auto out = block{};
+    for (auto i = 0; i < 16; i++)
+        out[i] = state[sr[i]];
+    state = out;
+}
+
+void inv_shift_rows(block & state)
+{
+    constexpr auto sr = std::array<int, 16>{
+        0,13,10,7,
+        4,1,14,11,
+        8,5,2,15,
+        12,9,6,3,
+    };
+    auto out = block{};
+    for (auto i = 0; i < 16; i++)
+        out[i] = state[sr[i]];
+    state = out;
+}
+
+void mix_columns(block & state)
+{
+    for (auto c = 0; c < 4; c++) {
+        auto * col = state.data() + c * 4;
+        auto a0 = byte(col[0]);
+        auto a1 = byte(col[1]);
+        auto a2 = byte(col[2]);
+        auto a3 = byte(col[3]);
+        col[0] = static_cast<std::byte>(gmul(a0, 2) ^ gmul(a1, 3) ^ a2 ^ a3);
+        col[1] = static_cast<std::byte>(a0 ^ gmul(a1, 2) ^ gmul(a2, 3) ^ a3);
+        col[2] = static_cast<std::byte>(a0 ^ a1 ^ gmul(a2, 2) ^ gmul(a3, 3));
+        col[3] = static_cast<std::byte>(gmul(a0, 3) ^ a1 ^ a2 ^ gmul(a3, 2));
+    }
+}
+
+void inv_mix_columns(block & state)
+{
+    for (auto c = 0; c < 4; c++) {
+        auto * col = state.data() + c * 4;
+        auto a0 = byte(col[0]);
+        auto a1 = byte(col[1]);
+        auto a2 = byte(col[2]);
+        auto a3 = byte(col[3]);
+        col[0] = static_cast<std::byte>(
+            gmul(a0, 14) ^ gmul(a1, 11) ^ gmul(a2, 13) ^ gmul(a3, 9));
+        col[1] = static_cast<std::byte>(
+            gmul(a0, 9) ^ gmul(a1, 14) ^ gmul(a2, 11) ^ gmul(a3, 13));
+        col[2] = static_cast<std::byte>(
+            gmul(a0, 13) ^ gmul(a1, 9) ^ gmul(a2, 14) ^ gmul(a3, 11));
+        col[3] = static_cast<std::byte>(
+            gmul(a0, 11) ^ gmul(a1, 13) ^ gmul(a2, 9) ^ gmul(a3, 14));
+    }
+}
+
+void aes_encrypt_block(
+    std::span<const std::byte> round_keys,
+    int rounds,
+    block const & in,
+    block & out)
 {
     auto s = in;
-    for (auto i = 0; i < 16; i++)
-        s[i] ^= ctx.round_keys_[i];
+    add_round_key(s, round_keys, 0);
 
-    constexpr auto sr = std::array<int, 16>{0,5,10,15, 4,9,14,3, 8,13,2,7, 12,1,6,11};
-    for (auto round = 1; round <= 10; round++) {
+    for (auto round = 1; round <= rounds; round++) {
         for (auto & b : s)
             b = static_cast<std::byte>(sbox[byte(b)]);
 
-        auto t = block{};
-        for (auto i = 0; i < 16; i++)
-            t[i] = s[sr[i]];
-        s = t;
+        shift_rows(s);
 
-        if (round < 10) {
-            for (auto c = 0; c < 4; c++) {
-                auto * col = s.data() + c * 4;
-                auto a0 = byte(col[0]);
-                auto a1 = byte(col[1]);
-                auto a2 = byte(col[2]);
-                auto a3 = byte(col[3]);
-                col[0] = static_cast<std::byte>(gmul(a0,2) ^ gmul(a1,3) ^ a2 ^ a3);
-                col[1] = static_cast<std::byte>(a0 ^ gmul(a1,2) ^ gmul(a2,3) ^ a3);
-                col[2] = static_cast<std::byte>(a0 ^ a1 ^ gmul(a2,2) ^ gmul(a3,3));
-                col[3] = static_cast<std::byte>(gmul(a0,3) ^ a1 ^ a2 ^ gmul(a3,2));
-            }
-        }
+        if (round < rounds)
+            mix_columns(s);
 
-        for (auto i = 0; i < 16; i++)
-            s[i] ^= ctx.round_keys_[round * 16 + i];
+        add_round_key(s, round_keys, round);
     }
     out = s;
+}
+
+void aes_decrypt_block(
+    std::span<const std::byte> round_keys,
+    int rounds,
+    block const & in,
+    block & out)
+{
+    auto s = in;
+    add_round_key(s, round_keys, rounds);
+
+    for (auto round = rounds - 1; round >= 1; round--) {
+        inv_shift_rows(s);
+        for (auto & b : s)
+            b = static_cast<std::byte>(inv_sbox[byte(b)]);
+        add_round_key(s, round_keys, round);
+        inv_mix_columns(s);
+    }
+
+    inv_shift_rows(s);
+    for (auto & b : s)
+        b = static_cast<std::byte>(inv_sbox[byte(b)]);
+    add_round_key(s, round_keys, 0);
+    out = s;
+}
+
+void expand_aes_key(
+    std::span<const std::byte> key,
+    std::span<std::byte> round_keys)
+{
+    std::ranges::copy(key, round_keys.begin());
+    auto generated = key.size();
+    auto rcon = u8{1};
+    auto temp = std::array<std::byte, 4>{};
+    while (generated < round_keys.size()) {
+        std::ranges::copy(
+            round_keys.subspan(generated - 4, 4),
+            temp.begin());
+        if (generated % key.size() == 0) {
+            temp = {
+                static_cast<std::byte>(sbox[byte(temp[1])] ^ rcon),
+                static_cast<std::byte>(sbox[byte(temp[2])]),
+                static_cast<std::byte>(sbox[byte(temp[3])]),
+                static_cast<std::byte>(sbox[byte(temp[0])]),
+            };
+            rcon = xtime(rcon);
+        } else if (key.size() > 24 && generated % key.size() == 16) {
+            for (auto & b : temp)
+                b = static_cast<std::byte>(sbox[byte(b)]);
+        }
+
+        for (auto i = 0; i < 4; i++) {
+            round_keys[generated] =
+                round_keys[generated - key.size()] ^ temp[i];
+            generated++;
+        }
+    }
 }
 
 block gf_mul(block x, block v)
@@ -184,7 +316,7 @@ void crypt_ctr(
     auto offset = std::size_t{0};
     while (offset != input.size()) {
         increment32(counter);
-        aes_encrypt_block(ctx, counter, stream);
+        aes_encrypt_block(ctx.round_keys_, 10, counter, stream);
         auto n = std::min(std::size_t{16}, input.size() - offset);
         for (auto i = std::size_t{0}; i < n; i++)
             output[offset + i] = input[offset + i] ^ stream[i];
@@ -205,26 +337,17 @@ bool tag_equal(block const & a, std::span<const std::byte> b)
 aes128gcm_context::aes128gcm_context(std::span<const std::byte> key)
 {
     require_size(key, aes128_key_len, "AES-128-GCM key must be 16 bytes");
-    std::ranges::copy(key, round_keys_.begin());
-    auto rcon = u8{1};
-    for (auto round = 1; round <= 10; round++) {
-        auto prev = (round - 1) * 16;
-        auto cur = round * 16;
-        auto t = std::array<u8, 4>{
-            static_cast<u8>(sbox[byte(round_keys_[prev + 13])] ^ rcon),
-            sbox[byte(round_keys_[prev + 14])],
-            sbox[byte(round_keys_[prev + 15])],
-            sbox[byte(round_keys_[prev + 12])],
-        };
-        for (auto i = 0; i < 4; i++)
-            round_keys_[cur + i] = round_keys_[prev + i] ^ static_cast<std::byte>(t[i]);
-        for (auto i = 4; i < 16; i++)
-            round_keys_[cur + i] = round_keys_[cur + i - 4] ^ round_keys_[prev + i];
-        rcon = xtime(rcon);
-    }
+    expand_aes_key(key, round_keys_);
 
     auto zero = block{};
-    aes_encrypt_block(*this, zero, ghash_key_);
+    aes_encrypt_block(round_keys_, 10, zero, ghash_key_);
+    initialized_ = true;
+}
+
+aes256_context::aes256_context(std::span<const std::byte> key)
+{
+    require_size(key, aes256_key_len, "AES-256 key must be 32 bytes");
+    expand_aes_key(key, round_keys_);
     initialized_ = true;
 }
 
@@ -234,8 +357,9 @@ std::optional<bytes> aes128gcm_open_impl(
     std::span<const std::byte> aad,
     std::span<const std::byte> ciphertext)
 {
-    if (!ctx.initialized_)
-        throw crypto_error{"AES-128-GCM context is not initialized"};
+    require_initialized(
+        ctx.initialized_,
+        "AES-128-GCM context is not initialized");
     require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
     if (ciphertext.size() < aes_gcm_tag_len)
         return std::nullopt;
@@ -245,7 +369,7 @@ std::optional<bytes> aes128gcm_open_impl(
     auto acc = ghash_finish(ctx, aad, text);
     auto s = block{};
     auto j0 = initial_counter(nonce);
-    aes_encrypt_block(ctx, j0, s);
+    aes_encrypt_block(ctx.round_keys_, 10, j0, s);
     for (auto i = 0; i < 16; i++)
         acc[i] ^= s[i];
     if (!tag_equal(acc, tag))
@@ -262,8 +386,9 @@ bytes aes128gcm_seal_impl(
     std::span<const std::byte> aad,
     std::span<const std::byte> plaintext)
 {
-    if (!ctx.initialized_)
-        throw crypto_error{"AES-128-GCM context is not initialized"};
+    require_initialized(
+        ctx.initialized_,
+        "AES-128-GCM context is not initialized");
     require_size(nonce, aes_gcm_nonce_len, "AES-GCM nonce must be 12 bytes");
 
     auto out = bytes(plaintext.size() + aes_gcm_tag_len);
@@ -273,10 +398,112 @@ bytes aes128gcm_seal_impl(
 
     auto tag = ghash_finish(ctx, aad, text);
     auto s = block{};
-    aes_encrypt_block(ctx, j0, s);
+    aes_encrypt_block(ctx.round_keys_, 10, j0, s);
     for (auto i = 0; i < 16; i++)
         out[plaintext.size() + i] = tag[i] ^ s[i];
     return out;
+}
+
+void aes256_encrypt_block(
+    const aes256_context & ctx,
+    std::span<const std::byte> input,
+    std::span<std::byte> output)
+{
+    require_initialized(ctx.initialized_, "AES-256 context is not initialized");
+    require_size(input, aes_block_len, "AES block input must be 16 bytes");
+    require_size(output, aes_block_len, "AES block output must be 16 bytes");
+
+    auto in = block{};
+    auto out = block{};
+    std::ranges::copy(input, in.begin());
+    aes_encrypt_block(ctx.round_keys_, 14, in, out);
+    std::ranges::copy(out, output.begin());
+}
+
+void aes256_decrypt_block(
+    const aes256_context & ctx,
+    std::span<const std::byte> input,
+    std::span<std::byte> output)
+{
+    require_initialized(ctx.initialized_, "AES-256 context is not initialized");
+    require_size(input, aes_block_len, "AES block input must be 16 bytes");
+    require_size(output, aes_block_len, "AES block output must be 16 bytes");
+
+    auto in = block{};
+    auto out = block{};
+    std::ranges::copy(input, in.begin());
+    aes_decrypt_block(ctx.round_keys_, 14, in, out);
+    std::ranges::copy(out, output.begin());
+}
+
+void require_ige_spans(
+    std::span<const std::byte> iv,
+    std::span<const std::byte> input,
+    std::span<std::byte> output)
+{
+    require_size(iv, aes_ige_iv_len, "AES-IGE IV must be 32 bytes");
+    if (input.size() % aes_block_len != 0)
+        throw crypto_error{"AES-IGE input must be a multiple of 16 bytes"};
+    if (output.size() != input.size())
+        throw crypto_error{"AES-IGE output must match input size"};
+}
+
+void aes256_ige_encrypt(
+    const aes256_context & ctx,
+    std::span<const std::byte> iv,
+    std::span<const std::byte> input,
+    std::span<std::byte> output)
+{
+    require_initialized(ctx.initialized_, "AES-256 context is not initialized");
+    require_ige_spans(iv, input, output);
+
+    auto c_prev = block{};
+    auto p_prev = block{};
+    std::ranges::copy(iv.first(16), c_prev.begin());
+    std::ranges::copy(iv.subspan(16), p_prev.begin());
+
+    auto block_in = block{};
+    auto block_out = block{};
+    for (auto offset = std::size_t{0}; offset < input.size(); offset += 16) {
+        std::ranges::copy(input.subspan(offset, 16), block_in.begin());
+        for (auto i = 0; i < 16; i++)
+            block_out[i] = block_in[i] ^ c_prev[i];
+        aes_encrypt_block(ctx.round_keys_, 14, block_out, block_out);
+        for (auto i = 0; i < 16; i++)
+            block_out[i] ^= p_prev[i];
+        std::ranges::copy(block_out, output.begin() + offset);
+        p_prev = block_in;
+        c_prev = block_out;
+    }
+}
+
+void aes256_ige_decrypt(
+    const aes256_context & ctx,
+    std::span<const std::byte> iv,
+    std::span<const std::byte> input,
+    std::span<std::byte> output)
+{
+    require_initialized(ctx.initialized_, "AES-256 context is not initialized");
+    require_ige_spans(iv, input, output);
+
+    auto c_prev = block{};
+    auto p_prev = block{};
+    std::ranges::copy(iv.first(16), c_prev.begin());
+    std::ranges::copy(iv.subspan(16), p_prev.begin());
+
+    auto block_in = block{};
+    auto block_out = block{};
+    for (auto offset = std::size_t{0}; offset < input.size(); offset += 16) {
+        std::ranges::copy(input.subspan(offset, 16), block_in.begin());
+        for (auto i = 0; i < 16; i++)
+            block_out[i] = block_in[i] ^ p_prev[i];
+        aes_decrypt_block(ctx.round_keys_, 14, block_out, block_out);
+        for (auto i = 0; i < 16; i++)
+            block_out[i] ^= c_prev[i];
+        std::ranges::copy(block_out, output.begin() + offset);
+        c_prev = block_in;
+        p_prev = block_out;
+    }
 }
 
 } // namespace nxt::crypto

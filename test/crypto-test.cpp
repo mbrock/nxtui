@@ -117,6 +117,13 @@ nxtrt::task<void> write_sha256_sink_chunks(nxtrt::sha256_sink & sink)
     co_await sink.flush();
 }
 
+nxtrt::task<void> write_sha1_sink_chunks(nxtrt::sha1_sink & sink)
+{
+    co_await nxtrt::write(sink, "a");
+    co_await nxtrt::write(sink, "bc");
+    co_await sink.flush();
+}
+
 nxtrt::task<void> write_hmac_sha256_sink_chunks(nxtrt::hmac_sha256_sink & sink)
 {
     co_await nxtrt::write(sink, "Hi ");
@@ -145,6 +152,13 @@ static suite crypto_tests{
                     "b00361a396177a9cb410ff61f20015ad")));
         };
 
+        "hashes bytes with SHA-1"_test = [] {
+            auto digest = nxt::crypto::sha1(bytes_from("abc"));
+            expect(equal_bytes(
+                digest,
+                hex("a9993e364706816aba3e25717850c26c9cd0d89d")));
+        };
+
         "hashes incrementally with SHA-256 state"_test = [] {
             auto state = nxt::crypto::sha256_state{};
             state.update(bytes_from("a"));
@@ -162,6 +176,21 @@ static suite crypto_tests{
                     "3bc29ac8a9816f1fc6c5c6dcd93c4721")));
         };
 
+        "hashes incrementally with SHA-1 state"_test = [] {
+            auto state = nxt::crypto::sha1_state{};
+            state.update(bytes_from("a"));
+            state.update(bytes_from("b"));
+            state.update(bytes_from("c"));
+            expect(equal_bytes(
+                state.finalize(),
+                hex("a9993e364706816aba3e25717850c26c9cd0d89d")));
+
+            state.update(bytes_from("def"));
+            expect(equal_bytes(
+                state.finalize(),
+                hex("1f8ac10f23c5b5bc1167bda84b833e5c057a77d2")));
+        };
+
         "hashes bytes through a SHA-256 sink"_test = [] {
             auto deck = nxtrt::deck{};
             auto sink = nxtrt::sha256_sink{std::size_t{2}};
@@ -172,6 +201,17 @@ static suite crypto_tests{
                 sink.finalize(),
                 hex("ba7816bf8f01cfea414140de5dae2223"
                     "b00361a396177a9cb410ff61f20015ad")));
+        };
+
+        "hashes bytes through a SHA-1 sink"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto sink = nxtrt::sha1_sink{std::size_t{2}};
+
+            deck.sync_wait(write_sha1_sink_chunks(sink));
+
+            expect(equal_bytes(
+                sink.finalize(),
+                hex("a9993e364706816aba3e25717850c26c9cd0d89d")));
         };
 
         "authenticates bytes with HMAC-SHA256"_test = [] {
@@ -240,6 +280,44 @@ static suite crypto_tests{
 
             ciphertext[0] ^= std::byte{1};
             expect(!nxt::crypto::aes128gcm_open(key, nonce, aad, ciphertext));
+        };
+
+        "encrypts and decrypts AES-256 blocks"_test = [] {
+            auto key = hex(
+                "603deb1015ca71be2b73aef0857d7781"
+                "1f352c073b6108d72d9810a30914dff4");
+            auto plaintext = hex("6bc1bee22e409f96e93d7e117393172a");
+            auto ciphertext = hex("f3eed1bdb5d2a03c064b5a7e3db181f8");
+            auto ctx = nxt::crypto::aes256_context{key};
+
+            auto encrypted = nxt::crypto::bytes(nxt::crypto::aes_block_len);
+            nxt::crypto::aes256_encrypt_block(ctx, plaintext, encrypted);
+            expect(encrypted == ciphertext);
+
+            auto decrypted = nxt::crypto::bytes(nxt::crypto::aes_block_len);
+            nxt::crypto::aes256_decrypt_block(ctx, encrypted, decrypted);
+            expect(decrypted == plaintext);
+        };
+
+        "encrypts and decrypts AES-256-IGE in caller buffers"_test = [] {
+            auto key = hex(
+                "603deb1015ca71be2b73aef0857d7781"
+                "1f352c073b6108d72d9810a30914dff4");
+            auto iv = nxt::crypto::bytes(nxt::crypto::aes_ige_iv_len);
+            auto plaintext = hex(
+                "6bc1bee22e409f96e93d7e117393172a"
+                "ae2d8a571e03ac9c9eb76fac45af8e51");
+            auto ciphertext = hex(
+                "f3eed1bdb5d2a03c064b5a7e3db181f8"
+                "880535aa181c648235a7d426c238d676");
+            auto ctx = nxt::crypto::aes256_context{key};
+
+            auto encrypted = nxt::crypto::bytes(plaintext.size());
+            nxt::crypto::aes256_ige_encrypt(ctx, iv, plaintext, encrypted);
+            expect(encrypted == ciphertext);
+
+            nxt::crypto::aes256_ige_decrypt(ctx, iv, encrypted, encrypted);
+            expect(encrypted == plaintext);
         };
 
         "agrees on the same X25519 shared secret"_test = [] {

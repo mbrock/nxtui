@@ -1,3 +1,4 @@
+#include <nxt/mt/crypto.hpp>
 #include <nxt/mt/message.hpp>
 #include <nxt/mt/tl.hpp>
 #include <nxt/mt/transport.hpp>
@@ -30,6 +31,46 @@ std::string text(std::span<const std::byte> bytes)
     return std::string{
         reinterpret_cast<const char *>(bytes.data()),
         bytes.size()};
+}
+
+int hex_digit(char ch)
+{
+    if (ch >= '0' && ch <= '9')
+        return ch - '0';
+    if (ch >= 'a' && ch <= 'f')
+        return 10 + ch - 'a';
+    if (ch >= 'A' && ch <= 'F')
+        return 10 + ch - 'A';
+    throw std::runtime_error{"bad hex digit"};
+}
+
+std::vector<std::byte> hex(std::string_view input)
+{
+    auto out = std::vector<std::byte>{};
+    out.reserve(input.size() / 2);
+    auto high = -1;
+    for (auto ch : input) {
+        if (ch == ' ' || ch == '\n')
+            continue;
+        if (high < 0) {
+            high = hex_digit(ch);
+            continue;
+        }
+        out.push_back(static_cast<std::byte>((high << 4) | hex_digit(ch)));
+        high = -1;
+    }
+    if (high >= 0)
+        throw std::runtime_error{"odd hex input length"};
+    return out;
+}
+
+template<std::size_t N>
+std::array<std::byte, N> counting_bytes(std::uint8_t first = 0)
+{
+    auto out = std::array<std::byte, N>{};
+    for (auto i = std::size_t{0}; i < out.size(); i++)
+        out[i] = std::byte{static_cast<std::uint8_t>(first + i)};
+    return out;
 }
 
 template<std::ranges::viewable_range Range>
@@ -145,6 +186,98 @@ static suite mtproto_tests{
             expect(out.size() == std::size_t{5});
             expect(std::to_integer<unsigned>(out[0]) == 1);
             expect(text(std::span<const std::byte>{out}.subspan(1)) == "abcd");
+        };
+
+        "derives MT auth key metadata and message keys"_test = [] {
+            auto key_data = counting_bytes<256>();
+            auto key = nxt::mt::make_auth_key(key_data);
+
+            expect(std::ranges::equal(
+                key.aux_hash,
+                hex("4916d6bdb7f78e68")));
+            expect(std::ranges::equal(
+                key.id,
+                hex("32d1586ea457dfc8")));
+
+            auto nonce = counting_bytes<32>();
+            expect(std::ranges::equal(
+                nxt::mt::calc_new_nonce_hash(key, nonce, 1),
+                hex("c2ced2b33e593a55d27f4a5dabee7c67")));
+
+            auto plaintext = counting_bytes<32>(16);
+            auto msg_key = nxt::mt::message_key(
+                key,
+                plaintext,
+                nxt::mt::sender::client);
+            expect(std::ranges::equal(
+                msg_key,
+                hex("fbfa5fa94e2a70f3ad96dd24f7ad36b5")));
+
+            auto key_iv = nxt::mt::derive_aes_key_iv(
+                key,
+                msg_key,
+                nxt::mt::sender::client);
+            expect(std::ranges::equal(
+                key_iv.key,
+                hex("36bce969c89677d9cadd87de515f83a5"
+                    "265d2f17274cb43de11122996338e5f2")));
+            expect(std::ranges::equal(
+                key_iv.iv,
+                hex("4808d5e2c25ecf23d82aab1b1aae0376"
+                    "e073e9f175db200548fb5432d4980271")));
+        };
+
+        "encrypts and decrypts MT padded payloads in caller buffers"_test = [] {
+            auto key = nxt::mt::make_auth_key(counting_bytes<256>());
+            auto plaintext = counting_bytes<32>(16);
+            auto payload = std::vector<std::byte>(
+                nxt::mt::encrypted_payload_size(plaintext));
+
+            nxt::mt::encrypt_padded(
+                plaintext,
+                key,
+                nxt::mt::sender::client,
+                payload);
+
+            expect(std::ranges::equal(
+                std::span<const std::byte>{payload}.first(8),
+                key.id));
+            auto opened = std::vector<std::byte>(plaintext.size());
+            auto view = nxt::mt::decrypt_padded(
+                payload,
+                key,
+                nxt::mt::sender::client,
+                opened);
+            expect(std::ranges::equal(view, plaintext));
+        };
+
+        "encrypts auth exchange data with hash using caller scratch"_test = [] {
+            auto server_nonce = counting_bytes<16>(16);
+            auto new_nonce = counting_bytes<32>();
+            auto key_iv = nxt::mt::temp_aes_key_iv(server_nonce, new_nonce);
+            auto data = counting_bytes<44>(32);
+            auto padding = counting_bytes<16>(160);
+            auto ciphertext = std::vector<std::byte>(
+                nxt::mt::encrypted_data_with_hash_size(data.size()));
+
+            nxt::mt::encrypt_data_with_hash(
+                data,
+                key_iv.key,
+                key_iv.iv,
+                padding,
+                ciphertext);
+
+            auto opened = std::vector<std::byte>(ciphertext.size());
+            auto view = nxt::mt::decrypt_data_with_hash(
+                ciphertext,
+                key_iv.key,
+                key_iv.iv,
+                opened);
+
+            expect(std::ranges::equal(view, data));
+            expect(
+                nxt::mt::server_salt(new_nonce, server_nonce)
+                == 0x1010101010101010LL);
         };
     }};
 
