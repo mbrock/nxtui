@@ -16,6 +16,7 @@ paths = [
     'rt-holding.md',
     'rt-game.md',
     'rt-occurrents.md',
+    '../rfc/new/rfc-0001-reels.md',
 ]
 recursive_paths = [
     '../src',
