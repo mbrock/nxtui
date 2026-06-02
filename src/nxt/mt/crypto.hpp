@@ -42,6 +42,13 @@ struct aes_key_iv
     std::array<std::byte, 32> iv{};
 };
 
+struct public_key
+{
+    std::span<const std::byte> modulus;
+    unsigned exponent = 65537;
+    std::uint64_t fingerprint = 0;
+};
+
 inline std::size_t sender_offset(sender from) noexcept
 {
     return from == sender::client ? 0 : 8;
@@ -306,6 +313,119 @@ inline std::int64_t server_salt(
                  << (i * 8);
     }
     return std::bit_cast<std::int64_t>(value);
+}
+
+inline constexpr auto rsa_padded_block_size = std::size_t{256};
+inline constexpr auto rsa_padded_data_limit = std::size_t{144};
+inline constexpr auto rsa_padded_data_with_padding_size = std::size_t{192};
+inline constexpr auto rsa_padded_data_with_hash_size = std::size_t{224};
+inline constexpr auto rsa_padded_random_size = std::size_t{224};
+
+inline std::size_t rsa_required_random_bytes() noexcept
+{
+    return rsa_padded_random_size;
+}
+
+inline void increment_be(std::span<std::byte> value) noexcept
+{
+    for (auto i = value.size(); i != 0; i--) {
+        auto next = static_cast<std::byte>(
+            std::to_integer<std::uint8_t>(value[i - 1]) + 1);
+        value[i - 1] = next;
+        if (next != std::byte{0})
+            break;
+    }
+}
+
+inline std::span<const std::byte> trim_unsigned_be(
+    std::span<const std::byte> value) noexcept
+{
+    while (!value.empty() && value.front() == std::byte{0})
+        value = value.subspan(1);
+    return value;
+}
+
+inline bool unsigned_be_less(
+    std::span<const std::byte> lhs,
+    std::span<const std::byte> rhs) noexcept
+{
+    lhs = trim_unsigned_be(lhs);
+    rhs = trim_unsigned_be(rhs);
+    if (lhs.size() != rhs.size())
+        return lhs.size() < rhs.size();
+    return std::ranges::lexicographical_compare(lhs, rhs);
+}
+
+inline void rsa_encrypt_padded(
+    std::span<const std::byte> data,
+    const public_key & key,
+    std::span<const std::byte> random_bytes,
+    std::span<std::byte> output)
+{
+    if (data.size() > rsa_padded_data_limit)
+        throw protocol_error{"RSA padded data too large"};
+    if (key.modulus.size() != rsa_padded_block_size)
+        throw protocol_error{"RSA modulus must be 256 bytes"};
+    if (output.size() != rsa_padded_block_size)
+        throw protocol_error{"RSA output must be 256 bytes"};
+    if (random_bytes.size() < rsa_padded_random_size)
+        throw protocol_error{"insufficient RSA random bytes"};
+
+    auto data_with_padding =
+        std::array<std::byte, rsa_padded_data_with_padding_size>{};
+    auto cursor = std::copy(data.begin(), data.end(), data_with_padding.begin());
+    std::copy_n(
+        random_bytes.begin(),
+        data_with_padding.end() - cursor,
+        cursor);
+
+    auto temp_key = std::array<std::byte, 32>{};
+    std::ranges::copy(
+        random_bytes.subspan(rsa_padded_data_with_padding_size, 32),
+        temp_key.begin());
+
+    auto data_with_hash =
+        std::array<std::byte, rsa_padded_data_with_hash_size>{};
+    auto aes_encrypted =
+        std::array<std::byte, rsa_padded_data_with_hash_size>{};
+    auto zero_iv = std::array<std::byte, nxt::crypto::aes_ige_iv_len>{};
+
+    while (true) {
+        std::ranges::reverse_copy(
+            data_with_padding,
+            data_with_hash.begin());
+
+        auto hash_state = nxt::crypto::sha256_state{};
+        hash_state.update(temp_key);
+        hash_state.update(data_with_padding);
+        auto digest = hash_state.finalize();
+        std::ranges::copy(
+            digest,
+            data_with_hash.begin() + rsa_padded_data_with_padding_size);
+
+        auto aes = nxt::crypto::aes256_context{temp_key};
+        nxt::crypto::aes256_ige_encrypt(
+            aes,
+            zero_iv,
+            data_with_hash,
+            aes_encrypted);
+
+        auto encrypted_digest = nxt::crypto::sha256(aes_encrypted);
+        for (auto i = std::size_t{0}; i < temp_key.size(); i++)
+            output[i] = temp_key[i] ^ encrypted_digest[i];
+        std::ranges::copy(aes_encrypted, output.begin() + temp_key.size());
+
+        if (unsigned_be_less(output, key.modulus)) {
+            nxt::crypto::rsa_raw_public_encrypt(
+                key.modulus,
+                key.exponent,
+                output,
+                output);
+            return;
+        }
+
+        increment_be(temp_key);
+    }
 }
 
 } // namespace nxt::mt

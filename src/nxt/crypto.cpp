@@ -235,6 +235,19 @@ bytes bytes_from_int(boost::multiprecision::cpp_int value, std::size_t len)
     return out;
 }
 
+void write_int_bytes(
+    boost::multiprecision::cpp_int value,
+    std::span<std::byte> out)
+{
+    for (std::size_t i = 0; i < out.size(); i++) {
+        out[out.size() - 1 - i] = static_cast<std::byte>(
+            static_cast<unsigned>(value & 0xff));
+        value >>= 8;
+    }
+    if (value != 0)
+        throw crypto_error{"RSA value is too large"};
+}
+
 std::size_t bit_length(std::span<const std::byte> in)
 {
     auto i = std::size_t{0};
@@ -637,6 +650,29 @@ bool rsa_pss_verify(
     state.update(salt);
     auto want = state.finalize();
     return constant_time_equal(want, h);
+}
+
+void rsa_raw_public_encrypt(
+    std::span<const std::byte> modulus,
+    unsigned exponent,
+    std::span<const std::byte> input,
+    std::span<std::byte> output)
+{
+    if (modulus.empty())
+        throw crypto_error{"RSA modulus is empty"};
+    if (output.size() != modulus.size())
+        throw crypto_error{"RSA output must match modulus size"};
+    if (input.size() > modulus.size())
+        throw crypto_error{"RSA input is too large"};
+    if (exponent < 3 || (exponent & 1) == 0)
+        throw crypto_error{"unsupported RSA public exponent"};
+
+    auto n = int_from_bytes(modulus);
+    auto m = int_from_bytes(input);
+    if (m >= n)
+        throw crypto_error{"RSA input is not below modulus"};
+
+    write_int_bytes(pow_mod(m, exponent, n), output);
 }
 
 }

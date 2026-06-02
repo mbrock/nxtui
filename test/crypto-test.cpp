@@ -320,6 +320,20 @@ static suite crypto_tests{
             expect(encrypted == plaintext);
         };
 
+        "encrypts raw RSA public blocks into caller buffers"_test = [] {
+            auto modulus = hex("0ca1");
+            auto input = hex("0041");
+            auto output = nxt::crypto::bytes(modulus.size());
+
+            nxt::crypto::rsa_raw_public_encrypt(
+                modulus,
+                17,
+                input,
+                output);
+
+            expect(output == hex("0ae6"));
+        };
+
         "agrees on the same X25519 shared secret"_test = [] {
             auto alice = nxt::crypto::x25519_keygen();
             auto bob = nxt::crypto::x25519_keygen();

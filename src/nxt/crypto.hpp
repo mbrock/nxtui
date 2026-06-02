@@ -247,4 +247,10 @@ mlkem768_decaps(
     std::span<const std::byte> signature,
     unsigned digest_bits);
 
+void rsa_raw_public_encrypt(
+    std::span<const std::byte> modulus,
+    unsigned exponent,
+    std::span<const std::byte> input,
+    std::span<std::byte> output);
+
 }

@@ -279,6 +279,49 @@ static suite mtproto_tests{
                 nxt::mt::server_salt(new_nonce, server_nonce)
                 == 0x1010101010101010LL);
         };
+
+        "encrypts Telegram padded RSA blocks in caller buffers"_test = [] {
+            auto modulus = hex(R"(
+                e8bb3305c0b52c6cf2afdf7637313489e63e05268e5badb601af417786472e5f
+                93b85438968e20e6729a301c0afc121bf7151f834436f7fda680847a66bf64
+                accec78ee21c0b316f0edafe2f41908da7bd1f4a5107638eeb67040ace472
+                a14f90d9f7c2b7def99688ba3073adb5750bb02964902a359fe745d8170e3
+                6876d4fd8a5d41b2a76cbff9a13267eb9580b2d06d10357448d20d9da21
+                91cb5d8c93982961cdfdeda629e37f1fb09a0722027696032fe61ed663d
+                b7a37f6f263d370f69db53a0dc0a1748bdaaff6209d5645485e6e001d1
+                953255757e4b8e42813347b11da6ab500fd0ace7e6dfa3736199ccaf939
+                7ed0745a427dcfa6cd67bcb1acff3
+            )");
+            auto key = nxt::mt::public_key{
+                .modulus = modulus,
+                .exponent = 65537,
+            };
+            auto plaintext = std::vector<std::byte>(144, std::byte{0x61});
+            auto random = std::vector<std::byte>(
+                nxt::mt::rsa_required_random_bytes(),
+                std::byte{0});
+            auto encrypted = std::vector<std::byte>(
+                nxt::mt::rsa_padded_block_size);
+
+            nxt::mt::rsa_encrypt_padded(
+                plaintext,
+                key,
+                random,
+                encrypted);
+
+            expect(std::ranges::equal(
+                encrypted,
+                hex(R"(
+                    bf68719e836806b040cd261ecaf66eb3c4ba19f3bbea3031b2e6cf29167bab64
+                    7201d101b291dc5b716a42e789a38d947fe59e9bcce8f30ef46a946743ea8b6b
+                    abbce7fc0afc46b802aa453e83471d82a4dfad83f971f350b4b4fb474cd1c48f
+                    df427e4b5fecce9ec3178ae7dac3985856fdefa21d6fdc5e0e0fd8a57bc4f515
+                    80d637d372be8d87c9aa3fde8e6f8287bcb3be846aadcdd59465375479e248f6
+                    2ed438f9804fbe36d41ca906243a5f740f3937949aa149ba8a8b8e68b3f3e1e3
+                    cd3f946387520e21eee55845e1f015a919a22f6a72bfaecd2cae946c91983b41
+                    f9ffabe97963bbde8f30eaf5fd3c5b8cecab8711bd269e441b6084f385726ff0
+                )")));
+        };
     }};
 
 } // namespace nxt::test
