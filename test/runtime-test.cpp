@@ -546,6 +546,98 @@ std::string byte_value_chunks_text(
     return out;
 }
 
+std::byte byte_value(unsigned value)
+{
+    return std::byte{static_cast<unsigned char>(value)};
+}
+
+template<typename T>
+T nth_value(
+    nxtrt::buffer_chunks<const T> chunks,
+    std::size_t index)
+{
+    for (auto chunk : chunks) {
+        if (index < chunk.size())
+            return chunk[index];
+        index -= chunk.size();
+    }
+    throw nxtrt::buffer_error{"test chunk index out of range"};
+}
+
+struct counted_byte_frame
+{
+    nxtrt::byte_chunks<const std::byte> payload;
+
+    static nxtrt::chop_scan_result<counted_byte_frame> scan(
+        nxtrt::byte_chunks<const std::byte> bytes)
+    {
+        if (bytes.size() < 1)
+            return nxtrt::chop_need_more{.minimum_buffered = 1};
+
+        auto payload_size = static_cast<std::size_t>(
+            std::to_integer<unsigned char>(nth_value(bytes, 0)));
+        auto extent = payload_size + 1;
+        if (bytes.size() < extent)
+            return nxtrt::chop_need_more{.minimum_buffered = extent};
+
+        return nxtrt::frame_chop<counted_byte_frame>{
+            .extent = extent,
+            .frame = counted_byte_frame{
+                .payload = bytes.subspan(1, payload_size),
+            },
+        };
+    }
+};
+
+struct counted_int_frame
+{
+    nxtrt::value_chunks<const int> payload;
+
+    static nxtrt::chop_scan_result<counted_int_frame> scan(
+        nxtrt::value_chunks<const int> values)
+    {
+        if (values.size() < 1)
+            return nxtrt::chop_need_more{.minimum_buffered = 1};
+
+        auto payload_size = static_cast<std::size_t>(
+            nth_value(values, 0));
+        auto extent = payload_size + 1;
+        if (values.size() < extent)
+            return nxtrt::chop_need_more{.minimum_buffered = extent};
+
+        return nxtrt::frame_chop<counted_int_frame>{
+            .extent = extent,
+            .frame = counted_int_frame{
+                .payload = values.subspan(1, payload_size),
+            },
+        };
+    }
+};
+
+template<std::ranges::input_range Chops>
+std::vector<std::string> counted_payload_texts(Chops && chops)
+{
+    auto out = std::vector<std::string>{};
+    for (auto && item : chops)
+        out.push_back(byte_value_chunks_text(item.frame.payload));
+    return out;
+}
+
+template<std::ranges::input_range Chops>
+std::vector<std::vector<int>> counted_int_payloads(Chops && chops)
+{
+    auto out = std::vector<std::vector<int>>{};
+    for (auto && item : chops) {
+        auto payload = std::vector<int>{};
+        for (auto chunk : item.frame.payload) {
+            for (auto value : chunk)
+                payload.push_back(value);
+        }
+        out.push_back(std::move(payload));
+    }
+    return out;
+}
+
 nxtrt::task<void> check_byte_feed_ring_shape(
     nxtrt::feed<std::byte> & source)
 {
@@ -568,6 +660,56 @@ nxtrt::task<void> check_byte_feed_ring_shape(
 
     auto eof = co_await source.take();
     expect(!eof);
+}
+
+nxtrt::task<void> check_reel_chops_ring_feed(nxtrt::bytefeed & reader)
+{
+    auto frames = nxtrt::reel<std::byte, counted_byte_frame>{reader};
+
+    auto first = co_await frames.peek(2);
+    expect(counted_payload_texts(first) == std::vector<std::string>{"ab", "c"});
+    expect(first.extent(1) == std::size_t{3});
+    co_await frames.discard_prefix(first.extent(1));
+
+    auto wrapped = co_await frames.peek(2);
+    expect(reader.buffered().chunk_count() == std::size_t{2});
+    expect(
+        counted_payload_texts(wrapped | std::views::take(2))
+        == std::vector<std::string>{"c", "de"});
+    expect(
+        nxtrt::chop_extent(wrapped | std::views::take(2))
+        == std::size_t{5});
+
+    co_await frames.discard_prefix(
+        nxtrt::chop_extent(wrapped | std::views::take(2)));
+    auto eof = co_await frames.peek();
+    expect(eof.empty());
+}
+
+nxtrt::task<void> check_stock_reel_chops_ring_feed(nxtrt::feed<int> & source)
+{
+    auto frames = nxtrt::reel<int, counted_int_frame>{source};
+
+    auto first = co_await frames.peek(2);
+    expect(
+        counted_int_payloads(first)
+        == std::vector<std::vector<int>>{{10, 20}, {30}});
+    expect(first.extent(1) == std::size_t{3});
+    co_await frames.discard_prefix(first.extent(1));
+
+    auto wrapped = co_await frames.peek(2);
+    expect(source.buffered().chunk_count() == std::size_t{2});
+    expect(
+        counted_int_payloads(wrapped | std::views::take(2))
+        == std::vector<std::vector<int>>{{30}, {40, 50}});
+    expect(
+        nxtrt::chop_extent(wrapped | std::views::take(2))
+        == std::size_t{5});
+
+    co_await frames.discard_prefix(
+        nxtrt::chop_extent(wrapped | std::views::take(2)));
+    auto eof = co_await frames.peek();
+    expect(eof.empty());
 }
 
 nxtrt::task<const int *> peek_int_value(nxtrt::feed<int> & source)
@@ -3003,6 +3145,79 @@ static suite runtime_tests{
                 auto reader = text_source(chunks, std::span{storage});
 
                 deck.sync_wait(check_bytefeed_chunk_peek(reader));
+            };
+
+            "chop lazily scans visible byte chunks"_test = [] {
+                auto bytes = std::array{
+                    byte_value(2),
+                    byte_value('a'),
+                    byte_value('b'),
+                    byte_value(1),
+                    byte_value('c'),
+                    byte_value(2),
+                    byte_value('d'),
+                };
+                auto all = std::span<const std::byte>{
+                    bytes.data(),
+                    bytes.size(),
+                };
+                auto spans = std::array{
+                    all.first(4),
+                    all.subspan(4),
+                };
+                auto chunks = nxtrt::byte_chunks<const std::byte>{
+                    std::span{spans},
+                };
+
+                auto frames = nxtrt::chop<std::byte, counted_byte_frame>(
+                    chunks);
+
+                expect(frames.count() == std::size_t{2});
+                expect(frames.extent() == std::size_t{5});
+                expect(
+                    counted_payload_texts(frames | std::views::take(2))
+                    == std::vector<std::string>{"ab", "c"});
+                expect(
+                    nxtrt::chop_extent(frames | std::views::take(2))
+                    == std::size_t{5});
+            };
+
+            "reel peeks chops from a bytefeed without storing frames"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto bytes = std::array{
+                    byte_value(2),
+                    byte_value('a'),
+                    byte_value('b'),
+                    byte_value(1),
+                    byte_value('c'),
+                    byte_value(2),
+                    byte_value('d'),
+                    byte_value('e'),
+                };
+                auto all = std::span<const std::byte>{
+                    bytes.data(),
+                    bytes.size(),
+                };
+                auto chunks = std::array{
+                    all,
+                };
+                auto storage = std::array<std::byte, 5>{};
+                auto reader = nxtrt::byte_span_feed{
+                    chunks,
+                    std::span{storage},
+                };
+
+                deck.sync_wait(check_reel_chops_ring_feed(reader));
+            };
+
+            "reel is generic over source stock values"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto source = int_feed{
+                    std::vector<int>{2, 10, 20, 1, 30, 2, 40, 50},
+                    5,
+                };
+
+                deck.sync_wait(check_stock_reel_chops_ring_feed(source));
             };
 
             "empty reads are distinguished from EOF"_test = [] {

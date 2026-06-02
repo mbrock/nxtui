@@ -99,6 +99,13 @@ if get_option('llm_tool')
     command : ['ln', '-sf', 'src/nxtllm', '@OUTPUT@'],
     build_by_default : true,
   )
+
+  custom_target('nxtmt-root-link',
+    output : 'nxtmt',
+    input : nxtmt,
+    command : ['ln', '-sf', 'src/nxtmt', '@OUTPUT@'],
+    build_by_default : true,
+  )
 endif
 
 if get_option('benchmarks')

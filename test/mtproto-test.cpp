@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -32,6 +33,27 @@ std::string text(std::span<const std::byte> bytes)
     return std::string{
         reinterpret_cast<const char *>(bytes.data()),
         bytes.size()};
+}
+
+std::string text(nxtrt::byte_chunks<const std::byte> chunks)
+{
+    auto out = std::string{};
+    for (auto chunk : chunks)
+        out += text(chunk);
+    return out;
+}
+
+std::vector<std::byte> byte_values(nxtrt::byte_chunks<const std::byte> chunks)
+{
+    auto out = std::vector<std::byte>{};
+    for (auto chunk : chunks)
+        out.insert(out.end(), chunk.begin(), chunk.end());
+    return out;
+}
+
+std::byte byte_value(unsigned value)
+{
+    return std::byte{static_cast<unsigned char>(value)};
 }
 
 int hex_digit(char ch)
@@ -94,6 +116,44 @@ nxtrt::task<void>
 write_frame(nxtrt::bytesink & sink, std::span<const std::byte> payload)
 {
     co_await nxtrt::mtproto::write_abridged_frame(sink, payload);
+}
+
+template<std::ranges::input_range Chops>
+std::vector<std::string> abridged_payload_texts(Chops && chops)
+{
+    auto out = std::vector<std::string>{};
+    for (auto && item : chops) {
+        if (item.frame.is_payload())
+            out.push_back(text(item.frame.payload));
+    }
+    return out;
+}
+
+nxtrt::task<void>
+check_abridged_reel_ring_feed(nxtrt::bytefeed & source)
+{
+    auto frames = nxtrt::mtproto::abridged_reel{source};
+
+    auto first = co_await frames.peek(2);
+    expect(
+        abridged_payload_texts(first)
+        == std::vector<std::string>{"abcd", "efgh"});
+    expect(first.extent(1) == std::size_t{5});
+    co_await frames.discard_prefix(first.extent(1));
+
+    auto wrapped = co_await frames.peek(2);
+    expect(source.buffered().chunk_count() == std::size_t{2});
+    expect(
+        abridged_payload_texts(wrapped | std::views::take(2))
+        == std::vector<std::string>{"efgh", "ijkl"});
+    expect(
+        nxtrt::chop_extent(wrapped | std::views::take(2))
+        == std::size_t{10});
+
+    co_await frames.discard_prefix(
+        nxtrt::chop_extent(wrapped | std::views::take(2)));
+    auto eof = co_await frames.peek();
+    expect(eof.empty());
 }
 
 } // namespace
@@ -163,6 +223,173 @@ static suite mtproto_tests{
             auto * decoded = std::get_if<nxt::mt::abridged_payload>(&frame);
             expect(decoded != nullptr);
             expect(text(decoded->bytes) == "abcd");
+            expect(reader.empty());
+        };
+
+        "projects abridged transport frames as reel chops"_test = [] {
+            auto bytes = std::array{
+                byte_value(0x81),
+                byte_value(0x02),
+                byte_value(0x03),
+                byte_value(0x04),
+                byte_value(2),
+                byte_value('a'),
+                byte_value('b'),
+                byte_value('c'),
+                byte_value('d'),
+                byte_value('e'),
+                byte_value('f'),
+                byte_value('g'),
+                byte_value('h'),
+            };
+            auto all = std::span<const std::byte>{
+                bytes.data(),
+                bytes.size(),
+            };
+            auto spans = std::array{
+                all.first(5),
+                all.subspan(5),
+            };
+            auto chunks = nxtrt::byte_chunks<const std::byte>{
+                std::span{spans},
+            };
+
+            auto frames =
+                nxtrt::chop<std::byte, nxtrt::mtproto::abridged_frame_view>(
+                    chunks);
+            auto it = frames.begin();
+
+            expect(it != frames.end());
+            expect(it->frame.is_quick_ack());
+            expect(
+                *it->frame.quick_ack_token
+                == nxt::mt::byte_swap32(0x04030281));
+            ++it;
+
+            expect(it != frames.end());
+            expect(it->frame.is_payload());
+            expect(text(it->frame.payload) == "abcdefgh");
+            expect(it->extent == std::size_t{9});
+            ++it;
+
+            expect(it == frames.end());
+            expect(frames.extent() == std::size_t{13});
+        };
+
+        "peeks abridged runtime frames as borrowed reel views"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto chunks = std::array{
+                "\x01" "abcd" "\x01" "efgh" "\x01" "ijkl"sv,
+            };
+            auto storage = std::array<std::byte, 10>{};
+            auto source = text_source(chunks, std::span{storage});
+
+            deck.sync_wait(check_abridged_reel_ring_feed(source));
+        };
+
+        "projects plain messages inside abridged reel frames"_test = [] {
+            auto message_storage = std::array<std::byte, 24>{};
+            auto writer = nxt::mt::byte_writer{message_storage};
+            nxt::mt::write_plain_message(
+                writer,
+                nxt::mt::plain_message_view{
+                    .message_id = 0x0102030405060708,
+                    .body = bytes("ping"),
+                });
+
+            auto frame_storage = std::array<std::byte, 32>{};
+            auto frame_writer = nxt::mt::byte_writer{frame_storage};
+            frame_writer.put_u8(0x81);
+            frame_writer.put_u8(0x02);
+            frame_writer.put_u8(0x03);
+            frame_writer.put_u8(0x04);
+            nxt::mt::write_abridged_frame(frame_writer, writer.written());
+
+            auto framed = std::span<const std::byte>{
+                frame_writer.written(),
+            };
+            auto spans = std::array{
+                framed.first(27),
+                framed.subspan(27),
+            };
+            auto chunks = nxtrt::byte_chunks<const std::byte>{
+                std::span{spans},
+            };
+            auto frames = nxtrt::chop<
+                std::byte,
+                nxtrt::mtproto::plain_abridged_frame_view>(chunks);
+            auto it = frames.begin();
+
+            expect(it != frames.end());
+            expect(it->frame.is_quick_ack());
+            expect(
+                *it->frame.quick_ack_token
+                == nxt::mt::byte_swap32(0x04030281));
+            ++it;
+
+            expect(it != frames.end());
+            expect(it->frame.is_message());
+            expect(it->frame.message_id == 0x0102030405060708ULL);
+            expect(it->frame.body.chunk_count() == std::size_t{2});
+            expect(text(it->frame.body) == "ping");
+            expect(it->extent == std::size_t{25});
+            ++it;
+
+            expect(it == frames.end());
+            expect(frames.extent() == std::size_t{29});
+        };
+
+        "parses TL fields from segmented plain message bodies"_test = [] {
+            auto nonce = counting_bytes<16>();
+            auto body_storage = std::array<std::byte, 20>{};
+            auto body_writer = nxt::mt::byte_writer{body_storage};
+            nxt::mt::auth::write_req_pq_multi(body_writer, nonce);
+
+            auto message_storage = std::array<std::byte, 40>{};
+            auto message_writer = nxt::mt::byte_writer{message_storage};
+            nxt::mt::write_plain_message(
+                message_writer,
+                nxt::mt::plain_message_view{
+                    .message_id = 0x0102030405060708,
+                    .body = body_writer.written(),
+                });
+
+            auto frame_storage = std::array<std::byte, 48>{};
+            auto frame_writer = nxt::mt::byte_writer{frame_storage};
+            nxt::mt::write_abridged_frame(
+                frame_writer,
+                message_writer.written());
+
+            auto framed = std::span<const std::byte>{
+                frame_writer.written(),
+            };
+            auto spans = std::array{
+                framed.first(27),
+                framed.subspan(27),
+            };
+            auto chunks = nxtrt::byte_chunks<const std::byte>{
+                std::span{spans},
+            };
+            auto frames = nxtrt::chop<
+                std::byte,
+                nxtrt::mtproto::plain_abridged_frame_view>(chunks);
+            auto frame = *frames.begin();
+
+            expect(frame.frame.is_message());
+            expect(frame.frame.body.chunk_count() == std::size_t{2});
+
+            auto reader = nxtrt::mtproto::tl_chunk_reader{
+                frame.frame.body,
+            };
+            expect(
+                static_cast<std::uint32_t>(reader.int_())
+                == nxt::mt::auth::req_pq_multi_constructor);
+            auto read_nonce = reader.int128();
+            expect(read_nonce.chunk_count() == std::size_t{2});
+            expect(byte_values(read_nonce) == std::vector<std::byte>{
+                nonce.begin(),
+                nonce.end(),
+            });
             expect(reader.empty());
         };
 

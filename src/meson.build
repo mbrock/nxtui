@@ -131,4 +131,14 @@ if get_option('llm_tool')
     ] + nxt_dns_deps,
     cpp_args : nxt_dns_args,
   )
+
+  nxtmt = executable('nxtmt',
+    'nxtai/nxtmt.cpp',
+    include_directories : nxt_inc,
+    dependencies : [
+      nxt_core_dep,
+      nxt_stacktrace_dep,
+    ] + nxt_dns_deps,
+    cpp_args : nxt_dns_args,
+  )
 endif
