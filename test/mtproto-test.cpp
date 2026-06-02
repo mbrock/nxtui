@@ -388,6 +388,83 @@ static suite mtproto_tests{
             expect(q == 0x5e63ac81ULL);
         };
 
+        "builds req_DH_params from resPQ using borrowed scratch"_test = [] {
+            auto modulus = hex(R"(
+                c8c11d635691fac091dd9489aedced2932aa8a0bcefef05fa800892d9b52ed03
+                200865c9e97211cb2ee6c7ae96d3fb0e15aeffd66019b44a08a240cfdd2868
+                a85e1f54d6fa5deaa041f6941ddf302690d61dc476385c2fa655142353cb4
+                e4b59f6e5b6584db76fe8b1370263246c010c93d011014113ebdf987d093f
+                9d37c2be48352d69a1683f8f6e6c2167983c761e3ab169fde5daaa1212
+                3fa1beab621e4da5935e9c198f82f35eae583a99386d8110ea6bd1abb0
+                f568759f62694419ea5f69847c43462abef858b4cb5edc84e7b9226cd7
+                bd7e183aa974a712c079dde85b9dc063b8a5c08e8f859c0ee5dcd824
+                c7807f20153361a7f63cfd2a433a1be7f5
+            )");
+            auto key_scratch = std::array<std::byte, 264>{};
+            auto key = nxt::mt::auth::make_public_key(
+                modulus,
+                65537,
+                key_scratch);
+            auto keys = std::array{key};
+            auto state = nxt::mt::auth::exchange_state{};
+            auto nonce = hex("4e44b426241e8b839153122d44585ac6");
+            auto begin_storage = std::array<std::byte, 20>{};
+            auto begin_writer = nxt::mt::byte_writer{begin_storage};
+            nxt::mt::auth::begin(state, nonce, begin_writer);
+
+            auto response = hex(R"(
+                632416054e44b426241e8b839153122d44585ac665ba0b393e1094329eda2c42
+                d62833030819546f942a11278d00000015c4b51c0300000003268d20df9858b2
+                029f4ba16d109296216be86c022bb4c3
+            )");
+            auto random = hex(R"(
+                b9dce68b05ef760fa7edfefeff45aaa8afbac11dc3d333bc3132fd16ab816d63
+                ed93c5bef9d0452add8164a2d5df5804277ee5a06fd4523372707ddbd8106d03
+                766d76fb8bec672bdcddcd225f7766b83663b32a0fda1055175c5582edd10430
+                937666be4fd15510ba5f19aa645973b6e4e9270efac25b58741635fe84dd0af0
+                7a4686f750bf34de1073f1e7fa24e9b01a76e537504bd52b8195e5b78c9af2ba
+                a982454e1a99eeae0f35944089ad12726d2433a2c18c9698a725364f9c4e939c
+                e4f1aee3891e58b85de90c88cc2eaef5db1841a594c0edc13cb4b7480a7e564f
+                e892f82282d03ed07eb5ceac6644247bb137241166fe194756dfcffd68c6c345
+            )");
+            auto fingerprints = std::array<std::uint64_t, 4>{};
+            auto inner = std::array<std::byte, 128>{};
+            auto encrypted = std::array<std::byte, 256>{};
+            auto request = std::array<std::byte, 320>{};
+            auto writer = nxt::mt::byte_writer{request};
+
+            nxt::mt::auth::receive_res_pq(
+                state,
+                response,
+                keys,
+                random,
+                fingerprints,
+                inner,
+                encrypted,
+                writer);
+
+            expect(
+                state.current_phase
+                == nxt::mt::auth::phase::awaiting_server_dh_params);
+            expect(std::ranges::equal(
+                state.new_nonce,
+                std::span<const std::byte>{random}.first(32)));
+            expect(std::ranges::equal(
+                writer.written(),
+                hex(R"(
+                    bee412d74e44b426241e8b839153122d44585ac665ba0b393e1094329eda2c42
+                    d62833030444b2e50d000000045e63ac8100000003268d20df9858b2fe000100
+                    7ec37ca8a84aa1b26d21bc8ac28b261ffa57b44e29f0d6722261e9b436059cc8
+                    0ae9768a3ae4fbefe46cfbb76b88a1f80a1ebd95ae5d17bf655ed1015755e04c
+                    483a01cf4094a0830864054a71a0ac8a5ec34d6b24a69bf66c9654b32a8c65b0
+                    302718351b28f72a9a49610d5259b6edb6da37acc5fedc47d1a09c58df2c7ecc
+                    bfaf54dfe123ebc253d9069f74e8be128051e5d280b3c9a5e8d3c6da344cb737
+                    4a6d410d4e088cc0eda3d8b1108ba4f4a85d79fbd2758000723780bc5459f59f
+                    d1cea1b511b77cc1411781d3feb57b14a97726cf3d2146cf43e648a69ff9cb5d
+                    48a31f543bd5bc3a023cf382d86d36bbfbbcb5e4a136acee25fd8e3e597e714d
+                )")));
+        };
+
         "writes auth req_DH_params into caller buffers"_test = [] {
             auto nonce = counting_bytes<16>();
             auto server_nonce = counting_bytes<16>(16);

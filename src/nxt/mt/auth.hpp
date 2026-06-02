@@ -27,6 +27,38 @@ inline constexpr std::uint32_t dh_gen_ok_constructor = 0x3bcbf734;
 inline constexpr std::uint32_t dh_gen_retry_constructor = 0x46dc1fb9;
 inline constexpr std::uint32_t dh_gen_fail_constructor = 0xa69dae02;
 
+enum class phase
+{
+    idle,
+    awaiting_res_pq,
+    awaiting_server_dh_params,
+    awaiting_dh_gen,
+    complete,
+};
+
+struct exchange_state
+{
+    phase current_phase = phase::idle;
+    std::array<std::byte, 16> nonce{};
+    std::array<std::byte, 16> server_nonce{};
+    std::array<std::byte, 32> new_nonce{};
+    std::array<std::byte, 8> p{};
+    std::array<std::byte, 8> q{};
+    std::size_t p_size = 0;
+    std::size_t q_size = 0;
+    std::uint64_t selected_public_key_fingerprint = 0;
+
+    [[nodiscard]] std::span<const std::byte> p_bytes() const noexcept
+    {
+        return std::span{p}.first(p_size);
+    }
+
+    [[nodiscard]] std::span<const std::byte> q_bytes() const noexcept
+    {
+        return std::span{q}.first(q_size);
+    }
+};
+
 inline std::size_t unsigned_be_size(unsigned value) noexcept
 {
     auto size = std::size_t{1};
@@ -45,6 +77,29 @@ inline void write_unsigned_be(
         auto shift = static_cast<unsigned>((out.size() - 1 - i) * 8);
         out[i] = static_cast<std::byte>(value >> shift);
     }
+}
+
+inline std::size_t unsigned_be_size(std::uint64_t value) noexcept
+{
+    auto size = std::size_t{1};
+    while ((value >>= 8) != 0)
+        size++;
+    return size;
+}
+
+inline std::span<const std::byte> write_unsigned_be(
+    std::span<std::byte> out,
+    std::uint64_t value)
+{
+    auto size = unsigned_be_size(value);
+    if (out.size() < size)
+        throw protocol_error{"unsigned integer output is too small"};
+    auto encoded = out.first(size);
+    for (auto i = std::size_t{0}; i < encoded.size(); i++) {
+        auto shift = static_cast<unsigned>((encoded.size() - 1 - i) * 8);
+        encoded[i] = static_cast<std::byte>(value >> shift);
+    }
+    return encoded;
 }
 
 inline std::size_t public_key_fingerprint_size(
@@ -122,6 +177,19 @@ inline void write_req_pq_multi(
         throw protocol_error{"invalid nonce"};
     tl::write_int(out, static_cast<std::int32_t>(req_pq_multi_constructor));
     tl::write_int128(out, nonce);
+}
+
+inline void begin(
+    exchange_state & state,
+    std::span<const std::byte> nonce,
+    byte_writer & out)
+{
+    if (nonce.size() != state.nonce.size())
+        throw protocol_error{"invalid nonce"};
+    state = exchange_state{};
+    state.current_phase = phase::awaiting_res_pq;
+    std::ranges::copy(nonce, state.nonce.begin());
+    write_req_pq_multi(out, state.nonce);
 }
 
 inline res_pq_view decode_res_pq(
@@ -276,6 +344,82 @@ inline const public_key * select_public_key(
             return &*found;
     }
     return nullptr;
+}
+
+inline void receive_res_pq(
+    exchange_state & state,
+    std::span<const std::byte> response,
+    std::span<const public_key> public_keys,
+    std::span<const std::byte> random_bytes,
+    std::span<std::uint64_t> fingerprint_storage,
+    std::span<std::byte> inner_storage,
+    std::span<std::byte> encrypted_storage,
+    byte_writer & out,
+    std::int32_t dc_id = 0,
+    bool include_dc_id = false)
+{
+    if (state.current_phase != phase::awaiting_res_pq)
+        throw protocol_error{"unexpected auth phase"};
+    if (random_bytes.size() < 32 + rsa_required_random_bytes())
+        throw protocol_error{"insufficient random bytes"};
+
+    auto decoded = decode_res_pq(response, fingerprint_storage);
+    if (!std::ranges::equal(decoded.nonce, state.nonce))
+        throw protocol_error{"nonce mismatch"};
+    auto * key = select_public_key(
+        public_keys,
+        decoded.server_public_key_fingerprints);
+    if (key == nullptr)
+        throw protocol_error{"unknown public key"};
+
+    auto [p_value, q_value] = factor_pq(decoded.pq);
+    auto p = write_unsigned_be(state.p, p_value);
+    auto q = write_unsigned_be(state.q, q_value);
+    state.p_size = p.size();
+    state.q_size = q.size();
+    std::ranges::copy(decoded.server_nonce, state.server_nonce.begin());
+    std::ranges::copy(random_bytes.first(32), state.new_nonce.begin());
+
+    auto inner_size = p_q_inner_data_size(
+        decoded.pq,
+        p,
+        q,
+        include_dc_id);
+    if (inner_storage.size() < inner_size)
+        throw protocol_error{"p_q_inner_data storage is too small"};
+    auto inner_writer = byte_writer{inner_storage.first(inner_size)};
+    write_p_q_inner_data(
+        inner_writer,
+        include_dc_id ? p_q_inner_data_dc_constructor
+                      : p_q_inner_data_constructor,
+        decoded.pq,
+        p,
+        q,
+        state.nonce,
+        state.server_nonce,
+        state.new_nonce,
+        include_dc_id ? std::optional<std::int32_t>{dc_id} : std::nullopt);
+
+    if (encrypted_storage.size() < rsa_padded_block_size)
+        throw protocol_error{"encrypted data storage is too small"};
+    auto encrypted_data = encrypted_storage.first(rsa_padded_block_size);
+    rsa_encrypt_padded(
+        inner_writer.written(),
+        *key,
+        random_bytes.subspan(32, rsa_required_random_bytes()),
+        encrypted_data);
+
+    write_req_dh_params(
+        out,
+        state.nonce,
+        state.server_nonce,
+        p,
+        q,
+        key->fingerprint,
+        encrypted_data);
+
+    state.current_phase = phase::awaiting_server_dh_params;
+    state.selected_public_key_fingerprint = key->fingerprint;
 }
 
 } // namespace nxt::mt::auth
