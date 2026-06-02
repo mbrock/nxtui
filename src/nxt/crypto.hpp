@@ -252,5 +252,10 @@ void rsa_raw_public_encrypt(
     unsigned exponent,
     std::span<const std::byte> input,
     std::span<std::byte> output);
+void modular_exponentiate(
+    std::span<const std::byte> base,
+    std::span<const std::byte> exponent,
+    std::span<const std::byte> modulus,
+    std::span<std::byte> output);
 
 }

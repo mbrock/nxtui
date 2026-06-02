@@ -463,6 +463,82 @@ static suite mtproto_tests{
                     d1cea1b511b77cc1411781d3feb57b14a97726cf3d2146cf43e648a69ff9cb5d
                     48a31f543bd5bc3a023cf382d86d36bbfbbcb5e4a136acee25fd8e3e597e714d
                 )")));
+
+            auto server_dh_params = hex(R"(
+                5c07e8d04e44b426241e8b839153122d44585ac665ba0b393e1094329eda2c42
+                d6283303fe500200fd064e91012ade621b26a48ac7dc8b2c8670ed67092a00fe
+                8c936483e4b02822c3cc655aaffe00542e311df5abdaa645b1da85ca50a6c7b0
+                e7cc7cb2b23d42c84e288bb3b5cfe313e1ebafe19833916df4d1f58dba62e0ac
+                49cac17a31b8b0d57d43eefda546d67e80e311c4b213adec9635c73f75a18ffb
+                26fb71391523bd5ddfcc8be51b36d6b2552394c511ec935d53811a981baca62a
+                2b58cbfe96f1b35e118e5e17456994aea931839925c4578f281f3f129d28026e
+                c80224617a9ca8c615a12fba9c53e774476567f07b01a59d2e6635e39c16dc0a
+                54679f3b54b0482f1cbeac821147d93d7365f4e23fb5794eb5fd4ffdc6456638
+                ea32f641f49ee705e7b0da71cb75753e2f4f80d5af07edb017948f332e34a9c5
+                886b0c86281e0e7228d5a652a9faaf819f7686c099186169aaa377c136fac57b
+                69b7f7b383aaece652f8dcb14e0dfb23e2a65330307a74c31c508cc504450fa2
+                08eee14d8bbead1c1f90ccfc183ae1d3345c62424ea3477776204e8fe69efbb6
+                a27b168913d3babaca30aa1c9589d6655b2ad4cd59f67e9b3957ab3270d70afa
+                b9bd488a6c5f39ca739ca8947def00cdb8812152731710f5108235775a019d3b
+                4986d6b720b05167b4ee731a10a29fc1e03c42e99d8ff5cf64f45070c2f5ce48
+                5ea5fddc281728b6e4d0dea561c9097e3f8a54b055b0c069a9f8207520f6429e
+                b5225c985e3379f2cf6754f56d414fcd00d502e69223b911b915978e0890a9ef
+                128715b828bf3fda3fee6c7b9b2621d971a6f7820f89f4c4c2ab29dec00007c3
+                ec6cead64f7f5802d5e6a4a16a185cfbfced5351fa68380e
+            )");
+            auto server_random = hex(R"(
+                8fc3605a4604cbb5461fdeff439c761150083cdd502550558e92c730d46c9caf
+                0b1b2d64d2c264942c50d98694fff604fdd2bd87f2cafb719bc55e65a1f60b08
+                809660a650721c40d56fc9c792df1d463aad1718c6924b7bdffbe395f14633d3
+                3fc38ce47c18a1561b83a5c66d29f9e292637127471c3baab0028ae42796b689
+                e53a7f9ab5f0ee6d3fb658d847c1abca509fc4ed0d45edbb1c946488910d8d78
+                fa0767255b57a7c3898da8d26625bde40c5a0e80b581408ecd95a17d396dc757
+                4a8ed3cbc4c085197ffaad29c18e577eb292aa8b98caa92efd6f9536049b5a7d
+                efc861e270eca90c55b9585405cb96f3e6ea754850b09e7a59ba5fd92d357982
+                915d39752aaa2ec16b6cbde6a6c33971
+            )");
+            auto decrypted = std::array<std::byte, 768>{};
+            auto g_b = std::array<std::byte, 256>{};
+            auto auth_key = std::array<std::byte, 256>{};
+            auto client_inner = std::array<std::byte, 320>{};
+            auto client_encrypted = std::array<std::byte, 384>{};
+            auto set_client = std::array<std::byte, 420>{};
+            auto set_writer = nxt::mt::byte_writer{set_client};
+
+            nxt::mt::auth::receive_server_dh_params(
+                state,
+                server_dh_params,
+                server_random,
+                1'693'436'740,
+                decrypted,
+                g_b,
+                auth_key,
+                client_inner,
+                client_encrypted,
+                set_writer);
+
+            expect(
+                state.current_phase
+                == nxt::mt::auth::phase::awaiting_dh_gen);
+            expect(state.server_salt == 4'459'407'212'920'268'508LL);
+            expect(state.time_offset == 0);
+            expect(state.has_key);
+            expect(std::ranges::equal(
+                set_writer.written(),
+                hex(R"(
+                    1f5f04f54e44b426241e8b839153122d44585ac665ba0b393e1094329eda2c42
+                    d6283303fe500100def448d48c608480bab65df3f8990be8011f7b415a6f8113
+                    617bea749b8b0ea6a937987b18cc4dcce8197efdcf8d6ec6af7fc3364b4945df
+                    77e4a1ae9db7acea4abcd73247edb36bde20fc969c1d55717277afe0bc31a9ee
+                    99f7d822f91fa2dc69c868a19511b162d55e0814d0292b7708b67d57eb045693
+                    49d5a20ffe85c0141fc17e9bbbaf207bef56e66decda718c52c45273f868c2ef
+                    f89bb06355cd515fbfe123d719b244234867d2889c9d0e4436ba644076e5014a
+                    78af60b2f0e1b30285f4f71539bcf8c506ccafd62cfcd1b040fe5e35bb30e519
+                    ad56d753100f604e3ea5d02409d74dd3ab0861227410f1e13591cf2a638347e6
+                    c6d0bcae14e0e8753313b51daee40a67407b5cc8b213856a290a0c7b6cda9ff9
+                    c58d69faaf6a748cff05512b69f1380f7a36843edecdc764048bc16d9808f353
+                    a9caf6d49ca8b717c8f6de037518a444931a7da2b80f16d0
+                )")));
         };
 
         "writes auth req_DH_params into caller buffers"_test = [] {

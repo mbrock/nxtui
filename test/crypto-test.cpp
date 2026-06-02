@@ -334,6 +334,21 @@ static suite crypto_tests{
             expect(output == hex("0ae6"));
         };
 
+        "raises modular exponent values into caller buffers"_test = [] {
+            auto base = hex("04");
+            auto exponent = hex("0d");
+            auto modulus = hex("01f1");
+            auto output = nxt::crypto::bytes(modulus.size());
+
+            nxt::crypto::modular_exponentiate(
+                base,
+                exponent,
+                modulus,
+                output);
+
+            expect(output == hex("01bd"));
+        };
+
         "agrees on the same X25519 shared secret"_test = [] {
             auto alice = nxt::crypto::x25519_keygen();
             auto bob = nxt::crypto::x25519_keygen();

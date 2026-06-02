@@ -281,6 +281,23 @@ boost::multiprecision::cpp_int pow_mod(
     return out;
 }
 
+boost::multiprecision::cpp_int pow_mod(
+    boost::multiprecision::cpp_int base,
+    boost::multiprecision::cpp_int exponent,
+    const boost::multiprecision::cpp_int & modulus)
+{
+    auto out = boost::multiprecision::cpp_int{1};
+    base %= modulus;
+    while (exponent != 0) {
+        if ((exponent & 1) != 0)
+            out = (out * base) % modulus;
+        exponent >>= 1;
+        if (exponent != 0)
+            base = (base * base) % modulus;
+    }
+    return out;
+}
+
 bytes mgf1_sha256(std::span<const std::byte> seed, std::size_t len)
 {
     auto out = bytes{};
@@ -673,6 +690,23 @@ void rsa_raw_public_encrypt(
         throw crypto_error{"RSA input is not below modulus"};
 
     write_int_bytes(pow_mod(m, exponent, n), output);
+}
+
+void modular_exponentiate(
+    std::span<const std::byte> base,
+    std::span<const std::byte> exponent,
+    std::span<const std::byte> modulus,
+    std::span<std::byte> output)
+{
+    if (modulus.empty())
+        throw crypto_error{"modular exponent modulus is empty"};
+    if (output.empty())
+        throw crypto_error{"modular exponent output is empty"};
+
+    auto n = int_from_bytes(modulus);
+    auto b = int_from_bytes(base);
+    auto e = int_from_bytes(exponent);
+    write_int_bytes(pow_mod(b, e, n), output);
 }
 
 }

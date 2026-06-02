@@ -44,9 +44,15 @@ struct exchange_state
     std::array<std::byte, 32> new_nonce{};
     std::array<std::byte, 8> p{};
     std::array<std::byte, 8> q{};
+    std::array<std::byte, 32> temp_aes_key{};
+    std::array<std::byte, 32> temp_aes_iv{};
+    auth_key key{};
     std::size_t p_size = 0;
     std::size_t q_size = 0;
     std::uint64_t selected_public_key_fingerprint = 0;
+    std::int64_t server_salt = 0;
+    std::int64_t time_offset = 0;
+    bool has_key = false;
 
     [[nodiscard]] std::span<const std::byte> p_bytes() const noexcept
     {
@@ -162,6 +168,16 @@ struct res_pq_view
     std::span<const std::byte> server_nonce;
     std::span<const std::byte> pq;
     std::span<const std::uint64_t> server_public_key_fingerprints;
+};
+
+struct server_dh_inner_data_view
+{
+    std::span<const std::byte> nonce;
+    std::span<const std::byte> server_nonce;
+    std::int32_t g = 0;
+    std::span<const std::byte> dh_prime;
+    std::span<const std::byte> g_a;
+    std::int32_t server_time = 0;
 };
 
 inline std::size_t req_pq_multi_size() noexcept
@@ -332,6 +348,73 @@ inline void write_req_dh_params(
     tl::write_bytes(out, encrypted_data);
 }
 
+inline server_dh_inner_data_view decode_server_dh_inner_data(
+    std::span<const std::byte> input)
+{
+    auto reader = tl::reader{input};
+    auto constructor = static_cast<std::uint32_t>(reader.int_());
+    if (constructor != server_dh_inner_data_constructor)
+        throw protocol_error{"unexpected server_DH_inner_data constructor"};
+    auto out = server_dh_inner_data_view{
+        .nonce = reader.int128(),
+        .server_nonce = reader.int128(),
+        .g = reader.int_(),
+        .dh_prime = reader.bytes(),
+        .g_a = reader.bytes(),
+        .server_time = reader.int_(),
+    };
+    if (!reader.empty())
+        throw protocol_error{"trailing server_DH_inner_data"};
+    return out;
+}
+
+inline std::size_t client_dh_inner_data_size(
+    std::span<const std::byte> g_b) noexcept
+{
+    return 4 + 16 + 16 + 8 + tl::bytes_size(g_b.size());
+}
+
+inline void write_client_dh_inner_data(
+    byte_writer & out,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> server_nonce,
+    std::uint64_t retry_id,
+    std::span<const std::byte> g_b)
+{
+    tl::write_int(out, static_cast<std::int32_t>(client_dh_inner_data_constructor));
+    tl::write_int128(out, nonce);
+    tl::write_int128(out, server_nonce);
+    tl::write_long(out, retry_id);
+    tl::write_bytes(out, g_b);
+}
+
+inline std::size_t set_client_dh_params_size(
+    std::span<const std::byte> encrypted_data) noexcept
+{
+    return 4 + 16 + 16 + tl::bytes_size(encrypted_data.size());
+}
+
+inline void write_set_client_dh_params(
+    byte_writer & out,
+    std::span<const std::byte> nonce,
+    std::span<const std::byte> server_nonce,
+    std::span<const std::byte> encrypted_data)
+{
+    tl::write_int(out, static_cast<std::int32_t>(set_client_dh_params_constructor));
+    tl::write_int128(out, nonce);
+    tl::write_int128(out, server_nonce);
+    tl::write_bytes(out, encrypted_data);
+}
+
+inline std::array<std::byte, 16> server_dh_fail_hash(
+    std::span<const std::byte> new_nonce)
+{
+    auto digest = nxt::crypto::sha1(new_nonce);
+    auto out = std::array<std::byte, 16>{};
+    std::ranges::copy(std::span{digest}.subspan(4, 16), out.begin());
+    return out;
+}
+
 inline const public_key * select_public_key(
     std::span<const public_key> keys,
     std::span<const std::uint64_t> fingerprints) noexcept
@@ -420,6 +503,117 @@ inline void receive_res_pq(
 
     state.current_phase = phase::awaiting_server_dh_params;
     state.selected_public_key_fingerprint = key->fingerprint;
+}
+
+inline void receive_server_dh_params(
+    exchange_state & state,
+    std::span<const std::byte> body,
+    std::span<const std::byte> random_bytes,
+    std::int32_t now,
+    std::span<std::byte> decrypted_storage,
+    std::span<std::byte> g_b_storage,
+    std::span<std::byte> auth_key_storage,
+    std::span<std::byte> client_inner_storage,
+    std::span<std::byte> encrypted_storage,
+    byte_writer & out)
+{
+    if (state.current_phase != phase::awaiting_server_dh_params)
+        throw protocol_error{"unexpected auth phase"};
+    if (random_bytes.size() < 256)
+        throw protocol_error{"insufficient random bytes"};
+    if (auth_key_storage.size() != 256)
+        throw protocol_error{"auth key storage must be 256 bytes"};
+
+    auto reader = tl::reader{body};
+    auto constructor = static_cast<std::uint32_t>(reader.int_());
+    auto nonce = reader.int128();
+    auto server_nonce = reader.int128();
+    if (!std::ranges::equal(nonce, state.nonce)
+        || !std::ranges::equal(server_nonce, state.server_nonce))
+        throw protocol_error{"nonce mismatch"};
+
+    if (constructor == server_dh_params_fail_constructor) {
+        auto actual_hash = reader.int128();
+        if (!reader.empty())
+            throw protocol_error{"trailing server_DH_params_fail"};
+        if (!std::ranges::equal(actual_hash, server_dh_fail_hash(state.new_nonce)))
+            throw protocol_error{"new nonce hash mismatch"};
+        throw protocol_error{"server dh params fail"};
+    }
+    if (constructor != server_dh_params_ok_constructor)
+        throw protocol_error{"unexpected server dh params constructor"};
+
+    auto encrypted_answer = reader.bytes();
+    if (!reader.empty())
+        throw protocol_error{"trailing server_DH_params_ok"};
+    if (decrypted_storage.size() < encrypted_answer.size())
+        throw protocol_error{"decrypted server_DH_params storage is too small"};
+
+    auto key_iv = temp_aes_key_iv(state.server_nonce, state.new_nonce);
+    std::ranges::copy(key_iv.key, state.temp_aes_key.begin());
+    std::ranges::copy(key_iv.iv, state.temp_aes_iv.begin());
+    auto decrypted = decrypt_data_with_hash(
+        encrypted_answer,
+        key_iv.key,
+        key_iv.iv,
+        decrypted_storage.first(encrypted_answer.size()));
+    auto inner = decode_server_dh_inner_data(decrypted);
+    if (!std::ranges::equal(inner.nonce, state.nonce)
+        || !std::ranges::equal(inner.server_nonce, state.server_nonce))
+        throw protocol_error{"nonce mismatch"};
+    if (g_b_storage.size() < inner.dh_prime.size())
+        throw protocol_error{"g_b storage is too small"};
+
+    auto g_bytes_storage = std::array<std::byte, 8>{};
+    auto g_bytes = write_unsigned_be(
+        g_bytes_storage,
+        static_cast<std::uint64_t>(inner.g));
+    auto b = random_bytes.first(256);
+    auto g_b = g_b_storage.first(inner.dh_prime.size());
+    nxt::crypto::modular_exponentiate(
+        g_bytes,
+        b,
+        inner.dh_prime,
+        g_b);
+    nxt::crypto::modular_exponentiate(
+        inner.g_a,
+        b,
+        inner.dh_prime,
+        auth_key_storage);
+    state.key = make_auth_key(auth_key_storage);
+    state.has_key = true;
+    state.server_salt = server_salt(state.new_nonce, state.server_nonce);
+    state.time_offset = static_cast<std::int64_t>(inner.server_time) - now;
+
+    auto client_inner_size = client_dh_inner_data_size(g_b);
+    if (client_inner_storage.size() < client_inner_size)
+        throw protocol_error{"client_DH_inner_data storage is too small"};
+    auto client_inner_writer =
+        byte_writer{client_inner_storage.first(client_inner_size)};
+    write_client_dh_inner_data(
+        client_inner_writer,
+        state.nonce,
+        state.server_nonce,
+        0,
+        g_b);
+
+    auto encrypted_size =
+        encrypted_data_with_hash_size(client_inner_writer.written().size());
+    if (encrypted_storage.size() < encrypted_size)
+        throw protocol_error{"client encrypted data storage is too small"};
+    auto encrypted = encrypted_storage.first(encrypted_size);
+    encrypt_data_with_hash(
+        client_inner_writer.written(),
+        key_iv.key,
+        key_iv.iv,
+        random_bytes.subspan(256),
+        encrypted);
+    write_set_client_dh_params(
+        out,
+        state.nonce,
+        state.server_nonce,
+        encrypted);
+    state.current_phase = phase::awaiting_dh_gen;
 }
 
 } // namespace nxt::mt::auth
