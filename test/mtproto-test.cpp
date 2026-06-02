@@ -1,3 +1,4 @@
+#include <nxt/mt/auth.hpp>
 #include <nxt/mt/crypto.hpp>
 #include <nxt/mt/message.hpp>
 #include <nxt/mt/tl.hpp>
@@ -320,6 +321,71 @@ static suite mtproto_tests{
                     2ed438f9804fbe36d41ca906243a5f740f3937949aa149ba8a8b8e68b3f3e1e3
                     cd3f946387520e21eee55845e1f015a919a22f6a72bfaecd2cae946c91983b41
                     f9ffabe97963bbde8f30eaf5fd3c5b8cecab8711bd269e441b6084f385726ff0
+                )")));
+        };
+
+        "writes req_pq_multi and decodes resPQ into borrowed views"_test = [] {
+            auto nonce = hex("4e44b426241e8b839153122d44585ac6");
+            auto request = std::array<std::byte, 20>{};
+            auto writer = nxt::mt::byte_writer{request};
+            nxt::mt::auth::write_req_pq_multi(writer, nonce);
+            expect(std::ranges::equal(
+                writer.written(),
+                hex("f18e7ebe4e44b426241e8b839153122d44585ac6")));
+
+            auto response = hex(R"(
+                632416054e44b426241e8b839153122d44585ac665ba0b393e1094329eda2c42
+                d62833030819546f942a11278d00000015c4b51c0300000003268d20df9858b2
+                029f4ba16d109296216be86c022bb4c3
+            )");
+            auto fingerprints = std::array<std::uint64_t, 4>{};
+            auto decoded = nxt::mt::auth::decode_res_pq(response, fingerprints);
+
+            expect(std::ranges::equal(decoded.nonce, nonce));
+            expect(std::ranges::equal(
+                decoded.server_nonce,
+                hex("65ba0b393e1094329eda2c42d6283303")));
+            expect(std::ranges::equal(decoded.pq, hex("19546f942a11278d")));
+            expect(
+                decoded.server_public_key_fingerprints.size()
+                == std::size_t{3});
+            expect(
+                decoded.server_public_key_fingerprints[0]
+                == 0xb25898df208d2603ULL);
+
+            auto [p, q] = nxt::mt::auth::factor_pq(decoded.pq);
+            expect(p == 0x44b2e50dULL);
+            expect(q == 0x5e63ac81ULL);
+        };
+
+        "writes auth req_DH_params into caller buffers"_test = [] {
+            auto nonce = counting_bytes<16>();
+            auto server_nonce = counting_bytes<16>(16);
+            auto p = hex("01");
+            auto q = hex("02");
+            auto encrypted = bytes("abc");
+            auto storage = std::array<std::byte, 56>{};
+            auto writer = nxt::mt::byte_writer{storage};
+
+            nxt::mt::auth::write_req_dh_params(
+                writer,
+                nonce,
+                server_nonce,
+                p,
+                q,
+                0x0102030405060708ULL,
+                encrypted);
+
+            expect(writer.size() == nxt::mt::auth::req_dh_params_size(
+                p,
+                q,
+                encrypted));
+            expect(std::ranges::equal(
+                writer.written(),
+                hex(R"(
+                    bee412d7000102030405060708090a0b0c0d0e0f
+                    101112131415161718191a1b1c1d1e1f01010000
+                    01020000080706050403020103616263
                 )")));
         };
     }};
