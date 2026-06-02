@@ -180,6 +180,15 @@ struct server_dh_inner_data_view
     std::int32_t server_time = 0;
 };
 
+struct dh_gen_response_view
+{
+    std::uint32_t constructor = 0;
+    std::span<const std::byte> nonce;
+    std::span<const std::byte> server_nonce;
+    std::span<const std::byte> new_nonce_hash;
+    std::uint8_t hash_number = 0;
+};
+
 inline std::size_t req_pq_multi_size() noexcept
 {
     return 4 + 16;
@@ -406,6 +415,33 @@ inline void write_set_client_dh_params(
     tl::write_bytes(out, encrypted_data);
 }
 
+inline dh_gen_response_view decode_dh_gen_response(
+    std::span<const std::byte> body)
+{
+    auto reader = tl::reader{body};
+    auto constructor = static_cast<std::uint32_t>(reader.int_());
+    auto hash_number = std::uint8_t{0};
+    if (constructor == dh_gen_ok_constructor)
+        hash_number = 1;
+    else if (constructor == dh_gen_retry_constructor)
+        hash_number = 2;
+    else if (constructor == dh_gen_fail_constructor)
+        hash_number = 3;
+    else
+        throw protocol_error{"unexpected dh_gen constructor"};
+
+    auto out = dh_gen_response_view{
+        .constructor = constructor,
+        .nonce = reader.int128(),
+        .server_nonce = reader.int128(),
+        .new_nonce_hash = reader.int128(),
+        .hash_number = hash_number,
+    };
+    if (!reader.empty())
+        throw protocol_error{"trailing dh_gen answer"};
+    return out;
+}
+
 inline std::array<std::byte, 16> server_dh_fail_hash(
     std::span<const std::byte> new_nonce)
 {
@@ -614,6 +650,33 @@ inline void receive_server_dh_params(
         state.server_nonce,
         encrypted);
     state.current_phase = phase::awaiting_dh_gen;
+}
+
+inline void receive_dh_gen(
+    exchange_state & state,
+    std::span<const std::byte> body)
+{
+    if (state.current_phase != phase::awaiting_dh_gen || !state.has_key)
+        throw protocol_error{"unexpected auth phase"};
+
+    auto response = decode_dh_gen_response(body);
+    if (!std::ranges::equal(response.nonce, state.nonce)
+        || !std::ranges::equal(response.server_nonce, state.server_nonce))
+        throw protocol_error{"nonce mismatch"};
+    if (!std::ranges::equal(
+            response.new_nonce_hash,
+            calc_new_nonce_hash(
+                state.key,
+                state.new_nonce,
+                response.hash_number)))
+        throw protocol_error{"new nonce hash mismatch"};
+
+    if (response.constructor == dh_gen_retry_constructor)
+        throw protocol_error{"dh_gen_retry"};
+    if (response.constructor == dh_gen_fail_constructor)
+        throw protocol_error{"dh_gen_fail"};
+
+    state.current_phase = phase::complete;
 }
 
 } // namespace nxt::mt::auth
