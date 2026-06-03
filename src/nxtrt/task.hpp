@@ -810,6 +810,12 @@ struct firm_child_record_header
     bool completion_reported = false;
 };
 
+struct child_completion
+{
+    task_id child;
+    std::exception_ptr failure;
+};
+
 struct child_record_base
 {
     child_record_base() = default;
@@ -1651,6 +1657,76 @@ private:
     std::size_t capacity_ = 0;
 };
 
+struct firm_completion_storage_ref
+{
+    firm_completion_storage_ref() = default;
+
+    explicit firm_completion_storage_ref(
+        std::span<detail::child_completion> completions)
+        : completions(completions)
+    {}
+
+    std::span<detail::child_completion> completions;
+};
+
+template<std::size_t N>
+class static_firm_completion_storage
+{
+public:
+    [[nodiscard]] firm_completion_storage_ref ref() noexcept
+    {
+        return firm_completion_storage_ref{
+            std::span<detail::child_completion>{storage_.data(), N}};
+    }
+
+    [[nodiscard]] operator firm_completion_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::array<detail::child_completion, N == 0 ? 1 : N> storage_{};
+};
+
+class owned_firm_completion_storage
+{
+public:
+    owned_firm_completion_storage() = default;
+
+    explicit owned_firm_completion_storage(std::size_t capacity)
+        : completions_(
+            capacity == 0
+                ? nullptr
+                : std::make_unique<detail::child_completion[]>(capacity))
+        , capacity_(capacity)
+    {}
+
+    owned_firm_completion_storage(
+        const owned_firm_completion_storage &) = delete;
+    owned_firm_completion_storage & operator=(
+        const owned_firm_completion_storage &) = delete;
+    owned_firm_completion_storage(
+        owned_firm_completion_storage &&) noexcept = default;
+    owned_firm_completion_storage & operator=(
+        owned_firm_completion_storage &&) noexcept = default;
+
+    [[nodiscard]] firm_completion_storage_ref ref() noexcept
+    {
+        return firm_completion_storage_ref{
+            std::span<detail::child_completion>{
+                completions_.get(), capacity_}};
+    }
+
+    [[nodiscard]] operator firm_completion_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::unique_ptr<detail::child_completion[]> completions_;
+    std::size_t capacity_ = 0;
+};
+
 struct firm_join_storage_ref
 {
     firm_join_storage_ref() = default;
@@ -1725,27 +1801,32 @@ struct firm_storage_ref
     firm_storage_ref(
         frame_storage_ref frames,
         firm_child_storage_ref children,
+        firm_completion_storage_ref completions,
         firm_join_storage_ref joins)
         : frames(frames)
         , children(children)
+        , completions(completions)
         , joins(joins)
     {}
 
     frame_storage_ref frames;
     firm_child_storage_ref children;
+    firm_completion_storage_ref completions;
     firm_join_storage_ref joins;
 };
 
 template<
     std::size_t FrameBytes,
     std::size_t ChildSlots,
-    std::size_t JoinFailureSlots = ChildSlots>
+    std::size_t JoinFailureSlots = ChildSlots,
+    std::size_t CompletionSlots = ChildSlots>
 class static_firm_storage
 {
 public:
     [[nodiscard]] firm_storage_ref ref() noexcept
     {
-        return firm_storage_ref{frames_, children_, joins_};
+        return firm_storage_ref{
+            frames_, children_, completions_, joins_};
     }
 
     [[nodiscard]] operator firm_storage_ref() noexcept
@@ -1768,9 +1849,15 @@ public:
         return joins_;
     }
 
+    [[nodiscard]] firm_completion_storage_ref completions() noexcept
+    {
+        return completions_;
+    }
+
 private:
     static_frame_storage<FrameBytes> frames_;
     static_firm_child_storage<ChildSlots> children_;
+    static_firm_completion_storage<CompletionSlots> completions_;
     static_firm_join_storage<JoinFailureSlots> joins_;
 };
 
@@ -1983,6 +2070,9 @@ public:
         , owned_child_storage_(default_child_capacity)
         , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
+        , owned_completion_storage_(default_child_capacity)
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
         , owned_join_storage_(default_child_capacity)
         , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
@@ -1995,6 +2085,9 @@ public:
         , owned_child_storage_(default_child_capacity)
         , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
+        , owned_completion_storage_(default_child_capacity)
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
         , owned_join_storage_(default_child_capacity)
         , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
@@ -2007,6 +2100,9 @@ public:
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
+        , owned_completion_storage_(children.slots.size())
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
         , owned_join_storage_(children.slots.size())
         , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
@@ -2017,6 +2113,9 @@ public:
     firm(frame_storage_ref frames, firm_child_storage_ref children)
         : frames_(frames)
         , child_slots_(children.slots)
+        , owned_completion_storage_(children.slots.size())
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
         , owned_join_storage_(children.slots.size())
         , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
@@ -2031,6 +2130,9 @@ public:
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
+        , owned_completion_storage_(children.slots.size())
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
         , join_failure_slots_(join.failures)
     {
         register_debug();
@@ -2042,6 +2144,9 @@ public:
         firm_join_storage_ref join)
         : frames_(frames)
         , child_slots_(children.slots)
+        , owned_completion_storage_(children.slots.size())
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
         , join_failure_slots_(join.failures)
     {
         register_debug();
@@ -2050,6 +2155,7 @@ public:
     explicit firm(firm_storage_ref storage)
         : frames_(storage.frames)
         , child_slots_(storage.children.slots)
+        , completion_slots_(storage.completions.completions)
         , join_failure_slots_(storage.joins.failures)
     {
         register_debug();
@@ -2092,6 +2198,14 @@ public:
                 : other.child_slots_)
         , uses_owned_child_storage_(
             std::exchange(other.uses_owned_child_storage_, false))
+        , owned_completion_storage_(
+            std::move(other.owned_completion_storage_))
+        , completion_slots_(
+            other.uses_owned_completion_storage_
+                ? owned_completion_storage_.ref().completions
+                : other.completion_slots_)
+        , uses_owned_completion_storage_(
+            std::exchange(other.uses_owned_completion_storage_, false))
         , owned_join_storage_(std::move(other.owned_join_storage_))
         , join_failure_slots_(
             other.uses_owned_join_storage_
@@ -2103,6 +2217,12 @@ public:
             std::exchange(other.join_failure_count_, 0))
         , join_failure_high_water_(
             std::exchange(other.join_failure_high_water_, 0))
+        , completion_count_(
+            std::exchange(other.completion_count_, 0))
+        , completion_high_water_(
+            std::exchange(other.completion_high_water_, 0))
+        , completion_overflow_(
+            std::exchange(other.completion_overflow_, false))
         , child_count_(std::exchange(other.child_count_, 0))
         , child_high_water_(std::exchange(other.child_high_water_, 0))
         , stop_(std::move(other.stop_))
@@ -2111,6 +2231,7 @@ public:
         , stopping_(std::exchange(other.stopping_, false))
     {
         other.child_slots_ = {};
+        other.completion_slots_ = {};
         other.join_failure_slots_ = {};
         debug_update();
     }
@@ -2159,6 +2280,16 @@ public:
     [[nodiscard]] std::size_t join_failure_high_water() const noexcept
     {
         return join_failure_high_water_;
+    }
+
+    [[nodiscard]] std::size_t child_completion_capacity() const noexcept
+    {
+        return completion_slots_.size();
+    }
+
+    [[nodiscard]] std::size_t child_completion_high_water() const noexcept
+    {
+        return completion_high_water_;
     }
 
     void stop() noexcept
@@ -2284,9 +2415,12 @@ private:
         if (child.firm_record.completion_reported)
             return;
         child.firm_record.completion_reported = true;
+        auto failure =
+            known_failure ? known_failure : child.completion_failure();
+        remember_child_completion(child.firm_record.task, failure);
         child_finished(
             child,
-            known_failure ? known_failure : child.completion_failure());
+            failure);
     }
 
     void debug_update() const
@@ -2317,6 +2451,29 @@ private:
             std::max(join_failure_high_water_, join_failure_count_);
     }
 
+    void remember_child_completion(
+        task_id child,
+        std::exception_ptr failure) noexcept
+    {
+        if (completion_count_ >= completion_slots_.size()) {
+            completion_overflow_ = true;
+            return;
+        }
+        completion_slots_[completion_count_++] = detail::child_completion{
+            .child = child,
+            .failure = std::move(failure),
+        };
+        completion_high_water_ =
+            std::max(completion_high_water_, completion_count_);
+    }
+
+    void throw_if_completion_overflow()
+    {
+        if (completion_overflow_)
+            throw runtime_error{
+                "nxtrt firm child completion storage is full"};
+    }
+
     void clear_join_failures() noexcept
     {
         for (auto i = std::size_t{0}; i < join_failure_count_; ++i)
@@ -2345,11 +2502,17 @@ private:
     owned_firm_child_storage owned_child_storage_;
     std::span<detail::firm_child_slot> child_slots_;
     bool uses_owned_child_storage_ = false;
+    owned_firm_completion_storage owned_completion_storage_;
+    std::span<detail::child_completion> completion_slots_;
+    bool uses_owned_completion_storage_ = false;
     owned_firm_join_storage owned_join_storage_;
     std::span<std::exception_ptr> join_failure_slots_;
     bool uses_owned_join_storage_ = false;
     std::size_t join_failure_count_ = 0;
     std::size_t join_failure_high_water_ = 0;
+    std::size_t completion_count_ = 0;
+    std::size_t completion_high_water_ = 0;
+    bool completion_overflow_ = false;
     std::size_t child_count_ = 0;
     std::size_t child_high_water_ = 0;
     std::stop_source stop_;
@@ -3376,6 +3539,8 @@ inline task<void> firm::join()
         if (collect_failure)
             remember_join_failure(std::move(collect_failure));
     }
+
+    throw_if_completion_overflow();
 
     if (join_failure_count_ != 0)
         throw_join_failures();
