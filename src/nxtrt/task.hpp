@@ -2500,12 +2500,47 @@ public:
         register_debug();
     }
 
+    firm(
+        firm_child_storage_ref children,
+        firm_deed_storage_ref deeds)
+        : owned_frame_storage_(default_frame_capacity)
+        , frames_(owned_frame_storage_)
+        , uses_owned_frame_storage_(true)
+        , child_slots_(children.slots)
+        , deed_records_(deeds.records)
+        , owned_completion_storage_(children.slots.size())
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
+        , owned_join_storage_(children.slots.size())
+        , join_failure_slots_(owned_join_storage_.ref().failures)
+        , uses_owned_join_storage_(true)
+    {
+        register_debug();
+    }
+
     firm(frame_storage_ref frames, firm_child_storage_ref children)
         : frames_(frames)
         , child_slots_(children.slots)
         , owned_deed_storage_(children.slots.size())
         , deed_records_(owned_deed_storage_.ref().records)
         , uses_owned_deed_storage_(true)
+        , owned_completion_storage_(children.slots.size())
+        , completion_slots_(owned_completion_storage_.ref().completions)
+        , uses_owned_completion_storage_(true)
+        , owned_join_storage_(children.slots.size())
+        , join_failure_slots_(owned_join_storage_.ref().failures)
+        , uses_owned_join_storage_(true)
+    {
+        register_debug();
+    }
+
+    firm(
+        frame_storage_ref frames,
+        firm_child_storage_ref children,
+        firm_deed_storage_ref deeds)
+        : frames_(frames)
+        , child_slots_(children.slots)
+        , deed_records_(deeds.records)
         , owned_completion_storage_(children.slots.size())
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)

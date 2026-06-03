@@ -2876,12 +2876,14 @@ static suite runtime_tests{
                 struct bounded_deed_firm : nxtrt::firm
                 {
                     bounded_deed_firm(
-                        nxtrt::firm_storage_ref storage,
+                        nxtrt::frame_storage_ref frames,
+                        nxtrt::firm_child_storage_ref children,
+                        nxtrt::firm_deed_storage_ref deeds,
                         std::vector<int> & events,
                         bool & overflowed,
                         std::size_t & capacity,
                         std::size_t & high_water)
-                        : nxtrt::firm(storage)
+                        : nxtrt::firm(frames, children, deeds)
                         , events(&events)
                         , overflowed(&overflowed)
                         , capacity(&capacity)
@@ -2915,8 +2917,9 @@ static suite runtime_tests{
                 };
 
                 auto deck = nxtrt::deck{};
-                auto storage =
-                    nxtrt::static_firm_storage<64 * 1024, 2, 2, 2, 1>{};
+                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
+                auto children = nxtrt::static_firm_child_storage<2>{};
+                auto deeds = nxtrt::static_firm_deed_storage<1>{};
                 auto events = std::vector<int>{};
                 auto overflowed = false;
                 auto capacity = std::size_t{};
@@ -2924,7 +2927,9 @@ static suite runtime_tests{
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     co_await bounded_deed_firm{
-                        storage,
+                        frames,
+                        children,
+                        deeds,
                         events,
                         overflowed,
                         capacity,
