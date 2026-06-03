@@ -797,28 +797,163 @@ struct child_record_base
     [[nodiscard]] virtual std::exception_ptr completion_failure()
         noexcept = 0;
     [[nodiscard]] virtual std::exception_ptr failure() = 0;
+    [[nodiscard]] virtual bool result_contained() const noexcept = 0;
+    [[nodiscard]] virtual bool result_observed() const noexcept = 0;
+    [[nodiscard]] virtual bool result_exported() const noexcept = 0;
     [[nodiscard]] virtual task<void> join() = 0;
     virtual void request_stop() noexcept = 0;
 
+    bool completion_reported = false;
+};
+
+template<typename T>
+struct deed_result_state
+{
+    using stored_type = std::remove_cv_t<T>;
+    using storage_type =
+        std::variant<std::monostate, stored_type, std::exception_ptr>;
+
+    [[nodiscard]] bool ready() const noexcept
+    {
+        return !std::holds_alternative<std::monostate>(result);
+    }
+
+    void ensure_done()
+    {
+        if (!ready() && ensure_ready)
+            ensure_ready();
+        if (!ready())
+            throw runtime_error{
+                "nxtrt deed result read before firm join"};
+    }
+
+    template<typename Value>
+    void set_value(Value && value)
+    {
+        result.template emplace<stored_type>(
+            std::forward<Value>(value));
+    }
+
+    void set_exception(std::exception_ptr failure)
+    {
+        result.template emplace<std::exception_ptr>(
+            std::move(failure));
+    }
+
+    [[nodiscard]] std::exception_ptr failure()
+    {
+        ensure_done();
+        if (std::holds_alternative<std::exception_ptr>(result))
+            return std::get<std::exception_ptr>(result);
+        return {};
+    }
+
+    [[nodiscard]] std::exception_ptr observe_exception()
+    {
+        observed = true;
+        return failure();
+    }
+
+    [[nodiscard]] T take_result()
+    {
+        ensure_done();
+        if (result_taken)
+            throw runtime_error{"nxtrt deed result already taken"};
+        observed = true;
+        result_taken = true;
+        if (std::holds_alternative<std::exception_ptr>(result))
+            rethrow(std::get<std::exception_ptr>(result));
+        if (!std::holds_alternative<stored_type>(result))
+            throw runtime_error{"nxtrt task result was never set"};
+        return std::move(std::get<stored_type>(result));
+    }
+
+    storage_type result;
+    std::function<void()> ensure_ready;
     bool contained = false;
     bool observed = false;
-    bool completion_reported = false;
+    bool result_taken = false;
+};
+
+template<>
+struct deed_result_state<void>
+{
+    [[nodiscard]] bool ready() const noexcept
+    {
+        return ready_;
+    }
+
+    void ensure_done()
+    {
+        if (!ready() && ensure_ready)
+            ensure_ready();
+        if (!ready())
+            throw runtime_error{
+                "nxtrt deed result read before firm join"};
+    }
+
+    void set_value() noexcept
+    {
+        ready_ = true;
+    }
+
+    void set_exception(std::exception_ptr failure)
+    {
+        failure_ = std::move(failure);
+        ready_ = true;
+    }
+
+    [[nodiscard]] std::exception_ptr failure()
+    {
+        ensure_done();
+        return failure_;
+    }
+
+    [[nodiscard]] std::exception_ptr observe_exception()
+    {
+        observed = true;
+        return failure();
+    }
+
+    void take_result()
+    {
+        ensure_done();
+        if (result_taken)
+            throw runtime_error{"nxtrt deed result already taken"};
+        observed = true;
+        result_taken = true;
+        if (failure_)
+            rethrow(failure_);
+    }
+
+    std::exception_ptr failure_;
+    std::function<void()> ensure_ready;
+    bool ready_ = false;
+    bool contained = false;
+    bool observed = false;
+    bool result_taken = false;
 };
 
 template<typename T>
 struct child_record final : child_record_base
 {
     using handle_type = typename task<T>::coroutine_handle;
-    using stored_type = std::remove_cv_t<T>;
-    using storage_type =
-        std::variant<std::monostate, stored_type, std::exception_ptr>;
 
-    explicit child_record(handle_type h) noexcept
+    child_record(
+        handle_type h,
+        std::shared_ptr<deed_result_state<T>> result)
         : handle(h)
-    {}
+        , result(std::move(result))
+    {
+        this->result->ensure_ready = [this] {
+            if (done())
+                evacuate_result();
+        };
+    }
 
     ~child_record() override
     {
+        result->ensure_ready = {};
         destroy_frame();
     }
 
@@ -856,29 +991,28 @@ struct child_record final : child_record_base
     [[nodiscard]] std::exception_ptr failure() override
     {
         evacuate_result();
-        if (std::holds_alternative<std::exception_ptr>(result_))
-            return std::get<std::exception_ptr>(result_);
-        return {};
+        return result->failure();
+    }
+
+    [[nodiscard]] bool result_contained() const noexcept override
+    {
+        return result->contained;
+    }
+
+    [[nodiscard]] bool result_observed() const noexcept override
+    {
+        return result->observed;
+    }
+
+    [[nodiscard]] bool result_exported() const noexcept override
+    {
+        return result.use_count() > 1;
     }
 
     void request_stop() noexcept override
     {
         if (handle)
             handle.promise().request_stop();
-    }
-
-    [[nodiscard]] T take_result()
-    {
-        evacuate_result();
-        if (result_taken)
-            throw runtime_error{"nxtrt deed result already taken"};
-        observed = true;
-        result_taken = true;
-        if (std::holds_alternative<std::exception_ptr>(result_))
-            rethrow(std::get<std::exception_ptr>(result_));
-        if (!std::holds_alternative<stored_type>(result_))
-            throw runtime_error{"nxtrt task result was never set"};
-        return std::move(std::get<stored_type>(result_));
     }
 
     void ensure_done() const
@@ -894,13 +1028,12 @@ struct child_record final : child_record_base
         if (evacuated_)
             return;
         try {
-            result_.template emplace<stored_type>(
-                std::move(handle.promise()).result());
+            result->set_value(std::move(handle.promise()).result());
         } catch (...) {
-            result_.template emplace<std::exception_ptr>(
-                std::current_exception());
+            result->set_exception(std::current_exception());
         }
         evacuated_ = true;
+        result->ensure_ready = {};
         destroy_frame();
     }
 
@@ -916,9 +1049,8 @@ struct child_record final : child_record_base
     }
 
     handle_type handle;
-    storage_type result_;
+    std::shared_ptr<deed_result_state<T>> result;
     bool joined_ = false;
-    bool result_taken = false;
     bool evacuated_ = false;
 };
 
@@ -927,12 +1059,21 @@ struct child_record<void> final : child_record_base
 {
     using handle_type = typename task<void>::coroutine_handle;
 
-    explicit child_record(handle_type h) noexcept
+    child_record(
+        handle_type h,
+        std::shared_ptr<deed_result_state<void>> result)
         : handle(h)
-    {}
+        , result(std::move(result))
+    {
+        this->result->ensure_ready = [this] {
+            if (done())
+                evacuate_result();
+        };
+    }
 
     ~child_record() override
     {
+        result->ensure_ready = {};
         destroy_frame();
     }
 
@@ -970,24 +1111,28 @@ struct child_record<void> final : child_record_base
     [[nodiscard]] std::exception_ptr failure() override
     {
         evacuate_result();
-        return failure_;
+        return result->failure();
+    }
+
+    [[nodiscard]] bool result_contained() const noexcept override
+    {
+        return result->contained;
+    }
+
+    [[nodiscard]] bool result_observed() const noexcept override
+    {
+        return result->observed;
+    }
+
+    [[nodiscard]] bool result_exported() const noexcept override
+    {
+        return result.use_count() > 1;
     }
 
     void request_stop() noexcept override
     {
         if (handle)
             handle.promise().request_stop();
-    }
-
-    void take_result()
-    {
-        evacuate_result();
-        if (result_taken)
-            throw runtime_error{"nxtrt deed result already taken"};
-        observed = true;
-        result_taken = true;
-        if (failure_)
-            rethrow(failure_);
     }
 
     void ensure_done() const
@@ -1004,10 +1149,12 @@ struct child_record<void> final : child_record_base
             return;
         try {
             handle.promise().result();
+            result->set_value();
         } catch (...) {
-            failure_ = std::current_exception();
+            result->set_exception(std::current_exception());
         }
         evacuated_ = true;
+        result->ensure_ready = {};
         destroy_frame();
     }
 
@@ -1023,15 +1170,14 @@ struct child_record<void> final : child_record_base
     }
 
     handle_type handle;
-    std::exception_ptr failure_;
+    std::shared_ptr<deed_result_state<void>> result;
     bool joined_ = false;
-    bool result_taken = false;
     bool evacuated_ = false;
 };
 
 struct firm_child_slot
 {
-    std::shared_ptr<child_record_base> record;
+    std::unique_ptr<child_record_base> record;
 };
 
 } // namespace detail
@@ -1048,14 +1194,12 @@ public:
 
     [[nodiscard]] std::exception_ptr exception() const
     {
-        auto & child = record();
-        child.observed = true;
-        return child.failure();
+        return state().observe_exception();
     }
 
     [[nodiscard]] T get() &&
     {
-        return record().take_result();
+        return state().take_result();
     }
 
     [[nodiscard]] catching_deed<T> cope() &&;
@@ -1064,18 +1208,19 @@ private:
     friend class firm;
     friend class catching_deed<T>;
 
-    explicit deed(std::shared_ptr<detail::child_record<T>> record) noexcept
-        : record_(std::move(record))
+    explicit deed(
+        std::shared_ptr<detail::deed_result_state<T>> state) noexcept
+        : state_(std::move(state))
     {}
 
-    [[nodiscard]] detail::child_record<T> & record() const
+    [[nodiscard]] detail::deed_result_state<T> & state() const
     {
-        if (!record_)
+        if (!state_)
             throw runtime_error{"nxtrt empty deed handle"};
-        return *record_;
+        return *state_;
     }
 
-    std::shared_ptr<detail::child_record<T>> record_;
+    std::shared_ptr<detail::deed_result_state<T>> state_;
 };
 
 template<>
@@ -1090,14 +1235,12 @@ public:
 
     [[nodiscard]] std::exception_ptr exception() const
     {
-        auto & child = record();
-        child.observed = true;
-        return child.failure();
+        return state().observe_exception();
     }
 
     void get() &&
     {
-        record().take_result();
+        state().take_result();
     }
 
     [[nodiscard]] catching_deed<void> cope() &&;
@@ -1107,18 +1250,18 @@ private:
     friend class catching_deed<void>;
 
     explicit deed(
-        std::shared_ptr<detail::child_record<void>> record) noexcept
-        : record_(std::move(record))
+        std::shared_ptr<detail::deed_result_state<void>> state) noexcept
+        : state_(std::move(state))
     {}
 
-    [[nodiscard]] detail::child_record<void> & record() const
+    [[nodiscard]] detail::deed_result_state<void> & state() const
     {
-        if (!record_)
+        if (!state_)
             throw runtime_error{"nxtrt empty deed handle"};
-        return *record_;
+        return *state_;
     }
 
-    std::shared_ptr<detail::child_record<void>> record_;
+    std::shared_ptr<detail::deed_result_state<void>> state_;
 };
 
 struct frame_storage_ref
@@ -1263,7 +1406,7 @@ public:
 
     [[nodiscard]] std::expected<T, std::exception_ptr> get() &&
     {
-        auto & child = record();
+        auto & child = state();
         child.ensure_done();
         try {
             return child.take_result();
@@ -1276,18 +1419,18 @@ private:
     friend class deed<T>;
 
     explicit catching_deed(
-        std::shared_ptr<detail::child_record<T>> record) noexcept
-        : record_(std::move(record))
+        std::shared_ptr<detail::deed_result_state<T>> state) noexcept
+        : state_(std::move(state))
     {}
 
-    [[nodiscard]] detail::child_record<T> & record() const
+    [[nodiscard]] detail::deed_result_state<T> & state() const
     {
-        if (!record_)
+        if (!state_)
             throw runtime_error{"nxtrt empty catching_deed handle"};
-        return *record_;
+        return *state_;
     }
 
-    std::shared_ptr<detail::child_record<T>> record_;
+    std::shared_ptr<detail::deed_result_state<T>> state_;
 };
 
 template<>
@@ -1302,7 +1445,7 @@ public:
 
     [[nodiscard]] std::expected<void, std::exception_ptr> get() &&
     {
-        auto & child = record();
+        auto & child = state();
         child.ensure_done();
         try {
             child.take_result();
@@ -1316,24 +1459,24 @@ private:
     friend class deed<void>;
 
     explicit catching_deed(
-        std::shared_ptr<detail::child_record<void>> record) noexcept
-        : record_(std::move(record))
+        std::shared_ptr<detail::deed_result_state<void>> state) noexcept
+        : state_(std::move(state))
     {}
 
-    [[nodiscard]] detail::child_record<void> & record() const
+    [[nodiscard]] detail::deed_result_state<void> & state() const
     {
-        if (!record_)
+        if (!state_)
             throw runtime_error{"nxtrt empty catching_deed handle"};
-        return *record_;
+        return *state_;
     }
 
-    std::shared_ptr<detail::child_record<void>> record_;
+    std::shared_ptr<detail::deed_result_state<void>> state_;
 };
 
 template<typename T>
 inline catching_deed<T> deed<T>::cope() &&
 {
-    auto child = std::move(record_);
+    auto child = std::move(state_);
     if (!child)
         throw runtime_error{"nxtrt empty deed handle"};
     child->contained = true;
@@ -1342,7 +1485,7 @@ inline catching_deed<T> deed<T>::cope() &&
 
 inline catching_deed<void> deed<void>::cope() &&
 {
-    auto child = std::move(record_);
+    auto child = std::move(state_);
     if (!child)
         throw runtime_error{"nxtrt empty deed handle"};
     child->contained = true;
@@ -1524,28 +1667,31 @@ public:
         if (!handle || handle.done())
             throw runtime_error{"nxtrt firm fork used with empty task"};
 
-        auto record = std::shared_ptr<detail::child_record<T>>{};
+        auto result =
+            std::make_shared<detail::deed_result_state<T>>();
+        auto record = std::unique_ptr<detail::child_record<T>>{};
         try {
             auto & promise = handle.promise();
             // Forked children outlive the call site, so they inherit the
             // current immutable environment snapshot.
             promise.env.copy_entries_from(*current);
-            record = std::make_shared<detail::child_record<T>>(handle);
-            promise.completion_callback = [this, weak_record =
-                std::weak_ptr<detail::child_record<T>>{record}] {
-                if (auto child = weak_record.lock())
-                    report_child_finished(*child);
+            record = std::make_unique<detail::child_record<T>>(
+                handle,
+                result);
+            auto * record_ptr = record.get();
+            promise.completion_callback = [this, record_ptr] {
+                report_child_finished(*record_ptr);
             };
         } catch (...) {
             handle.destroy();
             throw;
         }
 
-        child_slots_[child_count_++].record = record;
+        child_slots_[child_count_++].record = std::move(record);
         child_high_water_ = std::max(child_high_water_, child_count_);
         debug_update();
         active_deck->enqueue(handle, &handle.promise());
-        return deed<T>{std::move(record)};
+        return deed<T>{std::move(result)};
     }
 
     [[nodiscard]] task<void> join();
@@ -2588,8 +2734,10 @@ inline task<void> firm::join()
             co_await child.join();
             failure = child.failure();
             report_child_finished(child, failure);
-            auto const exported = record.use_count() > 1;
-            if (!child.contained && !child.observed && !exported) {
+            auto const exported = child.result_exported();
+            if (!child.result_contained()
+                && !child.result_observed()
+                && !exported) {
                 if (failure
                     && !(stop_requested()
                          && is_operation_cancelled(failure)))

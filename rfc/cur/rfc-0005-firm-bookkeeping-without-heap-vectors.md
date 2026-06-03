@@ -1,6 +1,6 @@
 # RFC 0005: Firm Bookkeeping without Heap Vectors {#rfc_firm_bookkeeping}
 
-Status: new
+Status: current
 
 ## Summary
 
@@ -22,13 +22,18 @@ good semantic seed:
 - `deed<T>` lets callers observe selected child results.
 - `firm::stop()` requests cancellation for all children.
 
-But the storage shape is provisional. A firm owns
-`std::vector<std::shared_ptr<child_record_base>>`, and each deed keeps another
-`shared_ptr` to the same child record. That makes lifetime safe while the
-runtime is young, but it hides the bookkeeping land behind general heap
-allocation.
+The storage shape is being moved in this direction incrementally. The first
+implementation replaced the heap-growing child vector with bounded child slots:
+`firm_child_storage_ref` and `static_firm_child_storage<N>`. A slot currently
+owns a child record, and a deed carries separate result state rather than
+sharing ownership of the child record itself.
 
-If [RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
+That is still provisional: child records and deed result states are allocated
+as ordinary C++ objects today. But the important semantic split has landed.
+The firm owns settlement records. A deed owns or names the selected result
+after evacuation.
+
+If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
 the records that describe those children should become firm-local as well.
 
 ## Proposal
@@ -127,7 +132,7 @@ behavior.
 
 This RFC is only about the bookkeeping substrate. Higher-level value
 composition over task factories belongs in
-[RFC 0014: Idea Algebra](rfc-0014-idea-algebra.md).
+[RFC 0014: Idea Algebra](../new/rfc-0014-idea-algebra.md).
 
 ## Main Work As A Child
 
@@ -150,7 +155,7 @@ child_completion completions[K]
 ```
 
 Later versions can use the extracted ring geometry from
-[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) for completion queues and
+[RFC 0007](rfc-0007-ring-geometry-extraction.md) for completion queues and
 free lists.
 
 Overflow is a real condition and should be reported as structured diagnostics:
@@ -175,29 +180,29 @@ children and no live deed can name the records being reclaimed.
 
 ## Relationship To Other RFCs
 
-[RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) provides frame land.
+[RFC 0002](rfc-0002-firm-frame-arenas.md) provides frame land.
 
-[RFC 0003](../cur/rfc-0003-deck-task-registry.md) provides durable task IDs.
+[RFC 0003](rfc-0003-deck-task-registry.md) provides durable task IDs.
 
-[RFC 0006](rfc-0006-join-as-a-completion-feed.md) describes the join side of
-the same bookkeeping as a feed of child completions.
+[RFC 0006](../new/rfc-0006-join-as-a-completion-feed.md) describes the join
+side of the same bookkeeping as a feed of child completions.
 
-[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) provides reusable bounded
+[RFC 0007](rfc-0007-ring-geometry-extraction.md) provides reusable bounded
 storage machinery for queues and free lists.
 
 ## Open Questions
 
-- What exact result-slot type lets final suspend evacuate a result into a deed
-  without unnecessary allocation?
+- What exact result-slot type lets final suspend evacuate a result into a
+  deed without the temporary `shared_ptr` state used by the transition code?
 - What are the default capacities for child records, deeds, and completions?
 - How should child result destruction interact with frame reuse?
 - Which current helpers need their main body turned into an explicit child?
 
 ## References
 
-- [RFC 0002: Firm Frame Arenas](../cur/rfc-0002-firm-frame-arenas.md)
-- [RFC 0006: Join as a Completion Feed](rfc-0006-join-as-a-completion-feed.md)
-- [RFC 0014: Idea Algebra](rfc-0014-idea-algebra.md)
+- [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
+- [RFC 0006: Join as a Completion Feed](../new/rfc-0006-join-as-a-completion-feed.md)
+- [RFC 0014: Idea Algebra](../new/rfc-0014-idea-algebra.md)
 - [Runtime Overview / Firms and Deeds](../../docs/rt-overview.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)
 - [Behavioral threads as occurrent structure](../../docs/rt-occurrents.md)

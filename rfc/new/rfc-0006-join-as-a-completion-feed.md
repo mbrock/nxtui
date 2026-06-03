@@ -128,7 +128,7 @@ where the child history becomes available to the parent scope.
 
 ## Relationship To Other RFCs
 
-[RFC 0005](rfc-0005-firm-bookkeeping-without-heap-vectors.md) defines the
+[RFC 0005](../cur/rfc-0005-firm-bookkeeping-without-heap-vectors.md) defines the
 firm-local storage where child and completion records live.
 
 [RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) can provide the bounded queue
@@ -158,7 +158,7 @@ firm joins and child deeds.
 
 ## References
 
-- [RFC 0005: Firm Bookkeeping without Heap Vectors](rfc-0005-firm-bookkeeping-without-heap-vectors.md)
+- [RFC 0005: Firm Bookkeeping without Heap Vectors](../cur/rfc-0005-firm-bookkeeping-without-heap-vectors.md)
 - [RFC 0007: Ring Geometry Extraction](../cur/rfc-0007-ring-geometry-extraction.md)
 - [RFC 0008: Pushfeed Channels and Removing Bell/Wire](rfc-0008-pushfeed-channels-and-removing-bell-wire.md)
 - [RFC 0014: Idea Algebra](rfc-0014-idea-algebra.md)
