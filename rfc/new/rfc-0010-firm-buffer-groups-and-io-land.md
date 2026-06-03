@@ -12,8 +12,8 @@ and completion pumping. The firm owns the buffer groups, quotas, and regions
 that its wishes may use, even when a wand registers those buffers with a
 platform backend.
 
-This mirrors the split from [RFC 0002](rfc-0002-firm-frame-arenas.md) and
-[RFC 0003](rfc-0003-deck-task-registry.md):
+This mirrors the split from [RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) and
+[RFC 0003](../cur/rfc-0003-deck-task-registry.md):
 
 ```text
 deck owns task registry
@@ -140,7 +140,7 @@ holding cost of byte land from the firm or runtime diagnostics.
 [RFC 0009](rfc-0009-wishes-urges-and-provided-buffers.md) introduces the
 storage-selecting wishes that need this territory.
 
-[RFC 0007](rfc-0007-ring-geometry-extraction.md) provides reusable geometry for
+[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) provides reusable geometry for
 buffer-group free lists and visible chunks.
 
 [RFC 0011](rfc-0011-multishot-wishes-as-feeds.md) uses buffer groups heavily
@@ -162,7 +162,7 @@ async resources owned by firms.
 ## References
 
 - [RFC 0000: Prolegomena to NXT System Theory](rfc-0000-prolegomena.md)
-- [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
+- [RFC 0002: Firm Frame Arenas](../cur/rfc-0002-firm-frame-arenas.md)
 - [RFC 0009: Wishes, Urges, and Provided Buffers](rfc-0009-wishes-urges-and-provided-buffers.md)
 - [RFC 0015: Async RAII Resources](rfc-0015-async-raii-resources.md)
 - [RFC 0001: Reels](rfc-0001-reels.md)

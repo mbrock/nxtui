@@ -28,7 +28,7 @@ But the storage shape is provisional. A firm owns
 runtime is young, but it hides the bookkeeping land behind general heap
 allocation.
 
-If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
+If [RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
 the records that describe those children should become firm-local as well.
 
 ## Proposal
@@ -150,7 +150,7 @@ child_completion completions[K]
 ```
 
 Later versions can use the extracted ring geometry from
-[RFC 0007](rfc-0007-ring-geometry-extraction.md) for completion queues and
+[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) for completion queues and
 free lists.
 
 Overflow is a real condition and should be reported as structured diagnostics:
@@ -175,14 +175,14 @@ children and no live deed can name the records being reclaimed.
 
 ## Relationship To Other RFCs
 
-[RFC 0002](rfc-0002-firm-frame-arenas.md) provides frame land.
+[RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) provides frame land.
 
-[RFC 0003](rfc-0003-deck-task-registry.md) provides durable task IDs.
+[RFC 0003](../cur/rfc-0003-deck-task-registry.md) provides durable task IDs.
 
 [RFC 0006](rfc-0006-join-as-a-completion-feed.md) describes the join side of
 the same bookkeeping as a feed of child completions.
 
-[RFC 0007](rfc-0007-ring-geometry-extraction.md) provides reusable bounded
+[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) provides reusable bounded
 storage machinery for queues and free lists.
 
 ## Open Questions
@@ -195,7 +195,7 @@ storage machinery for queues and free lists.
 
 ## References
 
-- [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
+- [RFC 0002: Firm Frame Arenas](../cur/rfc-0002-firm-frame-arenas.md)
 - [RFC 0006: Join as a Completion Feed](rfc-0006-join-as-a-completion-feed.md)
 - [RFC 0014: Idea Algebra](rfc-0014-idea-algebra.md)
 - [Runtime Overview / Firms and Deeds](../../docs/rt-overview.md)

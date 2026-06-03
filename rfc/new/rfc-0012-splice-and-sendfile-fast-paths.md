@@ -119,7 +119,7 @@ today. Direct transfer does not grant callers hidden stable pointers.
 
 ## Relationship To Other RFCs
 
-[RFC 0007](rfc-0007-ring-geometry-extraction.md) keeps the buffer geometry
+[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) keeps the buffer geometry
 clean enough for direct paths to reason about what is already buffered.
 
 [RFC 0009](rfc-0009-wishes-urges-and-provided-buffers.md) and
@@ -143,7 +143,7 @@ frames unless a protocol actually needs owned values.
 
 ## References
 
-- [RFC 0007: Ring Geometry Extraction](rfc-0007-ring-geometry-extraction.md)
+- [RFC 0007: Ring Geometry Extraction](../cur/rfc-0007-ring-geometry-extraction.md)
 - [RFC 0009: Wishes, Urges, and Provided Buffers](rfc-0009-wishes-urges-and-provided-buffers.md)
 - [RFC 0001: Reels](rfc-0001-reels.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)

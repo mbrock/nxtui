@@ -1,6 +1,6 @@
 # RFC 0013: Runtime Env Core Fields {#rfc_runtime_env_core_fields}
 
-Status: new
+Status: current
 
 ## Summary
 
@@ -141,8 +141,8 @@ allocation path.
 [RFC 0003](rfc-0003-deck-task-registry.md) needs `current_task_id` as a hot
 identity.
 
-[RFC 0004](rfc-0004-wand-completion-routing.md) and
-[RFC 0009](rfc-0009-wishes-urges-and-provided-buffers.md) need a direct path
+[RFC 0004](../new/rfc-0004-wand-completion-routing.md) and
+[RFC 0009](../new/rfc-0009-wishes-urges-and-provided-buffers.md) need a direct path
 from an awaited wish to the current task, firm, and wand.
 
 ## Open Questions
@@ -161,7 +161,7 @@ from an awaited wish to the current task, firm, and wand.
 
 - [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
 - [RFC 0003: Deck Task Registry and Task IDs](rfc-0003-deck-task-registry.md)
-- [RFC 0004: Wand Completion Routing without exec Hub](rfc-0004-wand-completion-routing.md)
+- [RFC 0004: Wand Completion Routing without exec Hub](../new/rfc-0004-wand-completion-routing.md)
 - [Runtime Overview](../../docs/rt-overview.md)
 - [env.hpp](../../src/nxtrt/env.hpp)
 - [task.hpp](../../src/nxtrt/task.hpp)

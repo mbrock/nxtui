@@ -58,7 +58,7 @@ at most one cold send/capacity wait
 ```
 
 Those slots contain `task_id`, so this RFC depends on
-[RFC 0003](rfc-0003-deck-task-registry.md). Multiple waiters, round-robin
+[RFC 0003](../cur/rfc-0003-deck-task-registry.md). Multiple waiters, round-robin
 selection, broadcast, and fan-out can be built later as explicit layers over
 the single-wait core.
 
@@ -140,9 +140,9 @@ Rendezvous transfer either completes exactly once or is cancelled exactly once.
 
 ## Relationship To Other RFCs
 
-[RFC 0003](rfc-0003-deck-task-registry.md) provides task IDs for wait slots.
+[RFC 0003](../cur/rfc-0003-deck-task-registry.md) provides task IDs for wait slots.
 
-[RFC 0007](rfc-0007-ring-geometry-extraction.md) provides the buffer geometry.
+[RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) provides the buffer geometry.
 
 [RFC 0006](rfc-0006-join-as-a-completion-feed.md) can use the same feed
 machinery for child completions.
@@ -163,8 +163,8 @@ semantics for platform-backed feeds.
 
 ## References
 
-- [RFC 0003: Deck Task Registry and Task IDs](rfc-0003-deck-task-registry.md)
-- [RFC 0007: Ring Geometry Extraction](rfc-0007-ring-geometry-extraction.md)
+- [RFC 0003: Deck Task Registry and Task IDs](../cur/rfc-0003-deck-task-registry.md)
+- [RFC 0007: Ring Geometry Extraction](../cur/rfc-0007-ring-geometry-extraction.md)
 - [Runtime Overview](../../docs/rt-overview.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)
 - [wire.hpp](../../src/nxtrt/wire.hpp)

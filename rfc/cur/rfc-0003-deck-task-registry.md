@@ -1,6 +1,6 @@
 # RFC 0003: Deck Task Registry and Task IDs {#rfc_deck_task_registry}
 
-Status: new
+Status: current
 
 ## Summary
 
@@ -195,10 +195,10 @@ handle and promise pointer already carried by `ready_item`.
 [RFC 0002](rfc-0002-firm-frame-arenas.md) gives the frame a firm-owned memory
 home. This RFC gives the task a deck-owned civic identity.
 
-[RFC 0004](rfc-0004-wand-completion-routing.md) depends on this registry so
+[RFC 0004](../new/rfc-0004-wand-completion-routing.md) depends on this registry so
 one-shot CQEs can wake a task directly.
 
-[RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md) uses task IDs
+[RFC 0008](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md) uses task IDs
 for deck-local producer and consumer wait slots.
 
 [RFC 0013](rfc-0013-runtime-env-core-fields.md) moves `current_task_id` into
@@ -219,7 +219,7 @@ the hot runtime environment path.
 ## References
 
 - [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
-- [RFC 0004: Wand Completion Routing without exec Hub](rfc-0004-wand-completion-routing.md)
+- [RFC 0004: Wand Completion Routing without exec Hub](../new/rfc-0004-wand-completion-routing.md)
 - [Runtime Overview](../../docs/rt-overview.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)
 - [deck.hpp](../../src/nxtrt/deck.hpp)

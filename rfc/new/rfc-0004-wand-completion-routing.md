@@ -30,7 +30,7 @@ common case needs.
 For a normal one-shot operation, a task awaits exactly one awaitee at a time.
 That means the task table already has a natural place for "what I am waiting
 for" and "where the result should land." Once
-[RFC 0003](rfc-0003-deck-task-registry.md) gives tasks stable deck-owned
+[RFC 0003](../cur/rfc-0003-deck-task-registry.md) gives tasks stable deck-owned
 identity, the wand does not need an address-stable operation object just to
 remember which coroutine to resume.
 
@@ -163,7 +163,7 @@ extra user-visible await slots.
 
 ## Relationship To Other RFCs
 
-[RFC 0003](rfc-0003-deck-task-registry.md) is a prerequisite. Without a durable
+[RFC 0003](../cur/rfc-0003-deck-task-registry.md) is a prerequisite. Without a durable
 task registry, user_data cannot safely name a task.
 
 [RFC 0009](rfc-0009-wishes-urges-and-provided-buffers.md) changes what a wish
@@ -184,7 +184,7 @@ long-lived wand-side realization state.
 
 ## References
 
-- [RFC 0003: Deck Task Registry and Task IDs](rfc-0003-deck-task-registry.md)
+- [RFC 0003: Deck Task Registry and Task IDs](../cur/rfc-0003-deck-task-registry.md)
 - [RFC 0009: Wishes, Urges, and Provided Buffers](rfc-0009-wishes-urges-and-provided-buffers.md)
 - [Runtime Overview / Wands](../../docs/rt-overview.md)
 - [Behavioral threads as occurrent structure](../../docs/rt-occurrents.md)

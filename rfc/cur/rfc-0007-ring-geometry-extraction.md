@@ -1,6 +1,6 @@
 # RFC 0007: Ring Geometry Extraction {#rfc_ring_geometry_extraction}
 
-Status: new
+Status: current
 
 ## Summary
 
@@ -70,11 +70,11 @@ The first users should be:
 - `feed<T>` and `sink<T>`;
 - deck ready queues once [RFC 0003](rfc-0003-deck-task-registry.md) moves them
   to `task_id`;
-- firm join feeds from [RFC 0006](rfc-0006-join-as-a-completion-feed.md);
-- pushfeed channels from [RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md);
+- firm join feeds from [RFC 0006](../new/rfc-0006-join-as-a-completion-feed.md);
+- pushfeed channels from [RFC 0008](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md);
 - provided-buffer rings from
-  [RFC 0010](rfc-0010-firm-buffer-groups-and-io-land.md);
-- mark buffers for optimized reels, if [RFC 0001](rfc-0001-reels.md) later
+  [RFC 0010](../new/rfc-0010-firm-buffer-groups-and-io-land.md);
+- mark buffers for optimized reels, if [RFC 0001](../new/rfc-0001-reels.md) later
   grows explicit marked wrappers.
 
 ## Design Rules
@@ -98,12 +98,12 @@ capacity and move buffered data without virtual calls or coroutine frames.
 Zero capacity is not a rendezvous protocol at this layer. The ring component
 may report capacity zero, but matching a producer with a consumer requires a
 deck transition, task identity, cancellation rules, and possibly downstream
-sink suspension. That belongs in [RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md),
+sink suspension. That belongs in [RFC 0008](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md),
 not in pure geometry.
 
 ## Relationship To Reels
 
-[RFC 0001: Reels](rfc-0001-reels.md) depends on visible source chunks and
+[RFC 0001: Reels](../new/rfc-0001-reels.md) depends on visible source chunks and
 borrowed projections. `chop_view` already operates over `buffer_chunks<const
 Stock>`. Extracting ring geometry should make that source chunk vocabulary more
 central, not replace it with contiguous spans.
@@ -140,9 +140,9 @@ remain low-level and explicit.
 
 ## References
 
-- [RFC 0001: Reels](rfc-0001-reels.md)
-- [RFC 0006: Join as a Completion Feed](rfc-0006-join-as-a-completion-feed.md)
-- [RFC 0008: Pushfeed Channels and Removing Bell/Wire](rfc-0008-pushfeed-channels-and-removing-bell-wire.md)
+- [RFC 0001: Reels](../new/rfc-0001-reels.md)
+- [RFC 0006: Join as a Completion Feed](../new/rfc-0006-join-as-a-completion-feed.md)
+- [RFC 0008: Pushfeed Channels and Removing Bell/Wire](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md)
 - [buffer-core.hpp](../../src/nxtrt/buffer-core.hpp)
 - [value-buffers.hpp](../../src/nxtrt/value-buffers.hpp)
 - [buffers.hpp](../../src/nxtrt/buffers.hpp)

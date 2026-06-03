@@ -32,7 +32,7 @@ and the task frame is born.
 
 ## Motivation
 
-[RFC 0002](rfc-0002-firm-frame-arenas.md) requires tasks to be born inside a
+[RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) requires tasks to be born inside a
 firm so their frames land in firm territory. That means APIs should prefer
 recipes:
 
@@ -143,7 +143,7 @@ but it should not pretend that every idea can be inspected like a wish.
 
 ## References
 
-- [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
+- [RFC 0002: Firm Frame Arenas](../cur/rfc-0002-firm-frame-arenas.md)
 - [RFC 0005: Firm Bookkeeping without Heap Vectors](rfc-0005-firm-bookkeeping-without-heap-vectors.md)
 - [RFC 0006: Join as a Completion Feed](rfc-0006-join-as-a-completion-feed.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)

@@ -1,6 +1,6 @@
 # RFC 0002: Firm Frame Arenas {#rfc_firm_frame_arenas}
 
-Status: new
+Status: current
 
 ## Summary
 
@@ -14,12 +14,12 @@ their frames occupy.
 This RFC proposes that every task belongs to a firm and every task frame is
 allocated from firm-owned or firm-borrowed frame land. Ordinary recursion
 consumes vertical stack space; concurrent breadth consumes firm frame space. In
-the language of [RFC 0000](rfc-0000-prolegomena.md), the firm becomes the
+the language of [RFC 0000](../new/rfc-0000-prolegomena.md), the firm becomes the
 visible territory for held async work, not only the object that later joins it.
 
 ## Series Note
 
-The runtime RFCs after [RFC 0001: Reels](rfc-0001-reels.md) are intended as a
+The runtime RFCs after [RFC 0001: Reels](../new/rfc-0001-reels.md) are intended as a
 staged consolidation of where held work lives:
 
 - [RFC 0007: Ring Geometry Extraction](rfc-0007-ring-geometry-extraction.md)
@@ -29,16 +29,16 @@ staged consolidation of where held work lives:
 - This RFC gives coroutine frames explicit land.
 - [RFC 0013: Runtime Env Core Fields](rfc-0013-runtime-env-core-fields.md)
   makes the current deck, firm, wand, and task hot fields.
-- [RFC 0004: Wand Completion Routing without exec Hub](rfc-0004-wand-completion-routing.md)
+- [RFC 0004: Wand Completion Routing without exec Hub](../new/rfc-0004-wand-completion-routing.md)
   uses the new task identity to route one-shot completions.
-- [RFC 0009](rfc-0009-wishes-urges-and-provided-buffers.md) and
-  [RFC 0010](rfc-0010-firm-buffer-groups-and-io-land.md) move I/O byte land
+- [RFC 0009](../new/rfc-0009-wishes-urges-and-provided-buffers.md) and
+  [RFC 0010](../new/rfc-0010-firm-buffer-groups-and-io-land.md) move I/O byte land
   into firm and wand territory.
-- [RFC 0008: Pushfeed Channels and Removing Bell/Wire](rfc-0008-pushfeed-channels-and-removing-bell-wire.md)
+- [RFC 0008: Pushfeed Channels and Removing Bell/Wire](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md)
   removes the backend trip from internal synchronization.
-- [RFC 0014: Idea Algebra](rfc-0014-idea-algebra.md) moves user-facing
+- [RFC 0014: Idea Algebra](../new/rfc-0014-idea-algebra.md) moves user-facing
   composition toward task factories.
-- [RFC 0015: Async RAII Resources](rfc-0015-async-raii-resources.md) treats
+- [RFC 0015: Async RAII Resources](../new/rfc-0015-async-raii-resources.md) treats
   long-lived firm children as scoped resources.
 
 The most important immediate pair is still this RFC and
@@ -199,7 +199,7 @@ identity and scheduling state.
 [RFC 0013](rfc-0013-runtime-env-core-fields.md) provides the hot `current_firm`
 field needed by promise allocation.
 
-[RFC 0010](rfc-0010-firm-buffer-groups-and-io-land.md) generalizes the same
+[RFC 0010](../new/rfc-0010-firm-buffer-groups-and-io-land.md) generalizes the same
 territory idea from coroutine frames to I/O buffers.
 
 ## Open Questions
@@ -218,7 +218,7 @@ territory idea from coroutine frames to I/O buffers.
 
 ## References
 
-- [RFC 0000: Prolegomena to NXT System Theory](rfc-0000-prolegomena.md)
+- [RFC 0000: Prolegomena to NXT System Theory](../new/rfc-0000-prolegomena.md)
 - [RFC 0003: Deck Task Registry and Task IDs](rfc-0003-deck-task-registry.md)
 - [Runtime Overview](../../docs/rt-overview.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)
