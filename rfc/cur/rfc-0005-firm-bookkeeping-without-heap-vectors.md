@@ -68,7 +68,10 @@ common base now also carries the generic observation metadata: whether the deed
 was contained, whether the result or failure was observed, and whether the
 result was already taken. Typed result storage has also been named as a
 `deed_result_slot<T>` helper, so the current inline storage path is explicit
-even before the future external-storage target exists.
+and non-void deeds can now redirect evacuation into caller-provided storage via
+`deed<T>::store_result_in(T&)` when `T` is assignable. That implements the
+first `T`/`T *` result-target shape without yet moving deed records into
+firm-local storage.
 
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no
@@ -130,21 +133,20 @@ deed-named storage at final suspend. If the deed is gone and no one will
 observe the result, the task can report completion into firm join state and
 destroy its frame after the firm's settlement rules allow it.
 
-The likely shape is a small result target in the child/deed record:
+The current initial shape is a small result target in the child/deed record:
 
 ```cpp
 template<typename T>
 struct deed_result_slot {
-    std::variant<std::monostate, T, T *> storage;
+    std::variant<std::monostate, T, T *, std::exception_ptr> storage;
 };
 ```
 
-That sketch is not the API, but it captures the ownership choice. A deed can
-carry inline storage for the result, or it can name caller/firm-provided
-storage. At child final suspend, the task evacuates its result out of the
-coroutine frame into that slot if the deed is still present. After evacuation,
-the frame can be destroyed according to firm settlement rules without losing
-the selected result.
+That sketch is deliberately small. A deed can carry inline storage for the
+result, or it can name caller-provided storage. At child final suspend, the
+task evacuates its result out of the coroutine frame into that slot if the deed
+is still present. After evacuation, the frame can be destroyed according to
+firm settlement rules without losing the selected result.
 
 This separates two ideas that are currently intertwined:
 

@@ -1352,6 +1352,38 @@ nxtrt::task<int> throw_int_after_yield()
     throw nxtrt::runtime_error{"firm child int boom"};
 }
 
+struct external_result_firm : nxtrt::firm
+{
+    explicit external_result_firm(int & target)
+        : target(target)
+    {}
+
+    int & target;
+
+    nxtrt::task<nxtrt::deed<int>> operator()()
+    {
+        auto child = fork(value_after_yield(64));
+        child.store_result_in(target);
+        co_await join();
+        co_return std::move(child);
+    }
+};
+
+nxtrt::task<nxtrt::deed<int>> fork_external_result_into(int & target)
+{
+    co_return co_await external_result_firm{target};
+}
+
+struct external_result_root
+{
+    int * target = nullptr;
+
+    nxtrt::task<nxtrt::deed<int>> operator()()
+    {
+        return fork_external_result_into(*target);
+    }
+};
+
 nxtrt::task<void> record_stop_state_after_yield(
     std::vector<int> & events,
     int value)
@@ -3171,6 +3203,17 @@ static suite runtime_tests{
                     });
 
                 expect(std::move(child).get() == 42_i);
+            };
+
+            "evacuate forked task results into external deed storage"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto target = 0;
+
+                auto child = deck.sync_wait(
+                    external_result_root{.target = &target});
+
+                expect(target == 64_i);
+                expect(std::move(child).get() == 64_i);
             };
 
             "move live deeds before child completion"_test = [] {

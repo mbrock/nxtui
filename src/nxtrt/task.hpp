@@ -919,16 +919,32 @@ struct deed_result_slot
 {
     using stored_type = std::remove_cv_t<T>;
     using storage_type =
-        std::variant<std::monostate, stored_type, std::exception_ptr>;
+        std::variant<
+            std::monostate,
+            stored_type,
+            stored_type *,
+            std::exception_ptr>;
 
     [[nodiscard]] bool ready() const noexcept
     {
+        if (std::holds_alternative<stored_type *>(storage))
+            return target_ready;
         return !std::holds_alternative<std::monostate>(storage);
     }
 
     template<typename Value>
     void set_value(Value && value)
     {
+        if (auto * target = target_storage()) {
+            if constexpr (std::assignable_from<stored_type &, Value>) {
+                *target = std::forward<Value>(value);
+                target_ready = true;
+                return;
+            } else {
+                throw runtime_error{
+                    "nxtrt deed result target is not assignable"};
+            }
+        }
         storage.template emplace<stored_type>(
             std::forward<Value>(value));
     }
@@ -937,6 +953,7 @@ struct deed_result_slot
     {
         storage.template emplace<std::exception_ptr>(
             std::move(failure));
+        target_ready = false;
     }
 
     [[nodiscard]] std::exception_ptr failure() const
@@ -950,12 +967,50 @@ struct deed_result_slot
     {
         if (std::holds_alternative<std::exception_ptr>(storage))
             rethrow(std::get<std::exception_ptr>(storage));
+        if (auto * target = target_storage()) {
+            if (!target_ready)
+                throw runtime_error{"nxtrt task result was never set"};
+            return std::move(*target);
+        }
         if (!std::holds_alternative<stored_type>(storage))
             throw runtime_error{"nxtrt task result was never set"};
         return std::move(std::get<stored_type>(storage));
     }
 
+    void store_in(stored_type & target)
+    {
+        if (std::holds_alternative<std::exception_ptr>(storage))
+            throw runtime_error{
+                "nxtrt deed result target set after failure"};
+        if (auto * old_target = target_storage()) {
+            if (target_ready)
+                throw runtime_error{
+                    "nxtrt deed result target set after result ready"};
+            if (old_target == &target)
+                return;
+        } else if (std::holds_alternative<stored_type>(storage)) {
+            target = std::move(std::get<stored_type>(storage));
+            target_ready = true;
+        }
+        storage.template emplace<stored_type *>(&target);
+    }
+
+    [[nodiscard]] stored_type * target_storage() noexcept
+    {
+        if (std::holds_alternative<stored_type *>(storage))
+            return std::get<stored_type *>(storage);
+        return nullptr;
+    }
+
+    [[nodiscard]] const stored_type * target_storage() const noexcept
+    {
+        if (std::holds_alternative<stored_type *>(storage))
+            return std::get<stored_type *>(storage);
+        return nullptr;
+    }
+
     storage_type storage;
+    bool target_ready = false;
 };
 
 template<>
@@ -995,6 +1050,8 @@ struct deed_result_slot<void>
 template<typename T>
 struct deed_result_state final : deed_result_state_base
 {
+    using stored_type = typename deed_result_slot<T>::stored_type;
+
     deed_result_state() = default;
     deed_result_state(deed_result_state &&) = default;
     deed_result_state & operator=(deed_result_state &&) = default;
@@ -1044,6 +1101,15 @@ struct deed_result_state final : deed_result_state_base
         observed = true;
         result_taken = true;
         return slot.take_result();
+    }
+
+    void store_result_in(stored_type & target)
+    {
+        if (result_taken)
+            throw runtime_error{"nxtrt deed result already taken"};
+        if (!ready())
+            ensure_ready_from_child();
+        slot.store_in(target);
     }
 
     deed_result_slot<T> slot;
@@ -1488,6 +1554,13 @@ public:
     [[nodiscard]] task_id child_task_id() const
     {
         return state().child_task;
+    }
+
+    deed & store_result_in(std::remove_cv_t<T> & target)
+        requires std::assignable_from<std::remove_cv_t<T> &, T>
+    {
+        state().store_result_in(target);
+        return *this;
     }
 
     [[nodiscard]] T get() &&
