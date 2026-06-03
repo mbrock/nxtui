@@ -76,8 +76,9 @@ firm-local storage. The generic metadata has also been named as
 firm-local or borrowed deed record has a clear header shape. Firms now allocate
 bounded issued-deed records from `firm_deed_storage_ref` /
 `static_firm_deed_storage<N>` on each fork. Those records name which child task
-was issued as a deed; the live deed handle still owns or names the typed result
-slot until a fuller firm-local deed lifetime lands.
+was issued as a deed. They deliberately store task identity, not live child
+record pointers; the live deed handle still owns or names the typed result slot
+until a fuller firm-local deed lifetime lands.
 
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no

@@ -863,6 +863,11 @@ struct deed_record_header
     bool result_taken = false;
 };
 
+struct firm_deed_record
+{
+    task_id child;
+};
+
 struct deed_result_state_base
 {
     deed_result_state_base() = default;
@@ -1824,11 +1829,11 @@ struct firm_deed_storage_ref
     firm_deed_storage_ref() = default;
 
     explicit firm_deed_storage_ref(
-        std::span<detail::deed_record_header> records)
+        std::span<detail::firm_deed_record> records)
         : records(records)
     {}
 
-    std::span<detail::deed_record_header> records;
+    std::span<detail::firm_deed_record> records;
 };
 
 template<std::size_t N>
@@ -1838,7 +1843,7 @@ public:
     [[nodiscard]] firm_deed_storage_ref ref() noexcept
     {
         return firm_deed_storage_ref{
-            std::span<detail::deed_record_header>{storage_.data(), N}};
+            std::span<detail::firm_deed_record>{storage_.data(), N}};
     }
 
     [[nodiscard]] operator firm_deed_storage_ref() noexcept
@@ -1847,7 +1852,7 @@ public:
     }
 
 private:
-    std::array<detail::deed_record_header, N == 0 ? 1 : N> storage_{};
+    std::array<detail::firm_deed_record, N == 0 ? 1 : N> storage_{};
 };
 
 class owned_firm_deed_storage
@@ -1859,7 +1864,7 @@ public:
         : records_(
             capacity == 0
                 ? nullptr
-                : std::make_unique<detail::deed_record_header[]>(capacity))
+                : std::make_unique<detail::firm_deed_record[]>(capacity))
         , capacity_(capacity)
     {}
 
@@ -1873,7 +1878,7 @@ public:
     [[nodiscard]] firm_deed_storage_ref ref() noexcept
     {
         return firm_deed_storage_ref{
-            std::span<detail::deed_record_header>{
+            std::span<detail::firm_deed_record>{
                 records_.get(), capacity_}};
     }
 
@@ -1883,7 +1888,7 @@ public:
     }
 
 private:
-    std::unique_ptr<detail::deed_record_header[]> records_;
+    std::unique_ptr<detail::firm_deed_record[]> records_;
     std::size_t capacity_ = 0;
 };
 
@@ -2650,7 +2655,9 @@ public:
                 active_deck->enqueue(handle, &promise);
             result.state().record.child_task =
                 record->firm_record.task;
-            deed_records_[deed_count_] = result.state().record;
+            deed_records_[deed_count_] = detail::firm_deed_record{
+                .child = record->firm_record.task,
+            };
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
@@ -2804,7 +2811,7 @@ private:
     std::span<detail::firm_child_slot> child_slots_;
     bool uses_owned_child_storage_ = false;
     owned_firm_deed_storage owned_deed_storage_;
-    std::span<detail::deed_record_header> deed_records_;
+    std::span<detail::firm_deed_record> deed_records_;
     bool uses_owned_deed_storage_ = false;
     owned_firm_completion_storage owned_completion_storage_;
     std::span<detail::child_completion> completion_slots_;
