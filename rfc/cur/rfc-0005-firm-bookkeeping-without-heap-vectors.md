@@ -56,6 +56,9 @@ result after evacuation.
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no
 longer owns a type-erased completion callable just to notify the firm.
+The child record also remembers the deck-assigned `task_id` returned when the
+child is enqueued, so firm bookkeeping has begun naming forked work by durable
+task identity instead of only by coroutine handle.
 
 Task cancellation bookkeeping has started moving the same way. Parent-stop
 propagation and parked-wish cancellation now use concrete in-promise

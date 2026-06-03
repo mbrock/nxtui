@@ -305,7 +305,9 @@ private:
     /// @endcond
 
     /// Put a coroutine handle on the ready queue for a later pump step.
-    void enqueue(std::coroutine_handle<> handle, detail::promise_base * promise);
+    task_id enqueue(
+        std::coroutine_handle<> handle,
+        detail::promise_base * promise);
 
     [[nodiscard]] task_id register_task(
         std::coroutine_handle<> handle,

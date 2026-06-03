@@ -1018,6 +1018,15 @@ nxtrt::task<void> record_current_firm(
     firms.push_back(nxtrt::current_firm());
 }
 
+nxtrt::task<void> record_current_task_id_after_yield(
+    std::vector<nxtrt::task_id> & ids)
+{
+    co_await nxtrt::yield();
+    auto * deck = nxtrt::current_deck();
+    expect(deck != nullptr);
+    ids.push_back(deck->current_task_id());
+}
+
 nxtrt::task<void> record_current_int_game(
     std::vector<nxtrt::game<int> *> & games)
 {
@@ -2859,6 +2868,59 @@ static suite runtime_tests{
 
                 expect(expected != nullptr);
                 expect(firms == std::vector<nxtrt::firm *>{expected});
+            };
+
+            "firm child records remember deck task ids"_test = [] {
+                struct task_id_observer_firm : nxtrt::firm
+                {
+                    task_id_observer_firm(
+                        std::vector<nxtrt::task_id> & running_ids,
+                        std::vector<nxtrt::task_id> & completed_ids)
+                        : running_ids(&running_ids)
+                        , completed_ids(&completed_ids)
+                    {}
+
+                    task_id_observer_firm(
+                        task_id_observer_firm &&) noexcept = default;
+                    task_id_observer_firm & operator=(
+                        task_id_observer_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        nxtrt::fork(
+                            record_current_task_id_after_yield(
+                                *running_ids));
+                        co_await nxtrt::join();
+                    }
+
+                protected:
+                    void child_finished(
+                        nxtrt::detail::child_record_base & child,
+                        std::exception_ptr) noexcept override
+                    {
+                        completed_ids->push_back(child.child_task);
+                    }
+
+                private:
+                    std::vector<nxtrt::task_id> * running_ids = nullptr;
+                    std::vector<nxtrt::task_id> * completed_ids = nullptr;
+                };
+
+                auto deck = nxtrt::deck{};
+                auto running_ids = std::vector<nxtrt::task_id>{};
+                auto completed_ids = std::vector<nxtrt::task_id>{};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await task_id_observer_firm{
+                        running_ids,
+                        completed_ids,
+                    };
+                });
+
+                expect(running_ids.size() == std::size_t{1});
+                expect(completed_ids.size() == std::size_t{1});
+                expect(static_cast<bool>(running_ids.front()));
+                expect(completed_ids.front() == running_ids.front());
             };
 
             "allow children to fork more work into the same firm"_test = [] {

@@ -832,6 +832,7 @@ struct child_record_base
     void report_finished_from_promise() noexcept;
 
     firm * owner = nullptr;
+    task_id child_task;
     bool completion_reported = false;
 };
 
@@ -2213,6 +2214,7 @@ public:
                 &result.state());
             record_constructed = true;
             promise.observe_completion_of(*record);
+            record->child_task = active_deck->enqueue(handle, &promise);
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
@@ -2224,7 +2226,6 @@ public:
         ++child_count_;
         child_high_water_ = std::max(child_high_water_, child_count_);
         debug_update();
-        active_deck->enqueue(handle, &handle.promise());
         return result;
     }
 
@@ -3713,15 +3714,16 @@ inline void deck::unregister_task(
     }
 }
 
-inline void deck::enqueue(
+inline task_id deck::enqueue(
     std::coroutine_handle<> handle,
     detail::promise_base * promise)
 {
     auto id = register_task(handle, promise);
     if (!id)
-        return;
+        return {};
     trace("deck enqueue task {}", id.value);
     ready_.push_back(id);
+    return id;
 }
 
 inline void deck::resume_if_ready(task_id id)
