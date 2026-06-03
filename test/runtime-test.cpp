@@ -907,8 +907,10 @@ nxtrt::task<void> aggregate_firm_storage_probe(
     std::vector<int> & events,
     std::size_t & frame_capacity,
     std::size_t & child_capacity,
+    std::size_t & deed_capacity,
     std::size_t & completion_capacity,
     std::size_t & join_failure_capacity,
+    std::size_t & deed_high_water,
     std::size_t & completion_high_water,
     std::size_t & child_high_water)
 {
@@ -919,16 +921,20 @@ nxtrt::task<void> aggregate_firm_storage_probe(
             std::vector<int> & events,
             std::size_t & frame_capacity,
             std::size_t & child_capacity,
+            std::size_t & deed_capacity,
             std::size_t & completion_capacity,
             std::size_t & join_failure_capacity,
+            std::size_t & deed_high_water,
             std::size_t & completion_high_water,
             std::size_t & child_high_water)
             : nxtrt::firm(storage)
             , events(&events)
             , frame_capacity_out(&frame_capacity)
             , child_capacity_out(&child_capacity)
+            , deed_capacity_out(&deed_capacity)
             , completion_capacity_out(&completion_capacity)
             , join_failure_capacity_out(&join_failure_capacity)
+            , deed_high_water_out(&deed_high_water)
             , completion_high_water_out(&completion_high_water)
             , child_high_water_out(&child_high_water)
         {}
@@ -941,10 +947,12 @@ nxtrt::task<void> aggregate_firm_storage_probe(
         {
             *frame_capacity_out = frame_capacity();
             *child_capacity_out = child_capacity();
+            *deed_capacity_out = deed_capacity();
             *completion_capacity_out = child_completion_capacity();
             *join_failure_capacity_out = join_failure_capacity();
             nxtrt::fork(record_after_yield(*events, 1));
             *child_high_water_out = child_high_water();
+            *deed_high_water_out = deed_high_water();
             co_await nxtrt::join();
             *completion_high_water_out = child_completion_high_water();
         }
@@ -952,8 +960,10 @@ nxtrt::task<void> aggregate_firm_storage_probe(
         std::vector<int> * events = nullptr;
         std::size_t * frame_capacity_out = nullptr;
         std::size_t * child_capacity_out = nullptr;
+        std::size_t * deed_capacity_out = nullptr;
         std::size_t * completion_capacity_out = nullptr;
         std::size_t * join_failure_capacity_out = nullptr;
+        std::size_t * deed_high_water_out = nullptr;
         std::size_t * completion_high_water_out = nullptr;
         std::size_t * child_high_water_out = nullptr;
     };
@@ -963,8 +973,10 @@ nxtrt::task<void> aggregate_firm_storage_probe(
         events,
         frame_capacity,
         child_capacity,
+        deed_capacity,
         completion_capacity,
         join_failure_capacity,
+        deed_high_water,
         completion_high_water,
         child_high_water,
     };
@@ -2801,6 +2813,72 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{11, 21});
             };
 
+            "firm deed storage reports borrowed record overflow"_test = [] {
+                struct bounded_deed_firm : nxtrt::firm
+                {
+                    bounded_deed_firm(
+                        nxtrt::firm_storage_ref storage,
+                        std::vector<int> & events,
+                        bool & overflowed,
+                        std::size_t & capacity,
+                        std::size_t & high_water)
+                        : nxtrt::firm(storage)
+                        , events(&events)
+                        , overflowed(&overflowed)
+                        , capacity(&capacity)
+                        , high_water(&high_water)
+                    {}
+
+                    bounded_deed_firm(
+                        bounded_deed_firm &&) noexcept = default;
+                    bounded_deed_firm & operator=(
+                        bounded_deed_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        *capacity = deed_capacity();
+                        nxtrt::fork(record_after_yield(*events, 1));
+                        try {
+                            nxtrt::fork(record_after_yield(*events, 2));
+                        } catch (const std::exception & e) {
+                            *overflowed =
+                                std::string_view{e.what()}.contains(
+                                    "firm deed record storage");
+                            *high_water = deed_high_water();
+                        }
+                        co_await nxtrt::join();
+                    }
+
+                    std::vector<int> * events = nullptr;
+                    bool * overflowed = nullptr;
+                    std::size_t * capacity = nullptr;
+                    std::size_t * high_water = nullptr;
+                };
+
+                auto deck = nxtrt::deck{};
+                auto storage =
+                    nxtrt::static_firm_storage<64 * 1024, 2, 2, 2, 1>{};
+                auto events = std::vector<int>{};
+                auto overflowed = false;
+                auto capacity = std::size_t{};
+                auto high_water = std::size_t{};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await bounded_deed_firm{
+                        storage,
+                        events,
+                        overflowed,
+                        capacity,
+                        high_water,
+                    };
+                });
+
+                expect(overflowed);
+                expect(capacity == std::size_t{1});
+                expect(high_water == std::size_t{1});
+                expect(events == std::vector<int>{11, 12});
+            };
+
             "firm completion storage reports borrowed overflow"_test = [] {
                 struct bounded_completion_firm : nxtrt::firm
                 {
@@ -2876,6 +2954,8 @@ static suite runtime_tests{
                 auto child_capacity = std::size_t{};
                 auto completion_capacity = std::size_t{};
                 auto join_failure_capacity = std::size_t{};
+                auto deed_capacity = std::size_t{};
+                auto deed_high_water = std::size_t{};
                 auto completion_high_water = std::size_t{};
                 auto child_high_water = std::size_t{};
 
@@ -2885,16 +2965,20 @@ static suite runtime_tests{
                         events,
                         frame_capacity,
                         child_capacity,
+                        deed_capacity,
                         completion_capacity,
                         join_failure_capacity,
+                        deed_high_water,
                         completion_high_water,
                         child_high_water);
                 });
 
                 expect(frame_capacity == std::size_t{64 * 1024});
                 expect(child_capacity == std::size_t{2});
+                expect(deed_capacity == std::size_t{2});
                 expect(completion_capacity == std::size_t{2});
                 expect(join_failure_capacity == std::size_t{3});
+                expect(deed_high_water == std::size_t{1});
                 expect(completion_high_water == std::size_t{1});
                 expect(child_high_water == std::size_t{1});
                 expect(events == std::vector<int>{11, 12});

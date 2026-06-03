@@ -43,10 +43,10 @@ children it can observe.
 
 Callers that want to grant all of a firm's local land together can use
 `firm_storage_ref` or
-`static_firm_storage<FrameBytes, Children, JoinFailures, Completions>`. That
-aggregate does not introduce a new owner; it is just a named bundle of the
-borrowed frame, child-record, child-completion, and join-failure storage
-regions.
+`static_firm_storage<FrameBytes, Children, JoinFailures, Completions, Deeds>`.
+That aggregate does not introduce a new owner; it is just a named bundle of the
+borrowed frame, child-record, deed-record, child-completion, and join-failure
+storage regions.
 
 The convenience `firm{}` path still owns default frame backing, but it now uses
 an explicit aligned `owned_frame_storage` block instead of
@@ -73,7 +73,11 @@ and non-void deeds can now redirect evacuation into caller-provided storage via
 first `T`/`T *` result-target shape without yet moving deed records into
 firm-local storage. The generic metadata has also been named as
 `deed_record_header`, separate from typed result slots, so the eventual
-firm-local or borrowed deed record has a clear header shape.
+firm-local or borrowed deed record has a clear header shape. Firms now allocate
+bounded issued-deed records from `firm_deed_storage_ref` /
+`static_firm_deed_storage<N>` on each fork. Those records name which child task
+was issued as a deed; the live deed handle still owns or names the typed result
+slot until a fuller firm-local deed lifetime lands.
 
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no
@@ -253,10 +257,10 @@ storage machinery for queues and free lists.
 
 ## Open Questions
 
-- What exact result-slot type lets final suspend evacuate a result into inline
-  deed storage, caller-provided storage, or firm-provided storage?
-- What are the default capacities for deed records once deed records become
-  separate from deed result slots?
+- What firm-provided result storage shape should complement inline deed
+  storage and caller-provided `T *` targets?
+- Which APIs need deed-record capacity to differ from child capacity? The first
+  default is one issued-deed record per child slot.
 - How should child result destruction interact with frame reuse?
 - Which current helpers need their main body turned into an explicit child?
 

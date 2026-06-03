@@ -1819,6 +1819,74 @@ private:
     std::size_t capacity_ = 0;
 };
 
+struct firm_deed_storage_ref
+{
+    firm_deed_storage_ref() = default;
+
+    explicit firm_deed_storage_ref(
+        std::span<detail::deed_record_header> records)
+        : records(records)
+    {}
+
+    std::span<detail::deed_record_header> records;
+};
+
+template<std::size_t N>
+class static_firm_deed_storage
+{
+public:
+    [[nodiscard]] firm_deed_storage_ref ref() noexcept
+    {
+        return firm_deed_storage_ref{
+            std::span<detail::deed_record_header>{storage_.data(), N}};
+    }
+
+    [[nodiscard]] operator firm_deed_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::array<detail::deed_record_header, N == 0 ? 1 : N> storage_{};
+};
+
+class owned_firm_deed_storage
+{
+public:
+    owned_firm_deed_storage() = default;
+
+    explicit owned_firm_deed_storage(std::size_t capacity)
+        : records_(
+            capacity == 0
+                ? nullptr
+                : std::make_unique<detail::deed_record_header[]>(capacity))
+        , capacity_(capacity)
+    {}
+
+    owned_firm_deed_storage(const owned_firm_deed_storage &) = delete;
+    owned_firm_deed_storage & operator=(
+        const owned_firm_deed_storage &) = delete;
+    owned_firm_deed_storage(owned_firm_deed_storage &&) noexcept = default;
+    owned_firm_deed_storage & operator=(
+        owned_firm_deed_storage &&) noexcept = default;
+
+    [[nodiscard]] firm_deed_storage_ref ref() noexcept
+    {
+        return firm_deed_storage_ref{
+            std::span<detail::deed_record_header>{
+                records_.get(), capacity_}};
+    }
+
+    [[nodiscard]] operator firm_deed_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::unique_ptr<detail::deed_record_header[]> records_;
+    std::size_t capacity_ = 0;
+};
+
 struct firm_completion_storage_ref
 {
     firm_completion_storage_ref() = default;
@@ -1963,16 +2031,19 @@ struct firm_storage_ref
     firm_storage_ref(
         frame_storage_ref frames,
         firm_child_storage_ref children,
+        firm_deed_storage_ref deeds,
         firm_completion_storage_ref completions,
         firm_join_storage_ref joins)
         : frames(frames)
         , children(children)
+        , deeds(deeds)
         , completions(completions)
         , joins(joins)
     {}
 
     frame_storage_ref frames;
     firm_child_storage_ref children;
+    firm_deed_storage_ref deeds;
     firm_completion_storage_ref completions;
     firm_join_storage_ref joins;
 };
@@ -1981,14 +2052,15 @@ template<
     std::size_t FrameBytes,
     std::size_t ChildSlots,
     std::size_t JoinFailureSlots = ChildSlots,
-    std::size_t CompletionSlots = ChildSlots>
+    std::size_t CompletionSlots = ChildSlots,
+    std::size_t DeedSlots = ChildSlots>
 class static_firm_storage
 {
 public:
     [[nodiscard]] firm_storage_ref ref() noexcept
     {
         return firm_storage_ref{
-            frames_, children_, completions_, joins_};
+            frames_, children_, deeds_, completions_, joins_};
     }
 
     [[nodiscard]] operator firm_storage_ref() noexcept
@@ -2006,6 +2078,11 @@ public:
         return children_;
     }
 
+    [[nodiscard]] firm_deed_storage_ref deeds() noexcept
+    {
+        return deeds_;
+    }
+
     [[nodiscard]] firm_join_storage_ref joins() noexcept
     {
         return joins_;
@@ -2019,6 +2096,7 @@ public:
 private:
     static_frame_storage<FrameBytes> frames_;
     static_firm_child_storage<ChildSlots> children_;
+    static_firm_deed_storage<DeedSlots> deeds_;
     static_firm_completion_storage<CompletionSlots> completions_;
     static_firm_join_storage<JoinFailureSlots> joins_;
 };
@@ -2246,6 +2324,9 @@ public:
         , owned_child_storage_(default_child_capacity)
         , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
+        , owned_deed_storage_(default_child_capacity)
+        , deed_records_(owned_deed_storage_.ref().records)
+        , uses_owned_deed_storage_(true)
         , owned_completion_storage_(default_child_capacity)
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)
@@ -2261,6 +2342,9 @@ public:
         , owned_child_storage_(default_child_capacity)
         , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
+        , owned_deed_storage_(default_child_capacity)
+        , deed_records_(owned_deed_storage_.ref().records)
+        , uses_owned_deed_storage_(true)
         , owned_completion_storage_(default_child_capacity)
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)
@@ -2276,6 +2360,9 @@ public:
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
+        , owned_deed_storage_(children.slots.size())
+        , deed_records_(owned_deed_storage_.ref().records)
+        , uses_owned_deed_storage_(true)
         , owned_completion_storage_(children.slots.size())
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)
@@ -2289,6 +2376,9 @@ public:
     firm(frame_storage_ref frames, firm_child_storage_ref children)
         : frames_(frames)
         , child_slots_(children.slots)
+        , owned_deed_storage_(children.slots.size())
+        , deed_records_(owned_deed_storage_.ref().records)
+        , uses_owned_deed_storage_(true)
         , owned_completion_storage_(children.slots.size())
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)
@@ -2306,6 +2396,9 @@ public:
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
+        , owned_deed_storage_(children.slots.size())
+        , deed_records_(owned_deed_storage_.ref().records)
+        , uses_owned_deed_storage_(true)
         , owned_completion_storage_(children.slots.size())
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)
@@ -2320,6 +2413,9 @@ public:
         firm_join_storage_ref join)
         : frames_(frames)
         , child_slots_(children.slots)
+        , owned_deed_storage_(children.slots.size())
+        , deed_records_(owned_deed_storage_.ref().records)
+        , uses_owned_deed_storage_(true)
         , owned_completion_storage_(children.slots.size())
         , completion_slots_(owned_completion_storage_.ref().completions)
         , uses_owned_completion_storage_(true)
@@ -2331,6 +2427,7 @@ public:
     explicit firm(firm_storage_ref storage)
         : frames_(storage.frames)
         , child_slots_(storage.children.slots)
+        , deed_records_(storage.deeds.records)
         , completion_slots_(storage.completions.completions)
         , join_failure_slots_(storage.joins.failures)
     {
@@ -2374,6 +2471,13 @@ public:
                 : other.child_slots_)
         , uses_owned_child_storage_(
             std::exchange(other.uses_owned_child_storage_, false))
+        , owned_deed_storage_(std::move(other.owned_deed_storage_))
+        , deed_records_(
+            other.uses_owned_deed_storage_
+                ? owned_deed_storage_.ref().records
+                : other.deed_records_)
+        , uses_owned_deed_storage_(
+            std::exchange(other.uses_owned_deed_storage_, false))
         , owned_completion_storage_(
             std::move(other.owned_completion_storage_))
         , completion_slots_(
@@ -2399,6 +2503,9 @@ public:
             std::exchange(other.completion_high_water_, 0))
         , completion_overflow_(
             std::exchange(other.completion_overflow_, false))
+        , deed_count_(std::exchange(other.deed_count_, 0))
+        , deed_high_water_(
+            std::exchange(other.deed_high_water_, 0))
         , child_count_(std::exchange(other.child_count_, 0))
         , child_high_water_(std::exchange(other.child_high_water_, 0))
         , stop_(std::move(other.stop_))
@@ -2407,6 +2514,7 @@ public:
         , stopping_(std::exchange(other.stopping_, false))
     {
         other.child_slots_ = {};
+        other.deed_records_ = {};
         other.completion_slots_ = {};
         other.join_failure_slots_ = {};
         debug_update();
@@ -2446,6 +2554,16 @@ public:
     [[nodiscard]] std::size_t child_high_water() const noexcept
     {
         return child_high_water_;
+    }
+
+    [[nodiscard]] std::size_t deed_capacity() const noexcept
+    {
+        return deed_records_.size();
+    }
+
+    [[nodiscard]] std::size_t deed_high_water() const noexcept
+    {
+        return deed_high_water_;
     }
 
     [[nodiscard]] std::size_t join_failure_capacity() const noexcept
@@ -2506,6 +2624,8 @@ public:
             throw runtime_error{"nxtrt firm fork used after stop"};
         if (child_count_ >= child_slots_.size())
             throw runtime_error{"nxtrt firm child storage is full"};
+        if (deed_count_ >= deed_records_.size())
+            throw runtime_error{"nxtrt firm deed record storage is full"};
 
         auto handle = child.release();
         if (!handle || handle.done())
@@ -2530,6 +2650,7 @@ public:
                 active_deck->enqueue(handle, &promise);
             result.state().record.child_task =
                 record->firm_record.task;
+            deed_records_[deed_count_] = result.state().record;
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
@@ -2540,6 +2661,8 @@ public:
 
         ++child_count_;
         child_high_water_ = std::max(child_high_water_, child_count_);
+        ++deed_count_;
+        deed_high_water_ = std::max(deed_high_water_, deed_count_);
         debug_update();
         return result;
     }
@@ -2680,6 +2803,9 @@ private:
     owned_firm_child_storage owned_child_storage_;
     std::span<detail::firm_child_slot> child_slots_;
     bool uses_owned_child_storage_ = false;
+    owned_firm_deed_storage owned_deed_storage_;
+    std::span<detail::deed_record_header> deed_records_;
+    bool uses_owned_deed_storage_ = false;
     owned_firm_completion_storage owned_completion_storage_;
     std::span<detail::child_completion> completion_slots_;
     bool uses_owned_completion_storage_ = false;
@@ -2691,6 +2817,8 @@ private:
     std::size_t completion_count_ = 0;
     std::size_t completion_high_water_ = 0;
     bool completion_overflow_ = false;
+    std::size_t deed_count_ = 0;
+    std::size_t deed_high_water_ = 0;
     std::size_t child_count_ = 0;
     std::size_t child_high_water_ = 0;
     std::stop_source stop_;
