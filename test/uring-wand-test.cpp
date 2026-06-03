@@ -442,10 +442,15 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = echo_over_socketpair(first.get(), second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return echo_over_socketpair(first.get(), second.get());
+                    },
+                };
 
-                deck.start(task);
-                auto echoed = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto echoed = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(echoed == "socket wish smoke");
             };
@@ -465,10 +470,15 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = read_socket_source_count(rx.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return read_socket_source_count(rx.get());
+                    },
+                };
 
-                deck.start(task);
-                auto result = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto result = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(result.first == "received");
                 expect(result.second == std::size_t{8});
@@ -484,12 +494,19 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = poll_after_socket_send(first.get(), second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return poll_after_socket_send(
+                            first.get(),
+                            second.get());
+                    },
+                };
 
-                deck.start(task);
-                uring_pump_until_done(deck, wand, task);
+                root.start();
+                uring_pump_until_done(deck, wand, root.inner());
 
-                expect(task.done());
+                expect(root.inner().done());
             };
 
             "loopback listeners accept connected clients"_test = [] {
@@ -504,16 +521,21 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = accept_one(listener.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return accept_one(listener.get());
+                    },
+                };
 
-                deck.start(task);
+                root.start();
                 if (::connect(
                         client.get(),
                         reinterpret_cast<sockaddr const *>(&address),
                         sizeof(address)) != 0)
                     throw std::runtime_error{"client connect failed"};
 
-                auto accepted = uring_pump_until_done(deck, wand, task);
+                auto accepted = uring_pump_until_done(deck, wand, root.inner());
                 expect(accepted.get() >= 0);
             };
         };
@@ -522,10 +544,15 @@ static suite uring_wand_tests{
             "statx wishes return file metadata"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = stat_current_directory();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return stat_current_directory();
+                    },
+                };
 
-                deck.start(task);
-                auto stat = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto stat = uring_pump_until_done(deck, wand, root.inner());
 
                 expect((stat.stx_mask & STATX_TYPE) != 0);
                 expect(S_ISDIR(stat.stx_mode));
@@ -534,10 +561,15 @@ static suite uring_wand_tests{
             "getdents64 wishes return directory entries"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = read_current_directory_names();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return read_current_directory_names();
+                    },
+                };
 
-                deck.start(task);
-                auto names = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto names = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(std::ranges::find(names, ".") != names.end());
                 expect(std::ranges::find(names, "..") != names.end());
@@ -546,10 +578,15 @@ static suite uring_wand_tests{
             "fs lists portable directory entries"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = nxtrt::fs::list_path(".");
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return nxtrt::fs::list_path(".");
+                    },
+                };
 
-                deck.start(task);
-                auto entries = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto entries = uring_pump_until_done(deck, wand, root.inner());
 
                 auto dot = std::ranges::find(
                     entries,
@@ -571,10 +608,15 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = write_to_fd(tx.get(), "wishful stdout");
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return write_to_fd(tx.get(), "wishful stdout");
+                    },
+                };
 
-                deck.start(task);
-                uring_pump_until_done(deck, wand, task);
+                root.start();
+                uring_pump_until_done(deck, wand, root.inner());
 
                 auto buffer = std::array<char, 32>{};
                 auto n = ::read(rx.get(), buffer.data(), buffer.size());
@@ -595,10 +637,20 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = write_with_socket_sink_count(tx.get(), "counted");
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return write_with_socket_sink_count(
+                            tx.get(),
+                            "counted");
+                    },
+                };
 
-                deck.start(task);
-                auto counted = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto counted = uring_pump_until_done(
+                    deck,
+                    wand,
+                    root.inner());
 
                 auto buffer = std::array<char, 32>{};
                 auto n = ::read(rx.get(), buffer.data(), buffer.size());
@@ -613,11 +665,16 @@ static suite uring_wand_tests{
             "subprocess capture drains stdout and stderr"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = capture_shell(
-                    "printf 'out'; printf 'err' >&2");
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return capture_shell(
+                            "printf 'out'; printf 'err' >&2");
+                    },
+                };
 
-                deck.start(task);
-                auto child = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto child = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 0_i);
@@ -629,10 +686,15 @@ static suite uring_wand_tests{
             "subprocess capture records nonzero exits"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = capture_shell("printf 'nope'; exit 7");
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return capture_shell("printf 'nope'; exit 7");
+                    },
+                };
 
-                deck.start(task);
-                auto child = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto child = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 7_i);
@@ -643,12 +705,17 @@ static suite uring_wand_tests{
             "subprocess capture does not inherit runtime stdin"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = capture_shell(
-                    "if read line; then printf 'stdin:%s' \"$line\"; "
-                    "else printf 'stdin-eof'; fi");
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return capture_shell(
+                            "if read line; then printf 'stdin:%s' \"$line\"; "
+                            "else printf 'stdin-eof'; fi");
+                    },
+                };
 
-                deck.start(task);
-                auto child = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto child = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 0_i);
@@ -659,10 +726,15 @@ static suite uring_wand_tests{
             "subprocess capture fails oversized output after draining"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = capture_shell("printf 'abcdefgh'; exit 7", 5);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return capture_shell("printf 'abcdefgh'; exit 7", 5);
+                    },
+                };
 
-                deck.start(task);
-                auto child = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto child = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(child.status.exited);
                 expect(child.status.exit_code == 7_i);
@@ -695,10 +767,15 @@ static suite uring_wand_tests{
             "subprocess children are signalled through pidfds"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = terminate_sleeping_shell();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return terminate_sleeping_shell();
+                    },
+                };
 
-                deck.start(task);
-                auto status = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto status = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(status.signaled);
                 expect(status.signal == SIGTERM);
@@ -707,10 +784,15 @@ static suite uring_wand_tests{
             "pty subprocesses run and wait through pidfds"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = run_shell_in_pty();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return run_shell_in_pty();
+                    },
+                };
 
-                deck.start(task);
-                auto status = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto status = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(status.exited);
                 expect(status.exit_code == 0_i);
@@ -720,9 +802,14 @@ static suite uring_wand_tests{
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
                 auto spawned = false;
-                auto task = cleanup_sleeping_shell_after_cancel(spawned);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return cleanup_sleeping_shell_after_cancel(spawned);
+                    },
+                };
 
-                deck.start(task);
+                root.start();
                 for (auto i = 0; i != 8 && !spawned; ++i) {
                     if (!deck.empty())
                         deck.run_ready();
@@ -731,8 +818,8 @@ static suite uring_wand_tests{
                 }
 
                 expect(spawned);
-                task.request_stop();
-                auto status = uring_pump_until_done(deck, wand, task);
+                root.inner().request_stop();
+                auto status = uring_pump_until_done(deck, wand, root.inner());
 
                 expect(status.signaled);
                 expect(status.signal == SIGTERM);
@@ -743,23 +830,33 @@ static suite uring_wand_tests{
             "timeout wishes complete"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = timeout_once();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return timeout_once();
+                    },
+                };
 
-                deck.start(task);
-                uring_pump_until_done(deck, wand, task);
+                root.start();
+                uring_pump_until_done(deck, wand, root.inner());
 
-                expect(task.done());
+                expect(root.inner().done());
             };
 
             "pending wishes wait for submission queue capacity"_test = [] {
                 auto wand = nxtrt::uring_wand{4};
                 auto deck = nxtrt::deck{&wand};
-                auto task = many_short_timeouts();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return many_short_timeouts();
+                    },
+                };
 
-                deck.start(task);
-                auto values = uring_pump_until_done(deck, wand, task);
+                root.start();
+                auto values = uring_pump_until_done(deck, wand, root.inner());
 
-                expect(task.done());
+                expect(root.inner().done());
                 expect(values.size() == std::size_t{32});
             };
 
@@ -773,13 +870,19 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task =
-                    poll_until_after_socket_send(first.get(), second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return poll_until_after_socket_send(
+                            first.get(),
+                            second.get());
+                    },
+                };
 
-                deck.start(task);
-                uring_pump_until_done(deck, wand, task);
+                root.start();
+                uring_pump_until_done(deck, wand, root.inner());
 
-                expect(task.done());
+                expect(root.inner().done());
             };
 
             "quiet watched fds time out"_test = [] {
@@ -792,12 +895,17 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = poll_until_timeout(second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return poll_until_timeout(second.get());
+                    },
+                };
 
-                deck.start(task);
-                uring_pump_until_done(deck, wand, task);
+                root.start();
+                uring_pump_until_done(deck, wand, root.inner());
 
-                expect(task.done());
+                expect(root.inner().done());
             };
 
             "poll wishes are cancelled when their task stops"_test = [] {
@@ -810,15 +918,20 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = poll_until_stopped(second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return poll_until_stopped(second.get());
+                    },
+                };
 
-                deck.start(task);
+                root.start();
                 deck.run_ready();
-                expect(!task.done());
+                expect(!root.inner().done());
 
-                task.request_stop();
-                wand.run_until_done(deck, task);
-                std::move(task).result();
+                root.inner().request_stop();
+                wand.run_until_done(deck, root.inner());
+                std::move(root.inner()).result();
             };
 
             "with_timeout returns when the body wins"_test = [] {
@@ -831,13 +944,19 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task =
-                    poll_after_send_with_timeout(first.get(), second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return poll_after_send_with_timeout(
+                            first.get(),
+                            second.get());
+                    },
+                };
 
-                deck.start(task);
-                uring_pump_until_done(deck, wand, task);
+                root.start();
+                uring_pump_until_done(deck, wand, root.inner());
 
-                expect(task.done());
+                expect(root.inner().done());
             };
 
             "with_timeout throws when the timer wins"_test = [] {
@@ -850,13 +969,18 @@ static suite uring_wand_tests{
 
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = poll_with_timeout(second.get());
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return poll_with_timeout(second.get());
+                    },
+                };
 
-                deck.start(task);
+                root.start();
 
                 auto timed_out = false;
                 try {
-                    uring_pump_until_done(deck, wand, task);
+                    uring_pump_until_done(deck, wand, root.inner());
                 } catch (const nxtrt::timeout_error &) {
                     timed_out = true;
                 }

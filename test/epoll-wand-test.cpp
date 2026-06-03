@@ -84,53 +84,73 @@ static suite epoll_wand_tests{
         "timeout wishes complete"_test = [] {
             auto wand = nxtrt::epoll_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = epoll_timeout_once();
+            auto root = nxtrt::root_task{
+                deck,
+                [] {
+                    return epoll_timeout_once();
+                },
+            };
 
-            deck.start(task);
-            epoll_pump_until_done(deck, wand, task);
+            root.start();
+            epoll_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "native poll-until reports readiness"_test = [] {
             auto sockets = make_epoll_socketpair();
             auto wand = nxtrt::epoll_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = epoll_poll_until_after_socket_send(
-                sockets[0].get(),
-                sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return epoll_poll_until_after_socket_send(
+                        sockets[0].get(),
+                        sockets[1].get());
+                },
+            };
 
-            deck.start(task);
-            epoll_pump_until_done(deck, wand, task);
+            root.start();
+            epoll_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "native poll-until times out"_test = [] {
             auto sockets = make_epoll_socketpair();
             auto wand = nxtrt::epoll_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = epoll_poll_until_timeout(sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return epoll_poll_until_timeout(sockets[1].get());
+                },
+            };
 
-            deck.start(task);
-            epoll_pump_until_done(deck, wand, task);
+            root.start();
+            epoll_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "poll wishes are cancelled when their task stops"_test = [] {
             auto sockets = make_epoll_socketpair();
             auto wand = nxtrt::epoll_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = epoll_poll_cancelled(sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return epoll_poll_cancelled(sockets[1].get());
+                },
+            };
 
-            deck.start(task);
+            root.start();
             deck.run_ready();
-            expect(!task.done());
+            expect(!root.inner().done());
 
-            task.request_stop();
-            wand.run_until_done(deck, task);
-            std::move(task).result();
+            root.inner().request_stop();
+            wand.run_until_done(deck, root.inner());
+            std::move(root.inner()).result();
         };
     }};
 

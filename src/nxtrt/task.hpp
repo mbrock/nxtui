@@ -2507,18 +2507,18 @@ inline task<void> firm::join()
         throw_exceptions("firm tasks failed", std::move(exceptions));
 }
 
-template<typename Fn>
-    requires stored_task_factory<std::decay_t<Fn>>
-[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
-with_firm(Fn && fn)
+namespace detail {
+
+template<stored_task_factory Fn>
+[[nodiscard]] task<stored_task_result_t<Fn>>
+with_firm_bound(Fn fn)
 {
-    using factory_type = std::decay_t<Fn>;
     auto firm_scope = firm{};
     if (auto * parent = current_firm())
         firm_scope.debug_parent(parent->debug_id());
     auto body = detail::run_firm_body(
         firm_scope,
-        factory_type{std::forward<Fn>(fn)});
+        std::move(fn));
     auto stop_firm = [&firm_scope] {
         firm_scope.stop();
     };
@@ -2529,7 +2529,7 @@ with_firm(Fn && fn)
         return std::move(body);
     };
 
-    if constexpr (std::is_void_v<stored_task_result_t<factory_type>>) {
+    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
         co_await with_env<firm_key>(&firm_scope, std::move(run_bound));
     } else {
         co_return co_await with_env<firm_key>(
@@ -2537,6 +2537,74 @@ with_firm(Fn && fn)
             std::move(run_bound));
     }
 }
+
+} // namespace detail
+
+template<typename Fn>
+    requires stored_task_factory<std::decay_t<Fn>>
+[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
+with_firm(Fn && fn)
+{
+    using factory_type = std::decay_t<Fn>;
+    return detail::with_firm_bound(
+        factory_type{std::forward<Fn>(fn)});
+}
+
+template<typename T>
+class root_task
+{
+public:
+    root_task() = delete;
+    root_task(const root_task &) = delete;
+    root_task & operator=(const root_task &) = delete;
+    root_task(root_task &&) = delete;
+    root_task & operator=(root_task &&) = delete;
+
+    template<typename Fn>
+        requires stored_task_factory<std::decay_t<Fn>>
+            && std::same_as<
+                stored_task_result_t<std::decay_t<Fn>>,
+                T>
+    root_task(deck & d, Fn && fn)
+        : deck_(&d)
+    {
+        using factory_type = std::decay_t<Fn>;
+        [[maybe_unused]] auto previous_root_firm =
+            env_.replace<firm_key>(&firm_);
+        auto root_guard = detail::env_guard{env_, &d, nullptr};
+        task_ = with_firm(factory_type{std::forward<Fn>(fn)});
+    }
+
+    void start()
+    {
+        deck_->start(task_);
+    }
+
+    [[nodiscard]] task<T> & inner() noexcept
+    {
+        return task_;
+    }
+
+    [[nodiscard]] const task<T> & inner() const noexcept
+    {
+        return task_;
+    }
+
+    [[nodiscard]] firm & root_firm() noexcept
+    {
+        return firm_;
+    }
+
+private:
+    firm firm_;
+    runtime_env env_;
+    task<T> task_;
+    deck * deck_ = nullptr;
+};
+
+template<typename Fn>
+root_task(deck &, Fn &&)
+    -> root_task<stored_task_result_t<std::decay_t<Fn>>>;
 
 template<task_factory Fn>
 [[nodiscard]] task_result_t<std::invoke_result_t<Fn>>

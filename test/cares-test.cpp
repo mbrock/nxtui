@@ -33,10 +33,18 @@ static suite dns_tests{
             "localhost resolves to IPv4 loopback"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = resolve_localhost();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return resolve_localhost();
+                    },
+                };
 
-                deck.start(task);
-                auto addresses = cares_pump_until_done(deck, wand, task);
+                root.start();
+                auto addresses = cares_pump_until_done(
+                    deck,
+                    wand,
+                    root.inner());
 
                 expect(!addresses.empty())
                     << "localhost should resolve to at least one address";

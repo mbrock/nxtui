@@ -902,6 +902,18 @@ nxtrt::task<void> record_after_yield(std::vector<int> & events, int value)
     events.push_back(value * 10 + 2);
 }
 
+nxtrt::task<int> root_task_probe(std::size_t & before, std::size_t & after)
+{
+    auto * firm = nxtrt::current_firm();
+    expect(firm != nullptr);
+    before = firm->frame_high_water();
+    auto child = []() -> nxtrt::task<int> {
+        co_return 9;
+    }();
+    after = firm->frame_high_water();
+    co_return co_await child;
+}
+
 nxtrt::task<void>
 record_next_wire_value(
     nxtrt::wire<int> & events,
@@ -1529,6 +1541,25 @@ static suite runtime_tests{
                 });
 
                 expect(after > before);
+            };
+
+            "root_task keeps a root firm for manually pumped tasks"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto before = std::size_t{};
+                auto after = std::size_t{};
+
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return root_task_probe(before, after);
+                    },
+                };
+
+                root.start();
+                deck.run_until_idle();
+
+                expect(after > before);
+                expect(std::move(root.inner()).result() == 9_i);
             };
 
             "resumes tasks awaiting children"_test = [] {
