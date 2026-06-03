@@ -2590,6 +2590,77 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{11, 12});
             };
 
+            "firm join storage reports borrowed failure overflow"_test = [] {
+                struct bounded_join_firm : nxtrt::firm
+                {
+                    bounded_join_firm(
+                        nxtrt::frame_storage_ref frames,
+                        nxtrt::firm_child_storage_ref children,
+                        nxtrt::firm_join_storage_ref joins,
+                        std::vector<int> & events,
+                        bool & overflowed,
+                        std::size_t & capacity,
+                        std::size_t & high_water)
+                        : nxtrt::firm(frames, children, joins)
+                        , events(&events)
+                        , overflowed(&overflowed)
+                        , capacity(&capacity)
+                        , high_water(&high_water)
+                    {}
+
+                    bounded_join_firm(bounded_join_firm &&) noexcept =
+                        default;
+                    bounded_join_firm & operator=(
+                        bounded_join_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        *capacity = join_failure_capacity();
+                        nxtrt::fork(throw_after_yield(*events, 1));
+                        nxtrt::fork(throw_after_yield(*events, 2));
+                        try {
+                            co_await nxtrt::join();
+                        } catch (const std::exception & e) {
+                            *overflowed =
+                                std::string_view{e.what()}.contains(
+                                    "firm join failure storage");
+                            *high_water = join_failure_high_water();
+                        }
+                    }
+
+                    std::vector<int> * events = nullptr;
+                    bool * overflowed = nullptr;
+                    std::size_t * capacity = nullptr;
+                    std::size_t * high_water = nullptr;
+                };
+
+                auto deck = nxtrt::deck{};
+                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
+                auto children = nxtrt::static_firm_child_storage<2>{};
+                auto joins = nxtrt::static_firm_join_storage<1>{};
+                auto events = std::vector<int>{};
+                auto overflowed = false;
+                auto capacity = std::size_t{};
+                auto high_water = std::size_t{};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await bounded_join_firm{
+                        frames,
+                        children,
+                        joins,
+                        events,
+                        overflowed,
+                        capacity,
+                        high_water,
+                    };
+                });
+
+                expect(overflowed);
+                expect(capacity == std::size_t{1});
+                expect(high_water == std::size_t{1});
+                expect(events == std::vector<int>{11, 21});
+            };
+
             "join forked tasks before the firm exits"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};

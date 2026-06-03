@@ -1508,6 +1508,37 @@ private:
     std::array<detail::firm_child_slot, N == 0 ? 1 : N> storage_{};
 };
 
+struct firm_join_storage_ref
+{
+    firm_join_storage_ref() = default;
+
+    explicit firm_join_storage_ref(
+        std::span<std::exception_ptr> failures)
+        : failures(failures)
+    {}
+
+    std::span<std::exception_ptr> failures;
+};
+
+template<std::size_t N>
+class static_firm_join_storage
+{
+public:
+    [[nodiscard]] firm_join_storage_ref ref() noexcept
+    {
+        return firm_join_storage_ref{
+            std::span<std::exception_ptr>{storage_.data(), N}};
+    }
+
+    [[nodiscard]] operator firm_join_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::array<std::exception_ptr, N == 0 ? 1 : N> storage_{};
+};
+
 namespace detail {
 
 struct alignas(std::max_align_t) task_frame_header
@@ -1719,6 +1750,13 @@ public:
                 default_child_capacity))
         , child_slots_(owned_child_storage_.get(), default_child_capacity)
         , uses_owned_child_storage_(true)
+        , owned_join_storage_(
+            std::make_unique<std::exception_ptr[]>(
+                default_child_capacity))
+        , join_failure_slots_(
+            owned_join_storage_.get(),
+            default_child_capacity)
+        , uses_owned_join_storage_(true)
     {
         register_debug();
     }
@@ -1730,6 +1768,13 @@ public:
                 default_child_capacity))
         , child_slots_(owned_child_storage_.get(), default_child_capacity)
         , uses_owned_child_storage_(true)
+        , owned_join_storage_(
+            std::make_unique<std::exception_ptr[]>(
+                default_child_capacity))
+        , join_failure_slots_(
+            owned_join_storage_.get(),
+            default_child_capacity)
+        , uses_owned_join_storage_(true)
     {
         register_debug();
     }
@@ -1739,6 +1784,13 @@ public:
         , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
+        , owned_join_storage_(
+            std::make_unique<std::exception_ptr[]>(
+                children.slots.size()))
+        , join_failure_slots_(
+            owned_join_storage_.get(),
+            children.slots.size())
+        , uses_owned_join_storage_(true)
     {
         register_debug();
     }
@@ -1746,6 +1798,36 @@ public:
     firm(frame_storage_ref frames, firm_child_storage_ref children)
         : frames_(frames)
         , child_slots_(children.slots)
+        , owned_join_storage_(
+            std::make_unique<std::exception_ptr[]>(
+                children.slots.size()))
+        , join_failure_slots_(
+            owned_join_storage_.get(),
+            children.slots.size())
+        , uses_owned_join_storage_(true)
+    {
+        register_debug();
+    }
+
+    firm(
+        firm_child_storage_ref children,
+        firm_join_storage_ref join)
+        : owned_frame_storage_(default_frame_capacity)
+        , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
+        , uses_owned_frame_storage_(true)
+        , child_slots_(children.slots)
+        , join_failure_slots_(join.failures)
+    {
+        register_debug();
+    }
+
+    firm(
+        frame_storage_ref frames,
+        firm_child_storage_ref children,
+        firm_join_storage_ref join)
+        : frames_(frames)
+        , child_slots_(children.slots)
+        , join_failure_slots_(join.failures)
     {
         register_debug();
     }
@@ -1789,6 +1871,19 @@ public:
                 : other.child_slots_)
         , uses_owned_child_storage_(
             std::exchange(other.uses_owned_child_storage_, false))
+        , owned_join_storage_(std::move(other.owned_join_storage_))
+        , join_failure_slots_(
+            other.uses_owned_join_storage_
+                ? std::span<std::exception_ptr>{
+                    owned_join_storage_.get(),
+                    other.join_failure_slots_.size()}
+                : other.join_failure_slots_)
+        , uses_owned_join_storage_(
+            std::exchange(other.uses_owned_join_storage_, false))
+        , join_failure_count_(
+            std::exchange(other.join_failure_count_, 0))
+        , join_failure_high_water_(
+            std::exchange(other.join_failure_high_water_, 0))
         , child_count_(std::exchange(other.child_count_, 0))
         , child_high_water_(std::exchange(other.child_high_water_, 0))
         , stop_(std::move(other.stop_))
@@ -1797,6 +1892,7 @@ public:
         , stopping_(std::exchange(other.stopping_, false))
     {
         other.child_slots_ = {};
+        other.join_failure_slots_ = {};
         debug_update();
     }
     firm & operator=(firm &&) = delete;
@@ -1834,6 +1930,16 @@ public:
     [[nodiscard]] std::size_t child_high_water() const noexcept
     {
         return child_high_water_;
+    }
+
+    [[nodiscard]] std::size_t join_failure_capacity() const noexcept
+    {
+        return join_failure_slots_.size();
+    }
+
+    [[nodiscard]] std::size_t join_failure_high_water() const noexcept
+    {
+        return join_failure_high_water_;
     }
 
     void stop() noexcept
@@ -1980,12 +2086,49 @@ private:
             std::invoke(fn, *child_slots_[i].record);
     }
 
+    void remember_join_failure(std::exception_ptr failure)
+    {
+        if (join_failure_count_ >= join_failure_slots_.size())
+            throw runtime_error{
+                "nxtrt firm join failure storage is full"};
+        join_failure_slots_[join_failure_count_++] = std::move(failure);
+        join_failure_high_water_ =
+            std::max(join_failure_high_water_, join_failure_count_);
+    }
+
+    void clear_join_failures() noexcept
+    {
+        for (auto i = std::size_t{0}; i < join_failure_count_; ++i)
+            join_failure_slots_[i] = {};
+        join_failure_count_ = 0;
+    }
+
+    [[noreturn]] void throw_join_failures()
+    {
+        if (join_failure_count_ == 0)
+            throw logic_error{
+                "nxtrt firm throw_join_failures called without failures"};
+        if (join_failure_count_ == 1)
+            rethrow(join_failure_slots_[0]);
+
+        auto exceptions = std::vector<std::exception_ptr>{};
+        exceptions.reserve(join_failure_count_);
+        for (auto i = std::size_t{0}; i < join_failure_count_; ++i)
+            exceptions.push_back(join_failure_slots_[i]);
+        throw exception_group{"firm tasks failed", std::move(exceptions)};
+    }
+
     std::vector<std::byte> owned_frame_storage_;
     firm_frame_arena frames_;
     bool uses_owned_frame_storage_ = false;
     std::unique_ptr<detail::firm_child_slot[]> owned_child_storage_;
     std::span<detail::firm_child_slot> child_slots_;
     bool uses_owned_child_storage_ = false;
+    std::unique_ptr<std::exception_ptr[]> owned_join_storage_;
+    std::span<std::exception_ptr> join_failure_slots_;
+    bool uses_owned_join_storage_ = false;
+    std::size_t join_failure_count_ = 0;
+    std::size_t join_failure_high_water_ = 0;
     std::size_t child_count_ = 0;
     std::size_t child_high_water_ = 0;
     std::stop_source stop_;
@@ -2963,10 +3106,22 @@ template<typename Firm>
 
 inline task<void> firm::join()
 {
-    auto exceptions = std::vector<std::exception_ptr>{};
+    struct join_failure_guard
+    {
+        firm * owner = nullptr;
+
+        ~join_failure_guard() noexcept
+        {
+            if (owner != nullptr)
+                owner->clear_join_failures();
+        }
+    };
+
+    auto failure_guard = join_failure_guard{this};
     for (auto i = std::size_t{0}; i < child_count_; ++i) {
         auto & record = child_slots_[i].record;
         auto failure = std::exception_ptr{};
+        auto collect_failure = std::exception_ptr{};
         try {
             auto & child = *record;
             co_await child.join();
@@ -2979,18 +3134,20 @@ inline task<void> firm::join()
                 if (failure
                     && !(stop_requested()
                          && is_operation_cancelled(failure)))
-                    exceptions.push_back(failure);
+                    collect_failure = failure;
             }
         } catch (...) {
             failure = std::current_exception();
             report_child_finished(*record, failure);
             if (!(stop_requested() && is_operation_cancelled(failure)))
-                exceptions.push_back(failure);
+                collect_failure = failure;
         }
+        if (collect_failure)
+            remember_join_failure(std::move(collect_failure));
     }
 
-    if (!exceptions.empty())
-        throw_exceptions("firm tasks failed", std::move(exceptions));
+    if (join_failure_count_ != 0)
+        throw_join_failures();
 }
 
 namespace detail {

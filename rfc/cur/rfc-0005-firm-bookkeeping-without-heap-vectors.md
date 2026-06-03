@@ -28,6 +28,12 @@ implementation replaced the heap-growing child vector with bounded child slots:
 inline storage for one child record, and a deed carries separate result state
 rather than sharing ownership of the child record itself.
 
+Join failure collection now has the same bounded-storage shape:
+`firm_join_storage_ref` and `static_firm_join_storage<N>` provide explicit
+slots for the exception pointers observed while `join()` drains children. The
+runtime still materializes an `exception_group` when throwing multiple failures,
+but the live join bookkeeping is no longer a growable vector.
+
 The current deed result state is inline in the deed handle and move-stable:
 when the handle moves, the child record is retargeted to the new result slot.
 That is still only the first result-slot shape, but the important semantic split
@@ -153,6 +159,7 @@ The first version can use fixed-capacity arrays over borrowed storage:
 firm_child_record children[N]
 firm_deed_record deeds[M]
 child_completion completions[K]
+join_failure exceptions[J]
 ```
 
 Later versions can use the extracted ring geometry from
