@@ -246,6 +246,14 @@ timer task, so whichever one completes first can stop the sibling through the
 firm child set. Plain `with_firm` remains different on purpose: its body is the
 scope manager, not automatically one of the managed child tasks.
 
+Future helpers should apply the same distinction. A helper that merely creates
+a structured scope can keep its body as the firm manager. A helper that races,
+times out, streams, or otherwise lets one sibling stop another should fork the
+main work as an explicit child. Channel pumps and pushfeed coordination belong
+to [RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md), and
+higher-level value composition belongs to [RFC 0014](../new/rfc-0014-idea-algebra.md);
+they should reuse this rule rather than adding new firm bookkeeping machinery.
+
 ## Storage Shape
 
 The first version can use fixed-capacity arrays over borrowed storage:
@@ -312,10 +320,13 @@ side of the same bookkeeping as a feed of child completions.
 [RFC 0007](rfc-0007-ring-geometry-extraction.md) provides reusable bounded
 storage machinery for queues and free lists.
 
-## Open Questions
+## Deferred Work
 
-- Which future helpers or channel pumps need their main body turned into an
-  explicit child?
+- Add reusable free-list policies for firm-local cells only after result,
+  frame, and deed observation lifetimes make per-cell reuse mechanically
+  obvious.
+- Apply the main-work-as-child rule in future channel pumps and idea-algebra
+  helpers when those APIs are introduced.
 
 ## References
 
