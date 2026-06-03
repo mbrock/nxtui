@@ -209,6 +209,13 @@ That distinction matters for helpers such as `wait_any`, `with_timeout`, and
 future channel pumps. The work that can be cancelled by a sibling must be in
 the same child set the sibling can stop.
 
+The current helper audit matches that rule. `wait_any`, `wait_any_range`,
+`when_all`, and `when_all_range` build a policy firm and fork the candidate
+tasks before joining. `with_timeout` similarly forks both the body task and the
+timer task, so whichever one completes first can stop the sibling through the
+firm child set. Plain `with_firm` remains different on purpose: its body is the
+scope manager, not automatically one of the managed child tasks.
+
 ## Storage Shape
 
 The first version can use fixed-capacity arrays over borrowed storage:
@@ -263,7 +270,8 @@ storage machinery for queues and free lists.
 - Which APIs need deed-record capacity to differ from child capacity? The first
   default is one issued-deed record per child slot.
 - How should child result destruction interact with frame reuse?
-- Which current helpers need their main body turned into an explicit child?
+- Which future helpers or channel pumps need their main body turned into an
+  explicit child?
 
 ## References
 
