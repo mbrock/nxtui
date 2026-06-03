@@ -44,6 +44,11 @@ Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no
 longer owns a type-erased completion callable just to notify the firm.
 
+Task cancellation bookkeeping has started moving the same way. Parent-stop
+propagation and parked-wish cancellation now use concrete in-promise
+`std::stop_callback` slots instead of heap-allocated, type-erased callback
+boxes.
+
 If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
 the records that describe those children should become firm-local as well.
 

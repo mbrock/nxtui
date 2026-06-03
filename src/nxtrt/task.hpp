@@ -45,8 +45,21 @@ namespace detail {
 
 void * allocate_task_frame(std::size_t size);
 void deallocate_task_frame(void * ptr, std::size_t size) noexcept;
+struct promise_base;
 struct child_record_base;
 struct deed_result_state_base;
+struct parent_stop_callback_fn
+{
+    promise_base * child = nullptr;
+    void operator()() const noexcept;
+};
+
+struct wait_stop_callback_fn
+{
+    wand * owner = nullptr;
+    coin_t token;
+    void operator()() const noexcept;
+};
 
 /// Shared promise state for every `task<T>`.
 ///
@@ -57,8 +70,10 @@ struct deed_result_state_base;
 /// what happens at initial and final suspension points.
 struct promise_base
 {
-    using stop_callback_type =
-        std::stop_callback<std::function<void()>>;
+    using parent_stop_callback_type =
+        std::stop_callback<parent_stop_callback_fn>;
+    using wait_stop_callback_type =
+        std::stop_callback<wait_stop_callback_fn>;
 
     /// Awaited by the compiler when the coroutine body reaches its end.
     ///
@@ -139,12 +154,9 @@ struct promise_base
         if (!token.stop_possible())
             return;
 
-        parent_stop_callback =
-            std::make_unique<stop_callback_type>(
-                token,
-                [this] {
-                    request_stop();
-                });
+        parent_stop_callback.emplace(
+            token,
+            parent_stop_callback_fn{this});
     }
 
     void cancel_wait_on_stop(wand & w, coin_t token)
@@ -154,12 +166,9 @@ struct promise_base
         if (!stop.stop_possible())
             return;
 
-        wait_stop_callback =
-            std::make_unique<stop_callback_type>(
-                stop,
-                [&w, token] {
-                    w.cancel(token);
-                });
+        wait_stop_callback.emplace(
+            stop,
+            wait_stop_callback_fn{&w, token});
     }
 
     void clear_wait_stop_callback() noexcept
@@ -220,15 +229,27 @@ struct promise_base
     /// Promise-owned ambient environment captured by this coroutine frame.
     runtime_env env;
     /// Propagates stop from the task awaiting this task.
-    std::unique_ptr<stop_callback_type> parent_stop_callback;
+    std::optional<parent_stop_callback_type> parent_stop_callback;
     /// Cancels the current parked wish when this task is stopped.
-    std::unique_ptr<stop_callback_type> wait_stop_callback;
+    std::optional<wait_stop_callback_type> wait_stop_callback;
     /// Optional firm child record to notify when this task reaches final suspend.
     child_record_base * completion_child = nullptr;
 
 private:
     std::stop_source stop_;
 };
+
+inline void parent_stop_callback_fn::operator()() const noexcept
+{
+    if (child != nullptr)
+        child->request_stop();
+}
+
+inline void wait_stop_callback_fn::operator()() const noexcept
+{
+    if (owner != nullptr)
+        owner->cancel(token);
+}
 
 /// Promise for non-void task results.
 template<typename T>
