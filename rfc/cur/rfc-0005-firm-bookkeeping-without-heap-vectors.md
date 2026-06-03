@@ -62,6 +62,8 @@ when the handle moves, the child record is retargeted to the new result slot.
 That is still only the first result-slot shape, but the important semantic split
 has landed. The firm owns settlement records. A deed owns or names the selected
 result after evacuation.
+The deed state also remembers the deck-assigned `task_id` of the child it
+observes, so a deed can name the child without owning the child record.
 
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no
@@ -114,6 +116,9 @@ deeds observe tasks.
 
 A `deed<T>` should be an RAII handle naming a forked child and, optionally,
 the storage where that child's result should be preserved after final suspend.
+Today that handle already exposes the child's `task_id`; the remaining work is
+to decide whether the deed record itself is inline in the handle, firm-local,
+or a small borrowed record that the handle names.
 
 If a deed remains alive, the child result can be moved into deed-owned or
 deed-named storage at final suspend. If the deed is gone and no one will

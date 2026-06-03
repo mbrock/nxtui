@@ -2990,8 +2990,10 @@ static suite runtime_tests{
                 {
                     task_id_observer_firm(
                         std::vector<nxtrt::task_id> & running_ids,
+                        std::vector<nxtrt::task_id> & deed_ids,
                         std::vector<nxtrt::task_id> & completed_ids)
                         : running_ids(&running_ids)
+                        , deed_ids(&deed_ids)
                         , completed_ids(&completed_ids)
                     {}
 
@@ -3002,9 +3004,10 @@ static suite runtime_tests{
 
                     nxtrt::task<void> operator()()
                     {
-                        nxtrt::fork(
+                        auto child = nxtrt::fork(
                             record_current_task_id_after_yield(
                                 *running_ids));
+                        deed_ids->push_back(child.child_task_id());
                         co_await nxtrt::join();
                     }
 
@@ -3018,23 +3021,28 @@ static suite runtime_tests{
 
                 private:
                     std::vector<nxtrt::task_id> * running_ids = nullptr;
+                    std::vector<nxtrt::task_id> * deed_ids = nullptr;
                     std::vector<nxtrt::task_id> * completed_ids = nullptr;
                 };
 
                 auto deck = nxtrt::deck{};
                 auto running_ids = std::vector<nxtrt::task_id>{};
+                auto deed_ids = std::vector<nxtrt::task_id>{};
                 auto completed_ids = std::vector<nxtrt::task_id>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     co_await task_id_observer_firm{
                         running_ids,
+                        deed_ids,
                         completed_ids,
                     };
                 });
 
                 expect(running_ids.size() == std::size_t{1});
+                expect(deed_ids.size() == std::size_t{1});
                 expect(completed_ids.size() == std::size_t{1});
                 expect(static_cast<bool>(running_ids.front()));
+                expect(deed_ids.front() == running_ids.front());
                 expect(completed_ids.front() == running_ids.front());
             };
 
@@ -3175,12 +3183,15 @@ static suite runtime_tests{
                             []() -> nxtrt::task<nxtrt::deed<int>> {
                                 auto first =
                                     nxtrt::fork(value_after_yield(77));
+                                auto id = first.child_task_id();
                                 auto second = std::move(first);
+                                expect(second.child_task_id() == id);
                                 co_await nxtrt::join();
                                 co_return std::move(second);
                             });
                     });
 
+                expect(static_cast<bool>(child.child_task_id()));
                 expect(std::move(child).get() == 77_i);
             };
 
@@ -3312,6 +3323,7 @@ static suite runtime_tests{
                             });
                     });
 
+                expect(static_cast<bool>(child.child_task_id()));
                 auto result = std::move(child).get();
                 expect(!result.has_value());
             };
@@ -3334,6 +3346,7 @@ static suite runtime_tests{
                             });
                     });
 
+                expect(static_cast<bool>(child.child_task_id()));
                 auto result = std::move(child).get();
                 expect(result.has_value());
                 expect(*result == 99_i);

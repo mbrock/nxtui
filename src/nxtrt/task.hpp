@@ -862,6 +862,7 @@ struct deed_result_state_base
         const deed_result_state_base &) = delete;
     deed_result_state_base(deed_result_state_base && other) noexcept
         : child(std::exchange(other.child, nullptr))
+        , child_task(std::exchange(other.child_task, {}))
     {
         if (child != nullptr)
             child->replace_result_state(&other, this);
@@ -874,6 +875,7 @@ struct deed_result_state_base
             return *this;
         detach();
         child = std::exchange(other.child, nullptr);
+        child_task = std::exchange(other.child_task, {});
         if (child != nullptr)
             child->replace_result_state(&other, this);
         return *this;
@@ -900,6 +902,7 @@ struct deed_result_state_base
     }
 
     child_record_base * child = nullptr;
+    task_id child_task;
 };
 
 template<typename T>
@@ -1416,6 +1419,11 @@ public:
         return state().observe_exception();
     }
 
+    [[nodiscard]] task_id child_task_id() const
+    {
+        return state().child_task;
+    }
+
     [[nodiscard]] T get() &&
     {
         return state().take_result();
@@ -1466,6 +1474,11 @@ public:
     [[nodiscard]] std::exception_ptr exception() const
     {
         return state().observe_exception();
+    }
+
+    [[nodiscard]] task_id child_task_id() const
+    {
+        return state().child_task;
     }
 
     void get() &&
@@ -1968,6 +1981,13 @@ public:
         }
     }
 
+    [[nodiscard]] task_id child_task_id() const
+    {
+        if (!state_)
+            throw runtime_error{"nxtrt empty catching_deed handle"};
+        return state_->child_task;
+    }
+
 private:
     friend class deed<T>;
 
@@ -2017,6 +2037,13 @@ public:
         } catch (...) {
             return std::unexpected{std::current_exception()};
         }
+    }
+
+    [[nodiscard]] task_id child_task_id() const
+    {
+        if (!state_)
+            throw runtime_error{"nxtrt empty catching_deed handle"};
+        return state_->child_task;
     }
 
 private:
@@ -2352,6 +2379,7 @@ public:
             promise.observe_completion_of(*record);
             record->firm_record.task =
                 active_deck->enqueue(handle, &promise);
+            result.state().child_task = record->firm_record.task;
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
