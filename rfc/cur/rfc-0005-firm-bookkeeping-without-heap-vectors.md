@@ -155,6 +155,13 @@ task evacuates its result out of the coroutine frame into that slot if the deed
 is still present. After evacuation, the frame can be destroyed according to
 firm settlement rules without losing the selected result.
 
+In the current implementation, result evacuation and frame reuse are separate
+events. Evacuation moves or reports the typed result into the deed slot, then
+destroys the coroutine frame. The first firm frame arena remains monotonic:
+destroying the frame runs destructors and unregisters runtime state, but it
+does not make those arena bytes available to a later child until the whole firm
+settles or a future arena policy chooses explicit reuse.
+
 This separates two ideas that are currently intertwined:
 
 ```text
@@ -269,7 +276,8 @@ storage machinery for queues and free lists.
   storage and caller-provided `T *` targets?
 - Which APIs need deed-record capacity to differ from child capacity? The first
   default is one issued-deed record per child slot.
-- How should child result destruction interact with frame reuse?
+- Should later frame arenas reuse destroyed child frames before firm
+  settlement, or should the default remain monotonic until the firm settles?
 - Which future helpers or channel pumps need their main body turned into an
   explicit child?
 
