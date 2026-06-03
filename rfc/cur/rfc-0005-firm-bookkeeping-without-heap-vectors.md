@@ -71,7 +71,9 @@ result was already taken. Typed result storage has also been named as a
 and non-void deeds can now redirect evacuation into caller-provided storage via
 `deed<T>::store_result_in(T&)` when `T` is assignable. That implements the
 first `T`/`T *` result-target shape without yet moving deed records into
-firm-local storage.
+firm-local storage. The generic metadata has also been named as
+`deed_record_header`, separate from typed result slots, so the eventual
+firm-local or borrowed deed record has a clear header shape.
 
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no

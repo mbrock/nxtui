@@ -854,6 +854,15 @@ inline void promise_base::run_completion_callback() noexcept
     completion_child->report_finished_from_promise();
 }
 
+struct deed_record_header
+{
+    child_record_base * child = nullptr;
+    task_id child_task;
+    bool contained = false;
+    bool observed = false;
+    bool result_taken = false;
+};
+
 struct deed_result_state_base
 {
     deed_result_state_base() = default;
@@ -861,14 +870,17 @@ struct deed_result_state_base
     deed_result_state_base & operator=(
         const deed_result_state_base &) = delete;
     deed_result_state_base(deed_result_state_base && other) noexcept
-        : child(std::exchange(other.child, nullptr))
-        , child_task(std::exchange(other.child_task, {}))
-        , contained(std::exchange(other.contained, false))
-        , observed(std::exchange(other.observed, false))
-        , result_taken(std::exchange(other.result_taken, false))
+        : record{
+              .child = std::exchange(other.record.child, nullptr),
+              .child_task = std::exchange(other.record.child_task, {}),
+              .contained = std::exchange(other.record.contained, false),
+              .observed = std::exchange(other.record.observed, false),
+              .result_taken =
+                  std::exchange(other.record.result_taken, false),
+          }
     {
-        if (child != nullptr)
-            child->replace_result_state(&other, this);
+        if (record.child != nullptr)
+            record.child->replace_result_state(&other, this);
     }
 
     deed_result_state_base & operator=(
@@ -877,13 +889,15 @@ struct deed_result_state_base
         if (this == &other)
             return *this;
         detach();
-        child = std::exchange(other.child, nullptr);
-        child_task = std::exchange(other.child_task, {});
-        contained = std::exchange(other.contained, false);
-        observed = std::exchange(other.observed, false);
-        result_taken = std::exchange(other.result_taken, false);
-        if (child != nullptr)
-            child->replace_result_state(&other, this);
+        record.child = std::exchange(other.record.child, nullptr);
+        record.child_task = std::exchange(other.record.child_task, {});
+        record.contained =
+            std::exchange(other.record.contained, false);
+        record.observed = std::exchange(other.record.observed, false);
+        record.result_taken =
+            std::exchange(other.record.result_taken, false);
+        if (record.child != nullptr)
+            record.child->replace_result_state(&other, this);
         return *this;
     }
 
@@ -894,24 +908,20 @@ struct deed_result_state_base
 
     void detach() noexcept
     {
-        if (child == nullptr)
+        if (record.child == nullptr)
             return;
-        auto * old_child = child;
-        child = nullptr;
+        auto * old_child = record.child;
+        record.child = nullptr;
         old_child->drop_result_state(this);
     }
 
     void ensure_ready_from_child()
     {
-        if (child != nullptr && child->done())
-            child->evacuate_result_if_done();
+        if (record.child != nullptr && record.child->done())
+            record.child->evacuate_result_if_done();
     }
 
-    child_record_base * child = nullptr;
-    task_id child_task;
-    bool contained = false;
-    bool observed = false;
-    bool result_taken = false;
+    deed_record_header record;
 };
 
 template<typename T>
@@ -1089,23 +1099,23 @@ struct deed_result_state final : deed_result_state_base
 
     [[nodiscard]] std::exception_ptr observe_exception()
     {
-        observed = true;
+        record.observed = true;
         return failure();
     }
 
     [[nodiscard]] T take_result()
     {
         ensure_done();
-        if (result_taken)
+        if (record.result_taken)
             throw runtime_error{"nxtrt deed result already taken"};
-        observed = true;
-        result_taken = true;
+        record.observed = true;
+        record.result_taken = true;
         return slot.take_result();
     }
 
     void store_result_in(stored_type & target)
     {
-        if (result_taken)
+        if (record.result_taken)
             throw runtime_error{"nxtrt deed result already taken"};
         if (!ready())
             ensure_ready_from_child();
@@ -1154,17 +1164,17 @@ struct deed_result_state<void> final : deed_result_state_base
 
     [[nodiscard]] std::exception_ptr observe_exception()
     {
-        observed = true;
+        record.observed = true;
         return failure();
     }
 
     void take_result()
     {
         ensure_done();
-        if (result_taken)
+        if (record.result_taken)
             throw runtime_error{"nxtrt deed result already taken"};
-        observed = true;
-        result_taken = true;
+        record.observed = true;
+        record.result_taken = true;
         slot.take_result();
     }
 
@@ -1185,13 +1195,13 @@ struct child_record final : child_record_base
     {
         this->firm_record.owner = &owner;
         if (this->result != nullptr)
-            this->result->child = this;
+            this->result->record.child = this;
     }
 
     ~child_record() override
     {
         if (result != nullptr)
-            result->child = nullptr;
+            result->record.child = nullptr;
         destroy_frame();
     }
 
@@ -1236,12 +1246,12 @@ struct child_record final : child_record_base
 
     [[nodiscard]] bool result_contained() const noexcept override
     {
-        return result != nullptr && result->contained;
+        return result != nullptr && result->record.contained;
     }
 
     [[nodiscard]] bool result_observed() const noexcept override
     {
-        return result != nullptr && result->observed;
+        return result != nullptr && result->record.observed;
     }
 
     [[nodiscard]] bool result_exported() const noexcept override
@@ -1299,7 +1309,7 @@ struct child_record final : child_record_base
         }
         evacuated_ = true;
         if (result != nullptr)
-            result->child = nullptr;
+            result->record.child = nullptr;
         destroy_frame();
     }
 
@@ -1335,13 +1345,13 @@ struct child_record<void> final : child_record_base
     {
         this->firm_record.owner = &owner;
         if (this->result != nullptr)
-            this->result->child = this;
+            this->result->record.child = this;
     }
 
     ~child_record() override
     {
         if (result != nullptr)
-            result->child = nullptr;
+            result->record.child = nullptr;
         destroy_frame();
     }
 
@@ -1386,12 +1396,12 @@ struct child_record<void> final : child_record_base
 
     [[nodiscard]] bool result_contained() const noexcept override
     {
-        return result != nullptr && result->contained;
+        return result != nullptr && result->record.contained;
     }
 
     [[nodiscard]] bool result_observed() const noexcept override
     {
-        return result != nullptr && result->observed;
+        return result != nullptr && result->record.observed;
     }
 
     [[nodiscard]] bool result_exported() const noexcept override
@@ -1448,7 +1458,7 @@ struct child_record<void> final : child_record_base
         }
         evacuated_ = true;
         if (result != nullptr)
-            result->child = nullptr;
+            result->record.child = nullptr;
         destroy_frame();
     }
 
@@ -1553,7 +1563,7 @@ public:
 
     [[nodiscard]] task_id child_task_id() const
     {
-        return state().child_task;
+        return state().record.child_task;
     }
 
     deed & store_result_in(std::remove_cv_t<T> & target)
@@ -1617,7 +1627,7 @@ public:
 
     [[nodiscard]] task_id child_task_id() const
     {
-        return state().child_task;
+        return state().record.child_task;
     }
 
     void get() &&
@@ -2124,7 +2134,7 @@ public:
     {
         if (!state_)
             throw runtime_error{"nxtrt empty catching_deed handle"};
-        return state_->child_task;
+        return state_->record.child_task;
     }
 
 private:
@@ -2182,7 +2192,7 @@ public:
     {
         if (!state_)
             throw runtime_error{"nxtrt empty catching_deed handle"};
-        return state_->child_task;
+        return state_->record.child_task;
     }
 
 private:
@@ -2207,7 +2217,7 @@ inline catching_deed<T> deed<T>::cope() &&
 {
     if (!state_)
         throw runtime_error{"nxtrt empty deed handle"};
-    state_->contained = true;
+    state_->record.contained = true;
     auto result = catching_deed<T>{std::move(*state_)};
     state_.reset();
     return result;
@@ -2217,7 +2227,7 @@ inline catching_deed<void> deed<void>::cope() &&
 {
     if (!state_)
         throw runtime_error{"nxtrt empty deed handle"};
-    state_->contained = true;
+    state_->record.contained = true;
     auto result = catching_deed<void>{std::move(*state_)};
     state_.reset();
     return result;
@@ -2518,7 +2528,8 @@ public:
             promise.observe_completion_of(*record);
             record->firm_record.task =
                 active_deck->enqueue(handle, &promise);
-            result.state().child_task = record->firm_record.task;
+            result.state().record.child_task =
+                record->firm_record.task;
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
