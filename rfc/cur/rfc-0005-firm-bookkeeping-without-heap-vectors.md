@@ -256,6 +256,13 @@ Overflow is a real condition and should be reported as structured diagnostics:
 - current task id;
 - suggested storage class if available.
 
+The current constructor policy keeps the common path compact. Convenience firm
+constructors derive deed-record, completion, and join-failure capacities from
+the child-record capacity. When a caller wants those capacities to differ, the
+explicit path is the aggregate `firm_storage_ref` /
+`static_firm_storage<FrameBytes, Children, JoinFailures, Completions, Deeds>`
+bundle, where each region is visible and separately sized.
+
 ## Invariants
 
 A child task belongs to exactly one firm.
@@ -285,8 +292,8 @@ storage machinery for queues and free lists.
 - Should firms provide typed result-storage pools that lend
   `deed_result_storage<T>` cells, or should callers continue granting those
   cells explicitly?
-- Which APIs need deed-record capacity to differ from child capacity? The first
-  default is one issued-deed record per child slot.
+- Do direct firm constructors need a separate deed-record storage overload, or
+  is the aggregate `firm_storage_ref` path enough for differing capacities?
 - Should later frame arenas reuse destroyed child frames before firm
   settlement, or should the default remain monotonic until the firm settles?
 - Which future helpers or channel pumps need their main body turned into an
