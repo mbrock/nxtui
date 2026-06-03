@@ -2317,6 +2317,85 @@ static suite runtime_tests{
                 expect(seen);
             };
 
+            "firm frame land backs tasks created inside the firm"_test = [] {
+                struct frame_probe_firm : nxtrt::firm
+                {
+                    frame_probe_firm(
+                        nxtrt::frame_storage_ref storage,
+                        std::size_t & initial_high_water,
+                        std::size_t & child_high_water)
+                        : nxtrt::firm(storage)
+                        , initial_high_water(&initial_high_water)
+                        , child_high_water(&child_high_water)
+                    {}
+
+                    frame_probe_firm(frame_probe_firm &&) noexcept = default;
+                    frame_probe_firm & operator=(frame_probe_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        *initial_high_water = frame_high_water();
+                        auto child = []() -> nxtrt::task<void> {
+                            co_return;
+                        }();
+                        *child_high_water = frame_high_water();
+                        nxtrt::fork(std::move(child));
+                        co_await nxtrt::join();
+                    }
+
+                    std::size_t * initial_high_water = nullptr;
+                    std::size_t * child_high_water = nullptr;
+                };
+
+                auto deck = nxtrt::deck{};
+                auto storage = nxtrt::static_frame_storage<64 * 1024>{};
+                auto initial_high_water = std::size_t{};
+                auto child_high_water = std::size_t{};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await frame_probe_firm{
+                        storage,
+                        initial_high_water,
+                        child_high_water,
+                    };
+                });
+
+                expect(initial_high_water > std::size_t{0});
+                expect(child_high_water > initial_high_water);
+            };
+
+            "firm frame land reports borrowed storage overflow"_test = [] {
+                struct overflowing_firm : nxtrt::firm
+                {
+                    explicit overflowing_firm(nxtrt::frame_storage_ref storage)
+                        : nxtrt::firm(storage)
+                    {}
+
+                    overflowing_firm(overflowing_firm &&) noexcept = default;
+                    overflowing_firm & operator=(overflowing_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        co_return;
+                    }
+                };
+
+                auto deck = nxtrt::deck{};
+                auto storage = nxtrt::static_frame_storage<1>{};
+                auto failed = false;
+
+                try {
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await overflowing_firm{storage};
+                    });
+                } catch (const std::exception & e) {
+                    failed = std::string_view{e.what()}.contains(
+                        "firm frame arena");
+                }
+
+                expect(failed);
+            };
+
             "join forked tasks before the firm exits"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};

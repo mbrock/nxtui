@@ -10,6 +10,8 @@
 #include "nxtrt/wish.hpp"
 #include "nxtrt/wish_ops.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <coroutine>
@@ -19,8 +21,10 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <type_traits>
@@ -38,6 +42,9 @@ template<typename T>
 class catching_deed;
 
 namespace detail {
+
+void * allocate_task_frame(std::size_t size);
+void deallocate_task_frame(void * ptr, std::size_t size) noexcept;
 
 /// Shared promise state for every `task<T>`.
 ///
@@ -83,6 +90,16 @@ struct promise_base
     {
         if (auto * current = detail::current_env)
             env.copy_entries_from(*current);
+    }
+
+    [[nodiscard]] static void * operator new(std::size_t size)
+    {
+        return allocate_task_frame(size);
+    }
+
+    static void operator delete(void * ptr, std::size_t size) noexcept
+    {
+        deallocate_task_frame(ptr, size);
     }
 
     /// Called by the compiler before running the coroutine body.
@@ -777,6 +794,8 @@ struct child_record_base
 
     [[nodiscard]] virtual bool done() const noexcept = 0;
     [[nodiscard]] virtual bool joined() const noexcept = 0;
+    [[nodiscard]] virtual std::exception_ptr completion_failure()
+        noexcept = 0;
     [[nodiscard]] virtual std::exception_ptr failure() = 0;
     [[nodiscard]] virtual task<void> join() = 0;
     virtual void request_stop() noexcept = 0;
@@ -790,6 +809,9 @@ template<typename T>
 struct child_record final : child_record_base
 {
     using handle_type = typename task<T>::coroutine_handle;
+    using stored_type = std::remove_cv_t<T>;
+    using storage_type =
+        std::variant<std::monostate, stored_type, std::exception_ptr>;
 
     explicit child_record(handle_type h) noexcept
         : handle(h)
@@ -797,16 +819,12 @@ struct child_record final : child_record_base
 
     ~child_record() override
     {
-        if (handle) {
-            debug::unpark_task(handle.promise().id);
-            handle.promise().unregister_from_deck();
-            handle.destroy();
-        }
+        destroy_frame();
     }
 
     [[nodiscard]] bool done() const noexcept override
     {
-        return !handle || handle.done();
+        return evacuated_ || !handle || handle.done();
     }
 
     [[nodiscard]] bool joined() const noexcept override
@@ -819,16 +837,27 @@ struct child_record final : child_record_base
         if (!joined_ && handle && !handle.done())
             co_await started_handle_awaiter{handle};
         joined_ = true;
+        evacuate_result();
+    }
+
+    [[nodiscard]] std::exception_ptr completion_failure()
+        noexcept override
+    {
+        if (!handle || !handle.done())
+            return {};
+        try {
+            static_cast<void>(handle.promise().result());
+        } catch (...) {
+            return std::current_exception();
+        }
+        return {};
     }
 
     [[nodiscard]] std::exception_ptr failure() override
     {
-        ensure_done();
-        try {
-            handle.promise().result();
-        } catch (...) {
-            return std::current_exception();
-        }
+        evacuate_result();
+        if (std::holds_alternative<std::exception_ptr>(result_))
+            return std::get<std::exception_ptr>(result_);
         return {};
     }
 
@@ -840,12 +869,16 @@ struct child_record final : child_record_base
 
     [[nodiscard]] T take_result()
     {
-        ensure_done();
+        evacuate_result();
         if (result_taken)
             throw runtime_error{"nxtrt deed result already taken"};
         observed = true;
         result_taken = true;
-        return std::move(handle.promise()).result();
+        if (std::holds_alternative<std::exception_ptr>(result_))
+            rethrow(std::get<std::exception_ptr>(result_));
+        if (!std::holds_alternative<stored_type>(result_))
+            throw runtime_error{"nxtrt task result was never set"};
+        return std::move(std::get<stored_type>(result_));
     }
 
     void ensure_done() const
@@ -855,9 +888,38 @@ struct child_record final : child_record_base
                 "nxtrt deed result read before firm join"};
     }
 
+    void evacuate_result()
+    {
+        ensure_done();
+        if (evacuated_)
+            return;
+        try {
+            result_.template emplace<stored_type>(
+                std::move(handle.promise()).result());
+        } catch (...) {
+            result_.template emplace<std::exception_ptr>(
+                std::current_exception());
+        }
+        evacuated_ = true;
+        destroy_frame();
+    }
+
+    void destroy_frame() noexcept
+    {
+        if (!handle)
+            return;
+        debug::unpark_task(handle.promise().id);
+        handle.promise().unregister_from_deck();
+        auto dying = handle;
+        handle = handle_type{};
+        dying.destroy();
+    }
+
     handle_type handle;
+    storage_type result_;
     bool joined_ = false;
     bool result_taken = false;
+    bool evacuated_ = false;
 };
 
 template<>
@@ -871,16 +933,12 @@ struct child_record<void> final : child_record_base
 
     ~child_record() override
     {
-        if (handle) {
-            debug::unpark_task(handle.promise().id);
-            handle.promise().unregister_from_deck();
-            handle.destroy();
-        }
+        destroy_frame();
     }
 
     [[nodiscard]] bool done() const noexcept override
     {
-        return !handle || handle.done();
+        return evacuated_ || !handle || handle.done();
     }
 
     [[nodiscard]] bool joined() const noexcept override
@@ -893,17 +951,26 @@ struct child_record<void> final : child_record_base
         if (!joined_ && handle && !handle.done())
             co_await started_handle_awaiter{handle};
         joined_ = true;
+        evacuate_result();
     }
 
-    [[nodiscard]] std::exception_ptr failure() override
+    [[nodiscard]] std::exception_ptr completion_failure()
+        noexcept override
     {
-        ensure_done();
+        if (!handle || !handle.done())
+            return {};
         try {
             handle.promise().result();
         } catch (...) {
             return std::current_exception();
         }
         return {};
+    }
+
+    [[nodiscard]] std::exception_ptr failure() override
+    {
+        evacuate_result();
+        return failure_;
     }
 
     void request_stop() noexcept override
@@ -914,12 +981,13 @@ struct child_record<void> final : child_record_base
 
     void take_result()
     {
-        ensure_done();
+        evacuate_result();
         if (result_taken)
             throw runtime_error{"nxtrt deed result already taken"};
         observed = true;
         result_taken = true;
-        handle.promise().result();
+        if (failure_)
+            rethrow(failure_);
     }
 
     void ensure_done() const
@@ -929,9 +997,36 @@ struct child_record<void> final : child_record_base
                 "nxtrt deed result read before firm join"};
     }
 
+    void evacuate_result()
+    {
+        ensure_done();
+        if (evacuated_)
+            return;
+        try {
+            handle.promise().result();
+        } catch (...) {
+            failure_ = std::current_exception();
+        }
+        evacuated_ = true;
+        destroy_frame();
+    }
+
+    void destroy_frame() noexcept
+    {
+        if (!handle)
+            return;
+        debug::unpark_task(handle.promise().id);
+        handle.promise().unregister_from_deck();
+        auto dying = handle;
+        handle = handle_type{};
+        dying.destroy();
+    }
+
     handle_type handle;
+    std::exception_ptr failure_;
     bool joined_ = false;
     bool result_taken = false;
+    bool evacuated_ = false;
 };
 
 } // namespace detail
@@ -1019,6 +1114,105 @@ private:
     }
 
     std::shared_ptr<detail::child_record<void>> record_;
+};
+
+struct frame_storage_ref
+{
+    frame_storage_ref() = default;
+
+    explicit frame_storage_ref(std::span<std::byte> bytes)
+        : bytes(bytes)
+    {}
+
+    std::span<std::byte> bytes;
+};
+
+template<std::size_t N>
+class static_frame_storage
+{
+public:
+    [[nodiscard]] frame_storage_ref ref() noexcept
+    {
+        return frame_storage_ref{std::span{storage_}};
+    }
+
+    [[nodiscard]] operator frame_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    alignas(std::max_align_t) std::array<std::byte, N == 0 ? 1 : N> storage_{};
+};
+
+namespace detail {
+
+struct alignas(std::max_align_t) task_frame_header
+{
+    firm * owner = nullptr;
+    std::size_t size = 0;
+};
+
+} // namespace detail
+
+class firm_frame_arena
+{
+public:
+    firm_frame_arena() = default;
+
+    explicit firm_frame_arena(frame_storage_ref storage)
+        : storage_(storage.bytes)
+    {}
+
+    [[nodiscard]] std::size_t capacity() const noexcept
+    {
+        return storage_.size();
+    }
+
+    [[nodiscard]] std::size_t used() const noexcept
+    {
+        return used_;
+    }
+
+    [[nodiscard]] std::size_t high_water() const noexcept
+    {
+        return high_water_;
+    }
+
+    [[nodiscard]] frame_storage_ref storage() const noexcept
+    {
+        return frame_storage_ref{storage_};
+    }
+
+    [[nodiscard]] void * allocate(firm & owner, std::size_t size)
+    {
+        constexpr auto alignment = alignof(detail::task_frame_header);
+        auto offset = align_up(used_, alignment);
+        auto total = sizeof(detail::task_frame_header) + size;
+        if (offset > storage_.size() || total > storage_.size() - offset)
+            throw runtime_error{"nxtrt firm frame arena is full"};
+
+        auto * header = reinterpret_cast<detail::task_frame_header *>(
+            storage_.data() + offset);
+        header->owner = &owner;
+        header->size = size;
+        used_ = offset + total;
+        high_water_ = std::max(high_water_, used_);
+        return header + 1;
+    }
+
+private:
+    [[nodiscard]] static constexpr std::size_t align_up(
+        std::size_t value,
+        std::size_t alignment) noexcept
+    {
+        auto mask = alignment - 1;
+        return (value + mask) & ~mask;
+    }
+
+    std::span<std::byte> storage_;
+    std::size_t used_ = 0;
+    std::size_t high_water_ = 0;
 };
 
 template<typename T>
@@ -1122,9 +1316,26 @@ inline catching_deed<void> deed<void>::cope() &&
 class firm
 {
 public:
+    static constexpr std::size_t default_frame_capacity = 4 * 1024 * 1024;
+
     firm()
-        : debug_id_(debug::allocate_firm_id())
+        : owned_frame_storage_(default_frame_capacity)
+        , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
+        , uses_owned_frame_storage_(true)
     {
+        register_debug();
+    }
+
+    explicit firm(frame_storage_ref frames)
+        : frames_(frames)
+    {
+        register_debug();
+    }
+
+private:
+    void register_debug()
+    {
+        debug_id_ = debug::allocate_firm_id();
         debug::register_firm(
             debug::firm_snapshot{
                 .id = debug_id_,
@@ -1134,6 +1345,7 @@ public:
             });
     }
 
+public:
     ~firm()
     {
         if (debug_id_ != 0)
@@ -1143,7 +1355,14 @@ public:
     firm(const firm &) = delete;
     firm & operator=(const firm &) = delete;
     firm(firm && other) noexcept
-        : children_(std::move(other.children_))
+        : owned_frame_storage_(std::move(other.owned_frame_storage_))
+        , frames_(
+            other.uses_owned_frame_storage_
+                ? frame_storage_ref{std::span{owned_frame_storage_}}
+                : other.frames_.storage())
+        , uses_owned_frame_storage_(
+            std::exchange(other.uses_owned_frame_storage_, false))
+        , children_(std::move(other.children_))
         , stop_(std::move(other.stop_))
         , debug_id_(std::exchange(other.debug_id_, 0))
         , debug_parent_(std::exchange(other.debug_parent_, 0))
@@ -1152,6 +1371,26 @@ public:
         debug_update();
     }
     firm & operator=(firm &&) = delete;
+
+    [[nodiscard]] void * allocate_frame(std::size_t size)
+    {
+        return frames_.allocate(*this, size);
+    }
+
+    [[nodiscard]] std::size_t frame_capacity() const noexcept
+    {
+        return frames_.capacity();
+    }
+
+    [[nodiscard]] std::size_t frame_high_water() const noexcept
+    {
+        return frames_.high_water();
+    }
+
+    [[nodiscard]] std::size_t frame_used() const noexcept
+    {
+        return frames_.used();
+    }
 
     void stop() noexcept
     {
@@ -1245,12 +1484,16 @@ protected:
     {}
 
 private:
-    void report_child_finished(detail::child_record_base & child) noexcept
+    void report_child_finished(
+        detail::child_record_base & child,
+        std::exception_ptr known_failure = {}) noexcept
     {
         if (child.completion_reported)
             return;
         child.completion_reported = true;
-        child_finished(child, child.failure());
+        child_finished(
+            child,
+            known_failure ? known_failure : child.completion_failure());
     }
 
     void debug_update() const
@@ -1264,6 +1507,9 @@ private:
             });
     }
 
+    std::vector<std::byte> owned_frame_storage_;
+    firm_frame_arena frames_;
+    bool uses_owned_frame_storage_ = false;
     std::vector<std::shared_ptr<detail::child_record_base>> children_;
     std::stop_source stop_;
     debug::firm_id debug_id_ = 0;
@@ -1292,6 +1538,32 @@ inline firm & require_current_firm()
         throw runtime_error{"nxtrt operation used without firm"};
     return *firm;
 }
+
+namespace detail {
+
+inline void * allocate_task_frame(std::size_t size)
+{
+    if (auto * firm = current_firm())
+        return firm->allocate_frame(size);
+
+    auto * header = static_cast<task_frame_header *>(
+        ::operator new(sizeof(task_frame_header) + size));
+    header->owner = nullptr;
+    header->size = size;
+    return header + 1;
+}
+
+inline void deallocate_task_frame(void * ptr, std::size_t) noexcept
+{
+    if (ptr == nullptr)
+        return;
+
+    auto * header = static_cast<task_frame_header *>(ptr) - 1;
+    if (header->owner == nullptr)
+        ::operator delete(header);
+}
+
+} // namespace detail
 
 [[nodiscard]] inline task<void> join()
 {
@@ -2215,7 +2487,7 @@ inline task<void> firm::join()
             auto & child = *children_[i];
             co_await child.join();
             failure = child.failure();
-            report_child_finished(child);
+            report_child_finished(child, failure);
             auto const exported = children_[i].use_count() > 1;
             if (!child.contained && !child.observed && !exported) {
                 if (failure
@@ -2225,7 +2497,7 @@ inline task<void> firm::join()
             }
         } catch (...) {
             failure = std::current_exception();
-            report_child_finished(*children_[i]);
+            report_child_finished(*children_[i], failure);
             if (!(stop_requested() && is_operation_cancelled(failure)))
                 exceptions.push_back(failure);
         }
