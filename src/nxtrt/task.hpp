@@ -39,10 +39,6 @@ class catching_deed;
 
 namespace detail {
 
-// Global id source for this early experiment. A later runtime object may own
-// id allocation if we want per-runtime numbering.
-inline task_id_source task_ids;
-
 /// Shared promise state for every `task<T>`.
 ///
 /// When a function returns `task<T>` and contains `co_await` or `co_return`,
@@ -84,7 +80,6 @@ struct promise_base
 
     /// Capture the ambient environment visible at coroutine frame creation.
     promise_base()
-        : id(task_ids.next())
     {
         if (auto * current = detail::current_env)
             env.copy_entries_from(*current);
@@ -195,8 +190,13 @@ struct promise_base
         current->current_deck->enqueue(handle, this);
     }
 
-    /// Identity assigned when the coroutine frame is created.
+    void unregister_from_deck() noexcept;
+
+    /// Identity assigned by the deck task registry when the task is first
+    /// scheduled.
     task_id id;
+    /// Deck registry that currently owns this task id, if any.
+    deck * registered_deck = nullptr;
     /// Raw coroutine handle for the awaiting task.
     std::coroutine_handle<> continuation;
     /// Awaiting task promise, used to restore ambient context when continuation runs.
@@ -502,7 +502,9 @@ private:
     {
         if (!coroutine_)
             return false;
-        debug::unpark_task(coroutine_.promise().id);
+        auto & promise = coroutine_.promise();
+        debug::unpark_task(promise.id);
+        promise.unregister_from_deck();
         coroutine_.destroy();
         coroutine_ = nullptr;
         return true;
@@ -795,8 +797,11 @@ struct child_record final : child_record_base
 
     ~child_record() override
     {
-        if (handle)
+        if (handle) {
+            debug::unpark_task(handle.promise().id);
+            handle.promise().unregister_from_deck();
             handle.destroy();
+        }
     }
 
     [[nodiscard]] bool done() const noexcept override
@@ -866,8 +871,11 @@ struct child_record<void> final : child_record_base
 
     ~child_record() override
     {
-        if (handle)
+        if (handle) {
+            debug::unpark_task(handle.promise().id);
+            handle.promise().unregister_from_deck();
             handle.destroy();
+        }
     }
 
     [[nodiscard]] bool done() const noexcept override
@@ -2381,10 +2389,8 @@ inline std::string deck::runtime_dump_text() const
 {
     auto ready = std::vector<task_id>{};
     ready.reserve(ready_.size());
-    for (auto const & item : ready_) {
-        if (item.promise != nullptr)
-            ready.push_back(item.promise->id);
-    }
+    for (auto id : ready_)
+        ready.push_back(id);
 
     return debug::format_runtime_dump(
         debug::snapshot_firms(),
@@ -2392,26 +2398,131 @@ inline std::string deck::runtime_dump_text() const
         std::move(ready));
 }
 
+inline task_id deck::register_task(
+    std::coroutine_handle<> handle,
+    detail::promise_base * promise)
+{
+    if (!handle || promise == nullptr)
+        return {};
+
+    if (promise->registered_deck != nullptr
+        && promise->registered_deck != this)
+        throw runtime_error{"nxtrt task scheduled on a different deck"};
+
+    if (auto id = promise->id) {
+        if (auto * existing = resolve(id)) {
+            if (existing->promise != promise)
+                throw runtime_error{"nxtrt task id collision"};
+            existing->handle = handle;
+            return id;
+        }
+        promise->id = {};
+    }
+
+    for (auto i = std::size_t{0}; i < tasks_.size(); ++i) {
+        auto & row = tasks_[i];
+        if (row.state != deck_task_state::vacant)
+            continue;
+
+        auto index = i + 1;
+        if (index > task_id::max_index)
+            throw runtime_error{"nxtrt deck task table is too large"};
+
+        row.id = task_id::make(
+            static_cast<std::uint32_t>(index),
+            row.era);
+        row.handle = handle;
+        row.promise = promise;
+        row.state = deck_task_state::live;
+        promise->id = row.id;
+        promise->registered_deck = this;
+        return row.id;
+    }
+
+    throw runtime_error{"nxtrt deck task table is full"};
+}
+
+inline deck_task_record * deck::resolve(task_id id) noexcept
+{
+    if (!id)
+        return nullptr;
+    auto index = id.index();
+    if (index == 0 || index > tasks_.size())
+        return nullptr;
+    auto & row = tasks_[index - 1];
+    if (row.state != deck_task_state::live || row.id != id)
+        return nullptr;
+    return &row;
+}
+
+inline const deck_task_record * deck::resolve(task_id id) const noexcept
+{
+    if (!id)
+        return nullptr;
+    auto index = id.index();
+    if (index == 0 || index > tasks_.size())
+        return nullptr;
+    auto const & row = tasks_[index - 1];
+    if (row.state != deck_task_state::live || row.id != id)
+        return nullptr;
+    return &row;
+}
+
+inline void deck::unregister_task(
+    task_id id,
+    detail::promise_base * promise) noexcept
+{
+    auto * row = resolve(id);
+    if (row == nullptr || row->promise != promise)
+        return;
+
+    row->id = {};
+    row->handle = {};
+    row->promise = nullptr;
+    row->state = deck_task_state::vacant;
+    ++row->era;
+    if (row->era == 0)
+        row->era = 1;
+
+    if (promise != nullptr) {
+        promise->id = {};
+        if (promise->registered_deck == this)
+            promise->registered_deck = nullptr;
+    }
+}
+
 inline void deck::enqueue(
     std::coroutine_handle<> handle,
     detail::promise_base * promise)
 {
-    trace("deck enqueue task");
-    ready_.push_back(
-        deck::ready_item{
-            .handle = handle,
-            .promise = promise,
-        });
+    auto id = register_task(handle, promise);
+    if (!id)
+        return;
+    trace("deck enqueue task {}", id.value);
+    ready_.push_back(id);
 }
 
-inline void deck::ready_item::resume_if_ready(deck & d) const
+inline void deck::resume_if_ready(task_id id)
 {
+    auto * task = resolve(id);
+    if (task == nullptr)
+        return;
+
+    auto handle = task->handle;
+    auto * promise = task->promise;
     if (!handle || handle.done())
         return;
 
-    trace("deck resume task");
-    auto env_guard = detail::env_guard{promise->env, &d, promise};
+    trace("deck resume task {}", id.value);
+    auto env_guard = detail::env_guard{promise->env, this, promise};
     handle.resume();
+}
+
+inline void detail::promise_base::unregister_from_deck() noexcept
+{
+    if (registered_deck == nullptr)
+        return;
+    registered_deck->unregister_task(id, this);
 }
 
 inline void need::resume(deck & d) const

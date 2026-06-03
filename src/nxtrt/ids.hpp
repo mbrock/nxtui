@@ -1,42 +1,50 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 #include <compare>
+#include <limits>
 
 namespace nxtrt {
 
 /// Stable, opaque identity for a coroutine task.
 ///
-/// `0` means "no task". Real tasks start at 1 so an all-zero/default value is
-/// a useful sentinel in tests, logs, and optional future registries.
+/// `0` means "no task". Real task ids are compact table identities with a
+/// 24-bit one-based row index and an 8-bit era. The exact packing stays behind
+/// helpers so traces and backend tickets can treat the id as one 32-bit word.
 struct task_id
 {
-    std::uint64_t value = 0;
+    static constexpr std::uint32_t index_bits = 24;
+    static constexpr std::uint32_t index_mask = (1u << index_bits) - 1u;
+    static constexpr std::uint32_t max_index = index_mask;
+
+    std::uint32_t value = 0;
+
+    [[nodiscard]] static constexpr task_id make(
+        std::uint32_t index,
+        std::uint8_t era) noexcept
+    {
+        return task_id{
+            (static_cast<std::uint32_t>(era) << index_bits)
+            | (index & index_mask),
+        };
+    }
 
     [[nodiscard]] explicit operator bool() const noexcept
     {
         return value != 0;
     }
 
-    friend auto operator<=>(task_id, task_id) = default;
-};
-
-class task_id_source
-{
-public:
-    /// Allocate the next process-local task id.
-    ///
-    /// This is atomic so ids remain unique if future decks or background
-    /// workers create coroutine frames from different threads. It does not imply
-    /// that the current deck is thread-safe.
-    [[nodiscard]] task_id next() noexcept
+    [[nodiscard]] constexpr std::uint32_t index() const noexcept
     {
-        return task_id{next_.fetch_add(1, std::memory_order::relaxed)};
+        return value & index_mask;
     }
 
-private:
-    std::atomic_uint64_t next_{1};
+    [[nodiscard]] constexpr std::uint8_t era() const noexcept
+    {
+        return static_cast<std::uint8_t>(value >> index_bits);
+    }
+
+    friend auto operator<=>(task_id, task_id) = default;
 };
 
 } // namespace nxtrt

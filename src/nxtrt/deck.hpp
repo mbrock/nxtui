@@ -5,12 +5,18 @@
 #include "nxtrt/trace.hpp"
 #include "nxtrt/wand.hpp"
 
+#include <array>
 #include <concepts>
 #include <coroutine>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
+#include <span>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace nxtrt {
 
@@ -60,12 +66,73 @@ struct promise_base;
 
 } // namespace detail
 
+enum class deck_task_state : std::uint8_t
+{
+    vacant,
+    live,
+};
+
+struct deck_task_record
+{
+    task_id id;
+    std::coroutine_handle<> handle;
+    detail::promise_base * promise = nullptr;
+    deck_task_state state = deck_task_state::vacant;
+    std::uint8_t era = 1;
+};
+
+struct deck_task_storage_ref
+{
+    deck_task_storage_ref() = default;
+
+    explicit deck_task_storage_ref(std::span<deck_task_record> records)
+        : records(records)
+    {}
+
+    std::span<deck_task_record> records;
+};
+
+template<std::size_t N>
+class static_deck_task_storage
+{
+public:
+    [[nodiscard]] deck_task_storage_ref ref() noexcept
+    {
+        return deck_task_storage_ref{std::span{records_}};
+    }
+
+    [[nodiscard]] operator deck_task_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::array<deck_task_record, N> records_{};
+};
+
 class deck
 {
 public:
-    deck() = default;
-    explicit deck(wand * w) noexcept
-        : wand_(w)
+    static constexpr std::size_t default_task_capacity = 4096;
+
+    deck()
+        : owned_tasks_(default_task_capacity)
+        , tasks_(owned_tasks_)
+    {}
+
+    explicit deck(wand * w)
+        : deck()
+    {
+        wand_ = w;
+    }
+
+    explicit deck(deck_task_storage_ref storage, wand * w = nullptr) noexcept
+        : tasks_(storage.records)
+        , wand_(w)
+    {}
+
+    deck(wand * w, deck_task_storage_ref storage) noexcept
+        : deck(storage, w)
     {}
 
     deck(const deck &) = delete;
@@ -92,7 +159,7 @@ public:
         return wand_;
     }
 
-    /// True when no coroutine handles are queued for the pump.
+    /// True when no task ids are queued for the pump.
     [[nodiscard]] bool empty() const noexcept
     {
         return ready_.empty();
@@ -177,12 +244,12 @@ private:
         if (env != nullptr && env->current_promise != nullptr)
             throw runtime_error{"nxtrt deck pump is not reentrant"};
 
-        auto round = std::deque<ready_item>{};
+        auto round = std::deque<task_id>{};
         round.swap(ready_);
         trace("deck round begin size={}", round.size());
 
-        for (auto const & item : round)
-            item.resume_if_ready(*this);
+        for (auto id : round)
+            resume_if_ready(id);
         trace("deck round end ready={}", ready_.size());
     }
 
@@ -240,27 +307,20 @@ private:
     friend struct yield_awaiter;
     /// @endcond
 
-    struct ready_item
-    {
-        /// Resume this coroutine frame if it still has work to do.
-        ///
-        /// The deck context is established once per pump round by
-        /// `run_ready()`. Each item only needs to restore its own promise as
-        /// the ambient current task before transferring control to the
-        /// compiler/runtime handle.
-        void resume_if_ready(deck & d) const;
-
-        // The compiler/runtime handle used to resume the coroutine frame.
-        std::coroutine_handle<> handle;
-        // The promise belonging to `handle`, used only to restore ambient
-        // current-task context while resuming.
-        detail::promise_base * promise = nullptr;
-    };
-
     /// Put a coroutine handle on the ready queue for a later pump step.
     void enqueue(std::coroutine_handle<> handle, detail::promise_base * promise);
 
-    std::deque<ready_item> ready_;
+    [[nodiscard]] task_id register_task(
+        std::coroutine_handle<> handle,
+        detail::promise_base * promise);
+    void unregister_task(task_id id, detail::promise_base * promise) noexcept;
+    [[nodiscard]] deck_task_record * resolve(task_id id) noexcept;
+    [[nodiscard]] const deck_task_record * resolve(task_id id) const noexcept;
+    void resume_if_ready(task_id id);
+
+    std::vector<deck_task_record> owned_tasks_;
+    std::span<deck_task_record> tasks_;
+    std::deque<task_id> ready_;
     wand * wand_ = nullptr;
 };
 

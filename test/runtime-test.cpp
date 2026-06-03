@@ -1528,11 +1528,11 @@ static suite runtime_tests{
                         [&events, child_body]() -> nxtrt::task<int> {
                             events.push_back(1);
                             auto child = child_body();
-                            auto child_id = child.id();
+                            expect(!child.id());
 
                             auto value = co_await child;
 
-                            expect(child.id() == child_id);
+                            expect(static_cast<bool>(child.id()));
                             events.push_back(4);
                             co_return value + 1;
                         })
@@ -1540,6 +1540,98 @@ static suite runtime_tests{
 
                 expect(events == std::vector<int>{1, 2, 3, 4})
                     << "child/continuation event order changed";
+            };
+
+            "borrowed task registries assign compact ids"_test = [] {
+                auto storage = nxtrt::static_deck_task_storage<4>{};
+                auto deck = nxtrt::deck{storage};
+
+                auto task = []() -> nxtrt::task<nxtrt::task_id> {
+                    auto * deck = nxtrt::current_deck();
+                    expect(deck != nullptr);
+                    co_return deck->current_task_id();
+                }();
+
+                expect(!task.id());
+                deck.start(task);
+                auto registered = task.id();
+                expect(registered.index() == std::uint32_t{1});
+                expect(registered.era() == std::uint8_t{1});
+
+                deck.run_ready();
+
+                expect(task.done());
+                expect(std::move(task).result() == registered);
+            };
+
+            "borrowed task registries reuse slots with a new era"_test = [] {
+                auto storage = nxtrt::static_deck_task_storage<1>{};
+                auto deck = nxtrt::deck{storage};
+
+                auto make_task = []() -> nxtrt::task<void> {
+                    co_return;
+                };
+
+                auto first = make_task();
+                deck.start(first);
+                auto first_id = first.id();
+                deck.run_ready();
+                first = {};
+
+                auto second = make_task();
+                deck.start(second);
+                auto second_id = second.id();
+
+                expect(first_id.index() == second_id.index());
+                expect(first_id.era() != second_id.era());
+
+                deck.run_ready();
+            };
+
+            "borrowed task registries reject overflow"_test = [] {
+                auto storage = nxtrt::static_deck_task_storage<1>{};
+                auto deck = nxtrt::deck{storage};
+
+                auto parked = []() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                }();
+                auto extra = []() -> nxtrt::task<void> {
+                    co_return;
+                }();
+
+                deck.start(parked);
+
+                auto rejected = false;
+                try {
+                    deck.start(extra);
+                } catch (const nxtrt::runtime_error &) {
+                    rejected = true;
+                }
+
+                expect(rejected);
+            };
+
+            "stale ready task ids are ignored"_test = [] {
+                auto storage = nxtrt::static_deck_task_storage<1>{};
+                auto deck = nxtrt::deck{storage};
+                auto events = std::vector<int>{};
+
+                auto task = [&events]() -> nxtrt::task<void> {
+                    events.push_back(1);
+                    co_await nxtrt::yield();
+                    events.push_back(2);
+                }();
+
+                deck.start(task);
+                deck.run_ready();
+                expect(events == std::vector<int>{1});
+                expect(!deck.empty());
+
+                task = {};
+                deck.run_ready();
+
+                expect(events == std::vector<int>{1});
+                expect(deck.empty());
             };
 
             "re-enters yielded tasks through the pump"_test = [] {
