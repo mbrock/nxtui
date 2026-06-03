@@ -1029,6 +1029,11 @@ struct child_record<void> final : child_record_base
     bool evacuated_ = false;
 };
 
+struct firm_child_slot
+{
+    std::shared_ptr<child_record_base> record;
+};
+
 } // namespace detail
 
 template<typename T>
@@ -1143,6 +1148,37 @@ public:
 
 private:
     alignas(std::max_align_t) std::array<std::byte, N == 0 ? 1 : N> storage_{};
+};
+
+struct firm_child_storage_ref
+{
+    firm_child_storage_ref() = default;
+
+    explicit firm_child_storage_ref(
+        std::span<detail::firm_child_slot> slots)
+        : slots(slots)
+    {}
+
+    std::span<detail::firm_child_slot> slots;
+};
+
+template<std::size_t N>
+class static_firm_child_storage
+{
+public:
+    [[nodiscard]] firm_child_storage_ref ref() noexcept
+    {
+        return firm_child_storage_ref{
+            std::span<detail::firm_child_slot>{storage_.data(), N}};
+    }
+
+    [[nodiscard]] operator firm_child_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::array<detail::firm_child_slot, N == 0 ? 1 : N> storage_{};
 };
 
 namespace detail {
@@ -1317,17 +1353,44 @@ class firm
 {
 public:
     static constexpr std::size_t default_frame_capacity = 4 * 1024 * 1024;
+    static constexpr std::size_t default_child_capacity = 4096;
 
     firm()
         : owned_frame_storage_(default_frame_capacity)
         , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
         , uses_owned_frame_storage_(true)
+        , owned_child_storage_(
+            std::make_unique<detail::firm_child_slot[]>(
+                default_child_capacity))
+        , child_slots_(owned_child_storage_.get(), default_child_capacity)
+        , uses_owned_child_storage_(true)
     {
         register_debug();
     }
 
     explicit firm(frame_storage_ref frames)
         : frames_(frames)
+        , owned_child_storage_(
+            std::make_unique<detail::firm_child_slot[]>(
+                default_child_capacity))
+        , child_slots_(owned_child_storage_.get(), default_child_capacity)
+        , uses_owned_child_storage_(true)
+    {
+        register_debug();
+    }
+
+    explicit firm(firm_child_storage_ref children)
+        : owned_frame_storage_(default_frame_capacity)
+        , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
+        , uses_owned_frame_storage_(true)
+        , child_slots_(children.slots)
+    {
+        register_debug();
+    }
+
+    firm(frame_storage_ref frames, firm_child_storage_ref children)
+        : frames_(frames)
+        , child_slots_(children.slots)
     {
         register_debug();
     }
@@ -1340,7 +1403,7 @@ private:
             debug::firm_snapshot{
                 .id = debug_id_,
                 .parent = debug_parent_,
-                .children = children_.size(),
+                .children = child_count_,
                 .stopping = stopping_,
             });
     }
@@ -1362,12 +1425,23 @@ public:
                 : other.frames_.storage())
         , uses_owned_frame_storage_(
             std::exchange(other.uses_owned_frame_storage_, false))
-        , children_(std::move(other.children_))
+        , owned_child_storage_(std::move(other.owned_child_storage_))
+        , child_slots_(
+            other.uses_owned_child_storage_
+                ? std::span<detail::firm_child_slot>{
+                    owned_child_storage_.get(),
+                    default_child_capacity}
+                : other.child_slots_)
+        , uses_owned_child_storage_(
+            std::exchange(other.uses_owned_child_storage_, false))
+        , child_count_(std::exchange(other.child_count_, 0))
+        , child_high_water_(std::exchange(other.child_high_water_, 0))
         , stop_(std::move(other.stop_))
         , debug_id_(std::exchange(other.debug_id_, 0))
         , debug_parent_(std::exchange(other.debug_parent_, 0))
         , stopping_(std::exchange(other.stopping_, false))
     {
+        other.child_slots_ = {};
         debug_update();
     }
     firm & operator=(firm &&) = delete;
@@ -1392,12 +1466,28 @@ public:
         return frames_.used();
     }
 
+    [[nodiscard]] std::size_t child_capacity() const noexcept
+    {
+        return child_slots_.size();
+    }
+
+    [[nodiscard]] std::size_t child_count() const noexcept
+    {
+        return child_count_;
+    }
+
+    [[nodiscard]] std::size_t child_high_water() const noexcept
+    {
+        return child_high_water_;
+    }
+
     void stop() noexcept
     {
         stopping_ = true;
         stop_.request_stop();
-        for (auto & child : children_)
-            child->request_stop();
+        for_each_child([](auto & child) {
+            child.request_stop();
+        });
         debug_update();
     }
 
@@ -1427,6 +1517,8 @@ public:
                 "nxtrt firm fork used without a running deck"};
         if (stopping_)
             throw runtime_error{"nxtrt firm fork used after stop"};
+        if (child_count_ >= child_slots_.size())
+            throw runtime_error{"nxtrt firm child storage is full"};
 
         auto handle = child.release();
         if (!handle || handle.done())
@@ -1449,7 +1541,8 @@ public:
             throw;
         }
 
-        children_.push_back(record);
+        child_slots_[child_count_++].record = record;
+        child_high_water_ = std::max(child_high_water_, child_count_);
         debug_update();
         active_deck->enqueue(handle, &handle.promise());
         return deed<T>{std::move(record)};
@@ -1459,8 +1552,8 @@ public:
 
     [[nodiscard]] bool has_unjoined_children() const noexcept
     {
-        for (auto const & child : children_) {
-            if (!child->joined())
+        for (auto i = std::size_t{0}; i < child_count_; ++i) {
+            if (!child_slots_[i].record->joined())
                 return true;
         }
         return false;
@@ -1502,15 +1595,26 @@ private:
             debug::firm_snapshot{
                 .id = debug_id_,
                 .parent = debug_parent_,
-                .children = children_.size(),
+                .children = child_count_,
                 .stopping = stopping_,
             });
+    }
+
+    template<typename Fn>
+    void for_each_child(Fn && fn) noexcept
+    {
+        for (auto i = std::size_t{0}; i < child_count_; ++i)
+            std::invoke(fn, *child_slots_[i].record);
     }
 
     std::vector<std::byte> owned_frame_storage_;
     firm_frame_arena frames_;
     bool uses_owned_frame_storage_ = false;
-    std::vector<std::shared_ptr<detail::child_record_base>> children_;
+    std::unique_ptr<detail::firm_child_slot[]> owned_child_storage_;
+    std::span<detail::firm_child_slot> child_slots_;
+    bool uses_owned_child_storage_ = false;
+    std::size_t child_count_ = 0;
+    std::size_t child_high_water_ = 0;
     std::stop_source stop_;
     debug::firm_id debug_id_ = 0;
     debug::firm_id debug_parent_ = 0;
@@ -2476,14 +2580,15 @@ template<typename Firm>
 inline task<void> firm::join()
 {
     auto exceptions = std::vector<std::exception_ptr>{};
-    for (auto i = std::size_t{0}; i < children_.size(); ++i) {
+    for (auto i = std::size_t{0}; i < child_count_; ++i) {
+        auto & record = child_slots_[i].record;
         auto failure = std::exception_ptr{};
         try {
-            auto & child = *children_[i];
+            auto & child = *record;
             co_await child.join();
             failure = child.failure();
             report_child_finished(child, failure);
-            auto const exported = children_[i].use_count() > 1;
+            auto const exported = record.use_count() > 1;
             if (!child.contained && !child.observed && !exported) {
                 if (failure
                     && !(stop_requested()
@@ -2492,7 +2597,7 @@ inline task<void> firm::join()
             }
         } catch (...) {
             failure = std::current_exception();
-            report_child_finished(*children_[i], failure);
+            report_child_finished(*record, failure);
             if (!(stop_requested() && is_operation_cancelled(failure)))
                 exceptions.push_back(failure);
         }

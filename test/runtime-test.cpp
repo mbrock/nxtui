@@ -2523,6 +2523,73 @@ static suite runtime_tests{
                 expect(failed);
             };
 
+            "firm child storage reports borrowed slot overflow"_test = [] {
+                struct bounded_child_firm : nxtrt::firm
+                {
+                    bounded_child_firm(
+                        nxtrt::frame_storage_ref frames,
+                        nxtrt::firm_child_storage_ref children,
+                        std::vector<int> & events,
+                        bool & overflowed,
+                        std::size_t & capacity,
+                        std::size_t & high_water)
+                        : nxtrt::firm(frames, children)
+                        , events(&events)
+                        , overflowed(&overflowed)
+                        , capacity(&capacity)
+                        , high_water(&high_water)
+                    {}
+
+                    bounded_child_firm(bounded_child_firm &&) noexcept =
+                        default;
+                    bounded_child_firm & operator=(
+                        bounded_child_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        *capacity = child_capacity();
+                        nxtrt::fork(record_after_yield(*events, 1));
+                        try {
+                            nxtrt::fork(record_after_yield(*events, 2));
+                        } catch (const std::exception & e) {
+                            *overflowed = std::string_view{e.what()}.contains(
+                                "firm child storage");
+                        }
+                        *high_water = child_high_water();
+                        co_await nxtrt::join();
+                    }
+
+                    std::vector<int> * events = nullptr;
+                    bool * overflowed = nullptr;
+                    std::size_t * capacity = nullptr;
+                    std::size_t * high_water = nullptr;
+                };
+
+                auto deck = nxtrt::deck{};
+                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
+                auto children = nxtrt::static_firm_child_storage<1>{};
+                auto events = std::vector<int>{};
+                auto overflowed = false;
+                auto capacity = std::size_t{};
+                auto high_water = std::size_t{};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await bounded_child_firm{
+                        frames,
+                        children,
+                        events,
+                        overflowed,
+                        capacity,
+                        high_water,
+                    };
+                });
+
+                expect(overflowed);
+                expect(capacity == std::size_t{1});
+                expect(high_water == std::size_t{1});
+                expect(events == std::vector<int>{11, 12});
+            };
+
             "join forked tasks before the firm exits"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
