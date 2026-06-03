@@ -39,6 +39,11 @@ Callers that want to grant all of a firm's local land together can use
 That aggregate does not introduce a new owner; it is just a named bundle of the
 borrowed frame, child-record, and join-failure storage regions.
 
+The convenience `firm{}` path still owns default frame backing, but it now uses
+an explicit aligned `owned_frame_storage` block instead of
+`std::vector<std::byte>`. That keeps the default path as a bounded byte region
+with a visible capacity, matching the borrowed frame-storage API more closely.
+
 The current deed result state is inline in the deed handle and move-stable:
 when the handle moves, the child record is retargeted to the new result slot.
 That is still only the first result-slot shape, but the important semantic split

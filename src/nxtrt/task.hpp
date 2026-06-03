@@ -1510,6 +1510,74 @@ private:
     alignas(std::max_align_t) std::array<std::byte, N == 0 ? 1 : N> storage_{};
 };
 
+class owned_frame_storage
+{
+public:
+    owned_frame_storage() = default;
+
+    explicit owned_frame_storage(std::size_t capacity)
+        : bytes_(allocate(capacity))
+        , capacity_(capacity)
+    {}
+
+    owned_frame_storage(const owned_frame_storage &) = delete;
+    owned_frame_storage & operator=(const owned_frame_storage &) = delete;
+
+    owned_frame_storage(owned_frame_storage && other) noexcept
+        : bytes_(std::exchange(other.bytes_, nullptr))
+        , capacity_(std::exchange(other.capacity_, 0))
+    {}
+
+    owned_frame_storage & operator=(owned_frame_storage && other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        reset();
+        bytes_ = std::exchange(other.bytes_, nullptr);
+        capacity_ = std::exchange(other.capacity_, 0);
+        return *this;
+    }
+
+    ~owned_frame_storage()
+    {
+        reset();
+    }
+
+    [[nodiscard]] frame_storage_ref ref() noexcept
+    {
+        return frame_storage_ref{std::span{bytes_, capacity_}};
+    }
+
+    [[nodiscard]] operator frame_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    [[nodiscard]] static std::byte * allocate(std::size_t capacity)
+    {
+        if (capacity == 0)
+            return nullptr;
+        auto * storage = ::operator new(
+            capacity,
+            std::align_val_t{alignof(std::max_align_t)});
+        return static_cast<std::byte *>(storage);
+    }
+
+    void reset() noexcept
+    {
+        if (bytes_ != nullptr)
+            ::operator delete(
+                bytes_,
+                std::align_val_t{alignof(std::max_align_t)});
+        bytes_ = nullptr;
+        capacity_ = 0;
+    }
+
+    std::byte * bytes_ = nullptr;
+    std::size_t capacity_ = 0;
+};
+
 struct firm_child_storage_ref
 {
     firm_child_storage_ref() = default;
@@ -1832,7 +1900,7 @@ public:
 
     firm()
         : owned_frame_storage_(default_frame_capacity)
-        , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
+        , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , owned_child_storage_(
             std::make_unique<detail::firm_child_slot[]>(
@@ -1870,7 +1938,7 @@ public:
 
     explicit firm(firm_child_storage_ref children)
         : owned_frame_storage_(default_frame_capacity)
-        , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
+        , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
         , owned_join_storage_(
@@ -1902,7 +1970,7 @@ public:
         firm_child_storage_ref children,
         firm_join_storage_ref join)
         : owned_frame_storage_(default_frame_capacity)
-        , frames_(frame_storage_ref{std::span{owned_frame_storage_}})
+        , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
         , join_failure_slots_(join.failures)
@@ -1955,7 +2023,7 @@ public:
         : owned_frame_storage_(std::move(other.owned_frame_storage_))
         , frames_(
             other.uses_owned_frame_storage_
-                ? frame_storage_ref{std::span{owned_frame_storage_}}
+                ? owned_frame_storage_.ref()
                 : other.frames_.storage())
         , uses_owned_frame_storage_(
             std::exchange(other.uses_owned_frame_storage_, false))
@@ -2216,7 +2284,7 @@ private:
         throw exception_group{"firm tasks failed", std::move(exceptions)};
     }
 
-    std::vector<std::byte> owned_frame_storage_;
+    owned_frame_storage owned_frame_storage_;
     firm_frame_arena frames_;
     bool uses_owned_frame_storage_ = false;
     std::unique_ptr<detail::firm_child_slot[]> owned_child_storage_;
