@@ -2175,6 +2175,73 @@ struct firm_storage_ref
     firm_join_storage_ref joins;
 };
 
+struct firm_bookkeeping_storage_ref
+{
+    firm_bookkeeping_storage_ref() = default;
+
+    firm_bookkeeping_storage_ref(
+        firm_child_storage_ref children,
+        firm_deed_storage_ref deeds,
+        firm_completion_storage_ref completions,
+        firm_join_storage_ref joins)
+        : children(children)
+        , deeds(deeds)
+        , completions(completions)
+        , joins(joins)
+    {}
+
+    firm_child_storage_ref children;
+    firm_deed_storage_ref deeds;
+    firm_completion_storage_ref completions;
+    firm_join_storage_ref joins;
+};
+
+template<
+    std::size_t ChildSlots,
+    std::size_t JoinFailureSlots = ChildSlots,
+    std::size_t CompletionSlots = ChildSlots,
+    std::size_t DeedSlots = ChildSlots>
+class static_firm_bookkeeping_storage
+{
+public:
+    [[nodiscard]] firm_bookkeeping_storage_ref ref() noexcept
+    {
+        return firm_bookkeeping_storage_ref{
+            children_, deeds_, completions_, joins_};
+    }
+
+    [[nodiscard]] operator firm_bookkeeping_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+    [[nodiscard]] firm_child_storage_ref children() noexcept
+    {
+        return children_;
+    }
+
+    [[nodiscard]] firm_deed_storage_ref deeds() noexcept
+    {
+        return deeds_;
+    }
+
+    [[nodiscard]] firm_join_storage_ref joins() noexcept
+    {
+        return joins_;
+    }
+
+    [[nodiscard]] firm_completion_storage_ref completions() noexcept
+    {
+        return completions_;
+    }
+
+private:
+    static_firm_child_storage<ChildSlots> children_;
+    static_firm_deed_storage<DeedSlots> deeds_;
+    static_firm_completion_storage<CompletionSlots> completions_;
+    static_firm_join_storage<JoinFailureSlots> joins_;
+};
+
 template<
     std::size_t FrameBytes,
     std::size_t ChildSlots,
@@ -2518,6 +2585,18 @@ public:
         register_debug();
     }
 
+    explicit firm(firm_bookkeeping_storage_ref storage)
+        : owned_frame_storage_(default_frame_capacity)
+        , frames_(owned_frame_storage_)
+        , uses_owned_frame_storage_(true)
+        , child_slots_(storage.children.slots)
+        , deed_records_(storage.deeds.records)
+        , completion_slots_(storage.completions.completions)
+        , join_failure_slots_(storage.joins.failures)
+    {
+        register_debug();
+    }
+
     firm(frame_storage_ref frames, firm_child_storage_ref children)
         : frames_(frames)
         , child_slots_(children.slots)
@@ -2547,6 +2626,16 @@ public:
         , owned_join_storage_(children.slots.size())
         , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
+    {
+        register_debug();
+    }
+
+    firm(frame_storage_ref frames, firm_bookkeeping_storage_ref storage)
+        : frames_(frames)
+        , child_slots_(storage.children.slots)
+        , deed_records_(storage.deeds.records)
+        , completion_slots_(storage.completions.completions)
+        , join_failure_slots_(storage.joins.failures)
     {
         register_debug();
     }
