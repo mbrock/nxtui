@@ -915,19 +915,93 @@ struct deed_result_state_base
 };
 
 template<typename T>
-struct deed_result_state final : deed_result_state_base
+struct deed_result_slot
 {
     using stored_type = std::remove_cv_t<T>;
     using storage_type =
         std::variant<std::monostate, stored_type, std::exception_ptr>;
 
+    [[nodiscard]] bool ready() const noexcept
+    {
+        return !std::holds_alternative<std::monostate>(storage);
+    }
+
+    template<typename Value>
+    void set_value(Value && value)
+    {
+        storage.template emplace<stored_type>(
+            std::forward<Value>(value));
+    }
+
+    void set_exception(std::exception_ptr failure)
+    {
+        storage.template emplace<std::exception_ptr>(
+            std::move(failure));
+    }
+
+    [[nodiscard]] std::exception_ptr failure() const
+    {
+        if (std::holds_alternative<std::exception_ptr>(storage))
+            return std::get<std::exception_ptr>(storage);
+        return {};
+    }
+
+    [[nodiscard]] T take_result()
+    {
+        if (std::holds_alternative<std::exception_ptr>(storage))
+            rethrow(std::get<std::exception_ptr>(storage));
+        if (!std::holds_alternative<stored_type>(storage))
+            throw runtime_error{"nxtrt task result was never set"};
+        return std::move(std::get<stored_type>(storage));
+    }
+
+    storage_type storage;
+};
+
+template<>
+struct deed_result_slot<void>
+{
+    [[nodiscard]] bool ready() const noexcept
+    {
+        return ready_;
+    }
+
+    void set_value() noexcept
+    {
+        ready_ = true;
+    }
+
+    void set_exception(std::exception_ptr failure)
+    {
+        failure_ = std::move(failure);
+        ready_ = true;
+    }
+
+    [[nodiscard]] std::exception_ptr failure() const
+    {
+        return failure_;
+    }
+
+    void take_result()
+    {
+        if (failure_)
+            rethrow(failure_);
+    }
+
+    std::exception_ptr failure_;
+    bool ready_ = false;
+};
+
+template<typename T>
+struct deed_result_state final : deed_result_state_base
+{
     deed_result_state() = default;
     deed_result_state(deed_result_state &&) = default;
     deed_result_state & operator=(deed_result_state &&) = default;
 
     [[nodiscard]] bool ready() const noexcept
     {
-        return !std::holds_alternative<std::monostate>(result);
+        return slot.ready();
     }
 
     void ensure_done()
@@ -942,22 +1016,18 @@ struct deed_result_state final : deed_result_state_base
     template<typename Value>
     void set_value(Value && value)
     {
-        result.template emplace<stored_type>(
-            std::forward<Value>(value));
+        slot.set_value(std::forward<Value>(value));
     }
 
     void set_exception(std::exception_ptr failure)
     {
-        result.template emplace<std::exception_ptr>(
-            std::move(failure));
+        slot.set_exception(std::move(failure));
     }
 
     [[nodiscard]] std::exception_ptr failure()
     {
         ensure_done();
-        if (std::holds_alternative<std::exception_ptr>(result))
-            return std::get<std::exception_ptr>(result);
-        return {};
+        return slot.failure();
     }
 
     [[nodiscard]] std::exception_ptr observe_exception()
@@ -973,14 +1043,10 @@ struct deed_result_state final : deed_result_state_base
             throw runtime_error{"nxtrt deed result already taken"};
         observed = true;
         result_taken = true;
-        if (std::holds_alternative<std::exception_ptr>(result))
-            rethrow(std::get<std::exception_ptr>(result));
-        if (!std::holds_alternative<stored_type>(result))
-            throw runtime_error{"nxtrt task result was never set"};
-        return std::move(std::get<stored_type>(result));
+        return slot.take_result();
     }
 
-    storage_type result;
+    deed_result_slot<T> slot;
 };
 
 template<>
@@ -992,7 +1058,7 @@ struct deed_result_state<void> final : deed_result_state_base
 
     [[nodiscard]] bool ready() const noexcept
     {
-        return ready_;
+        return slot.ready();
     }
 
     void ensure_done()
@@ -1006,19 +1072,18 @@ struct deed_result_state<void> final : deed_result_state_base
 
     void set_value() noexcept
     {
-        ready_ = true;
+        slot.set_value();
     }
 
     void set_exception(std::exception_ptr failure)
     {
-        failure_ = std::move(failure);
-        ready_ = true;
+        slot.set_exception(std::move(failure));
     }
 
     [[nodiscard]] std::exception_ptr failure()
     {
         ensure_done();
-        return failure_;
+        return slot.failure();
     }
 
     [[nodiscard]] std::exception_ptr observe_exception()
@@ -1034,12 +1099,10 @@ struct deed_result_state<void> final : deed_result_state_base
             throw runtime_error{"nxtrt deed result already taken"};
         observed = true;
         result_taken = true;
-        if (failure_)
-            rethrow(failure_);
+        slot.take_result();
     }
 
-    std::exception_ptr failure_;
-    bool ready_ = false;
+    deed_result_slot<void> slot;
 };
 
 template<typename T>

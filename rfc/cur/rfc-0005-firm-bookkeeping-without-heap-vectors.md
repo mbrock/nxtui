@@ -66,7 +66,9 @@ The deed state also remembers the deck-assigned `task_id` of the child it
 observes, so a deed can name the child without owning the child record. Its
 common base now also carries the generic observation metadata: whether the deed
 was contained, whether the result or failure was observed, and whether the
-result was already taken. Typed result storage remains in the specialized state.
+result was already taken. Typed result storage has also been named as a
+`deed_result_slot<T>` helper, so the current inline storage path is explicit
+even before the future external-storage target exists.
 
 Child final-suspend reporting also uses the firm record now. A forked promise
 stores a raw pointer to its child record as its completion observer; it no
