@@ -76,7 +76,10 @@ first `T`/`T *` result-target shape without yet moving deed records into
 firm-local storage. Deeds can also borrow a typed
 `deed_result_storage<T>` cell, which gives result evacuation uninitialized
 external storage and therefore works for move-only, non-default-constructible
-results without assigning into a preexisting `T`.
+results without assigning into a preexisting `T`. For repeated typed results,
+callers can grant a bounded `static_deed_result_storage_pool<T, N>` and lend
+cells from it to selected deeds. The first pool is monotonic: a loaned cell is
+not recycled until the surrounding result-storage land is reset or destroyed.
 The generic metadata has also been named as
 `deed_record_header`, separate from typed result slots, so the eventual
 firm-local or borrowed deed record has a clear header shape. Firms now allocate
@@ -161,11 +164,12 @@ struct deed_result_slot {
 ```
 
 That sketch is deliberately small. A deed can carry inline storage for the
-result, assign into caller-provided live storage, or construct into a borrowed
-typed `deed_result_storage<T>` cell. At child final suspend, the task
-evacuates its result out of the coroutine frame into that slot if the deed is
-still present. After evacuation, the frame can be destroyed according to firm
-settlement rules without losing the selected result.
+result, assign into caller-provided live storage, construct into a borrowed
+typed `deed_result_storage<T>` cell, or borrow such cells from a typed bounded
+pool. At child final suspend, the task evacuates its result out of the
+coroutine frame into that slot if the deed is still present. After evacuation,
+the frame can be destroyed according to firm settlement rules without losing
+the selected result.
 
 In the current implementation, result evacuation and frame reuse are separate
 events. Evacuation moves or reports the typed result into the deed slot, then
@@ -297,9 +301,8 @@ storage machinery for queues and free lists.
 
 ## Open Questions
 
-- Should firms provide typed result-storage pools that lend
-  `deed_result_storage<T>` cells, or should callers continue granting those
-  cells explicitly?
+- Should typed result-storage pools eventually get reusable free lists, or
+  should their first monotonic, settlement-scoped behavior remain the default?
 - Should later frame arenas reuse destroyed child frames before firm
   settlement, or should the default remain monotonic until the firm settles?
 - Which future helpers or channel pumps need their main body turned into an

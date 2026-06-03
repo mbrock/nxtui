@@ -1428,11 +1428,37 @@ struct external_result_cell_firm : nxtrt::firm
     }
 };
 
+struct pooled_result_cell_firm : nxtrt::firm
+{
+    explicit pooled_result_cell_firm(
+        nxtrt::deed_result_storage_pool_ref<firm_result_value> & pool)
+        : pool(&pool)
+    {}
+
+    nxtrt::deed_result_storage_pool_ref<firm_result_value> * pool = nullptr;
+
+    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
+    {
+        auto & target = pool->borrow();
+        auto child = fork(firm_result_value_after_yield(72));
+        child.store_result_in(target);
+        co_await join();
+        co_return std::move(child);
+    }
+};
+
 nxtrt::task<nxtrt::deed<firm_result_value>>
 fork_external_result_cell_into(
     nxtrt::deed_result_storage<firm_result_value> & target)
 {
     co_return co_await external_result_cell_firm{target};
+}
+
+nxtrt::task<nxtrt::deed<firm_result_value>>
+fork_pooled_result_cell_into(
+    nxtrt::deed_result_storage_pool_ref<firm_result_value> & pool)
+{
+    co_return co_await pooled_result_cell_firm{pool};
 }
 
 struct external_result_root
@@ -1452,6 +1478,17 @@ struct external_result_cell_root
     nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
     {
         return fork_external_result_cell_into(*target);
+    }
+};
+
+struct pooled_result_cell_root
+{
+    nxtrt::deed_result_storage_pool_ref<firm_result_value> * pool =
+        nullptr;
+
+    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
+    {
+        return fork_pooled_result_cell_into(*pool);
     }
 };
 
@@ -3379,6 +3416,37 @@ static suite runtime_tests{
                 auto value = std::move(child).get();
                 expect(value.value == 71_i);
                 expect(!target.ready());
+            };
+
+            "evacuate results into borrowed deed storage pools"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto storage =
+                    nxtrt::static_deed_result_storage_pool<
+                        firm_result_value,
+                        1>{};
+                auto pool = storage.ref();
+
+                auto child = deck.sync_wait(
+                    pooled_result_cell_root{.pool = &pool});
+
+                expect(pool.capacity() == std::size_t{1});
+                expect(pool.used() == std::size_t{1});
+                expect(pool.high_water() == std::size_t{1});
+                auto value = std::move(child).get();
+                expect(value.value == 72_i);
+
+                auto another_pool_ref = storage.ref();
+                expect(another_pool_ref.used() == std::size_t{1});
+                expect(another_pool_ref.high_water() == std::size_t{1});
+
+                auto overflowed = false;
+                try {
+                    (void)another_pool_ref.borrow();
+                } catch (const std::exception & e) {
+                    overflowed = std::string_view{e.what()}.contains(
+                        "deed result storage pool is full");
+                }
+                expect(overflowed);
             };
 
             "move live deeds before child completion"_test = [] {

@@ -375,6 +375,82 @@ private:
 };
 
 template<typename T>
+class deed_result_storage_pool_ref
+{
+public:
+    using storage_type = deed_result_storage<std::remove_cv_t<T>>;
+
+    deed_result_storage_pool_ref() = default;
+
+    explicit deed_result_storage_pool_ref(
+        std::span<storage_type> cells,
+        std::size_t & used,
+        std::size_t & high_water)
+        : cells_(cells)
+        , used_(&used)
+        , high_water_(&high_water)
+    {}
+
+    [[nodiscard]] std::size_t capacity() const noexcept
+    {
+        return cells_.size();
+    }
+
+    [[nodiscard]] std::size_t used() const noexcept
+    {
+        return used_ == nullptr ? std::size_t{} : *used_;
+    }
+
+    [[nodiscard]] std::size_t high_water() const noexcept
+    {
+        return high_water_ == nullptr ? std::size_t{} : *high_water_;
+    }
+
+    [[nodiscard]] storage_type & borrow()
+    {
+        if (used_ == nullptr || high_water_ == nullptr)
+            throw runtime_error{
+                "nxtrt deed result storage pool is empty"};
+        if (*used_ >= cells_.size())
+            throw runtime_error{
+                "nxtrt deed result storage pool is full"};
+        auto & cell = cells_[(*used_)++];
+        *high_water_ = std::max(*high_water_, *used_);
+        return cell;
+    }
+
+private:
+    std::span<storage_type> cells_;
+    std::size_t * used_ = nullptr;
+    std::size_t * high_water_ = nullptr;
+};
+
+template<typename T, std::size_t N>
+class static_deed_result_storage_pool
+{
+public:
+    using storage_type = deed_result_storage<std::remove_cv_t<T>>;
+
+    [[nodiscard]] deed_result_storage_pool_ref<T> ref() noexcept
+    {
+        return deed_result_storage_pool_ref<T>{
+            std::span<storage_type>{storage_.data(), N},
+            used_,
+            high_water_};
+    }
+
+    [[nodiscard]] operator deed_result_storage_pool_ref<T>() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::array<storage_type, N == 0 ? 1 : N> storage_{};
+    std::size_t used_ = 0;
+    std::size_t high_water_ = 0;
+};
+
+template<typename T>
 class [[nodiscard]] task
 {
 public:
