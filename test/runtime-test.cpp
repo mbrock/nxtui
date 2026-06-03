@@ -1027,6 +1027,37 @@ nxtrt::task<void> record_current_task_id_after_yield(
     ids.push_back(deck->current_task_id());
 }
 
+nxtrt::task<void> probe_fork_deck_overflow_body(
+    std::vector<int> & events,
+    bool & overflowed,
+    std::size_t & child_count_after_failure)
+{
+    try {
+        nxtrt::fork(record_after_yield(events, 7));
+    } catch (const nxtrt::runtime_error & e) {
+        overflowed =
+            std::string_view{e.what()}.contains("deck task table is full");
+        child_count_after_failure =
+            nxtrt::require_current_firm().child_count();
+    }
+    co_return;
+}
+
+struct fork_deck_overflow_root
+{
+    std::vector<int> * events = nullptr;
+    bool * overflowed = nullptr;
+    std::size_t * child_count_after_failure = nullptr;
+
+    nxtrt::task<void> operator()() const
+    {
+        return probe_fork_deck_overflow_body(
+            *events,
+            *overflowed,
+            *child_count_after_failure);
+    }
+};
+
 nxtrt::task<void> record_current_int_game(
     std::vector<nxtrt::game<int> *> & games)
 {
@@ -2922,6 +2953,27 @@ static suite runtime_tests{
                 expect(static_cast<bool>(running_ids.front()));
                 expect(completed_ids.front() == running_ids.front());
             };
+
+            "firm fork unwinds child slot after deck registry overflow"_test =
+                [] {
+                    // The sync_wait/firm scaffolding occupies three live task
+                    // IDs before this body tries to fork its child.
+                    auto storage = nxtrt::static_deck_task_storage<4>{};
+                    auto deck = nxtrt::deck{storage};
+                    auto events = std::vector<int>{};
+                    auto overflowed = false;
+                    auto child_count_after_failure = std::size_t{42};
+
+                    deck.sync_wait(fork_deck_overflow_root{
+                        &events,
+                        &overflowed,
+                        &child_count_after_failure,
+                    });
+
+                    expect(overflowed);
+                    expect(child_count_after_failure == std::size_t{0});
+                    expect(events.empty());
+                };
 
             "allow children to fork more work into the same firm"_test = [] {
                 auto deck = nxtrt::deck{};
