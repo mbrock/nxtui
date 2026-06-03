@@ -34,6 +34,11 @@ slots for the exception pointers observed while `join()` drains children. The
 runtime still materializes an `exception_group` when throwing multiple failures,
 but the live join bookkeeping is no longer a growable vector.
 
+Callers that want to grant all of a firm's local land together can use
+`firm_storage_ref` or `static_firm_storage<FrameBytes, Children, JoinFailures>`.
+That aggregate does not introduce a new owner; it is just a named bundle of the
+borrowed frame, child-record, and join-failure storage regions.
+
 The current deed result state is inline in the deed handle and move-stable:
 when the handle moves, the child record is retargeted to the new result slot.
 That is still only the first result-slot shape, but the important semantic split

@@ -902,6 +902,62 @@ nxtrt::task<void> record_after_yield(std::vector<int> & events, int value)
     events.push_back(value * 10 + 2);
 }
 
+nxtrt::task<void> aggregate_firm_storage_probe(
+    nxtrt::firm_storage_ref storage,
+    std::vector<int> & events,
+    std::size_t & frame_capacity,
+    std::size_t & child_capacity,
+    std::size_t & join_failure_capacity,
+    std::size_t & child_high_water)
+{
+    struct aggregate_storage_firm : nxtrt::firm
+    {
+        aggregate_storage_firm(
+            nxtrt::firm_storage_ref storage,
+            std::vector<int> & events,
+            std::size_t & frame_capacity,
+            std::size_t & child_capacity,
+            std::size_t & join_failure_capacity,
+            std::size_t & child_high_water)
+            : nxtrt::firm(storage)
+            , events(&events)
+            , frame_capacity_out(&frame_capacity)
+            , child_capacity_out(&child_capacity)
+            , join_failure_capacity_out(&join_failure_capacity)
+            , child_high_water_out(&child_high_water)
+        {}
+
+        aggregate_storage_firm(aggregate_storage_firm &&) noexcept = default;
+        aggregate_storage_firm & operator=(
+            aggregate_storage_firm &&) = delete;
+
+        nxtrt::task<void> operator()()
+        {
+            *frame_capacity_out = frame_capacity();
+            *child_capacity_out = child_capacity();
+            *join_failure_capacity_out = join_failure_capacity();
+            nxtrt::fork(record_after_yield(*events, 1));
+            *child_high_water_out = child_high_water();
+            co_await nxtrt::join();
+        }
+
+        std::vector<int> * events = nullptr;
+        std::size_t * frame_capacity_out = nullptr;
+        std::size_t * child_capacity_out = nullptr;
+        std::size_t * join_failure_capacity_out = nullptr;
+        std::size_t * child_high_water_out = nullptr;
+    };
+
+    co_await aggregate_storage_firm{
+        storage,
+        events,
+        frame_capacity,
+        child_capacity,
+        join_failure_capacity,
+        child_high_water,
+    };
+}
+
 nxtrt::task<int> root_task_probe(std::size_t & before, std::size_t & after)
 {
     auto * firm = nxtrt::current_firm();
@@ -2659,6 +2715,33 @@ static suite runtime_tests{
                 expect(capacity == std::size_t{1});
                 expect(high_water == std::size_t{1});
                 expect(events == std::vector<int>{11, 21});
+            };
+
+            "firm storage can be borrowed as one aggregate"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto storage =
+                    nxtrt::static_firm_storage<64 * 1024, 2, 3>{};
+                auto events = std::vector<int>{};
+                auto frame_capacity = std::size_t{};
+                auto child_capacity = std::size_t{};
+                auto join_failure_capacity = std::size_t{};
+                auto child_high_water = std::size_t{};
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await aggregate_firm_storage_probe(
+                        storage,
+                        events,
+                        frame_capacity,
+                        child_capacity,
+                        join_failure_capacity,
+                        child_high_water);
+                });
+
+                expect(frame_capacity == std::size_t{64 * 1024});
+                expect(child_capacity == std::size_t{2});
+                expect(join_failure_capacity == std::size_t{3});
+                expect(child_high_water == std::size_t{1});
+                expect(events == std::vector<int>{11, 12});
             };
 
             "join forked tasks before the firm exits"_test = [] {

@@ -1572,6 +1572,62 @@ private:
     std::array<std::exception_ptr, N == 0 ? 1 : N> storage_{};
 };
 
+struct firm_storage_ref
+{
+    firm_storage_ref() = default;
+
+    firm_storage_ref(
+        frame_storage_ref frames,
+        firm_child_storage_ref children,
+        firm_join_storage_ref joins)
+        : frames(frames)
+        , children(children)
+        , joins(joins)
+    {}
+
+    frame_storage_ref frames;
+    firm_child_storage_ref children;
+    firm_join_storage_ref joins;
+};
+
+template<
+    std::size_t FrameBytes,
+    std::size_t ChildSlots,
+    std::size_t JoinFailureSlots = ChildSlots>
+class static_firm_storage
+{
+public:
+    [[nodiscard]] firm_storage_ref ref() noexcept
+    {
+        return firm_storage_ref{frames_, children_, joins_};
+    }
+
+    [[nodiscard]] operator firm_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+    [[nodiscard]] frame_storage_ref frames() noexcept
+    {
+        return frames_;
+    }
+
+    [[nodiscard]] firm_child_storage_ref children() noexcept
+    {
+        return children_;
+    }
+
+    [[nodiscard]] firm_join_storage_ref joins() noexcept
+    {
+        return joins_;
+    }
+
+private:
+    static_frame_storage<FrameBytes> frames_;
+    static_firm_child_storage<ChildSlots> children_;
+    static_firm_join_storage<JoinFailureSlots> joins_;
+};
+
 namespace detail {
 
 struct alignas(std::max_align_t) task_frame_header
@@ -1861,6 +1917,14 @@ public:
         : frames_(frames)
         , child_slots_(children.slots)
         , join_failure_slots_(join.failures)
+    {
+        register_debug();
+    }
+
+    explicit firm(firm_storage_ref storage)
+        : frames_(storage.frames)
+        , child_slots_(storage.children.slots)
+        , join_failure_slots_(storage.joins.failures)
     {
         register_debug();
     }
