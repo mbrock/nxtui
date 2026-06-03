@@ -374,7 +374,9 @@ sync_wait_firm(deck & d, Fn && fn)
 {
     using factory_type = std::decay_t<Fn>;
     return d.sync_wait(
-        detail::run_firm_root(factory_type{std::forward<Fn>(fn)}));
+        [fn = factory_type{std::forward<Fn>(fn)}]() mutable {
+            return detail::run_firm_root(std::move(fn));
+        });
 }
 
 template<typename Event, typename T>
@@ -390,8 +392,9 @@ sync_wait_game(deck & d, Fn && fn)
 {
     using factory_type = std::decay_t<Fn>;
     return d.sync_wait(
-        detail::run_game_root<Event>(
-            factory_type{std::forward<Fn>(fn)}));
+        [fn = factory_type{std::forward<Fn>(fn)}]() mutable {
+            return detail::run_game_root<Event>(std::move(fn));
+        });
 }
 
 } // namespace nxtrt

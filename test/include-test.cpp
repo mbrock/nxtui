@@ -17,7 +17,7 @@ static boost::ut::suite public_include_tests{
     "runtime umbrella exposes task"_test = [] {
         auto deck = nxtrt::deck{};
         boost::ut::expect(
-            deck.sync_wait([]() -> nxtrt::task<int> { co_return 42; }())
+            deck.sync_wait([]() -> nxtrt::task<int> { co_return 42; })
             == 42);
     };
 }};

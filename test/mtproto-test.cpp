@@ -287,7 +287,9 @@ static suite mtproto_tests{
             auto storage = std::array<std::byte, 10>{};
             auto source = mtproto_text_source(chunks, std::span{storage});
 
-            deck.sync_wait(check_abridged_reel_ring_feed(source));
+            deck.sync_wait([&] {
+                return check_abridged_reel_ring_feed(source);
+            });
         };
 
         "projects plain messages inside abridged reel frames"_test = [] {
@@ -402,7 +404,9 @@ static suite mtproto_tests{
             auto storage = std::array<std::byte, 16>{};
             auto source = mtproto_text_source(chunks, std::span{storage});
 
-            auto payload = deck.sync_wait(read_frame_text(source));
+            auto payload = deck.sync_wait([&] {
+                return read_frame_text(source);
+            });
 
             expect(payload == "abcd");
         };
@@ -412,7 +416,9 @@ static suite mtproto_tests{
             auto out = std::vector<std::byte>{};
             auto sink = nxtrt::container_sink{out};
 
-            deck.sync_wait(write_frame(sink, bytes("abcd")));
+            deck.sync_wait([&] {
+                return write_frame(sink, bytes("abcd"));
+            });
 
             expect(out.size() == std::size_t{5});
             expect(std::to_integer<unsigned>(out[0]) == 1);
@@ -426,12 +432,14 @@ static suite mtproto_tests{
             auto last_message_id = std::optional<std::uint64_t>{};
             auto message_storage = std::array<std::byte, 32>{};
 
-            deck.sync_wait(nxtrt::mtproto::write_plain_abridged_frame(
-                sink,
-                bytes("ping"),
-                last_message_id,
-                message_storage,
-                1'693'436'740'000'000'000ULL));
+            deck.sync_wait([&] {
+                return nxtrt::mtproto::write_plain_abridged_frame(
+                    sink,
+                    bytes("ping"),
+                    last_message_id,
+                    message_storage,
+                    1'693'436'740'000'000'000ULL);
+            });
 
             expect(last_message_id.has_value());
             expect(out.size() == std::size_t{25});
@@ -445,8 +453,9 @@ static suite mtproto_tests{
                 std::span{source_storage},
             };
 
-            auto message =
-                deck.sync_wait(nxtrt::mtproto::read_plain_abridged_frame(source));
+            auto message = deck.sync_wait([&] {
+                return nxtrt::mtproto::read_plain_abridged_frame(source);
+            });
 
             expect(message.message_id == *last_message_id);
             expect(text(message.body) == "ping");

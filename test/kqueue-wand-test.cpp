@@ -192,38 +192,53 @@ static suite kqueue_wand_tests{
         "timeout wishes complete"_test = [] {
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = timeout_once();
+            auto root = nxtrt::root_task{
+                deck,
+                [] {
+                    return timeout_once();
+                },
+            };
 
-            deck.start(task);
-            kqueue_pump_until_done(deck, wand, task);
+            root.start();
+            kqueue_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "native poll-until reports readiness"_test = [] {
             auto sockets = make_socketpair();
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = native_poll_until_after_socket_send(
-                sockets[0].get(),
-                sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return native_poll_until_after_socket_send(
+                        sockets[0].get(),
+                        sockets[1].get());
+                },
+            };
 
-            deck.start(task);
-            kqueue_pump_until_done(deck, wand, task);
+            root.start();
+            kqueue_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "native poll-until times out"_test = [] {
             auto sockets = make_socketpair();
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = native_poll_until_timeout(sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return native_poll_until_timeout(sockets[1].get());
+                },
+            };
 
-            deck.start(task);
-            kqueue_pump_until_done(deck, wand, task);
+            root.start();
+            kqueue_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "loopback listeners accept connected clients"_test = [] {
@@ -238,16 +253,21 @@ static suite kqueue_wand_tests{
 
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = accept_one(listener.get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return accept_one(listener.get());
+                },
+            };
 
-            deck.start(task);
+            root.start();
             if (::connect(
                     client.get(),
                     reinterpret_cast<sockaddr const *>(&address),
                     sizeof(address)) != 0)
                 throw std::runtime_error{"client connect failed"};
 
-            auto accepted = kqueue_pump_until_done(deck, wand, task);
+            auto accepted = kqueue_pump_until_done(deck, wand, root.inner());
             expect(accepted.get() >= 0);
         };
 
@@ -255,58 +275,78 @@ static suite kqueue_wand_tests{
             auto sockets = make_socketpair();
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = repeat_native_poll_until(
-                sockets[0].get(),
-                sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return repeat_native_poll_until(
+                        sockets[0].get(),
+                        sockets[1].get());
+                },
+            };
 
-            deck.start(task);
-            kqueue_pump_until_done(deck, wand, task);
+            root.start();
+            kqueue_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "poll slots are reusable after sibling deletes"_test = [] {
             auto sockets = make_socketpair();
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = repeat_poll_with_sibling_filter(
-                sockets[0].get(),
-                sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return repeat_poll_with_sibling_filter(
+                        sockets[0].get(),
+                        sockets[1].get());
+                },
+            };
 
-            deck.start(task);
-            kqueue_pump_until_done(deck, wand, task);
+            root.start();
+            kqueue_pump_until_done(deck, wand, root.inner());
 
-            expect(task.done());
+            expect(root.inner().done());
         };
 
         "poll wishes are cancelled when their task stops"_test = [] {
             auto sockets = make_socketpair();
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = poll_cancelled(sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return poll_cancelled(sockets[1].get());
+                },
+            };
 
-            deck.start(task);
+            root.start();
             deck.run_ready();
-            expect(!task.done());
+            expect(!root.inner().done());
 
-            task.request_stop();
-            wand.run_until_done(deck, task);
-            std::move(task).result();
+            root.inner().request_stop();
+            wand.run_until_done(deck, root.inner());
+            std::move(root.inner()).result();
         };
 
         "native poll-until is cancelled when its task stops"_test = [] {
             auto sockets = make_socketpair();
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
-            auto task = native_poll_until_cancelled(sockets[1].get());
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return native_poll_until_cancelled(sockets[1].get());
+                },
+            };
 
-            deck.start(task);
+            root.start();
             deck.run_ready();
-            expect(!task.done());
+            expect(!root.inner().done());
 
-            task.request_stop();
-            wand.run_until_done(deck, task);
-            std::move(task).result();
+            root.inner().request_stop();
+            wand.run_until_done(deck, root.inner());
+            std::move(root.inner()).result();
         };
     }};
 

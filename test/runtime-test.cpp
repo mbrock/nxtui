@@ -1252,6 +1252,21 @@ nxtrt::task<void> record_stop_state_after_yield(
     events.push_back(nxtrt::stop_requested() ? value : -value);
 }
 
+nxtrt::task<void> hosted_firm_stop_body(std::vector<int> & events)
+{
+    nxtrt::fork(record_stop_state_after_yield(events, 4));
+    events.push_back(100);
+    co_await nxtrt::yield();
+    co_await nxtrt::join();
+}
+
+nxtrt::task<void> hosted_firm_stop_probe(std::vector<int> & events)
+{
+    co_await nxtrt::with_firm([&] {
+        return hosted_firm_stop_body(events);
+    });
+}
+
 nxtrt::task<void> record_stop_state_after_two_yields(
     std::vector<int> & events,
     int value)
@@ -1596,22 +1611,25 @@ static suite runtime_tests{
                 auto storage = nxtrt::static_deck_task_storage<4>{};
                 auto deck = nxtrt::deck{storage};
 
-                auto task = []() -> nxtrt::task<nxtrt::task_id> {
-                    auto * deck = nxtrt::current_deck();
-                    expect(deck != nullptr);
-                    co_return deck->current_task_id();
-                }();
+                auto root = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<nxtrt::task_id> {
+                        auto * deck = nxtrt::current_deck();
+                        expect(deck != nullptr);
+                        co_return deck->current_task_id();
+                    },
+                };
 
-                expect(!task.id());
-                deck.start(task);
-                auto registered = task.id();
+                expect(!root.inner().id());
+                root.start();
+                auto registered = root.inner().id();
                 expect(registered.index() == std::uint32_t{1});
                 expect(registered.era() == std::uint8_t{1});
 
                 deck.run_ready();
 
-                expect(task.done());
-                expect(std::move(task).result() == registered);
+                expect(root.inner().done());
+                expect(std::move(root.inner()).result() == registered);
             };
 
             "borrowed task registries reuse slots with a new era"_test = [] {
@@ -1622,15 +1640,17 @@ static suite runtime_tests{
                     co_return;
                 };
 
-                auto first = make_task();
-                deck.start(first);
-                auto first_id = first.id();
-                deck.run_ready();
-                first = {};
+                auto first_id = nxtrt::task_id{};
+                {
+                    auto first = nxtrt::root_task{deck, make_task};
+                    first.start();
+                    first_id = first.inner().id();
+                    deck.run_ready();
+                }
 
-                auto second = make_task();
-                deck.start(second);
-                auto second_id = second.id();
+                auto second = nxtrt::root_task{deck, make_task};
+                second.start();
+                auto second_id = second.inner().id();
 
                 expect(first_id.index() == second_id.index());
                 expect(first_id.era() != second_id.era());
@@ -1642,18 +1662,24 @@ static suite runtime_tests{
                 auto storage = nxtrt::static_deck_task_storage<1>{};
                 auto deck = nxtrt::deck{storage};
 
-                auto parked = []() -> nxtrt::task<void> {
-                    co_await nxtrt::yield();
-                }();
-                auto extra = []() -> nxtrt::task<void> {
-                    co_return;
-                }();
+                auto parked = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<void> {
+                        co_await nxtrt::yield();
+                    },
+                };
+                auto extra = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<void> {
+                        co_return;
+                    },
+                };
 
-                deck.start(parked);
+                parked.start();
 
                 auto rejected = false;
                 try {
-                    deck.start(extra);
+                    extra.start();
                 } catch (const nxtrt::runtime_error &) {
                     rejected = true;
                 }
@@ -1666,18 +1692,19 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{storage};
                 auto events = std::vector<int>{};
 
-                auto task = [&events]() -> nxtrt::task<void> {
-                    events.push_back(1);
-                    co_await nxtrt::yield();
-                    events.push_back(2);
-                }();
+                {
+                    auto root = nxtrt::root_task{
+                        deck,
+                        [&] {
+                            return record_after_yield(events, 0);
+                        },
+                    };
 
-                deck.start(task);
-                deck.run_ready();
-                expect(events == std::vector<int>{1});
-                expect(!deck.empty());
-
-                task = {};
+                    root.start();
+                    deck.run_ready();
+                    expect(events == std::vector<int>{1});
+                    expect(!deck.empty());
+                }
                 deck.run_ready();
 
                 expect(events == std::vector<int>{1});
@@ -1721,8 +1748,13 @@ static suite runtime_tests{
                     events.push_back(2);
                 };
 
-                auto task = task_body(events);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return task_body(events);
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
                 expect(events == std::vector<int>{1})
@@ -1751,8 +1783,13 @@ static suite runtime_tests{
                     events.push_back(2);
                 };
 
-                auto task = task_body(events);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return task_body(events);
+                    },
+                };
+                root.start();
                 deck.run_until_idle();
 
                 expect(events == std::vector<int>{1, 2})
@@ -1792,12 +1829,17 @@ static suite runtime_tests{
             "tasks observe their own stop request"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto task = []() -> nxtrt::task<bool> {
-                    co_return nxtrt::task_stop_requested();
-                }();
-                task.request_stop();
+                auto root = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<bool> {
+                        co_return nxtrt::task_stop_requested();
+                    },
+                };
+                root.inner().request_stop();
+                root.start();
+                deck.run_until_idle();
 
-                expect(deck.sync_wait(std::move(task)));
+                expect(std::move(root.inner()).result());
             };
 
             "ready awaitable resolves without suspending"_test = [] {
@@ -1805,19 +1847,24 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
                 auto suspends = 0;
 
-                auto task = run_splice_probe(events, suspends, true);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return run_splice_probe(events, suspends, true);
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
                 expect(suspends == 0_i)
                     << "ready fast path must not enter await_suspend";
-                expect(task.done())
+                expect(root.inner().done())
                     << "ready awaitable should finish in one pump round";
                 expect(deck.empty())
                     << "ready awaitable should not queue any work";
                 expect(events == std::vector<int>{99})
                     << "ready path should skip the delegate task entirely";
-                expect(std::move(task).result() == 42_i);
+                expect(std::move(root.inner()).result() == 42_i);
             };
 
             "missing awaitable delegates to a spliced task"_test = [] {
@@ -1825,8 +1872,9 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
                 auto suspends = 0;
 
-                auto value = deck.sync_wait(
-                    run_splice_probe(events, suspends, false));
+                auto value = deck.sync_wait([&] {
+                    return run_splice_probe(events, suspends, false);
+                });
 
                 expect(suspends == 1_i)
                     << "miss path should enter await_suspend exactly once";
@@ -1840,17 +1888,22 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
                 auto suspends = 0;
 
-                auto task = run_hope(events, suspends, true);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return run_hope(events, suspends, true);
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
                 expect(suspends == 0_i)
                     << "ready hope must not build a delegate task";
-                expect(task.done())
+                expect(root.inner().done())
                     << "ready hope should finish in one pump round";
                 expect(deck.empty());
                 expect(events == std::vector<int>{99});
-                expect(std::move(task).result() == 42_i);
+                expect(std::move(root.inner()).result() == 42_i);
             };
 
             "hope makes a wish and resumes after it"_test = [] {
@@ -1858,8 +1911,9 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
                 auto suspends = 0;
 
-                auto value =
-                    deck.sync_wait(run_hope(events, suspends, false));
+                auto value = deck.sync_wait([&] {
+                    return run_hope(events, suspends, false);
+                });
 
                 expect(suspends == 1_i)
                     << "miss path should build exactly one delegate task";
@@ -1870,31 +1924,43 @@ static suite runtime_tests{
 
             "map transforms a task result"_test = [] {
                 auto deck = nxtrt::deck{};
-                expect(deck.sync_wait(map_over_task()) == 22_i);
+                expect(deck.sync_wait([] {
+                    return map_over_task();
+                }) == 22_i);
             };
 
             "map over a ready hope stays synchronous"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto task = map_over_ready_hope();
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return map_over_ready_hope();
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
-                expect(task.done())
+                expect(root.inner().done())
                     << "mapping a ready awaitable must not add a suspension";
                 expect(deck.empty());
-                expect(std::move(task).result() == 42_i);
+                expect(std::move(root.inner()).result() == 42_i);
             };
 
             "map transforms a wish result over one round-trip"_test = [] {
                 auto wand = manual_wand{};
                 auto deck = nxtrt::deck{&wand};
 
-                auto task = map_over_manual_wish(55);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return map_over_manual_wish(55);
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
-                expect(!task.done())
+                expect(!root.inner().done())
                     << "mapped wish should park, not complete synchronously";
                 expect(wand.prepared == std::vector<nxtrt::coin_t>{55})
                     << "map must forward the wish's preparation to the wand";
@@ -1904,18 +1970,19 @@ static suite runtime_tests{
                 wand.fulfill(deck, 55);
                 deck.run_ready();
 
-                expect(task.done());
-                expect(std::move(task).result() == 7_i)
+                expect(root.inner().done());
+                expect(std::move(root.inner()).result() == 7_i)
                     << "transform must run in the resume after fulfillment";
             };
 
             "then transforms task values"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto result = deck.sync_wait(
-                    nxtrt::then(value_after_yield(20), [](int value) {
+                auto result = deck.sync_wait([] {
+                    return nxtrt::then(value_after_yield(20), [](int value) {
                         return value + 1;
-                    }));
+                    });
+                });
 
                 expect(result == 21_i);
             };
@@ -1923,10 +1990,13 @@ static suite runtime_tests{
             "let_value chains task values"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto result = deck.sync_wait(
-                    nxtrt::let_value(value_after_yield(20), [](int value) {
+                auto result = deck.sync_wait([] {
+                    return nxtrt::let_value(
+                        value_after_yield(20),
+                        [](int value) {
                         return value_after_yield(value + 2);
-                    }));
+                    });
+                });
 
                 expect(result == 22_i);
             };
@@ -1935,11 +2005,13 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait(nxtrt::finally(
-                    value_after_yield(7),
-                    [&]() {
-                        return record_after_yield(events, 9);
-                    }));
+                auto result = deck.sync_wait([&] {
+                    return nxtrt::finally(
+                        value_after_yield(7),
+                        [&]() {
+                            return record_after_yield(events, 9);
+                        });
+                });
 
                 expect(result == 7_i);
                 expect(events == std::vector<int>{91, 92});
@@ -1951,11 +2023,13 @@ static suite runtime_tests{
                 auto threw = false;
 
                 try {
-                    (void)deck.sync_wait(nxtrt::finally(
-                        throw_int_after_yield(),
-                        [&]() {
-                            return record_after_yield(events, 8);
-                        }));
+                    (void)deck.sync_wait([&] {
+                        return nxtrt::finally(
+                            throw_int_after_yield(),
+                            [&]() {
+                                return record_after_yield(events, 8);
+                            });
+                    });
                 } catch (const std::exception &) {
                     threw = true;
                 }
@@ -1969,12 +2043,14 @@ static suite runtime_tests{
                 auto grouped = false;
 
                 try {
-                    (void)deck.sync_wait(nxtrt::finally(
-                        throw_int_after_yield(),
-                        []() -> nxtrt::task<void> {
-                            co_await nxtrt::yield();
-                            throw nxtrt::runtime_error{"cleanup boom"};
-                        }));
+                    (void)deck.sync_wait([] {
+                        return nxtrt::finally(
+                            throw_int_after_yield(),
+                            []() -> nxtrt::task<void> {
+                                co_await nxtrt::yield();
+                                throw nxtrt::runtime_error{"cleanup boom"};
+                            });
+                    });
                 } catch (const nxtrt::exception_group & group) {
                     grouped = true;
                     expect(group.exceptions().size() == std::size_t{2});
@@ -1987,17 +2063,18 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait(
-                    value_after_yield(10)
-                    | nxtrt::then([](int value) {
-                        return value * 2;
-                    })
-                    | nxtrt::let_value([](int value) {
-                        return value_after_yield(value + 5);
-                    })
-                    | nxtrt::finally([&]() {
-                        return record_after_yield(events, 6);
-                    }));
+                auto result = deck.sync_wait([&] {
+                    return value_after_yield(10)
+                        | nxtrt::then([](int value) {
+                            return value * 2;
+                        })
+                        | nxtrt::let_value([](int value) {
+                            return value_after_yield(value + 5);
+                        })
+                        | nxtrt::finally([&]() {
+                            return record_after_yield(events, 6);
+                        });
+                });
 
                 expect(result == 25_i);
                 expect(events == std::vector<int>{61, 62});
@@ -2588,21 +2665,15 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{1, 3, 21, 22, 4});
             };
 
-            "preconstructed root tasks reject fork outside a firm"_test = [] {
-                auto deck = nxtrt::deck{};
-
-                auto root = []() -> nxtrt::task<bool> {
-                    try {
-                        nxtrt::fork([]() -> nxtrt::task<void> {
-                            co_return;
-                        }());
-                    } catch (const std::exception &) {
-                        co_return true;
-                    }
-                    co_return false;
-                }();
-
-                auto rejected = deck.sync_wait(std::move(root));
+            "tasks require a firm at construction"_test = [] {
+                auto rejected = false;
+                try {
+                    (void)[]() -> nxtrt::task<void> {
+                        co_return;
+                    }();
+                } catch (const nxtrt::runtime_error &) {
+                    rejected = true;
+                }
 
                 expect(rejected);
             };
@@ -2908,23 +2979,33 @@ static suite runtime_tests{
 
             "shielded child tasks do not inherit parent stop"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto task = shielded_child_stop_state();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return shielded_child_stop_state();
+                    },
+                };
 
-                deck.start(task);
-                task.request_stop();
+                root.start();
+                root.inner().request_stop();
                 deck.run_until_idle();
 
-                expect(task.done());
-                expect(!std::move(task).result());
+                expect(root.inner().done());
+                expect(!std::move(root.inner()).result());
             };
 
             "shielded child wishes are not cancelled by parent stop"_test = [] {
                 auto wand = manual_wand{};
                 auto deck = nxtrt::deck{&wand};
-                auto task = shielded_manual_token(99);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [] {
+                        return shielded_manual_token(99);
+                    },
+                };
 
-                deck.start(task);
-                task.request_stop();
+                root.start();
+                root.inner().request_stop();
                 deck.run_until_idle();
 
                 expect(wand.prepared == std::vector<nxtrt::coin_t>{99});
@@ -2934,31 +3015,27 @@ static suite runtime_tests{
                 wand.fulfill(deck, 99);
                 deck.run_until_idle();
 
-                expect(task.done());
-                std::move(task).result();
+                expect(root.inner().done());
+                std::move(root.inner()).result();
             };
 
             "stop a hosted firm when its parent task is stopped"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto task = [&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::fork(
-                            record_stop_state_after_yield(events, 4));
-                        events.push_back(100);
-                        co_await nxtrt::yield();
-                        co_await nxtrt::join();
-                        co_return;
-                    });
-                }();
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return hosted_firm_stop_probe(events);
+                    },
+                };
 
-                deck.start(task);
+                root.start();
                 for (auto i = 0; i != 8 && events.empty(); ++i)
                     deck.run_ready();
 
                 expect(events == std::vector<int>{100});
-                task.request_stop();
+                root.inner().request_stop();
                 deck.run_until_idle();
 
                 expect(events == std::vector<int>{100, 4});
@@ -3089,22 +3166,24 @@ static suite runtime_tests{
         "tool batches"_test = [] {
             "parse calls and return function_call_output items in order"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto calls = deck.sync_wait(
-                    nxtai::tools::read_function_calls_from_items(
-                        {
+                auto calls = deck.sync_wait([] {
+                    return nxtai::tools::read_function_calls_from_items(
+                        std::vector{
                             nxtai::openai::raw_json{
                                 R"({"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo","arguments":"{\"text\":\"one\"}"})"},
                             nxtai::openai::raw_json{
                                 R"({"id":"fc_2","type":"function_call","call_id":"call_2","name":"echo","arguments":"{\"text\":\"two\"}"})"},
-                        }));
+                        });
+                });
                 auto tools = nxtai::tools::make_tool_registry({
                     nxtai::tools::make_function_tool(echo_tool{}),
                 });
 
-                auto results = deck.sync_wait(
-                    nxtai::tools::run_function_tool_batch(
+                auto results = deck.sync_wait([&]() mutable {
+                    return nxtai::tools::run_function_tool_batch(
                         tools,
-                        std::move(calls)));
+                        std::move(calls));
+                });
 
                 expect(results.size() == 2_ul);
                 expect(results[0].call.call_id == "call_1");
@@ -3133,10 +3212,11 @@ static suite runtime_tests{
                     },
                 };
 
-                auto results = deck.sync_wait(
-                    nxtai::tools::run_function_tool_batch(
+                auto results = deck.sync_wait([&]() mutable {
+                    return nxtai::tools::run_function_tool_batch(
                         tools,
-                        std::move(calls)));
+                        std::move(calls));
+                });
 
                 expect(results.size() == 1_ul);
                 expect(results[0].result.failed);
@@ -3157,8 +3237,13 @@ static suite runtime_tests{
                     events.push_back(2);
                 };
 
-                auto task = task_body(events);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return task_body(events);
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
                 expect(events == std::vector<int>{1})
@@ -3191,8 +3276,13 @@ static suite runtime_tests{
                     events.push_back(2);
                 };
 
-                auto task = task_body(events);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return task_body(events);
+                    },
+                };
+                root.start();
                 deck.run_ready();
 
                 expect(events == std::vector<int>{1});
@@ -3215,13 +3305,16 @@ static suite runtime_tests{
                 auto wand = manual_wand{};
                 auto deck = nxtrt::deck{&wand};
 
-                auto task = []() -> nxtrt::task<void> {
-                    co_await nxtrt::op::manual{.token = 99};
-                }();
+                auto root = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<void> {
+                        co_await nxtrt::op::manual{.token = 99};
+                    },
+                };
 
-                deck.start(task);
+                root.start();
                 deck.run_ready();
-                task.request_stop();
+                root.inner().request_stop();
 
                 expect(wand.cancelled == std::vector<nxtrt::coin_t>{99});
             };
@@ -3403,21 +3496,26 @@ static suite runtime_tests{
                 auto reader = text_source(chunks, std::span{storage});
                 auto events = std::vector<int>{};
 
-                auto task = take_three_buffered_bytes(reader, events);
-                deck.start(task);
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return take_three_buffered_bytes(reader, events);
+                    },
+                };
+                root.start();
 
                 deck.run_ready();
-                expect(!task.done())
+                expect(!root.inner().done())
                     << "initial fill should delegate to a slow task";
                 deck.run_ready();
-                expect(!task.done())
+                expect(!root.inner().done())
                     << "fill continuation should wait for the next deck turn";
                 deck.run_ready();
 
-                expect(task.done())
+                expect(root.inner().done())
                     << "three buffered take(1) calls must finish inline";
                 expect(events == std::vector<int>{1, 2, 3, 4});
-                expect(std::move(task).result() == "abc");
+                expect(std::move(root.inner()).result() == "abc");
             };
 
             "bytefeed peeks through shared chunk views"_test = [] {
@@ -3426,7 +3524,9 @@ static suite runtime_tests{
                 auto storage = std::array<std::byte, 4>{};
                 auto reader = text_source(chunks, std::span{storage});
 
-                deck.sync_wait(check_bytefeed_chunk_peek(reader));
+                deck.sync_wait([&] {
+                    return check_bytefeed_chunk_peek(reader);
+                });
             };
 
             "chop lazily scans visible byte chunks"_test = [] {
@@ -3489,7 +3589,9 @@ static suite runtime_tests{
                     std::span{storage},
                 };
 
-                deck.sync_wait(check_reel_chops_ring_feed(reader));
+                deck.sync_wait([&] {
+                    return check_reel_chops_ring_feed(reader);
+                });
             };
 
             "reel is generic over source stock values"_test = [] {
@@ -3499,7 +3601,9 @@ static suite runtime_tests{
                     5,
                 };
 
-                deck.sync_wait(check_stock_reel_chops_ring_feed(source));
+                deck.sync_wait([&] {
+                    return check_stock_reel_chops_ring_feed(source);
+                });
             };
 
             "empty reads are distinguished from EOF"_test = [] {
@@ -3815,7 +3919,9 @@ static suite runtime_tests{
                 auto reader = text_source(chunks, std::span<std::byte>{});
                 auto sink = chunking_string_sink{64};
 
-                auto streamed = deck.sync_wait(nxtrt::stream_all(reader, sink));
+                auto streamed = deck.sync_wait([&] {
+                    return nxtrt::stream_all(reader, sink);
+                });
 
                 expect(streamed == std::size_t{2});
                 expect(sink.text == "xy");
@@ -3849,16 +3955,25 @@ static suite runtime_tests{
                             chunking_string_sink{64, std::span{storage}};
                         auto events = std::vector<int>{};
 
-                        auto task = write_three_buffered_bytes(writer, events);
-                        deck.start(task);
+                        auto root = nxtrt::root_task{
+                            deck,
+                            [&] {
+                                return write_three_buffered_bytes(
+                                    writer,
+                                    events);
+                            },
+                        };
+                        root.start();
                         deck.run_ready();
 
-                        expect(task.done())
+                        expect(root.inner().done())
                             << "three buffered write() calls must finish inline";
                         expect(events == std::vector<int>{1, 2, 3, 4});
                         expect(writer.text.empty());
 
-                        deck.sync_wait(flush_writer(writer));
+                        deck.sync_wait([&] {
+                            return flush_writer(writer);
+                        });
                         expect(writer.text == "abc");
                     };
                 };
@@ -4181,14 +4296,18 @@ static suite runtime_tests{
                     storage,
                 };
 
-                deck.sync_wait(check_feed_peek(source));
+                deck.sync_wait([&] {
+                    return check_feed_peek(source);
+                });
             };
 
             "peek borrows requested values as chunks"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto source = int_feed{std::vector<int>{1, 2, 3}, 2};
 
-                deck.sync_wait(check_feed_chunk_peek(source));
+                deck.sync_wait([&] {
+                    return check_feed_chunk_peek(source);
+                });
             };
 
             "feed buffers expose wrapped chunks"_test = [] {
@@ -4196,7 +4315,9 @@ static suite runtime_tests{
                 auto source =
                     int_feed{std::vector<int>{1, 2, 3, 4, 5}, 3};
 
-                deck.sync_wait(check_feed_ring_peek(source));
+                deck.sync_wait([&] {
+                    return check_feed_ring_peek(source);
+                });
             };
 
             "byte feeds have reader-shaped ring lookahead"_test = [] {
@@ -4208,7 +4329,9 @@ static suite runtime_tests{
                     storage,
                 };
 
-                deck.sync_wait(check_byte_feed_ring_shape(source));
+                deck.sync_wait([&] {
+                    return check_byte_feed_ring_shape(source);
+                });
             };
 
             "bytefeeds are feeds"_test = [] {
@@ -4217,14 +4340,18 @@ static suite runtime_tests{
                 auto storage = std::array<std::byte, 4>{};
                 auto reader = text_source(chunks, std::span{storage});
 
-                deck.sync_wait(check_byte_feed_ring_shape(reader));
+                deck.sync_wait([&] {
+                    return check_byte_feed_ring_shape(reader);
+                });
             };
 
             "peek returns null at eof"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto source = int_feed{std::vector<int>{}, 1};
 
-                auto event = deck.sync_wait(peek_int_value(source));
+                auto event = deck.sync_wait([&] {
+                    return peek_int_value(source);
+                });
 
                 expect(event == nullptr);
             };
@@ -4233,11 +4360,15 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto source = int_feed{std::vector<int>{7}, 1};
 
-                deck.sync_wait(check_feed_one_methods(source));
+                deck.sync_wait([&] {
+                    return check_feed_one_methods(source);
+                });
 
                 auto rejected = false;
                 try {
-                    (void)deck.sync_wait(take_one_int_value(source));
+                    (void)deck.sync_wait([&] {
+                        return take_one_int_value(source);
+                    });
                 } catch (const nxtrt::value_end_of_stream &) {
                     rejected = true;
                 }
@@ -4250,7 +4381,9 @@ static suite runtime_tests{
                 auto storage = nxtrt::static_value_storage<int, 2>{};
                 auto sink = collecting_int_sink{64, storage};
 
-                deck.sync_wait(check_sink_buffers_until_flush(sink));
+                deck.sync_wait([&] {
+                    return check_sink_buffers_until_flush(sink);
+                });
 
                 expect(sink.collected == std::vector<int>{1, 2});
             };
@@ -4259,7 +4392,9 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto sink = collecting_int_sink{2, std::size_t{3}};
 
-                deck.sync_wait(check_sink_ring_buffer(sink));
+                deck.sync_wait([&] {
+                    return check_sink_ring_buffer(sink);
+                });
 
                 expect(sink.collected == std::vector<int>{1, 2, 3, 4, 5});
             };
@@ -4274,7 +4409,7 @@ static suite runtime_tests{
                     co_await sink.write(std::span<const int>{values});
                     co_await sink.write_splat(std::span<const int>{pattern}, 2);
                     co_await sink.flush();
-                }());
+                });
 
                 expect(sink.collected == std::vector<int>{1, 2, 3, 8, 9, 8, 9});
             };
@@ -4286,7 +4421,7 @@ static suite runtime_tests{
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     co_await sink.write_splat(std::span<const int>{pattern}, 3);
-                }());
+                });
 
                 expect(sink.collected == std::vector<int>{4, 5, 4, 5, 4, 5});
             };
@@ -4296,7 +4431,9 @@ static suite runtime_tests{
                 auto source = int_feed{std::vector<int>{1, 2, 3}, 1};
                 auto sink = collecting_int_sink{64, std::size_t{2}};
 
-                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+                auto streamed = deck.sync_wait([&] {
+                    return nxtrt::stream_all(source, sink);
+                });
 
                 expect(streamed == std::size_t{3});
                 expect(sink.collected == std::vector<int>{1, 2, 3});
@@ -4310,7 +4447,9 @@ static suite runtime_tests{
                 };
                 auto sink = collecting_int_sink{64, std::size_t{3}};
 
-                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+                auto streamed = deck.sync_wait([&] {
+                    return nxtrt::stream_all(source, sink);
+                });
 
                 expect(streamed == std::size_t{3});
                 expect(sink.collected == std::vector<int>{5, 6, 7});
@@ -4321,7 +4460,9 @@ static suite runtime_tests{
                 auto values = std::vector<int>{};
                 auto sink = nxtrt::container_sink{values};
 
-                deck.sync_wait(write_int_values(sink, 1, 2));
+                deck.sync_wait([&] {
+                    return write_int_values(sink, 1, 2);
+                });
                 expect(sink.buffered_size() == std::size_t{0});
 
                 expect(values == std::vector<int>{1, 2});
@@ -4336,7 +4477,9 @@ static suite runtime_tests{
                     std::back_inserter(values),
                 };
 
-                deck.sync_wait(write_int_values(sink, 3, 4));
+                deck.sync_wait([&] {
+                    return write_int_values(sink, 3, 4);
+                });
 
                 expect(values == std::vector<int>{3, 4});
             };
@@ -4353,7 +4496,9 @@ static suite runtime_tests{
                 };
                 auto sink = nxtrt::container_sink{values};
 
-                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+                auto streamed = deck.sync_wait([&] {
+                    return nxtrt::stream_all(source, sink);
+                });
 
                 expect(streamed == std::size_t{3});
                 expect(values == std::vector<int>{10, 20, 30});
@@ -4390,7 +4535,7 @@ static suite runtime_tests{
                     expect(peeked.size() == std::size_t{2});
                     auto streamed = co_await nxtrt::stream_all(source, sink);
                     expect(streamed == std::size_t{4});
-                }());
+                });
 
                 expect(out == std::vector<int>{1, 2, 3, 4});
             };
@@ -4423,7 +4568,7 @@ static suite runtime_tests{
 
                     auto rest = co_await source.take_one();
                     expect(rest == 4_i);
-                }());
+                });
             };
 
             "parser feeds parse values from arbitrary feeds"_test = [] {
@@ -4437,7 +4582,9 @@ static suite runtime_tests{
                 auto values = std::vector<int>{};
                 auto sink = nxtrt::container_sink{values};
 
-                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+                auto streamed = deck.sync_wait([&] {
+                    return nxtrt::stream_all(source, sink);
+                });
 
                 expect(streamed == std::size_t{2});
                 expect(values == std::vector<int>{3, 7});
@@ -4454,7 +4601,9 @@ static suite runtime_tests{
                 auto values = std::vector<int>{};
                 auto sink = nxtrt::container_sink{values};
 
-                auto streamed = deck.sync_wait(nxtrt::stream_all(source, sink));
+                auto streamed = deck.sync_wait([&] {
+                    return nxtrt::stream_all(source, sink);
+                });
 
                 expect(streamed == std::size_t{3});
                 expect(values == std::vector<int>{1, 2, 3});
@@ -4468,15 +4617,21 @@ static suite runtime_tests{
                     storage,
                 };
 
-                deck.sync_wait(check_range_source_lookahead(source));
+                deck.sync_wait([&] {
+                    return check_range_source_lookahead(source);
+                });
             };
 
             "discard_all consumes expected values"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto source = int_feed{std::vector<int>{1, 2, 3}, 1};
 
-                deck.sync_wait(discard_expected_prefix(source));
-                auto rest = deck.sync_wait(take_int_value(source));
+                deck.sync_wait([&] {
+                    return discard_expected_prefix(source);
+                });
+                auto rest = deck.sync_wait([&] {
+                    return take_int_value(source);
+                });
                 expect(rest && *rest == 3_i);
             };
 
@@ -4486,13 +4641,17 @@ static suite runtime_tests{
                 auto rejected = false;
 
                 try {
-                    deck.sync_wait(discard_mismatched_prefix(source));
+                    deck.sync_wait([&] {
+                        return discard_mismatched_prefix(source);
+                    });
                 } catch (const nxtrt::unexpected_value &) {
                     rejected = true;
                 }
 
                 expect(rejected);
-                auto next = deck.sync_wait(take_int_value(source));
+                auto next = deck.sync_wait([&] {
+                    return take_int_value(source);
+                });
                 expect(next && *next == 2_i);
             };
 
@@ -4502,7 +4661,9 @@ static suite runtime_tests{
                 auto rejected = false;
 
                 try {
-                    deck.sync_wait(discard_past_eof(source));
+                    deck.sync_wait([&] {
+                        return discard_past_eof(source);
+                    });
                 } catch (const nxtrt::value_end_of_stream &) {
                     rejected = true;
                 }
@@ -5054,7 +5215,9 @@ static suite runtime_tests{
                 auto reader = text_source(chunks, std::span{head_storage});
 
                 auto events =
-                    deck.sync_wait(read_sse_events_from_response(reader));
+                    deck.sync_wait([&] {
+                        return read_sse_events_from_response(reader);
+                    });
 
                 expect(events.size() == std::size_t{1});
                 expect(events[0].type == "response.output_text.delta");

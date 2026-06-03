@@ -645,7 +645,9 @@ int nxtllm_main(int argc, char ** argv)
     nxt::debug::try_catch(
         [&] {
             auto rt = nxtrt::runtime{};
-            exit_code = rt.run(run_nxtllm(parse_args(argc, argv)));
+            exit_code = rt.run([&] {
+                return run_nxtllm(parse_args(argc, argv));
+            });
         },
         [&](const missing_prompt & e) { exit_code = report_exception(e); },
         [&](const openai_http_error & e) {

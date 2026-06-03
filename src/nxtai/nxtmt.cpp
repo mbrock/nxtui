@@ -512,7 +512,9 @@ int main(int argc, char ** argv)
 {
     try {
         auto rt = nxtrt::runtime{};
-        return rt.run(run_nxtmt(parse_args(argc, argv)));
+        return rt.run([&] {
+            return run_nxtmt(parse_args(argc, argv));
+        });
     } catch (const std::exception & error) {
         std::cerr << "nxtmt: " << error.what() << '\n';
         return EXIT_FAILURE;

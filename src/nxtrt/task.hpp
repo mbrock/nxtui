@@ -1546,11 +1546,7 @@ inline void * allocate_task_frame(std::size_t size)
     if (auto * firm = current_firm())
         return firm->allocate_frame(size);
 
-    auto * header = static_cast<task_frame_header *>(
-        ::operator new(sizeof(task_frame_header) + size));
-    header->owner = nullptr;
-    header->size = size;
-    return header + 1;
+    throw runtime_error{"nxtrt task created without current firm"};
 }
 
 inline void deallocate_task_frame(void * ptr, std::size_t) noexcept
@@ -1558,9 +1554,8 @@ inline void deallocate_task_frame(void * ptr, std::size_t) noexcept
     if (ptr == nullptr)
         return;
 
-    auto * header = static_cast<task_frame_header *>(ptr) - 1;
-    if (header->owner == nullptr)
-        ::operator delete(header);
+    [[maybe_unused]] auto * header =
+        static_cast<task_frame_header *>(ptr) - 1;
 }
 
 } // namespace detail
@@ -2572,7 +2567,7 @@ public:
         [[maybe_unused]] auto previous_root_firm =
             env_.replace<firm_key>(&firm_);
         auto root_guard = detail::env_guard{env_, &d, nullptr};
-        task_ = with_firm(factory_type{std::forward<Fn>(fn)});
+        task_ = std::invoke(factory_type{std::forward<Fn>(fn)});
     }
 
     void start()

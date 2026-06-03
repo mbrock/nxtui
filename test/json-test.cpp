@@ -19,7 +19,7 @@ std::vector<nxt::json::token> read_all_json_tokens(std::string_view input)
         while (auto token = co_await nxt::json::read_token(reader))
             out.push_back(std::move(*token));
         co_return out;
-    }());
+    });
 }
 
 static boost::ut::suite json_tests{

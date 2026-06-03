@@ -61,6 +61,9 @@ model runtime-model
     observes one task
 
   predicate structural-invariants
+    all ([t task])
+      some ([z firm])
+        in t (z spawned)
     all ([z firm] [t (z spawned)])
       some ([d (z issued)])
         == (d observes) t

@@ -197,7 +197,9 @@ static suite crypto_tests{
             auto deck = nxtrt::deck{};
             auto sink = nxtrt::sha256_sink{std::size_t{2}};
 
-            deck.sync_wait(write_sha256_sink_chunks(sink));
+            deck.sync_wait([&] {
+                return write_sha256_sink_chunks(sink);
+            });
 
             expect(equal_bytes(
                 sink.finalize(),
@@ -209,7 +211,9 @@ static suite crypto_tests{
             auto deck = nxtrt::deck{};
             auto sink = nxtrt::sha1_sink{std::size_t{2}};
 
-            deck.sync_wait(write_sha1_sink_chunks(sink));
+            deck.sync_wait([&] {
+                return write_sha1_sink_chunks(sink);
+            });
 
             expect(equal_bytes(
                 sink.finalize(),
@@ -237,7 +241,9 @@ static suite crypto_tests{
 
             auto deck = nxtrt::deck{};
             auto sink = nxtrt::hmac_sha256_sink{key, std::size_t{3}};
-            deck.sync_wait(write_hmac_sha256_sink_chunks(sink));
+            deck.sync_wait([&] {
+                return write_hmac_sha256_sink_chunks(sink);
+            });
             expect(equal_bytes(
                 sink.finalize(),
                 hex("b0344c61d8db38535ca8afceaf0bf12b"
