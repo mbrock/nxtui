@@ -61,6 +61,8 @@ child is enqueued, so firm bookkeeping has begun naming forked work by durable
 task identity instead of only by coroutine handle.
 If deck registration fails after a child record has been constructed, `fork()`
 destroys that record and leaves the firm with no phantom child to join.
+That generic metadata now has a named `firm_child_record_header`, keeping firm
+identity and completion-reporting state distinct from typed result handling.
 
 Task cancellation bookkeeping has started moving the same way. Parent-stop
 propagation and parked-wish cancellation now use concrete in-promise

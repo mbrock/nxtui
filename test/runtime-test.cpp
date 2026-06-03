@@ -2929,7 +2929,7 @@ static suite runtime_tests{
                         nxtrt::detail::child_record_base & child,
                         std::exception_ptr) noexcept override
                     {
-                        completed_ids->push_back(child.child_task);
+                        completed_ids->push_back(child.firm_record.task);
                     }
 
                 private:

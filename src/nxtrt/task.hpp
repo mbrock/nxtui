@@ -803,6 +803,13 @@ private:
     promise_base * promise_ = nullptr;
 };
 
+struct firm_child_record_header
+{
+    firm * owner = nullptr;
+    task_id task;
+    bool completion_reported = false;
+};
+
 struct child_record_base
 {
     child_record_base() = default;
@@ -831,9 +838,7 @@ struct child_record_base
 
     void report_finished_from_promise() noexcept;
 
-    firm * owner = nullptr;
-    task_id child_task;
-    bool completion_reported = false;
+    firm_child_record_header firm_record;
 };
 
 inline void promise_base::run_completion_callback() noexcept
@@ -1037,7 +1042,7 @@ struct child_record final : child_record_base
         : handle(h)
         , result(result)
     {
-        this->owner = &owner;
+        this->firm_record.owner = &owner;
         if (this->result != nullptr)
             this->result->child = this;
     }
@@ -1187,7 +1192,7 @@ struct child_record<void> final : child_record_base
         : handle(h)
         , result(result)
     {
-        this->owner = &owner;
+        this->firm_record.owner = &owner;
         if (this->result != nullptr)
             this->result->child = this;
     }
@@ -2214,7 +2219,8 @@ public:
                 &result.state());
             record_constructed = true;
             promise.observe_completion_of(*record);
-            record->child_task = active_deck->enqueue(handle, &promise);
+            record->firm_record.task =
+                active_deck->enqueue(handle, &promise);
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
@@ -2275,9 +2281,9 @@ private:
         detail::child_record_base & child,
         std::exception_ptr known_failure = {}) noexcept
     {
-        if (child.completion_reported)
+        if (child.firm_record.completion_reported)
             return;
-        child.completion_reported = true;
+        child.firm_record.completion_reported = true;
         child_finished(
             child,
             known_failure ? known_failure : child.completion_failure());
@@ -2356,8 +2362,8 @@ namespace detail {
 
 inline void child_record_base::report_finished_from_promise() noexcept
 {
-    if (owner != nullptr)
-        owner->report_child_finished(*this);
+    if (firm_record.owner != nullptr)
+        firm_record.owner->report_child_finished(*this);
 }
 
 } // namespace detail
