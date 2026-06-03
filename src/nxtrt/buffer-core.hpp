@@ -10,10 +10,12 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -214,6 +216,58 @@ private:
 
 template<typename T = std::byte, std::size_t Inline = 2>
 using byte_chunks = buffer_chunks<T, Inline>;
+
+/// View of raw storage where up to `size()` values of `T` may be constructed.
+///
+/// Unlike `std::span<T>`, this does not claim that live `T` objects already
+/// exist. Producers must start object lifetimes before reporting values as
+/// constructed to a ring, feed, or sink.
+template<typename T>
+class junk
+{
+public:
+    using value_type = std::remove_cv_t<T>;
+
+    junk() = default;
+
+    junk(value_type * data, std::size_t size)
+        : data_(data)
+        , size_(size)
+    {}
+
+    [[nodiscard]] value_type * data() const noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return size_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+
+    [[nodiscard]] junk first(std::size_t n) const noexcept
+    {
+        return {data_, std::min(n, size_)};
+    }
+
+    [[nodiscard]] std::span<std::byte> as_writable_bytes() const noexcept
+        requires std::is_trivially_copyable_v<value_type>
+    {
+        return {
+            reinterpret_cast<std::byte *>(data_),
+            size_ * sizeof(value_type),
+        };
+    }
+
+private:
+    value_type * data_ = nullptr;
+    std::size_t size_ = 0;
+};
 
 /// Scanner response for a frame whose complete source stock is not visible yet.
 ///
@@ -488,5 +542,152 @@ template<typename T>
 }
 
 } // namespace detail
+
+/// Borrowed ring storage with explicit constructed-value lifetime.
+///
+/// `ring_region` is the pure storage/cursor layer below feeds and sinks. It
+/// knows about borrowed storage, two-span views, raw writable tail capacity,
+/// constructed prefixes, and destruction. It does not allocate, suspend, or
+/// know about higher-level runtime ownership.
+template<typename T>
+class ring_region
+{
+public:
+    using value_type = std::remove_cv_t<T>;
+    using value_chunk_view = buffer_chunks<value_type>;
+    using const_value_chunk_view = buffer_chunks<const value_type>;
+
+    ring_region() = default;
+
+    ring_region(value_type * data, std::size_t capacity)
+        : data_(data)
+        , capacity_(capacity)
+    {}
+
+    [[nodiscard]] value_type * data() noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] const value_type * data() const noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] std::span<value_type> storage() noexcept
+    {
+        return {data_, capacity_};
+    }
+
+    [[nodiscard]] std::size_t capacity() const noexcept
+    {
+        return capacity_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return size_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+
+    [[nodiscard]] std::size_t unused_capacity_size() const noexcept
+    {
+        return capacity_ - size_;
+    }
+
+    [[nodiscard]] const_value_chunk_view constructed() const noexcept
+    {
+        return detail::ring_chunks(
+            static_cast<const value_type *>(data_),
+            capacity_,
+            seek_,
+            size_);
+    }
+
+    [[nodiscard]] value_chunk_view constructed() noexcept
+    {
+        return detail::ring_chunks(data_, capacity_, seek_, size_);
+    }
+
+    [[nodiscard]] std::span<value_type> unused_capacity() noexcept
+    {
+        return detail::ring_unused_capacity(
+            data_,
+            capacity_,
+            seek_,
+            size_);
+    }
+
+    [[nodiscard]] junk<value_type> unconstructed_capacity() noexcept
+    {
+        auto span = unused_capacity();
+        return {span.data(), span.size()};
+    }
+
+    [[nodiscard]] value_type * front_data() noexcept
+    {
+        return empty() ? nullptr : data_ + seek_;
+    }
+
+    [[nodiscard]] const value_type * front_data() const noexcept
+    {
+        return empty() ? nullptr : data_ + seek_;
+    }
+
+    [[nodiscard]] std::size_t write_index() const noexcept
+    {
+        return detail::ring_write_index<value_type>(capacity_, seek_, size_);
+    }
+
+    [[nodiscard]] bool has_contiguous_constructed() const noexcept
+    {
+        return seek_ + size_ <= capacity_;
+    }
+
+    void advance_constructed(std::size_t n) noexcept
+    {
+        size_ += n;
+    }
+
+    void release_without_destroying() noexcept
+    {
+        seek_ = 0;
+        size_ = 0;
+    }
+
+    void reset_if_empty() noexcept
+    {
+        if (empty())
+            seek_ = 0;
+    }
+
+    void destroy_prefix(std::size_t n) noexcept
+    {
+        while (n != 0) {
+            auto take = std::min(n, capacity_ - seek_);
+            for (auto & value : std::span{data_ + seek_, take})
+                std::destroy_at(&value);
+            seek_ = (seek_ + take) % capacity_;
+            size_ -= take;
+            n -= take;
+        }
+    }
+
+    void destroy_all() noexcept
+    {
+        destroy_prefix(size_);
+        seek_ = 0;
+    }
+
+private:
+    value_type * data_ = nullptr;
+    std::size_t capacity_ = 0;
+    std::size_t seek_ = 0;
+    std::size_t size_ = 0;
+};
 
 } // namespace nxtrt

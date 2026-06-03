@@ -3019,6 +3019,65 @@ static suite runtime_tests{
                 expect(second < 501.0);
             };
 
+            "ring regions expose constructed chunks and raw capacity"_test = [] {
+                auto storage = std::array<std::byte, 4>{};
+                auto ring = nxtrt::ring_region<std::byte>{
+                    storage.data(),
+                    storage.size(),
+                };
+
+                auto dst = ring.unconstructed_capacity();
+                expect(dst.size() == std::size_t{4});
+                auto text = std::string_view{"abc"};
+                std::memcpy(
+                    dst.as_writable_bytes().data(),
+                    text.data(),
+                    text.size());
+                ring.advance_constructed(text.size());
+
+                auto chunks = ring.constructed();
+                expect(chunks.chunk_count() == std::size_t{1});
+                expect(nxtrt::as_string_view(chunks.chunks().front()) == "abc");
+
+                ring.destroy_all();
+                expect(ring.empty());
+                expect(ring.unused_capacity_size() == std::size_t{4});
+            };
+
+            "ring regions preserve wrapped constructed values"_test = [] {
+                auto storage = nxtrt::static_value_storage<int, 3>{};
+                auto ring = nxtrt::ring_region<int>{
+                    storage.data(),
+                    storage.size(),
+                };
+
+                for (auto value : {1, 2, 3}) {
+                    std::construct_at(
+                        ring.data() + ring.write_index(),
+                        value);
+                    ring.advance_constructed(1);
+                }
+
+                ring.destroy_prefix(2);
+                for (auto value : {4, 5}) {
+                    std::construct_at(
+                        ring.data() + ring.write_index(),
+                        value);
+                    ring.advance_constructed(1);
+                }
+
+                auto chunks = ring.constructed();
+                expect(chunks.size() == std::size_t{3});
+                expect(chunks.chunk_count() == std::size_t{2});
+                expect(chunks.chunks()[0].size() == std::size_t{1});
+                expect(chunks.chunks()[0][0] == 3_i);
+                expect(chunks.chunks()[1].size() == std::size_t{2});
+                expect(chunks.chunks()[1][0] == 4_i);
+                expect(chunks.chunks()[1][1] == 5_i);
+
+                ring.destroy_all();
+            };
+
             "chunks are visited through reused storage"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{"ab"sv, "cdef"sv, "g"sv};

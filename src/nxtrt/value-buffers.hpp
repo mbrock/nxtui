@@ -73,58 +73,6 @@ struct unexpected_value : value_buffer_error
     using value_buffer_error::value_buffer_error;
 };
 
-/// View of raw storage where up to `size()` values of `T` may be constructed.
-///
-/// Unlike `std::span<T>`, this does not claim that live `T` objects already
-/// exist. Producers must start object lifetimes before reporting values as
-/// constructed to a feed or sink.
-template<typename T>
-class junk
-{
-public:
-    using value_type = std::remove_cv_t<T>;
-
-    junk() = default;
-
-    junk(value_type * data, std::size_t size)
-        : data_(data)
-        , size_(size)
-    {}
-
-    [[nodiscard]] value_type * data() const noexcept
-    {
-        return data_;
-    }
-
-    [[nodiscard]] std::size_t size() const noexcept
-    {
-        return size_;
-    }
-
-    [[nodiscard]] bool empty() const noexcept
-    {
-        return size_ == 0;
-    }
-
-    [[nodiscard]] junk first(std::size_t n) const noexcept
-    {
-        return {data_, std::min(n, size_)};
-    }
-
-    [[nodiscard]] std::span<std::byte> as_writable_bytes() const noexcept
-        requires std::is_trivially_copyable_v<value_type>
-    {
-        return {
-            reinterpret_cast<std::byte *>(data_),
-            size_ * sizeof(value_type),
-        };
-    }
-
-private:
-    value_type * data_ = nullptr;
-    std::size_t size_ = 0;
-};
-
 namespace detail {
 
 template<typename T, typename Result>
@@ -301,14 +249,12 @@ public:
     using const_value_chunk_view = value_chunks<const value_type>;
 
     explicit sink(storage_ref buffer)
-        : buffer_(buffer.data)
-        , capacity_(buffer.size)
+        : ring_(buffer.data, buffer.size)
     {}
 
     explicit sink(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
-        , buffer_(owned_buffer_.data())
-        , capacity_(owned_buffer_.size())
+        , ring_(owned_buffer_.data(), owned_buffer_.size())
     {}
 
     sink(const sink &) = delete;
@@ -324,12 +270,12 @@ public:
 
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
-        return size_;
+        return ring_.size();
     }
 
     [[nodiscard]] std::size_t unused_capacity_size() const noexcept
     {
-        return capacity_ - size_;
+        return ring_.unused_capacity_size();
     }
 
     /// Return values currently staged for the sink.
@@ -444,23 +390,19 @@ public:
 
     [[nodiscard]] std::size_t storage_capacity() const noexcept
     {
-        return capacity_;
+        return ring_.capacity();
     }
 
     [[nodiscard]] std::span<value_type> unused_capacity() noexcept
     {
-        return detail::ring_unused_capacity(
-            buffer_,
-            capacity_,
-            seek_,
-            size_);
+        return ring_.unused_capacity();
     }
 
     void advance_constructed(std::size_t n)
     {
         if (n > unused_capacity().size())
             throw value_buffer_error{"value sink advanced past buffer capacity"};
-        size_ += n;
+        ring_.advance_constructed(n);
     }
 
     [[nodiscard]] junk<value_type> uninitialized_capacity() noexcept
@@ -472,21 +414,17 @@ public:
 protected:
     [[nodiscard]] const_value_chunk_view buffered_chunks() const noexcept
     {
-        return detail::ring_chunks(
-            static_cast<const value_type *>(buffer_),
-            capacity_,
-            seek_,
-            size_);
+        return ring_.constructed();
     }
 
     [[nodiscard]] value_chunk_view buffered_values() noexcept
     {
-        return detail::ring_chunks(buffer_, capacity_, seek_, size_);
+        return ring_.constructed();
     }
 
     void release_buffered_without_destroying() noexcept
     {
-        seek_ = size_ = 0;
+        ring_.release_without_destroying();
     }
 
     void consume_buffered_for_derived(std::size_t n)
@@ -510,8 +448,10 @@ private:
     {
         if (unused_capacity_size() == 0)
             throw value_buffer_error{"value sink buffer is full"};
-        std::construct_at(buffer_ + write_index(), std::move(value));
-        ++size_;
+        std::construct_at(
+            ring_.data() + ring_.write_index(),
+            std::move(value));
+        ring_.advance_constructed(1);
     }
 
     static std::size_t repeated_size(
@@ -533,7 +473,7 @@ private:
             throw value_buffer_error{"value sink buffer is full"};
         for (auto i = std::size_t{0}; i < values.size(); ++i)
             std::construct_at(dst.data() + i, values[i]);
-        size_ += values.size();
+        ring_.advance_constructed(values.size());
     }
 
     template<std::size_t Inline>
@@ -555,15 +495,15 @@ private:
 
     void reset_if_empty() noexcept
     {
-        if (size_ == 0)
-            seek_ = 0;
+        ring_.reset_if_empty();
     }
 
     void require_preserved_capacity(
         std::size_t preserve,
         std::size_t capacity) const
     {
-        if (preserve > capacity_ || capacity > capacity_ - preserve)
+        auto available = ring_.capacity();
+        if (preserve > available || capacity > available - preserve)
             throw value_buffer_error{"value sink buffer is too small"};
     }
 
@@ -581,14 +521,13 @@ private:
     {
         if (n > buffered_size())
             throw value_buffer_error{"value sink consumed past buffer"};
-        destroy_prefix(n);
+        ring_.destroy_prefix(n);
         reset_if_empty();
     }
 
     void destroy_buffered() noexcept
     {
-        destroy_prefix(size_);
-        seek_ = 0;
+        ring_.destroy_all();
     }
 
     task<void> flush_slow()
@@ -599,7 +538,7 @@ private:
 
     task<void> write_slow(value_type value)
     {
-        if (capacity_ == 0) {
+        if (ring_.capacity() == 0) {
             auto one = value_type{std::move(value)};
             auto accepted = co_await drain_more(value_chunk_view{
                 std::span{&one, 1},
@@ -617,7 +556,7 @@ private:
     task<void> write_slow(std::span<const value_type> values)
         requires std::copy_constructible<value_type>
     {
-        if (capacity_ != 0 && values.size() < capacity_) {
+        if (ring_.capacity() != 0 && values.size() < ring_.capacity()) {
             if (auto free = unused_capacity_size();
                 free != 0 && values.size() > free) {
                 append_to_buffer(values.first(free));
@@ -646,13 +585,13 @@ private:
         std::size_t splat)
         requires std::copy_constructible<value_type>
     {
-        if (capacity_ == 0) {
+        if (ring_.capacity() == 0) {
             co_await write_splat_direct_slow(pattern, splat);
             co_return;
         }
 
         auto count = repeated_size(pattern.size(), splat);
-        if (count < capacity_) {
+        if (count < ring_.capacity()) {
             while (count > unused_capacity_size())
                 co_await drain_buffered_once();
             append_splat_to_buffer(pattern, splat);
@@ -766,27 +705,7 @@ private:
     }
 
     rack<value_type> owned_buffer_{0};
-    value_type * buffer_ = nullptr;
-    std::size_t capacity_ = 0;
-    std::size_t seek_ = 0;
-    std::size_t size_ = 0;
-
-    [[nodiscard]] std::size_t write_index() const noexcept
-    {
-        return detail::ring_write_index<value_type>(capacity_, seek_, size_);
-    }
-
-    void destroy_prefix(std::size_t n) noexcept
-    {
-        while (n != 0) {
-            auto take = std::min(n, capacity_ - seek_);
-            for (auto & value : std::span{buffer_ + seek_, take})
-                std::destroy_at(&value);
-            seek_ = (seek_ + take) % capacity_;
-            size_ -= take;
-            n -= take;
-        }
-    }
+    ring_region<value_type> ring_;
 };
 
 /// Sink that stores values in fixed caller-owned raw storage.
@@ -1129,14 +1048,12 @@ public:
     using const_value_chunk_view = value_chunks<const value_type>;
 
     explicit feed(storage_ref buffer)
-        : buffer_(buffer.data)
-        , capacity_(buffer.size)
+        : ring_(buffer.data, buffer.size)
     {}
 
     explicit feed(std::size_t buffer_size)
         : owned_buffer_(buffer_size)
-        , buffer_(owned_buffer_.data())
-        , capacity_(owned_buffer_.size())
+        , ring_(owned_buffer_.data(), owned_buffer_.size())
     {}
 
     feed(const feed &) = delete;
@@ -1152,12 +1069,12 @@ public:
 
     [[nodiscard]] std::size_t buffered_size() const noexcept
     {
-        return size_;
+        return ring_.size();
     }
 
     [[nodiscard]] std::size_t unused_capacity_size() const noexcept
     {
-        return capacity_ - size_;
+        return ring_.unused_capacity_size();
     }
 
     /// Return currently buffered values.
@@ -1175,7 +1092,7 @@ public:
     /// `value_end_of_stream`.
     hope<void> fill(std::size_t n)
     {
-        if (n > capacity_)
+        if (n > ring_.capacity())
             throw value_buffer_error{"value source buffer is too small"};
         if (buffered_size() >= n)
             return hope<void>::ready();
@@ -1189,7 +1106,7 @@ public:
     hope<const value_type *> peek()
     {
         if (buffered_size() != 0)
-            return hope<const value_type *>::ready(buffer_ + seek_);
+            return hope<const value_type *>::ready(ring_.front_data());
 
         auto read = fill_more();
         if (!read.is_ready())
@@ -1197,7 +1114,7 @@ public:
 
         auto result = read.take_ready();
         if (buffered_size() != 0)
-            return hope<const value_type *>::ready(buffer_ + seek_);
+            return hope<const value_type *>::ready(ring_.front_data());
         if (is_eof(result) && value_count(result) == 0)
             return hope<const value_type *>::ready(nullptr);
         return peek_slow();
@@ -1209,7 +1126,7 @@ public:
     /// mutate this source's buffer.
     hope<const_value_chunk_view> peek(std::size_t n)
     {
-        if (n > capacity_)
+        if (n > ring_.capacity())
             throw value_buffer_error{"value source buffer is too small"};
         if (buffered_size() >= n)
             return hope<const_value_chunk_view>::ready(buffered().first(n));
@@ -1240,7 +1157,7 @@ public:
     {
         if (buffered_size() != 0)
             return hope<std::optional<value_type>>::ready(take_buffered());
-        if (capacity_ == 0)
+        if (ring_.capacity() == 0)
             return take_direct_slow();
 
         auto read = fill_more();
@@ -1359,7 +1276,7 @@ public:
     void rebase(std::size_t capacity)
         requires std::is_trivially_copyable_v<value_type>
     {
-        if (capacity > capacity_)
+        if (capacity > ring_.capacity())
             throw value_buffer_error{"value source buffer is too small"};
         contiguize_buffered_for_derived();
     }
@@ -1382,7 +1299,7 @@ public:
     hope<std::span<const value_type>> peek_span(std::size_t n)
         requires std::same_as<value_type, std::byte>
     {
-        if (n > capacity_)
+        if (n > ring_.capacity())
             throw value_buffer_error{"value source buffer is too small"};
         if (buffered_size() >= n)
             return hope<std::span<const value_type>>::ready(
@@ -1495,45 +1412,39 @@ public:
 protected:
     [[nodiscard]] const_value_chunk_view buffered_chunks() const noexcept
     {
-        return detail::ring_chunks(
-            static_cast<const value_type *>(buffer_),
-            capacity_,
-            seek_,
-            size_);
+        return ring_.constructed();
     }
 
     [[nodiscard]] std::size_t storage_capacity() const noexcept
     {
-        return capacity_;
+        return ring_.capacity();
     }
 
     [[nodiscard]] std::span<value_type> buffer_storage() noexcept
     {
-        return {buffer_, capacity_};
+        return ring_.storage();
     }
 
     [[nodiscard]] std::span<value_type> unused_capacity() noexcept
     {
-        return detail::ring_unused_capacity(
-            buffer_,
-            capacity_,
-            seek_,
-            size_);
+        return ring_.unused_capacity();
     }
 
     void emplace(value_type value)
     {
         if (unused_capacity_size() == 0)
             throw value_buffer_error{"value source buffer is full"};
-        std::construct_at(buffer_ + write_index(), std::move(value));
-        ++size_;
+        std::construct_at(
+            ring_.data() + ring_.write_index(),
+            std::move(value));
+        ring_.advance_constructed(1);
     }
 
     void advance_constructed(std::size_t n)
     {
         if (n > unused_capacity().size())
             throw value_buffer_error{"value source advanced past buffer capacity"};
-        size_ += n;
+        ring_.advance_constructed(n);
     }
 
     [[nodiscard]] junk<value_type> uninitialized_capacity() noexcept
@@ -1557,14 +1468,14 @@ protected:
     void contiguize_buffered_for_derived()
         requires std::is_trivially_copyable_v<value_type>
     {
-        if (size_ == 0) {
-            seek_ = 0;
+        if (ring_.empty()) {
+            ring_.reset_if_empty();
             return;
         }
-        if (seek_ + size_ <= capacity_)
+        if (ring_.has_contiguous_constructed())
             return;
 
-        auto values = std::vector<value_type>(size_);
+        auto values = std::vector<value_type>(ring_.size());
         auto offset = std::size_t{0};
         for (auto chunk : buffered_chunks()) {
             std::memcpy(
@@ -1574,11 +1485,10 @@ protected:
             offset += chunk.size();
         }
 
-        destroy_prefix(size_);
-        seek_ = 0;
+        ring_.destroy_all();
         for (auto i = std::size_t{0}; i < values.size(); ++i)
-            std::construct_at(buffer_ + i, values[i]);
-        size_ = values.size();
+            std::construct_at(ring_.data() + i, values[i]);
+        ring_.advance_constructed(values.size());
     }
 
     /// Cold-path source operation.
@@ -1622,14 +1532,14 @@ private:
     {
         if (n > buffered_size())
             throw value_buffer_error{"value source consumed past buffer"};
-        destroy_prefix(n);
+        ring_.destroy_prefix(n);
         reset_if_empty();
     }
 
     std::optional<value_type> take_buffered()
     {
         auto value = std::optional<value_type>{
-            std::move(buffer_[seek_]),
+            std::move(*ring_.front_data()),
         };
         toss(1);
         return value;
@@ -1638,20 +1548,19 @@ private:
     void expect_buffered(const value_type & expected)
         requires std::equality_comparable<value_type>
     {
-        if (!(buffer_[seek_] == expected))
+        if (!(*ring_.front_data() == expected))
             throw unexpected_value{"unexpected value"};
         toss(1);
     }
 
     void reset_if_empty() noexcept
     {
-        if (size_ == 0)
-            seek_ = 0;
+        ring_.reset_if_empty();
     }
 
     hope<fare_t> fill_more()
     {
-        if (buffered_size() == capacity_)
+        if (buffered_size() == ring_.capacity())
             throw value_buffer_error{"value source buffer is full"};
         return fill_more_into_capacity();
     }
@@ -1679,7 +1588,7 @@ private:
         if (reported != 0 && written != reported)
             throw value_buffer_error{"value source stream count mismatch"};
         sink.release_buffered();
-        size_ += written;
+        ring_.advance_constructed(written);
         if (written == 0)
             return result;
         return written;
@@ -1725,7 +1634,7 @@ private:
             auto before = buffered_size();
             auto read = co_await fill_more();
             if (buffered_size() != 0)
-                co_return buffer_ + seek_;
+                co_return ring_.front_data();
             if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
                 co_return nullptr;
         }
@@ -1736,7 +1645,7 @@ private:
         auto before = buffered_size();
         auto read = co_await std::move(first_read);
         if (buffered_size() != 0)
-            co_return buffer_ + seek_;
+            co_return ring_.front_data();
         if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
             co_return nullptr;
         co_return co_await peek_slow();
@@ -1856,7 +1765,7 @@ private:
 
         auto moved = std::size_t{0};
         while (moved != n) {
-            auto value = std::move(buffer_[seek_]);
+            auto value = std::move(*ring_.front_data());
             toss(1);
             auto write = sink.write(std::move(value));
             ++moved;
@@ -2006,7 +1915,7 @@ private:
                 co_return out;
             }
 
-            if (buffered_size() == capacity_)
+            if (buffered_size() == ring_.capacity())
                 throw value_buffer_error{"value source buffer filled before delimiter"};
 
             auto read = co_await fill_more();
@@ -2025,8 +1934,7 @@ private:
 
     void destroy_buffered() noexcept
     {
-        destroy_prefix(size_);
-        seek_ = 0;
+        ring_.destroy_all();
     }
 
     template<typename Object>
@@ -2060,27 +1968,7 @@ private:
     }
 
     rack<value_type> owned_buffer_{0};
-    value_type * buffer_ = nullptr;
-    std::size_t capacity_ = 0;
-    std::size_t seek_ = 0;
-    std::size_t size_ = 0;
-
-    [[nodiscard]] std::size_t write_index() const noexcept
-    {
-        return detail::ring_write_index<value_type>(capacity_, seek_, size_);
-    }
-
-    void destroy_prefix(std::size_t n) noexcept
-    {
-        while (n != 0) {
-            auto take = std::min(n, capacity_ - seek_);
-            for (auto & value : std::span{buffer_ + seek_, take})
-                std::destroy_at(&value);
-            seek_ = (seek_ + take) % capacity_;
-            size_ -= take;
-            n -= take;
-        }
-    }
+    ring_region<value_type> ring_;
 };
 
 namespace detail {
