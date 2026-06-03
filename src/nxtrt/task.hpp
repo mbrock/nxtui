@@ -805,6 +805,9 @@ struct child_record_base
     virtual void evacuate_result_if_done() = 0;
     virtual void drop_result_state(
         deed_result_state_base * result) noexcept = 0;
+    virtual void replace_result_state(
+        deed_result_state_base * old_result,
+        deed_result_state_base * new_result) noexcept = 0;
     virtual void request_stop() noexcept = 0;
 
     bool completion_reported = false;
@@ -816,9 +819,24 @@ struct deed_result_state_base
     deed_result_state_base(const deed_result_state_base &) = delete;
     deed_result_state_base & operator=(
         const deed_result_state_base &) = delete;
-    deed_result_state_base(deed_result_state_base &&) = delete;
+    deed_result_state_base(deed_result_state_base && other) noexcept
+        : child(std::exchange(other.child, nullptr))
+    {
+        if (child != nullptr)
+            child->replace_result_state(&other, this);
+    }
+
     deed_result_state_base & operator=(
-        deed_result_state_base &&) = delete;
+        deed_result_state_base && other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        detach();
+        child = std::exchange(other.child, nullptr);
+        if (child != nullptr)
+            child->replace_result_state(&other, this);
+        return *this;
+    }
 
     virtual ~deed_result_state_base()
     {
@@ -849,6 +867,10 @@ struct deed_result_state final : deed_result_state_base
     using stored_type = std::remove_cv_t<T>;
     using storage_type =
         std::variant<std::monostate, stored_type, std::exception_ptr>;
+
+    deed_result_state() = default;
+    deed_result_state(deed_result_state &&) = default;
+    deed_result_state & operator=(deed_result_state &&) = default;
 
     [[nodiscard]] bool ready() const noexcept
     {
@@ -914,6 +936,10 @@ struct deed_result_state final : deed_result_state_base
 template<>
 struct deed_result_state<void> final : deed_result_state_base
 {
+    deed_result_state() = default;
+    deed_result_state(deed_result_state &&) noexcept = default;
+    deed_result_state & operator=(deed_result_state &&) noexcept = default;
+
     [[nodiscard]] bool ready() const noexcept
     {
         return ready_;
@@ -1057,6 +1083,14 @@ struct child_record final : child_record_base
             result = nullptr;
     }
 
+    void replace_result_state(
+        deed_result_state_base * old_state,
+        deed_result_state_base * new_state) noexcept override
+    {
+        if (old_state == result)
+            result = static_cast<deed_result_state<T> *>(new_state);
+    }
+
     void request_stop() noexcept override
     {
         if (handle)
@@ -1197,6 +1231,14 @@ struct child_record<void> final : child_record_base
             result = nullptr;
     }
 
+    void replace_result_state(
+        deed_result_state_base * old_state,
+        deed_result_state_base * new_state) noexcept override
+    {
+        if (old_state == result)
+            result = static_cast<deed_result_state<void> *>(new_state);
+    }
+
     void request_stop() noexcept override
     {
         if (handle)
@@ -1305,8 +1347,24 @@ public:
     deed() = default;
     deed(const deed &) = delete;
     deed & operator=(const deed &) = delete;
-    deed(deed &&) noexcept = default;
-    deed & operator=(deed &&) noexcept = default;
+    deed(deed && other) noexcept(
+        std::is_nothrow_move_constructible_v<
+            detail::deed_result_state<T>>)
+        : state_(std::move(other.state_))
+    {
+        other.state_.reset();
+    }
+
+    deed & operator=(deed && other) noexcept(
+        std::is_nothrow_move_assignable_v<
+            std::optional<detail::deed_result_state<T>>>)
+    {
+        if (this == &other)
+            return *this;
+        state_ = std::move(other.state_);
+        other.state_.reset();
+        return *this;
+    }
 
     [[nodiscard]] std::exception_ptr exception() const
     {
@@ -1324,9 +1382,8 @@ private:
     friend class firm;
     friend class catching_deed<T>;
 
-    explicit deed(
-        std::unique_ptr<detail::deed_result_state<T>> state) noexcept
-        : state_(std::move(state))
+    explicit deed(std::in_place_t)
+        : state_(std::in_place)
     {}
 
     [[nodiscard]] detail::deed_result_state<T> & state() const
@@ -1336,7 +1393,7 @@ private:
         return *state_;
     }
 
-    std::unique_ptr<detail::deed_result_state<T>> state_;
+    mutable std::optional<detail::deed_result_state<T>> state_;
 };
 
 template<>
@@ -1346,8 +1403,20 @@ public:
     deed() = default;
     deed(const deed &) = delete;
     deed & operator=(const deed &) = delete;
-    deed(deed &&) noexcept = default;
-    deed & operator=(deed &&) noexcept = default;
+    deed(deed && other) noexcept
+        : state_(std::move(other.state_))
+    {
+        other.state_.reset();
+    }
+
+    deed & operator=(deed && other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        state_ = std::move(other.state_);
+        other.state_.reset();
+        return *this;
+    }
 
     [[nodiscard]] std::exception_ptr exception() const
     {
@@ -1365,9 +1434,8 @@ private:
     friend class firm;
     friend class catching_deed<void>;
 
-    explicit deed(
-        std::unique_ptr<detail::deed_result_state<void>> state) noexcept
-        : state_(std::move(state))
+    explicit deed(std::in_place_t)
+        : state_(std::in_place)
     {}
 
     [[nodiscard]] detail::deed_result_state<void> & state() const
@@ -1377,7 +1445,7 @@ private:
         return *state_;
     }
 
-    std::unique_ptr<detail::deed_result_state<void>> state_;
+    mutable std::optional<detail::deed_result_state<void>> state_;
 };
 
 struct frame_storage_ref
@@ -1517,8 +1585,24 @@ public:
     catching_deed() = default;
     catching_deed(const catching_deed &) = delete;
     catching_deed & operator=(const catching_deed &) = delete;
-    catching_deed(catching_deed &&) noexcept = default;
-    catching_deed & operator=(catching_deed &&) noexcept = default;
+    catching_deed(catching_deed && other) noexcept(
+        std::is_nothrow_move_constructible_v<
+            detail::deed_result_state<T>>)
+        : state_(std::move(other.state_))
+    {
+        other.state_.reset();
+    }
+
+    catching_deed & operator=(catching_deed && other) noexcept(
+        std::is_nothrow_move_assignable_v<
+            std::optional<detail::deed_result_state<T>>>)
+    {
+        if (this == &other)
+            return *this;
+        state_ = std::move(other.state_);
+        other.state_.reset();
+        return *this;
+    }
 
     [[nodiscard]] std::expected<T, std::exception_ptr> get() &&
     {
@@ -1534,19 +1618,18 @@ public:
 private:
     friend class deed<T>;
 
-    explicit catching_deed(
-        std::unique_ptr<detail::deed_result_state<T>> state) noexcept
-        : state_(std::move(state))
+    explicit catching_deed(detail::deed_result_state<T> && state)
+        : state_(std::in_place, std::move(state))
     {}
 
-    [[nodiscard]] detail::deed_result_state<T> & state() const
+    [[nodiscard]] detail::deed_result_state<T> & state()
     {
         if (!state_)
             throw runtime_error{"nxtrt empty catching_deed handle"};
         return *state_;
     }
 
-    std::unique_ptr<detail::deed_result_state<T>> state_;
+    std::optional<detail::deed_result_state<T>> state_;
 };
 
 template<>
@@ -1556,8 +1639,20 @@ public:
     catching_deed() = default;
     catching_deed(const catching_deed &) = delete;
     catching_deed & operator=(const catching_deed &) = delete;
-    catching_deed(catching_deed &&) noexcept = default;
-    catching_deed & operator=(catching_deed &&) noexcept = default;
+    catching_deed(catching_deed && other) noexcept
+        : state_(std::move(other.state_))
+    {
+        other.state_.reset();
+    }
+
+    catching_deed & operator=(catching_deed && other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        state_ = std::move(other.state_);
+        other.state_.reset();
+        return *this;
+    }
 
     [[nodiscard]] std::expected<void, std::exception_ptr> get() &&
     {
@@ -1574,38 +1669,39 @@ public:
 private:
     friend class deed<void>;
 
-    explicit catching_deed(
-        std::unique_ptr<detail::deed_result_state<void>> state) noexcept
-        : state_(std::move(state))
+    explicit catching_deed(detail::deed_result_state<void> && state)
+        : state_(std::in_place, std::move(state))
     {}
 
-    [[nodiscard]] detail::deed_result_state<void> & state() const
+    [[nodiscard]] detail::deed_result_state<void> & state()
     {
         if (!state_)
             throw runtime_error{"nxtrt empty catching_deed handle"};
         return *state_;
     }
 
-    std::unique_ptr<detail::deed_result_state<void>> state_;
+    std::optional<detail::deed_result_state<void>> state_;
 };
 
 template<typename T>
 inline catching_deed<T> deed<T>::cope() &&
 {
-    auto child = std::move(state_);
-    if (!child)
+    if (!state_)
         throw runtime_error{"nxtrt empty deed handle"};
-    child->contained = true;
-    return catching_deed<T>{std::move(child)};
+    state_->contained = true;
+    auto result = catching_deed<T>{std::move(*state_)};
+    state_.reset();
+    return result;
 }
 
 inline catching_deed<void> deed<void>::cope() &&
 {
-    auto child = std::move(state_);
-    if (!child)
+    if (!state_)
         throw runtime_error{"nxtrt empty deed handle"};
-    child->contained = true;
-    return catching_deed<void>{std::move(child)};
+    state_->contained = true;
+    auto result = catching_deed<void>{std::move(*state_)};
+    state_.reset();
+    return result;
 }
 
 class firm
@@ -1783,8 +1879,7 @@ public:
         if (!handle || handle.done())
             throw runtime_error{"nxtrt firm fork used with empty task"};
 
-        auto result =
-            std::make_unique<detail::deed_result_state<T>>();
+        auto result = deed<T>{std::in_place};
         auto * record = static_cast<detail::child_record<T> *>(nullptr);
         auto record_constructed = false;
         try {
@@ -1795,7 +1890,7 @@ public:
             record = &child_slots_[child_count_]
                 .template emplace<detail::child_record<T>>(
                 handle,
-                result.get());
+                &result.state());
             record_constructed = true;
             promise.completion_callback = [this, record] {
                 report_child_finished(*record);
@@ -1812,7 +1907,7 @@ public:
         child_high_water_ = std::max(child_high_water_, child_count_);
         debug_update();
         active_deck->enqueue(handle, &handle.promise());
-        return deed<T>{std::move(result)};
+        return result;
     }
 
     [[nodiscard]] task<void> join();

@@ -2813,6 +2813,25 @@ static suite runtime_tests{
                 expect(std::move(child).get() == 42_i);
             };
 
+            "move live deeds before child completion"_test = [] {
+                auto deck = nxtrt::deck{};
+
+                auto child =
+                    deck.sync_wait([]()
+                        -> nxtrt::task<nxtrt::deed<int>> {
+                        co_return co_await nxtrt::with_firm(
+                            []() -> nxtrt::task<nxtrt::deed<int>> {
+                                auto first =
+                                    nxtrt::fork(value_after_yield(77));
+                                auto second = std::move(first);
+                                co_await nxtrt::join();
+                                co_return std::move(second);
+                            });
+                    });
+
+                expect(std::move(child).get() == 77_i);
+            };
+
             "return several forked task results"_test = [] {
                 auto deck = nxtrt::deck{};
                 using children_type = std::tuple<

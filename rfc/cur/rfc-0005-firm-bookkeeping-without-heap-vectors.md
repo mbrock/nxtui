@@ -28,9 +28,10 @@ implementation replaced the heap-growing child vector with bounded child slots:
 inline storage for one child record, and a deed carries separate result state
 rather than sharing ownership of the child record itself.
 
-That is still provisional: deed result states are currently move-stable
-objects owned uniquely by deed handles. But the important semantic split has
-landed. The firm owns settlement records. A deed owns or names the selected
+The current deed result state is inline in the deed handle and move-stable:
+when the handle moves, the child record is retargeted to the new result slot.
+That is still only the first result-slot shape, but the important semantic split
+has landed. The firm owns settlement records. A deed owns or names the selected
 result after evacuation.
 
 If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
@@ -192,9 +193,8 @@ storage machinery for queues and free lists.
 
 ## Open Questions
 
-- What exact result-slot type lets final suspend evacuate a result into a
-  deed without the temporary move-stable allocation used by the transition
-  code?
+- What exact result-slot type lets final suspend evacuate a result into inline
+  deed storage, caller-provided storage, or firm-provided storage?
 - What are the default capacities for child records, deeds, and completions?
 - How should child result destruction interact with frame reuse?
 - Which current helpers need their main body turned into an explicit child?
@@ -202,7 +202,7 @@ storage machinery for queues and free lists.
 ## References
 
 - [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
-- [RFC 0006: Join as a Completion Feed](../new/rfc-0006-join-as-a-completion-feed.md)
+- [RFC 0006: Join as a Completion Feed](rfc-0006-join-as-a-completion-feed.md)
 - [RFC 0014: Idea Algebra](../new/rfc-0014-idea-algebra.md)
 - [Runtime Overview / Firms and Deeds](../../docs/rt-overview.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)
