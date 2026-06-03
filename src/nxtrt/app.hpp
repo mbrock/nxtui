@@ -139,6 +139,12 @@ public:
     [[nodiscard]] stored_task_result_t<std::decay_t<Fn>>
     run(Fn && fn)
     {
+        auto root_firm = firm{};
+        auto root_env = runtime_env{};
+        [[maybe_unused]] auto previous_root_firm =
+            root_env.replace<firm_key>(&root_firm);
+        auto root_guard = detail::env_guard{root_env, &deck_, nullptr};
+
         return run(
             detail::run_in_root_firm(
                 std::decay_t<Fn>{std::forward<Fn>(fn)}));

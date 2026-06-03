@@ -2538,6 +2538,21 @@ with_firm(Fn && fn)
     }
 }
 
+template<task_factory Fn>
+[[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
+deck::sync_wait(Fn && fn)
+{
+    using factory_type = std::decay_t<Fn>;
+
+    auto root_firm = firm{};
+    auto root_env = runtime_env{};
+    [[maybe_unused]] auto previous_root_firm =
+        root_env.replace<firm_key>(&root_firm);
+    auto root_guard = detail::env_guard{root_env, this, nullptr};
+
+    return sync_wait(with_firm(factory_type{std::forward<Fn>(fn)}));
+}
+
 namespace detail {
 
 inline task<poll_until_result> poll_ready(op::poll wish)

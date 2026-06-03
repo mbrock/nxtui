@@ -850,7 +850,23 @@ template<typename T>
 template<task_factory Fn>
 [[nodiscard]] inline task_result_t<std::invoke_result_t<Fn>> run(Fn && fn)
 {
-    return run(std::invoke(std::forward<Fn>(fn)));
+    auto wand = uring_wand{};
+    auto d = deck{&wand};
+    auto root_firm = firm{};
+    auto root_env = runtime_env{};
+    [[maybe_unused]] auto previous_root_firm =
+        root_env.replace<firm_key>(&root_firm);
+    auto root_guard = detail::env_guard{root_env, &d, nullptr};
+    auto root = with_firm(std::forward<Fn>(fn));
+
+    d.start(root);
+    wand.run_until_done(d, root);
+
+    if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+        std::move(root).result();
+    } else {
+        return std::move(root).result();
+    }
 }
 
 inline io_uring_sqe * uring_submission::get_sqe()

@@ -292,10 +292,7 @@ public:
     /// that produces a fresh task when `sync_wait` starts it.
     template<task_factory Fn>
     [[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
-    sync_wait(Fn && fn)
-    {
-        return sync_wait(std::invoke(std::forward<Fn>(fn)));
-    }
+    sync_wait(Fn && fn);
 
 private:
     /// @cond

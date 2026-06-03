@@ -1512,6 +1512,25 @@ static suite runtime_tests{
                 }) == 7_i);
             };
 
+            "sync_wait factories create tasks inside a root firm"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto before = std::size_t{};
+                auto after = std::size_t{};
+
+                deck.sync_wait([&] {
+                    auto * firm = nxtrt::current_firm();
+                    expect(firm != nullptr);
+                    before = firm->frame_high_water();
+                    auto root = []() -> nxtrt::task<void> {
+                        co_return;
+                    }();
+                    after = firm->frame_high_water();
+                    return root;
+                });
+
+                expect(after > before);
+            };
+
             "resumes tasks awaiting children"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
@@ -2538,10 +2557,10 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{1, 3, 21, 22, 4});
             };
 
-            "reject fork outside a firm"_test = [] {
+            "preconstructed root tasks reject fork outside a firm"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto rejected = deck.sync_wait([]() -> nxtrt::task<bool> {
+                auto root = []() -> nxtrt::task<bool> {
                     try {
                         nxtrt::fork([]() -> nxtrt::task<void> {
                             co_return;
@@ -2550,7 +2569,9 @@ static suite runtime_tests{
                         co_return true;
                     }
                     co_return false;
-                });
+                }();
+
+                auto rejected = deck.sync_wait(std::move(root));
 
                 expect(rejected);
             };
