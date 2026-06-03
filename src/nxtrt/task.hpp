@@ -45,6 +45,7 @@ namespace detail {
 
 void * allocate_task_frame(std::size_t size);
 void deallocate_task_frame(void * ptr, std::size_t size) noexcept;
+struct deed_result_state_base;
 
 /// Shared promise state for every `task<T>`.
 ///
@@ -801,13 +802,49 @@ struct child_record_base
     [[nodiscard]] virtual bool result_observed() const noexcept = 0;
     [[nodiscard]] virtual bool result_exported() const noexcept = 0;
     [[nodiscard]] virtual task<void> join() = 0;
+    virtual void evacuate_result_if_done() = 0;
+    virtual void drop_result_state(
+        deed_result_state_base * result) noexcept = 0;
     virtual void request_stop() noexcept = 0;
 
     bool completion_reported = false;
 };
 
+struct deed_result_state_base
+{
+    deed_result_state_base() = default;
+    deed_result_state_base(const deed_result_state_base &) = delete;
+    deed_result_state_base & operator=(
+        const deed_result_state_base &) = delete;
+    deed_result_state_base(deed_result_state_base &&) = delete;
+    deed_result_state_base & operator=(
+        deed_result_state_base &&) = delete;
+
+    virtual ~deed_result_state_base()
+    {
+        detach();
+    }
+
+    void detach() noexcept
+    {
+        if (child == nullptr)
+            return;
+        auto * old_child = child;
+        child = nullptr;
+        old_child->drop_result_state(this);
+    }
+
+    void ensure_ready_from_child()
+    {
+        if (child != nullptr && child->done())
+            child->evacuate_result_if_done();
+    }
+
+    child_record_base * child = nullptr;
+};
+
 template<typename T>
-struct deed_result_state
+struct deed_result_state final : deed_result_state_base
 {
     using stored_type = std::remove_cv_t<T>;
     using storage_type =
@@ -820,8 +857,8 @@ struct deed_result_state
 
     void ensure_done()
     {
-        if (!ready() && ensure_ready)
-            ensure_ready();
+        if (!ready())
+            ensure_ready_from_child();
         if (!ready())
             throw runtime_error{
                 "nxtrt deed result read before firm join"};
@@ -869,14 +906,13 @@ struct deed_result_state
     }
 
     storage_type result;
-    std::function<void()> ensure_ready;
     bool contained = false;
     bool observed = false;
     bool result_taken = false;
 };
 
 template<>
-struct deed_result_state<void>
+struct deed_result_state<void> final : deed_result_state_base
 {
     [[nodiscard]] bool ready() const noexcept
     {
@@ -885,8 +921,8 @@ struct deed_result_state<void>
 
     void ensure_done()
     {
-        if (!ready() && ensure_ready)
-            ensure_ready();
+        if (!ready())
+            ensure_ready_from_child();
         if (!ready())
             throw runtime_error{
                 "nxtrt deed result read before firm join"};
@@ -927,7 +963,6 @@ struct deed_result_state<void>
     }
 
     std::exception_ptr failure_;
-    std::function<void()> ensure_ready;
     bool ready_ = false;
     bool contained = false;
     bool observed = false;
@@ -941,19 +976,18 @@ struct child_record final : child_record_base
 
     child_record(
         handle_type h,
-        std::shared_ptr<deed_result_state<T>> result)
+        deed_result_state<T> * result)
         : handle(h)
-        , result(std::move(result))
+        , result(result)
     {
-        this->result->ensure_ready = [this] {
-            if (done())
-                evacuate_result();
-        };
+        if (this->result != nullptr)
+            this->result->child = this;
     }
 
     ~child_record() override
     {
-        result->ensure_ready = {};
+        if (result != nullptr)
+            result->child = nullptr;
         destroy_frame();
     }
 
@@ -991,22 +1025,36 @@ struct child_record final : child_record_base
     [[nodiscard]] std::exception_ptr failure() override
     {
         evacuate_result();
-        return result->failure();
+        if (result != nullptr)
+            return result->failure();
+        return failure_;
     }
 
     [[nodiscard]] bool result_contained() const noexcept override
     {
-        return result->contained;
+        return result != nullptr && result->contained;
     }
 
     [[nodiscard]] bool result_observed() const noexcept override
     {
-        return result->observed;
+        return result != nullptr && result->observed;
     }
 
     [[nodiscard]] bool result_exported() const noexcept override
     {
-        return result.use_count() > 1;
+        return result != nullptr;
+    }
+
+    void evacuate_result_if_done() override
+    {
+        if (done())
+            evacuate_result();
+    }
+
+    void drop_result_state(deed_result_state_base * state) noexcept override
+    {
+        if (state == result)
+            result = nullptr;
     }
 
     void request_stop() noexcept override
@@ -1028,12 +1076,18 @@ struct child_record final : child_record_base
         if (evacuated_)
             return;
         try {
-            result->set_value(std::move(handle.promise()).result());
+            if (result != nullptr)
+                result->set_value(std::move(handle.promise()).result());
+            else
+                static_cast<void>(std::move(handle.promise()).result());
         } catch (...) {
-            result->set_exception(std::current_exception());
+            failure_ = std::current_exception();
+            if (result != nullptr)
+                result->set_exception(failure_);
         }
         evacuated_ = true;
-        result->ensure_ready = {};
+        if (result != nullptr)
+            result->child = nullptr;
         destroy_frame();
     }
 
@@ -1049,7 +1103,8 @@ struct child_record final : child_record_base
     }
 
     handle_type handle;
-    std::shared_ptr<deed_result_state<T>> result;
+    deed_result_state<T> * result = nullptr;
+    std::exception_ptr failure_;
     bool joined_ = false;
     bool evacuated_ = false;
 };
@@ -1061,19 +1116,18 @@ struct child_record<void> final : child_record_base
 
     child_record(
         handle_type h,
-        std::shared_ptr<deed_result_state<void>> result)
+        deed_result_state<void> * result)
         : handle(h)
-        , result(std::move(result))
+        , result(result)
     {
-        this->result->ensure_ready = [this] {
-            if (done())
-                evacuate_result();
-        };
+        if (this->result != nullptr)
+            this->result->child = this;
     }
 
     ~child_record() override
     {
-        result->ensure_ready = {};
+        if (result != nullptr)
+            result->child = nullptr;
         destroy_frame();
     }
 
@@ -1111,22 +1165,36 @@ struct child_record<void> final : child_record_base
     [[nodiscard]] std::exception_ptr failure() override
     {
         evacuate_result();
-        return result->failure();
+        if (result != nullptr)
+            return result->failure();
+        return failure_;
     }
 
     [[nodiscard]] bool result_contained() const noexcept override
     {
-        return result->contained;
+        return result != nullptr && result->contained;
     }
 
     [[nodiscard]] bool result_observed() const noexcept override
     {
-        return result->observed;
+        return result != nullptr && result->observed;
     }
 
     [[nodiscard]] bool result_exported() const noexcept override
     {
-        return result.use_count() > 1;
+        return result != nullptr;
+    }
+
+    void evacuate_result_if_done() override
+    {
+        if (done())
+            evacuate_result();
+    }
+
+    void drop_result_state(deed_result_state_base * state) noexcept override
+    {
+        if (state == result)
+            result = nullptr;
     }
 
     void request_stop() noexcept override
@@ -1149,12 +1217,16 @@ struct child_record<void> final : child_record_base
             return;
         try {
             handle.promise().result();
-            result->set_value();
+            if (result != nullptr)
+                result->set_value();
         } catch (...) {
-            result->set_exception(std::current_exception());
+            failure_ = std::current_exception();
+            if (result != nullptr)
+                result->set_exception(failure_);
         }
         evacuated_ = true;
-        result->ensure_ready = {};
+        if (result != nullptr)
+            result->child = nullptr;
         destroy_frame();
     }
 
@@ -1170,7 +1242,8 @@ struct child_record<void> final : child_record_base
     }
 
     handle_type handle;
-    std::shared_ptr<deed_result_state<void>> result;
+    deed_result_state<void> * result = nullptr;
+    std::exception_ptr failure_;
     bool joined_ = false;
     bool evacuated_ = false;
 };
@@ -1252,7 +1325,7 @@ private:
     friend class catching_deed<T>;
 
     explicit deed(
-        std::shared_ptr<detail::deed_result_state<T>> state) noexcept
+        std::unique_ptr<detail::deed_result_state<T>> state) noexcept
         : state_(std::move(state))
     {}
 
@@ -1263,7 +1336,7 @@ private:
         return *state_;
     }
 
-    std::shared_ptr<detail::deed_result_state<T>> state_;
+    std::unique_ptr<detail::deed_result_state<T>> state_;
 };
 
 template<>
@@ -1293,7 +1366,7 @@ private:
     friend class catching_deed<void>;
 
     explicit deed(
-        std::shared_ptr<detail::deed_result_state<void>> state) noexcept
+        std::unique_ptr<detail::deed_result_state<void>> state) noexcept
         : state_(std::move(state))
     {}
 
@@ -1304,7 +1377,7 @@ private:
         return *state_;
     }
 
-    std::shared_ptr<detail::deed_result_state<void>> state_;
+    std::unique_ptr<detail::deed_result_state<void>> state_;
 };
 
 struct frame_storage_ref
@@ -1462,7 +1535,7 @@ private:
     friend class deed<T>;
 
     explicit catching_deed(
-        std::shared_ptr<detail::deed_result_state<T>> state) noexcept
+        std::unique_ptr<detail::deed_result_state<T>> state) noexcept
         : state_(std::move(state))
     {}
 
@@ -1473,7 +1546,7 @@ private:
         return *state_;
     }
 
-    std::shared_ptr<detail::deed_result_state<T>> state_;
+    std::unique_ptr<detail::deed_result_state<T>> state_;
 };
 
 template<>
@@ -1502,7 +1575,7 @@ private:
     friend class deed<void>;
 
     explicit catching_deed(
-        std::shared_ptr<detail::deed_result_state<void>> state) noexcept
+        std::unique_ptr<detail::deed_result_state<void>> state) noexcept
         : state_(std::move(state))
     {}
 
@@ -1513,7 +1586,7 @@ private:
         return *state_;
     }
 
-    std::shared_ptr<detail::deed_result_state<void>> state_;
+    std::unique_ptr<detail::deed_result_state<void>> state_;
 };
 
 template<typename T>
@@ -1711,7 +1784,7 @@ public:
             throw runtime_error{"nxtrt firm fork used with empty task"};
 
         auto result =
-            std::make_shared<detail::deed_result_state<T>>();
+            std::make_unique<detail::deed_result_state<T>>();
         auto * record = static_cast<detail::child_record<T> *>(nullptr);
         auto record_constructed = false;
         try {
@@ -1722,7 +1795,7 @@ public:
             record = &child_slots_[child_count_]
                 .template emplace<detail::child_record<T>>(
                 handle,
-                result);
+                result.get());
             record_constructed = true;
             promise.completion_callback = [this, record] {
                 report_child_finished(*record);

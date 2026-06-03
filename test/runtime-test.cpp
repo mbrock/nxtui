@@ -2883,6 +2883,28 @@ static suite runtime_tests{
                 expect(observed);
             };
 
+            "dropped deeds do not hide child failures"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto threw = false;
+
+                try {
+                    deck.sync_wait([]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_firm(
+                            []() -> nxtrt::task<void> {
+                                {
+                                    auto child =
+                                        nxtrt::fork(throw_int_after_yield());
+                                }
+                                co_await nxtrt::join();
+                            });
+                    });
+                } catch (const std::exception &) {
+                    threw = true;
+                }
+
+                expect(threw);
+            };
+
             "let coped deeds report failure as expected"_test = [] {
                 auto deck = nxtrt::deck{};
 

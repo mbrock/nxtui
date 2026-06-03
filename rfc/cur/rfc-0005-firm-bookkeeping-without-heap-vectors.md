@@ -28,9 +28,10 @@ implementation replaced the heap-growing child vector with bounded child slots:
 inline storage for one child record, and a deed carries separate result state
 rather than sharing ownership of the child record itself.
 
-That is still provisional: deed result states are allocated as ordinary C++
-objects today. But the important semantic split has landed. The firm owns
-settlement records. A deed owns or names the selected result after evacuation.
+That is still provisional: deed result states are currently move-stable
+objects owned uniquely by deed handles. But the important semantic split has
+landed. The firm owns settlement records. A deed owns or names the selected
+result after evacuation.
 
 If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
 the records that describe those children should become firm-local as well.
@@ -192,7 +193,8 @@ storage machinery for queues and free lists.
 ## Open Questions
 
 - What exact result-slot type lets final suspend evacuate a result into a
-  deed without the temporary `shared_ptr` state used by the transition code?
+  deed without the temporary move-stable allocation used by the transition
+  code?
 - What are the default capacities for child records, deeds, and completions?
 - How should child result destruction interact with frame reuse?
 - Which current helpers need their main body turned into an explicit child?
