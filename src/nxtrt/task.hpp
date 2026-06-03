@@ -1177,7 +1177,50 @@ struct child_record<void> final : child_record_base
 
 struct firm_child_slot
 {
-    std::unique_ptr<child_record_base> record;
+    static constexpr std::size_t inline_record_bytes = 128;
+
+    firm_child_slot() = default;
+    firm_child_slot(const firm_child_slot &) = delete;
+    firm_child_slot & operator=(const firm_child_slot &) = delete;
+    firm_child_slot(firm_child_slot &&) = delete;
+    firm_child_slot & operator=(firm_child_slot &&) = delete;
+
+    ~firm_child_slot()
+    {
+        reset();
+    }
+
+    template<typename Record, typename... Args>
+        requires std::derived_from<Record, child_record_base>
+    [[nodiscard]] Record & emplace(Args &&... args)
+    {
+        static_assert(
+            sizeof(Record) <= inline_record_bytes,
+            "firm child slot inline storage is too small");
+        static_assert(
+            alignof(Record) <= alignof(firm_child_slot),
+            "firm child slot inline storage is under-aligned");
+
+        reset();
+        auto * child = ::new (storage_.data())
+            Record(std::forward<Args>(args)...);
+        record = child;
+        return *child;
+    }
+
+    void reset() noexcept
+    {
+        if (record == nullptr)
+            return;
+        std::destroy_at(record);
+        record = nullptr;
+    }
+
+    child_record_base * record = nullptr;
+
+private:
+    alignas(std::max_align_t)
+        std::array<std::byte, inline_record_bytes> storage_{};
 };
 
 } // namespace detail
@@ -1669,25 +1712,30 @@ public:
 
         auto result =
             std::make_shared<detail::deed_result_state<T>>();
-        auto record = std::unique_ptr<detail::child_record<T>>{};
+        auto * record = static_cast<detail::child_record<T> *>(nullptr);
+        auto record_constructed = false;
         try {
             auto & promise = handle.promise();
             // Forked children outlive the call site, so they inherit the
             // current immutable environment snapshot.
             promise.env.copy_entries_from(*current);
-            record = std::make_unique<detail::child_record<T>>(
+            record = &child_slots_[child_count_]
+                .template emplace<detail::child_record<T>>(
                 handle,
                 result);
-            auto * record_ptr = record.get();
-            promise.completion_callback = [this, record_ptr] {
-                report_child_finished(*record_ptr);
+            record_constructed = true;
+            promise.completion_callback = [this, record] {
+                report_child_finished(*record);
             };
         } catch (...) {
-            handle.destroy();
+            if (record_constructed)
+                child_slots_[child_count_].reset();
+            else
+                handle.destroy();
             throw;
         }
 
-        child_slots_[child_count_++].record = std::move(record);
+        ++child_count_;
         child_high_water_ = std::max(child_high_water_, child_count_);
         debug_update();
         active_deck->enqueue(handle, &handle.promise());

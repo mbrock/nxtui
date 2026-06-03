@@ -24,14 +24,13 @@ good semantic seed:
 
 The storage shape is being moved in this direction incrementally. The first
 implementation replaced the heap-growing child vector with bounded child slots:
-`firm_child_storage_ref` and `static_firm_child_storage<N>`. A slot currently
-owns a child record, and a deed carries separate result state rather than
-sharing ownership of the child record itself.
+`firm_child_storage_ref` and `static_firm_child_storage<N>`. Each slot contains
+inline storage for one child record, and a deed carries separate result state
+rather than sharing ownership of the child record itself.
 
-That is still provisional: child records and deed result states are allocated
-as ordinary C++ objects today. But the important semantic split has landed.
-The firm owns settlement records. A deed owns or names the selected result
-after evacuation.
+That is still provisional: deed result states are allocated as ordinary C++
+objects today. But the important semantic split has landed. The firm owns
+settlement records. A deed owns or names the selected result after evacuation.
 
 If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
 the records that describe those children should become firm-local as well.
