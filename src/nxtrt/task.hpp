@@ -41,6 +41,9 @@ class deed;
 template<typename T>
 class catching_deed;
 
+template<typename T>
+class deed_result_storage;
+
 namespace detail {
 
 void * allocate_task_frame(std::size_t size);
@@ -333,6 +336,43 @@ private:
 };
 
 } // namespace detail
+
+template<typename T>
+class deed_result_storage
+{
+public:
+    using stored_type = std::remove_cv_t<T>;
+
+    deed_result_storage() = default;
+    deed_result_storage(const deed_result_storage &) = delete;
+    deed_result_storage & operator=(const deed_result_storage &) = delete;
+    deed_result_storage(deed_result_storage &&) = delete;
+    deed_result_storage & operator=(deed_result_storage &&) = delete;
+
+    [[nodiscard]] bool ready() const noexcept
+    {
+        return value_.has_value();
+    }
+
+    template<typename Value>
+        requires std::constructible_from<stored_type, Value &&>
+    void set_value(Value && value)
+    {
+        value_.emplace(std::forward<Value>(value));
+    }
+
+    [[nodiscard]] T take_result()
+    {
+        if (!value_)
+            throw runtime_error{"nxtrt task result was never set"};
+        auto result = std::move(*value_);
+        value_.reset();
+        return result;
+    }
+
+private:
+    std::optional<stored_type> value_;
+};
 
 template<typename T>
 class [[nodiscard]] task
@@ -938,12 +978,15 @@ struct deed_result_slot
             std::monostate,
             stored_type,
             stored_type *,
+            deed_result_storage<stored_type> *,
             std::exception_ptr>;
 
     [[nodiscard]] bool ready() const noexcept
     {
         if (std::holds_alternative<stored_type *>(storage))
             return target_ready;
+        if (auto * target = target_cell())
+            return target->ready();
         return !std::holds_alternative<std::monostate>(storage);
     }
 
@@ -958,6 +1001,17 @@ struct deed_result_slot
             } else {
                 throw runtime_error{
                     "nxtrt deed result target is not assignable"};
+            }
+        }
+        if (auto * target = target_cell()) {
+            if constexpr (std::constructible_from<
+                              stored_type,
+                              Value &&>) {
+                target->set_value(std::forward<Value>(value));
+                return;
+            } else {
+                throw runtime_error{
+                    "nxtrt deed result target is not constructible"};
             }
         }
         storage.template emplace<stored_type>(
@@ -987,6 +1041,8 @@ struct deed_result_slot
                 throw runtime_error{"nxtrt task result was never set"};
             return std::move(*target);
         }
+        if (auto * target = target_cell())
+            return target->take_result();
         if (!std::holds_alternative<stored_type>(storage))
             throw runtime_error{"nxtrt task result was never set"};
         return std::move(std::get<stored_type>(storage));
@@ -1003,11 +1059,42 @@ struct deed_result_slot
                     "nxtrt deed result target set after result ready"};
             if (old_target == &target)
                 return;
+        } else if (auto * old_target = target_cell()) {
+            if (old_target->ready())
+                throw runtime_error{
+                    "nxtrt deed result target set after result ready"};
         } else if (std::holds_alternative<stored_type>(storage)) {
             target = std::move(std::get<stored_type>(storage));
             target_ready = true;
         }
         storage.template emplace<stored_type *>(&target);
+    }
+
+    void store_in(deed_result_storage<stored_type> & target)
+    {
+        if (std::holds_alternative<std::exception_ptr>(storage))
+            throw runtime_error{
+                "nxtrt deed result target set after failure"};
+        if (target.ready())
+            throw runtime_error{
+                "nxtrt deed result target set after result ready"};
+        if (auto * old_target = target_storage()) {
+            if (target_ready)
+                throw runtime_error{
+                    "nxtrt deed result target set after result ready"};
+            static_cast<void>(old_target);
+        } else if (auto * old_target = target_cell()) {
+            if (old_target->ready())
+                throw runtime_error{
+                    "nxtrt deed result target set after result ready"};
+            if (old_target == &target)
+                return;
+        } else if (std::holds_alternative<stored_type>(storage)) {
+            target.set_value(std::move(std::get<stored_type>(storage)));
+        }
+        storage.template emplace<deed_result_storage<stored_type> *>(
+            &target);
+        target_ready = false;
     }
 
     [[nodiscard]] stored_type * target_storage() noexcept
@@ -1021,6 +1108,24 @@ struct deed_result_slot
     {
         if (std::holds_alternative<stored_type *>(storage))
             return std::get<stored_type *>(storage);
+        return nullptr;
+    }
+
+    [[nodiscard]] deed_result_storage<stored_type> *
+    target_cell() noexcept
+    {
+        if (std::holds_alternative<deed_result_storage<stored_type> *>(
+                storage))
+            return std::get<deed_result_storage<stored_type> *>(storage);
+        return nullptr;
+    }
+
+    [[nodiscard]] const deed_result_storage<stored_type> *
+    target_cell() const noexcept
+    {
+        if (std::holds_alternative<deed_result_storage<stored_type> *>(
+                storage))
+            return std::get<deed_result_storage<stored_type> *>(storage);
         return nullptr;
     }
 
@@ -1119,6 +1224,15 @@ struct deed_result_state final : deed_result_state_base
     }
 
     void store_result_in(stored_type & target)
+    {
+        if (record.result_taken)
+            throw runtime_error{"nxtrt deed result already taken"};
+        if (!ready())
+            ensure_ready_from_child();
+        slot.store_in(target);
+    }
+
+    void store_result_in(deed_result_storage<stored_type> & target)
     {
         if (record.result_taken)
             throw runtime_error{"nxtrt deed result already taken"};
@@ -1573,6 +1687,14 @@ public:
 
     deed & store_result_in(std::remove_cv_t<T> & target)
         requires std::assignable_from<std::remove_cv_t<T> &, T>
+    {
+        state().store_result_in(target);
+        return *this;
+    }
+
+    deed & store_result_in(
+        deed_result_storage<std::remove_cv_t<T>> & target)
+        requires std::constructible_from<std::remove_cv_t<T>, T>
     {
         state().store_result_in(target);
         return *this;

@@ -1386,6 +1386,55 @@ nxtrt::task<nxtrt::deed<int>> fork_external_result_into(int & target)
     co_return co_await external_result_firm{target};
 }
 
+struct firm_result_value
+{
+    explicit firm_result_value(int value)
+        : value(value)
+    {}
+
+    firm_result_value(const firm_result_value &) = delete;
+    firm_result_value & operator=(const firm_result_value &) = delete;
+
+    firm_result_value(firm_result_value && other) noexcept
+        : value(std::exchange(other.value, -1))
+    {}
+
+    firm_result_value & operator=(firm_result_value &&) = delete;
+
+    int value = 0;
+};
+
+nxtrt::task<firm_result_value> firm_result_value_after_yield(int value)
+{
+    co_await nxtrt::yield();
+    co_return firm_result_value{value};
+}
+
+struct external_result_cell_firm : nxtrt::firm
+{
+    explicit external_result_cell_firm(
+        nxtrt::deed_result_storage<firm_result_value> & target)
+        : target(target)
+    {}
+
+    nxtrt::deed_result_storage<firm_result_value> & target;
+
+    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
+    {
+        auto child = fork(firm_result_value_after_yield(71));
+        child.store_result_in(target);
+        co_await join();
+        co_return std::move(child);
+    }
+};
+
+nxtrt::task<nxtrt::deed<firm_result_value>>
+fork_external_result_cell_into(
+    nxtrt::deed_result_storage<firm_result_value> & target)
+{
+    co_return co_await external_result_cell_firm{target};
+}
+
 struct external_result_root
 {
     int * target = nullptr;
@@ -1393,6 +1442,16 @@ struct external_result_root
     nxtrt::task<nxtrt::deed<int>> operator()()
     {
         return fork_external_result_into(*target);
+    }
+};
+
+struct external_result_cell_root
+{
+    nxtrt::deed_result_storage<firm_result_value> * target = nullptr;
+
+    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
+    {
+        return fork_external_result_cell_into(*target);
     }
 };
 
@@ -3298,6 +3357,20 @@ static suite runtime_tests{
 
                 expect(target == 64_i);
                 expect(std::move(child).get() == 64_i);
+            };
+
+            "evacuate move-only results into borrowed deed storage"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto target =
+                    nxtrt::deed_result_storage<firm_result_value>{};
+
+                auto child = deck.sync_wait(
+                    external_result_cell_root{.target = &target});
+
+                expect(target.ready());
+                auto value = std::move(child).get();
+                expect(value.value == 71_i);
+                expect(!target.ready());
             };
 
             "move live deeds before child completion"_test = [] {

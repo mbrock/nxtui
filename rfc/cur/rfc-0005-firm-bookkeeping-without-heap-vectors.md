@@ -71,7 +71,11 @@ result was already taken. Typed result storage has also been named as a
 and non-void deeds can now redirect evacuation into caller-provided storage via
 `deed<T>::store_result_in(T&)` when `T` is assignable. That implements the
 first `T`/`T *` result-target shape without yet moving deed records into
-firm-local storage. The generic metadata has also been named as
+firm-local storage. Deeds can also borrow a typed
+`deed_result_storage<T>` cell, which gives result evacuation uninitialized
+external storage and therefore works for move-only, non-default-constructible
+results without assigning into a preexisting `T`.
+The generic metadata has also been named as
 `deed_record_header`, separate from typed result slots, so the eventual
 firm-local or borrowed deed record has a clear header shape. Firms now allocate
 bounded issued-deed records from `firm_deed_storage_ref` /
@@ -145,15 +149,21 @@ The current initial shape is a small result target in the child/deed record:
 ```cpp
 template<typename T>
 struct deed_result_slot {
-    std::variant<std::monostate, T, T *, std::exception_ptr> storage;
+    std::variant<
+        std::monostate,
+        T,
+        T *,
+        deed_result_storage<T> *,
+        std::exception_ptr> storage;
 };
 ```
 
 That sketch is deliberately small. A deed can carry inline storage for the
-result, or it can name caller-provided storage. At child final suspend, the
-task evacuates its result out of the coroutine frame into that slot if the deed
-is still present. After evacuation, the frame can be destroyed according to
-firm settlement rules without losing the selected result.
+result, assign into caller-provided live storage, or construct into a borrowed
+typed `deed_result_storage<T>` cell. At child final suspend, the task
+evacuates its result out of the coroutine frame into that slot if the deed is
+still present. After evacuation, the frame can be destroyed according to firm
+settlement rules without losing the selected result.
 
 In the current implementation, result evacuation and frame reuse are separate
 events. Evacuation moves or reports the typed result into the deed slot, then
@@ -272,8 +282,9 @@ storage machinery for queues and free lists.
 
 ## Open Questions
 
-- What firm-provided result storage shape should complement inline deed
-  storage and caller-provided `T *` targets?
+- Should firms provide typed result-storage pools that lend
+  `deed_result_storage<T>` cells, or should callers continue granting those
+  cells explicitly?
 - Which APIs need deed-record capacity to differ from child capacity? The first
   default is one issued-deed record per child slot.
 - Should later frame arenas reuse destroyed child frames before firm
