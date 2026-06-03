@@ -42,11 +42,13 @@ completion without throwing; if the borrowed completion storage is too small,
 children it can observe.
 
 Callers that want to grant all of a firm's local land together can use
+`firm_bookkeeping_storage_ref` or
+`static_firm_bookkeeping_storage<Children, JoinFailures, Completions, Deeds>`.
+Callers that also want to grant frame land in the same bundle can use
 `firm_storage_ref` or
 `static_firm_storage<FrameBytes, Children, JoinFailures, Completions, Deeds>`.
-That aggregate does not introduce a new owner; it is just a named bundle of the
-borrowed frame, child-record, deed-record, child-completion, and join-failure
-storage regions.
+That full-land aggregate does not introduce a new owner; it is just a named
+bundle of borrowed frame storage plus the borrowed bookkeeping-storage bundle.
 
 The convenience `firm{}` path still owns default frame backing, but it now uses
 an explicit aligned `owned_frame_storage` block instead of
@@ -266,7 +268,8 @@ to differ, the explicit path is the bookkeeping bundle
 The full-land aggregate
 `static_firm_storage<FrameBytes, Children, JoinFailures, Completions, Deeds>`
 still exists for callers that want to grant frame and bookkeeping storage as
-one visible region bundle.
+one visible region bundle. Internally, `firm_storage_ref` is now exactly that:
+`frame_storage_ref` plus `firm_bookkeeping_storage_ref`.
 
 ## Invariants
 
@@ -297,9 +300,6 @@ storage machinery for queues and free lists.
 - Should firms provide typed result-storage pools that lend
   `deed_result_storage<T>` cells, or should callers continue granting those
   cells explicitly?
-- Should `firm_storage_ref` be rebuilt internally around
-  `firm_bookkeeping_storage_ref`, or is it useful for the full-land bundle to
-  keep flat named fields?
 - Should later frame arenas reuse destroyed child frames before firm
   settlement, or should the default remain monotonic until the firm settles?
 - Which future helpers or channel pumps need their main body turned into an

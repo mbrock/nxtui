@@ -2151,30 +2151,6 @@ private:
     std::size_t capacity_ = 0;
 };
 
-struct firm_storage_ref
-{
-    firm_storage_ref() = default;
-
-    firm_storage_ref(
-        frame_storage_ref frames,
-        firm_child_storage_ref children,
-        firm_deed_storage_ref deeds,
-        firm_completion_storage_ref completions,
-        firm_join_storage_ref joins)
-        : frames(frames)
-        , children(children)
-        , deeds(deeds)
-        , completions(completions)
-        , joins(joins)
-    {}
-
-    frame_storage_ref frames;
-    firm_child_storage_ref children;
-    firm_deed_storage_ref deeds;
-    firm_completion_storage_ref completions;
-    firm_join_storage_ref joins;
-};
-
 struct firm_bookkeeping_storage_ref
 {
     firm_bookkeeping_storage_ref() = default;
@@ -2194,6 +2170,56 @@ struct firm_bookkeeping_storage_ref
     firm_deed_storage_ref deeds;
     firm_completion_storage_ref completions;
     firm_join_storage_ref joins;
+};
+
+struct firm_storage_ref
+{
+    firm_storage_ref() = default;
+
+    firm_storage_ref(
+        frame_storage_ref frames,
+        firm_bookkeeping_storage_ref bookkeeping)
+        : frames(frames)
+        , bookkeeping(bookkeeping)
+    {}
+
+    firm_storage_ref(
+        frame_storage_ref frames,
+        firm_child_storage_ref children,
+        firm_deed_storage_ref deeds,
+        firm_completion_storage_ref completions,
+        firm_join_storage_ref joins)
+        : firm_storage_ref(
+              frames,
+              firm_bookkeeping_storage_ref{
+                  children,
+                  deeds,
+                  completions,
+                  joins})
+    {}
+
+    [[nodiscard]] firm_child_storage_ref children() const noexcept
+    {
+        return bookkeeping.children;
+    }
+
+    [[nodiscard]] firm_deed_storage_ref deeds() const noexcept
+    {
+        return bookkeeping.deeds;
+    }
+
+    [[nodiscard]] firm_completion_storage_ref completions() const noexcept
+    {
+        return bookkeeping.completions;
+    }
+
+    [[nodiscard]] firm_join_storage_ref joins() const noexcept
+    {
+        return bookkeeping.joins;
+    }
+
+    frame_storage_ref frames;
+    firm_bookkeeping_storage_ref bookkeeping;
 };
 
 template<
@@ -2254,7 +2280,7 @@ public:
     [[nodiscard]] firm_storage_ref ref() noexcept
     {
         return firm_storage_ref{
-            frames_, children_, deeds_, completions_, joins_};
+            frames_, bookkeeping_};
     }
 
     [[nodiscard]] operator firm_storage_ref() noexcept
@@ -2269,30 +2295,31 @@ public:
 
     [[nodiscard]] firm_child_storage_ref children() noexcept
     {
-        return children_;
+        return bookkeeping_.children();
     }
 
     [[nodiscard]] firm_deed_storage_ref deeds() noexcept
     {
-        return deeds_;
+        return bookkeeping_.deeds();
     }
 
     [[nodiscard]] firm_join_storage_ref joins() noexcept
     {
-        return joins_;
+        return bookkeeping_.joins();
     }
 
     [[nodiscard]] firm_completion_storage_ref completions() noexcept
     {
-        return completions_;
+        return bookkeeping_.completions();
     }
 
 private:
     static_frame_storage<FrameBytes> frames_;
-    static_firm_child_storage<ChildSlots> children_;
-    static_firm_deed_storage<DeedSlots> deeds_;
-    static_firm_completion_storage<CompletionSlots> completions_;
-    static_firm_join_storage<JoinFailureSlots> joins_;
+    static_firm_bookkeeping_storage<
+        ChildSlots,
+        JoinFailureSlots,
+        CompletionSlots,
+        DeedSlots> bookkeeping_;
 };
 
 namespace detail {
@@ -2677,10 +2704,10 @@ public:
 
     explicit firm(firm_storage_ref storage)
         : frames_(storage.frames)
-        , child_slots_(storage.children.slots)
-        , deed_records_(storage.deeds.records)
-        , completion_slots_(storage.completions.completions)
-        , join_failure_slots_(storage.joins.failures)
+        , child_slots_(storage.children().slots)
+        , deed_records_(storage.deeds().records)
+        , completion_slots_(storage.completions().completions)
+        , join_failure_slots_(storage.joins().failures)
     {
         register_debug();
     }
