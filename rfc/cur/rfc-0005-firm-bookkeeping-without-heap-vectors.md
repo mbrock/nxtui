@@ -40,6 +40,10 @@ That is still only the first result-slot shape, but the important semantic split
 has landed. The firm owns settlement records. A deed owns or names the selected
 result after evacuation.
 
+Child final-suspend reporting also uses the firm record now. A forked promise
+stores a raw pointer to its child record as its completion observer; it no
+longer owns a type-erased completion callable just to notify the firm.
+
 If [RFC 0002](rfc-0002-firm-frame-arenas.md) makes coroutine frames firm-local,
 the records that describe those children should become firm-local as well.
 

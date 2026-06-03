@@ -45,6 +45,7 @@ namespace detail {
 
 void * allocate_task_frame(std::size_t size);
 void deallocate_task_frame(void * ptr, std::size_t size) noexcept;
+struct child_record_base;
 struct deed_result_state_base;
 
 /// Shared promise state for every `task<T>`.
@@ -190,14 +191,11 @@ struct promise_base
             current->current_deck->enqueue(continuation, continuation_promise);
     }
 
-    void run_completion_callback() noexcept
+    void run_completion_callback() noexcept;
+
+    void observe_completion_of(child_record_base & child) noexcept
     {
-        if (!completion_callback)
-            return;
-        try {
-            completion_callback();
-        } catch (...) {
-        }
+        completion_child = &child;
     }
 
     void enqueue_self(std::coroutine_handle<> handle)
@@ -225,8 +223,8 @@ struct promise_base
     std::unique_ptr<stop_callback_type> parent_stop_callback;
     /// Cancels the current parked wish when this task is stopped.
     std::unique_ptr<stop_callback_type> wait_stop_callback;
-    /// Optional hook used by firms to observe children at final suspend.
-    std::function<void()> completion_callback;
+    /// Optional firm child record to notify when this task reaches final suspend.
+    child_record_base * completion_child = nullptr;
 
 private:
     std::stop_source stop_;
@@ -810,8 +808,18 @@ struct child_record_base
         deed_result_state_base * new_result) noexcept = 0;
     virtual void request_stop() noexcept = 0;
 
+    void report_finished_from_promise() noexcept;
+
+    firm * owner = nullptr;
     bool completion_reported = false;
 };
+
+inline void promise_base::run_completion_callback() noexcept
+{
+    if (completion_child == nullptr)
+        return;
+    completion_child->report_finished_from_promise();
+}
 
 struct deed_result_state_base
 {
@@ -1002,10 +1010,12 @@ struct child_record final : child_record_base
 
     child_record(
         handle_type h,
+        firm & owner,
         deed_result_state<T> * result)
         : handle(h)
         , result(result)
     {
+        this->owner = &owner;
         if (this->result != nullptr)
             this->result->child = this;
     }
@@ -1150,10 +1160,12 @@ struct child_record<void> final : child_record_base
 
     child_record(
         handle_type h,
+        firm & owner,
         deed_result_state<void> * result)
         : handle(h)
         , result(result)
     {
+        this->owner = &owner;
         if (this->result != nullptr)
             this->result->child = this;
     }
@@ -1996,11 +2008,10 @@ public:
             record = &child_slots_[child_count_]
                 .template emplace<detail::child_record<T>>(
                 handle,
+                *this,
                 &result.state());
             record_constructed = true;
-            promise.completion_callback = [this, record] {
-                report_child_finished(*record);
-            };
+            promise.observe_completion_of(*record);
         } catch (...) {
             if (record_constructed)
                 child_slots_[child_count_].reset();
@@ -2056,6 +2067,8 @@ protected:
     {}
 
 private:
+    friend struct detail::child_record_base;
+
     void report_child_finished(
         detail::child_record_base & child,
         std::exception_ptr known_failure = {}) noexcept
@@ -2136,6 +2149,16 @@ private:
     debug::firm_id debug_parent_ = 0;
     bool stopping_ = false;
 };
+
+namespace detail {
+
+inline void child_record_base::report_finished_from_promise() noexcept
+{
+    if (owner != nullptr)
+        owner->report_child_finished(*this);
+}
+
+} // namespace detail
 
 struct firm_key
 {
