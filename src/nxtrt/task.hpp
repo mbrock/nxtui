@@ -863,6 +863,9 @@ struct deed_result_state_base
     deed_result_state_base(deed_result_state_base && other) noexcept
         : child(std::exchange(other.child, nullptr))
         , child_task(std::exchange(other.child_task, {}))
+        , contained(std::exchange(other.contained, false))
+        , observed(std::exchange(other.observed, false))
+        , result_taken(std::exchange(other.result_taken, false))
     {
         if (child != nullptr)
             child->replace_result_state(&other, this);
@@ -876,6 +879,9 @@ struct deed_result_state_base
         detach();
         child = std::exchange(other.child, nullptr);
         child_task = std::exchange(other.child_task, {});
+        contained = std::exchange(other.contained, false);
+        observed = std::exchange(other.observed, false);
+        result_taken = std::exchange(other.result_taken, false);
         if (child != nullptr)
             child->replace_result_state(&other, this);
         return *this;
@@ -903,6 +909,9 @@ struct deed_result_state_base
 
     child_record_base * child = nullptr;
     task_id child_task;
+    bool contained = false;
+    bool observed = false;
+    bool result_taken = false;
 };
 
 template<typename T>
@@ -972,9 +981,6 @@ struct deed_result_state final : deed_result_state_base
     }
 
     storage_type result;
-    bool contained = false;
-    bool observed = false;
-    bool result_taken = false;
 };
 
 template<>
@@ -1034,9 +1040,6 @@ struct deed_result_state<void> final : deed_result_state_base
 
     std::exception_ptr failure_;
     bool ready_ = false;
-    bool contained = false;
-    bool observed = false;
-    bool result_taken = false;
 };
 
 template<typename T>
