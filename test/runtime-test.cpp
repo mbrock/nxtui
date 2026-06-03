@@ -3447,6 +3447,24 @@ static suite runtime_tests{
                         "deed result storage pool is full");
                 }
                 expect(overflowed);
+
+                auto empty_storage =
+                    nxtrt::static_deed_result_storage_pool<
+                        firm_result_value,
+                        0>{};
+                auto empty_pool = empty_storage.ref();
+                expect(empty_pool.capacity() == std::size_t{0});
+                expect(empty_pool.used() == std::size_t{0});
+
+                auto empty_overflowed = false;
+                try {
+                    (void)empty_pool.borrow();
+                } catch (const std::exception & e) {
+                    empty_overflowed =
+                        std::string_view{e.what()}.contains(
+                            "deed result storage pool is full");
+                }
+                expect(empty_overflowed);
             };
 
             "move live deeds before child completion"_test = [] {

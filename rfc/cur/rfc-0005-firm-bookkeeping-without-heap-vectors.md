@@ -178,6 +178,13 @@ destroying the frame runs destructors and unregisters runtime state, but it
 does not make those arena bytes available to a later child until the whole firm
 settles or a future arena policy chooses explicit reuse.
 
+Result-storage pools follow the same first policy. Borrowing a
+`deed_result_storage<T>` cell advances a monotonic cursor. Taking the evacuated
+result clears the cell value, but it does not return that cell to the pool
+during the same firm settlement epoch. A later free-list policy can be added
+when deed observation lifetimes are represented explicitly enough to make reuse
+boring.
+
 This separates two ideas that are currently intertwined:
 
 ```text
@@ -254,6 +261,12 @@ Later versions can use the extracted ring geometry from
 [RFC 0007](rfc-0007-ring-geometry-extraction.md) for completion queues and
 free lists.
 
+The first reuse policy is monotonic within a firm settlement epoch. Child
+records, completion records, join-failure records, deed result-storage cells,
+and frame-arena bytes are allocated from visible bounded land and reclaimed
+when that land is reset or destroyed. Reusing individual cells before firm
+settlement is intentionally left for a later policy with explicit free lists.
+
 Overflow is a real condition and should be reported as structured diagnostics:
 
 - firm id/name;
@@ -301,10 +314,6 @@ storage machinery for queues and free lists.
 
 ## Open Questions
 
-- Should typed result-storage pools eventually get reusable free lists, or
-  should their first monotonic, settlement-scoped behavior remain the default?
-- Should later frame arenas reuse destroyed child frames before firm
-  settlement, or should the default remain monotonic until the firm settles?
 - Which future helpers or channel pumps need their main body turned into an
   explicit child?
 
