@@ -1910,6 +1910,17 @@ public:
         return result;
     }
 
+    template<typename Fn, typename... Args>
+        requires std::invocable<Fn, Args...>
+            && is_task_v<std::invoke_result_t<Fn, Args...>>
+    auto fork(Fn && fn, Args &&... args)
+        -> deed<task_result_t<std::invoke_result_t<Fn, Args...>>>
+    {
+        return fork(std::invoke(
+            std::forward<Fn>(fn),
+            std::forward<Args>(args)...));
+    }
+
     [[nodiscard]] task<void> join();
 
     [[nodiscard]] bool has_unjoined_children() const noexcept
@@ -2078,6 +2089,17 @@ template<typename T>
 deed<T> fork(task<T> child)
 {
     return require_current_firm().fork(std::move(child));
+}
+
+template<typename Fn, typename... Args>
+    requires std::invocable<Fn, Args...>
+        && is_task_v<std::invoke_result_t<Fn, Args...>>
+auto fork(Fn && fn, Args &&... args)
+    -> deed<task_result_t<std::invoke_result_t<Fn, Args...>>>
+{
+    return require_current_firm().fork(
+        std::forward<Fn>(fn),
+        std::forward<Args>(args)...);
 }
 
 template<typename T>

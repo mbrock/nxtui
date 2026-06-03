@@ -185,7 +185,7 @@ children and no live deed can name the records being reclaimed.
 
 [RFC 0003](rfc-0003-deck-task-registry.md) provides durable task IDs.
 
-[RFC 0006](../new/rfc-0006-join-as-a-completion-feed.md) describes the join
+[RFC 0006](rfc-0006-join-as-a-completion-feed.md) describes the join
 side of the same bookkeeping as a feed of child completions.
 
 [RFC 0007](rfc-0007-ring-geometry-extraction.md) provides reusable bounded
