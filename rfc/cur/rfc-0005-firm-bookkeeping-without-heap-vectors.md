@@ -43,6 +43,9 @@ The convenience `firm{}` path still owns default frame backing, but it now uses
 an explicit aligned `owned_frame_storage` block instead of
 `std::vector<std::byte>`. That keeps the default path as a bounded byte region
 with a visible capacity, matching the borrowed frame-storage API more closely.
+Default child-record and join-failure backing have the same wrapper shape:
+`owned_firm_child_storage` and `owned_firm_join_storage` own bounded arrays and
+then lend `firm_child_storage_ref` / `firm_join_storage_ref` views to the firm.
 
 The current deed result state is inline in the deed handle and move-stable:
 when the handle moves, the child record is retargeted to the new result slot.

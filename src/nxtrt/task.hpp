@@ -1609,6 +1609,42 @@ private:
     std::array<detail::firm_child_slot, N == 0 ? 1 : N> storage_{};
 };
 
+class owned_firm_child_storage
+{
+public:
+    owned_firm_child_storage() = default;
+
+    explicit owned_firm_child_storage(std::size_t capacity)
+        : slots_(
+            capacity == 0
+                ? nullptr
+                : std::make_unique<detail::firm_child_slot[]>(capacity))
+        , capacity_(capacity)
+    {}
+
+    owned_firm_child_storage(const owned_firm_child_storage &) = delete;
+    owned_firm_child_storage & operator=(
+        const owned_firm_child_storage &) = delete;
+    owned_firm_child_storage(owned_firm_child_storage &&) noexcept = default;
+    owned_firm_child_storage & operator=(
+        owned_firm_child_storage &&) noexcept = default;
+
+    [[nodiscard]] firm_child_storage_ref ref() noexcept
+    {
+        return firm_child_storage_ref{
+            std::span<detail::firm_child_slot>{slots_.get(), capacity_}};
+    }
+
+    [[nodiscard]] operator firm_child_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::unique_ptr<detail::firm_child_slot[]> slots_;
+    std::size_t capacity_ = 0;
+};
+
 struct firm_join_storage_ref
 {
     firm_join_storage_ref() = default;
@@ -1638,6 +1674,42 @@ public:
 
 private:
     std::array<std::exception_ptr, N == 0 ? 1 : N> storage_{};
+};
+
+class owned_firm_join_storage
+{
+public:
+    owned_firm_join_storage() = default;
+
+    explicit owned_firm_join_storage(std::size_t capacity)
+        : failures_(
+            capacity == 0
+                ? nullptr
+                : std::make_unique<std::exception_ptr[]>(capacity))
+        , capacity_(capacity)
+    {}
+
+    owned_firm_join_storage(const owned_firm_join_storage &) = delete;
+    owned_firm_join_storage & operator=(
+        const owned_firm_join_storage &) = delete;
+    owned_firm_join_storage(owned_firm_join_storage &&) noexcept = default;
+    owned_firm_join_storage & operator=(
+        owned_firm_join_storage &&) noexcept = default;
+
+    [[nodiscard]] firm_join_storage_ref ref() noexcept
+    {
+        return firm_join_storage_ref{
+            std::span<std::exception_ptr>{failures_.get(), capacity_}};
+    }
+
+    [[nodiscard]] operator firm_join_storage_ref() noexcept
+    {
+        return ref();
+    }
+
+private:
+    std::unique_ptr<std::exception_ptr[]> failures_;
+    std::size_t capacity_ = 0;
 };
 
 struct firm_storage_ref
@@ -1902,17 +1974,11 @@ public:
         : owned_frame_storage_(default_frame_capacity)
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
-        , owned_child_storage_(
-            std::make_unique<detail::firm_child_slot[]>(
-                default_child_capacity))
-        , child_slots_(owned_child_storage_.get(), default_child_capacity)
+        , owned_child_storage_(default_child_capacity)
+        , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
-        , owned_join_storage_(
-            std::make_unique<std::exception_ptr[]>(
-                default_child_capacity))
-        , join_failure_slots_(
-            owned_join_storage_.get(),
-            default_child_capacity)
+        , owned_join_storage_(default_child_capacity)
+        , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
     {
         register_debug();
@@ -1920,17 +1986,11 @@ public:
 
     explicit firm(frame_storage_ref frames)
         : frames_(frames)
-        , owned_child_storage_(
-            std::make_unique<detail::firm_child_slot[]>(
-                default_child_capacity))
-        , child_slots_(owned_child_storage_.get(), default_child_capacity)
+        , owned_child_storage_(default_child_capacity)
+        , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
-        , owned_join_storage_(
-            std::make_unique<std::exception_ptr[]>(
-                default_child_capacity))
-        , join_failure_slots_(
-            owned_join_storage_.get(),
-            default_child_capacity)
+        , owned_join_storage_(default_child_capacity)
+        , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
     {
         register_debug();
@@ -1941,12 +2001,8 @@ public:
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
-        , owned_join_storage_(
-            std::make_unique<std::exception_ptr[]>(
-                children.slots.size()))
-        , join_failure_slots_(
-            owned_join_storage_.get(),
-            children.slots.size())
+        , owned_join_storage_(children.slots.size())
+        , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
     {
         register_debug();
@@ -1955,12 +2011,8 @@ public:
     firm(frame_storage_ref frames, firm_child_storage_ref children)
         : frames_(frames)
         , child_slots_(children.slots)
-        , owned_join_storage_(
-            std::make_unique<std::exception_ptr[]>(
-                children.slots.size()))
-        , join_failure_slots_(
-            owned_join_storage_.get(),
-            children.slots.size())
+        , owned_join_storage_(children.slots.size())
+        , join_failure_slots_(owned_join_storage_.ref().failures)
         , uses_owned_join_storage_(true)
     {
         register_debug();
@@ -2030,18 +2082,14 @@ public:
         , owned_child_storage_(std::move(other.owned_child_storage_))
         , child_slots_(
             other.uses_owned_child_storage_
-                ? std::span<detail::firm_child_slot>{
-                    owned_child_storage_.get(),
-                    default_child_capacity}
+                ? owned_child_storage_.ref().slots
                 : other.child_slots_)
         , uses_owned_child_storage_(
             std::exchange(other.uses_owned_child_storage_, false))
         , owned_join_storage_(std::move(other.owned_join_storage_))
         , join_failure_slots_(
             other.uses_owned_join_storage_
-                ? std::span<std::exception_ptr>{
-                    owned_join_storage_.get(),
-                    other.join_failure_slots_.size()}
+                ? owned_join_storage_.ref().failures
                 : other.join_failure_slots_)
         , uses_owned_join_storage_(
             std::exchange(other.uses_owned_join_storage_, false))
@@ -2287,10 +2335,10 @@ private:
     owned_frame_storage owned_frame_storage_;
     firm_frame_arena frames_;
     bool uses_owned_frame_storage_ = false;
-    std::unique_ptr<detail::firm_child_slot[]> owned_child_storage_;
+    owned_firm_child_storage owned_child_storage_;
     std::span<detail::firm_child_slot> child_slots_;
     bool uses_owned_child_storage_ = false;
-    std::unique_ptr<std::exception_ptr[]> owned_join_storage_;
+    owned_firm_join_storage owned_join_storage_;
     std::span<std::exception_ptr> join_failure_slots_;
     bool uses_owned_join_storage_ = false;
     std::size_t join_failure_count_ = 0;
