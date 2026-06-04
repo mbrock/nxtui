@@ -1,8 +1,9 @@
-.PHONY: all setup setup-unity build dev full test freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
+.PHONY: all setup setup-unity build dev full test setup-gcc13 build-gcc13 test-gcc13 gcc13 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
 
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
 BENCH_CPP_ARGS ?=
+GCC13_BUILD_DIR ?= build-gcc13
 DEPS_FILE ?=
 DEPS_DEPTH ?= 4
 DEPS_FLAGS ?=
@@ -27,6 +28,21 @@ full:
 test:
 	meson compile -C build nxt-tests
 	meson test -C build
+
+setup-gcc13:
+	CC=gcc-13 CXX=g++-13 meson setup "$(GCC13_BUILD_DIR)" $(NXT_MESON_LINK_ARGS)
+
+build-gcc13:
+	@if [ ! -d "$(GCC13_BUILD_DIR)" ]; then \
+		CC=gcc-13 CXX=g++-13 meson setup "$(GCC13_BUILD_DIR)" $(NXT_MESON_LINK_ARGS); \
+	fi
+	meson compile -C "$(GCC13_BUILD_DIR)" nxt-dev
+
+test-gcc13: build-gcc13
+	meson compile -C "$(GCC13_BUILD_DIR)" nxt-tests
+	meson test -C "$(GCC13_BUILD_DIR)"
+
+gcc13: test-gcc13
 
 deps:
 	@scripts/include-graph --summary --depth "$(DEPS_DEPTH)" $(DEPS_FLAGS) $(DEPS_FILE)

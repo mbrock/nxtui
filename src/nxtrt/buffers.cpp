@@ -14,21 +14,13 @@ template class discarding_sink<std::byte>;
 task<std::size_t>
 send_some(int fd, std::span<const std::byte> buffer, int flags)
 {
-    co_return co_await op::send_some{
-        .fd = fd,
-        .buffer = buffer,
-        .flags = flags,
-    };
+    co_return co_await op::send_some{fd, buffer, flags};
 }
 
 task<std::size_t>
 write_some(int fd, std::span<const std::byte> buffer, off_t offset)
 {
-    co_return co_await op::write_some{
-        .fd = fd,
-        .buffer = buffer,
-        .offset = offset,
-    };
+    co_return co_await op::write_some{fd, buffer, offset};
 }
 
 hope<std::size_t>
@@ -43,11 +35,7 @@ fd_sink::drain_more_task(value_chunk_view chunks, std::size_t splat)
     auto src = first_nonempty(chunks, splat);
     while (true) {
         try {
-            co_return co_await op::write_some{
-                .fd = fd_,
-                .buffer = src,
-                .offset = -1,
-            };
+            co_return co_await op::write_some{fd_, src};
         } catch (const interrupted_system_call &) {
         }
     }
@@ -90,11 +78,7 @@ socket_sink::drain_more_task(value_chunk_view chunks, std::size_t splat)
     auto src = first_nonempty(chunks, splat);
     while (true) {
         try {
-            auto n = co_await op::send_some{
-                .fd = fd_,
-                .buffer = src,
-                .flags = flags_,
-            };
+            auto n = co_await op::send_some{fd_, src, flags_};
             sent_ += n;
             co_return n;
         } catch (const interrupted_system_call &) {
@@ -122,11 +106,7 @@ fd_source::read_into(junk<std::byte> dst)
 {
     while (true) {
         try {
-            co_return co_await op::read_some{
-                .fd = fd_,
-                .buffer = dst.as_writable_bytes(),
-                .offset = -1,
-            };
+            co_return co_await op::read_some{fd_, dst.as_writable_bytes()};
         } catch (const interrupted_system_call &) {
         }
     }
@@ -138,10 +118,9 @@ socket_source::read_into(junk<std::byte> dst)
     while (true) {
         try {
             auto n = co_await op::recv_some{
-                .fd = fd_,
-                .buffer = dst.as_writable_bytes(),
-                .flags = flags_,
-            };
+                fd_,
+                dst.as_writable_bytes(),
+                flags_};
             received_ += n;
             co_return n;
         } catch (const interrupted_system_call &) {

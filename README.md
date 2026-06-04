@@ -103,6 +103,7 @@ conceptual spine of the project:
 | --- | --- |
 | [**Runtime overview**][rt-overview] | The map. Every core type — `task`, `deck`, `firm`, `wish`, `wand` — and how they fit, in one page. Start here. |
 | [**A story about holding work**][rt-holding] | The narrative. Why the deck, the wand, the byte streams, and `hope<T>` are all the *same* idea — a holder with a release policy — and the endgame where they merge. |
+| [**Runtime RFCs**][runtime-rfcs] | The design notebook. Current and speculative RFCs for firms, wands, feeds, reels, buffer land, and the runtime vocabulary. |
 | [**RFC 0001: Reels**][rfc-reels] | The framing note. Reels are frame-shaped projections over `bytefeed` stock: raw bytes becoming marked frames, before anything turns into owned values. |
 | [**The game**][rt-game] | The one programming model in the runtime: behavioral programming (request / waitFor / block) as small composable `task`s, built on top of the same machinery. |
 | [**Occurrent structure**][rt-occurrents] | The ontology note. Behavioral threads, coroutines, and structured concurrency as process parts, boundaries, and shared happenings. |
@@ -227,6 +228,7 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 [rt-holding]: https://swa.sh/nxt/rt_holding.html
 [rt-game]: https://swa.sh/nxt/rt_game.html
 [rt-occurrents]: https://swa.sh/nxt/rt_occurrents.html
+[runtime-rfcs]: https://swa.sh/nxt/runtime_rfcs.html
 [rfc-reels]: https://swa.sh/nxt/rfc_reels.html
 
 <!-- nxtrt -->

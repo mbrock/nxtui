@@ -4391,10 +4391,7 @@ inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
     short events,
     std::chrono::nanoseconds timeout)
 {
-    auto ready = detail::poll_ready(op::poll{
-        .fd = fd,
-        .events = events,
-    });
+    auto ready = detail::poll_ready(op::poll{fd, events});
     auto deadline = detail::poll_deadline(timeout);
     auto deeds = co_await with_firm(
         [ready = std::move(ready),

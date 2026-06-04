@@ -80,7 +80,7 @@ nxtrt::task<void> native_poll_until_timeout(int rx)
 
 nxtrt::task<nxt::unique_fd> accept_one(int listener)
 {
-    co_return nxt::unique_fd{co_await nxtrt::op::accept{.fd = listener}};
+    co_return nxt::unique_fd{co_await nxtrt::op::accept{listener}};
 }
 
 sockaddr_in loopback_listener_address(int fd)
@@ -122,10 +122,7 @@ nxtrt::task<void> repeat_native_poll_until(int tx, int rx)
         if (result.timed_out || (result.events & POLLIN) == 0)
             throw std::runtime_error{"repeat poll-until missed readability"};
 
-        auto received = co_await nxtrt::op::recv_some{
-            .fd = rx,
-            .buffer = storage,
-        };
+        auto received = co_await nxtrt::op::recv_some{rx, storage};
         if (received != storage.size())
             throw std::runtime_error{"short repeat recv"};
 
@@ -139,10 +136,7 @@ nxtrt::task<void> repeat_poll_with_sibling_filter(int tx, int rx)
     auto storage = std::array<std::byte, 1>{};
 
     for (auto i = 0; i != 16; ++i) {
-        auto events = co_await nxtrt::op::poll{
-            .fd = tx,
-            .events = POLLIN | POLLOUT,
-        };
+        auto events = co_await nxtrt::op::poll{tx, POLLIN | POLLOUT};
         if ((events & POLLOUT) == 0)
             throw std::runtime_error{"poll did not report writability"};
 
@@ -150,10 +144,7 @@ nxtrt::task<void> repeat_poll_with_sibling_filter(int tx, int rx)
         if (sent != message.size())
             throw std::runtime_error{"short sibling send"};
 
-        auto received = co_await nxtrt::op::recv_some{
-            .fd = tx,
-            .buffer = storage,
-        };
+        auto received = co_await nxtrt::op::recv_some{tx, storage};
         if (received != storage.size())
             throw std::runtime_error{"short sibling recv"};
 
@@ -164,10 +155,7 @@ nxtrt::task<void> repeat_poll_with_sibling_filter(int tx, int rx)
 nxtrt::task<void> poll_cancelled(int rx)
 {
     try {
-        (void)co_await nxtrt::op::poll{
-            .fd = rx,
-            .events = POLLIN,
-        };
+        (void)co_await nxtrt::op::poll{rx, POLLIN};
     } catch (const nxtrt::operation_cancelled &) {
         co_return;
     }

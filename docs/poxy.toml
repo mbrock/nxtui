@@ -12,11 +12,13 @@ generate_tagfile = true
 extract_all = true
 paths = [
     '../test',
+    'rfcs.md',
     'rt-overview.md',
     'rt-holding.md',
     'rt-game.md',
     'rt-occurrents.md',
-    '../rfc/new/rfc-0001-reels.md',
+    '../rfc/cur',
+    '../rfc/new',
 ]
 recursive_paths = [
     '../src',

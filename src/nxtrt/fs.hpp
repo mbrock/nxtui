@@ -115,11 +115,10 @@ inline file_status status_from_statx(statx_result const & stat) noexcept
 inline task<file_status> stat_path(int dirfd, std::string path)
 {
     auto stat = co_await op::statx{
-        .dirfd = dirfd,
-        .path = std::move(path),
-        .flags = AT_SYMLINK_NOFOLLOW,
-        .mask = STATX_TYPE | STATX_MODE | STATX_SIZE,
-    };
+        dirfd,
+        std::move(path),
+        AT_SYMLINK_NOFOLLOW,
+        STATX_TYPE | STATX_MODE | STATX_SIZE};
     co_return status_from_statx(stat);
 }
 
@@ -128,10 +127,7 @@ inline task<std::vector<std::string>> read_directory_names(int fd)
     auto storage = std::array<std::byte, 16 * 1024>{};
     auto source = task_bytefeed{
         [fd](junk<std::byte> dst) -> task<std::size_t> {
-            co_return co_await op::getdents64{
-                .fd = fd,
-                .buffer = dst.as_writable_bytes(),
-            };
+            co_return co_await op::getdents64{fd, dst.as_writable_bytes()};
         },
         std::span{storage}};
 
@@ -155,11 +151,9 @@ inline task<std::vector<std::string>> read_directory_names(int fd)
 inline task<std::vector<directory_entry>> list_directory(std::string path)
 {
     auto fd = co_await op::openat{
-        .dirfd = AT_FDCWD,
-        .path = std::move(path),
-        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
-        .mode = 0,
-    };
+        AT_FDCWD,
+        std::move(path),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC};
     auto dir = nxt::unique_fd{fd};
     auto names = co_await detail::read_directory_names(dir.get());
 

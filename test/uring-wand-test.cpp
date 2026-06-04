@@ -72,10 +72,7 @@ nxtrt::task<void> poll_after_socket_send(int tx, int rx)
     if (sent != message.size())
         throw std::runtime_error{"short poll smoke send"};
 
-    auto revents = co_await nxtrt::op::poll{
-        .fd = rx,
-        .events = POLLIN,
-    };
+    auto revents = co_await nxtrt::op::poll{rx, POLLIN};
     if ((revents & POLLIN) == 0)
         throw std::runtime_error{"poll did not report readable socket"};
 }
@@ -143,10 +140,7 @@ nxtrt::task<void> poll_until_timeout(int rx)
 
 nxtrt::task<void> poll_forever(int rx)
 {
-    (void)co_await nxtrt::op::poll{
-        .fd = rx,
-        .events = POLLIN,
-    };
+    (void)co_await nxtrt::op::poll{rx, POLLIN};
 }
 
 nxtrt::task<void> poll_with_timeout(int rx)
@@ -162,10 +156,7 @@ nxtrt::task<void> poll_after_send_with_timeout(int tx, int rx)
 nxtrt::task<void> poll_until_stopped(int rx)
 {
     try {
-        (void)co_await nxtrt::op::poll{
-            .fd = rx,
-            .events = POLLIN,
-        };
+        (void)co_await nxtrt::op::poll{rx, POLLIN};
     } catch (const nxtrt::operation_cancelled &) {
         co_return;
     }
@@ -183,15 +174,16 @@ nxtrt::task<void> connect_to(int fd, sockaddr_in address)
 
 nxtrt::task<nxt::unique_fd> accept_one(int listener)
 {
-    co_return nxt::unique_fd{co_await nxtrt::op::accept{.fd = listener}};
+    co_return nxt::unique_fd{co_await nxtrt::op::accept{listener}};
 }
 
 nxtrt::task<struct statx> stat_current_directory()
 {
     co_return co_await nxtrt::op::statx{
-        .path = ".",
-        .mask = STATX_TYPE,
-    };
+        AT_FDCWD,
+        ".",
+        AT_SYMLINK_NOFOLLOW,
+        STATX_TYPE};
 }
 
 struct linux_dirent64
@@ -206,16 +198,13 @@ struct linux_dirent64
 nxtrt::task<std::vector<std::string>> read_current_directory_names()
 {
     auto fd = co_await nxtrt::op::openat{
-        .path = ".",
-        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
-    };
+        AT_FDCWD,
+        ".",
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC};
     auto dir = nxt::unique_fd{fd};
 
     auto storage = std::array<std::byte, 4096>{};
-    auto bytes = co_await nxtrt::op::getdents64{
-        .fd = dir.get(),
-        .buffer = storage,
-    };
+    auto bytes = co_await nxtrt::op::getdents64{dir.get(), storage};
 
     auto names = std::vector<std::string>{};
     for (auto offset = std::size_t{}; offset < bytes;) {
@@ -232,10 +221,8 @@ nxtrt::task<std::vector<std::string>> read_current_directory_names()
 
 nxtrt::task<void> write_to_fd(int fd, std::string_view text)
 {
-    auto written = co_await nxtrt::op::write_some{
-        .fd = fd,
-        .buffer = nxtrt::as_bytes(text),
-    };
+    auto written =
+        co_await nxtrt::op::write_some{fd, nxtrt::as_bytes(text)};
     if (written != text.size())
         throw std::runtime_error{"short write wish"};
 }
@@ -269,31 +256,26 @@ nxtrt::task<nxtrt::child_result> terminate_sleeping_shell()
     argv.emplace_back("/bin/sh");
     argv.emplace_back("-c");
     argv.emplace_back("sleep 10");
-    auto child = co_await nxtrt::op::spawn_piped{.argv = std::move(argv)};
+    auto child = co_await nxtrt::op::spawn_piped{std::move(argv)};
 
-    co_await nxtrt::op::signal_child{
-        .pidfd = child.pid_fd(),
-        .signal = SIGTERM,
-    };
-    co_return co_await nxtrt::op::wait_child{.pidfd = child.pid_fd()};
+    co_await nxtrt::op::signal_child{child.pid_fd(), SIGTERM};
+    co_return co_await nxtrt::op::wait_child{child.pid_fd()};
 }
 
 nxtrt::task<nxtrt::child_result> run_shell_in_pty()
 {
     auto child = co_await nxtrt::op::spawn_pty{
-        .argv = {"/bin/sh", "-c", "printf pty-ok"},
-        .columns = 40,
-        .rows = 8,
-    };
+        {"/bin/sh", "-c", "printf pty-ok"},
+        40,
+        8};
 
     auto storage = std::array<std::byte, 128>{};
     auto output = std::string{};
     while (true) {
         try {
             auto n = co_await nxtrt::op::read_some{
-                .fd = child.master_fd(),
-                .buffer = std::span{storage},
-            };
+                child.master_fd(),
+                std::span{storage}};
             if (n == 0)
                 break;
             output += nxtrt::as_string_view(std::span{storage}.first(n));

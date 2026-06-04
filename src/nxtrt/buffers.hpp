@@ -530,6 +530,12 @@ public:
     using base::base;
 };
 
+template<typename Read, std::size_t Extent>
+task_bytefeed(Read, std::span<std::byte, Extent>) -> task_bytefeed<Read>;
+
+template<typename Read>
+task_bytefeed(Read, value_storage_ref<std::byte>) -> task_bytefeed<Read>;
+
 /// Borrowed in-memory byte reader over a single-pass range of byte-like chunks.
 ///
 /// Chunks may be byte spans or UTF-8 text views; text chunks are treated as

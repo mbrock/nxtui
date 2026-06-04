@@ -37,20 +37,15 @@ struct [[gnu::packed]] linux_dirent64_header
 inline task<std::vector<std::string>> list_names(std::filesystem::path path)
 {
     auto fd = co_await op::openat{
-        .dirfd = AT_FDCWD,
-        .path = path.string(),
-        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
-        .mode = 0,
-    };
+        AT_FDCWD,
+        path.string(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC};
     auto dir = nxt::unique_fd{fd};
     auto storage = std::array<std::byte, 16 * 1024>{};
     auto names = std::vector<std::string>{};
 
     while (true) {
-        auto bytes = co_await op::getdents64{
-            .fd = dir.get(),
-            .buffer = std::span{storage},
-        };
+        auto bytes = co_await op::getdents64{dir.get(), std::span{storage}};
         if (bytes == 0)
             break;
 
@@ -109,20 +104,15 @@ inline task<std::string> read_text_file(std::filesystem::path path)
 {
     try {
         auto fd = co_await op::openat{
-            .dirfd = AT_FDCWD,
-            .path = path.string(),
-            .flags = O_RDONLY | O_CLOEXEC,
-            .mode = 0,
-        };
+            AT_FDCWD,
+            path.string(),
+            O_RDONLY | O_CLOEXEC};
         auto file = nxt::unique_fd{fd};
         auto storage = std::array<std::byte, 4096>{};
         auto out = std::string{};
 
         while (true) {
-            auto n = co_await op::read_some{
-                .fd = file.get(),
-                .buffer = std::span{storage},
-            };
+            auto n = co_await op::read_some{file.get(), std::span{storage}};
             if (n == 0)
                 break;
             out += as_string_view(std::span{storage}.first(n));

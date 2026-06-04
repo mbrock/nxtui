@@ -168,10 +168,7 @@ private:
     task<void> wait_slow()
     {
         while (!ringing_) {
-            auto events = co_await op::poll{
-                .fd = poll_fd(),
-                .events = POLLIN,
-            };
+            auto events = co_await op::poll{poll_fd(), POLLIN};
             if ((events & (POLLIN | POLLERR | POLLHUP | POLLNVAL)) != 0)
                 co_return;
         }

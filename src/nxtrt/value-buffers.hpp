@@ -699,7 +699,8 @@ private:
         hope<std::span<value_type>> slice,
         std::size_t len)
     {
-        auto out = (co_await std::move(slice)).first(len);
+        auto writable = std::span<value_type>{co_await std::move(slice)};
+        auto out = writable.first(len);
         advance_constructed(len);
         co_return out;
     }

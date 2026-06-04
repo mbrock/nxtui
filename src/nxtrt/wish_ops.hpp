@@ -118,6 +118,10 @@ struct manual : wish<void, "manual">
 {
     coin_t token = 0;
 
+    constexpr explicit manual(coin_t token = 0) noexcept
+        : token(token)
+    {}
+
     auto args() const
     {
         return wish_args(wish_arg{"token", token});
@@ -130,6 +134,17 @@ struct openat : wish<int, "openat">
     std::string path;
     int flags = O_RDONLY;
     mode_t mode = 0;
+
+    explicit openat(
+        int dirfd = AT_FDCWD,
+        std::string path = {},
+        int flags = O_RDONLY,
+        mode_t mode = 0)
+        : dirfd(dirfd)
+        , path(std::move(path))
+        , flags(flags)
+        , mode(mode)
+    {}
 
     auto args() const
     {
@@ -146,6 +161,17 @@ struct statx : wish<statx_result, "statx">
     unsigned mask = STATX_BASIC_STATS;
     statx_result result{};
 
+    explicit statx(
+        int dirfd = AT_FDCWD,
+        std::string path = {},
+        int flags = AT_SYMLINK_NOFOLLOW,
+        unsigned mask = STATX_BASIC_STATS)
+        : dirfd(dirfd)
+        , path(std::move(path))
+        , flags(flags)
+        , mask(mask)
+    {}
+
     auto args() const
     {
         return path_args(path);
@@ -157,6 +183,13 @@ struct getdents64 : wish<std::size_t, "getdents64">
     int fd = -1;
     std::span<std::byte> buffer;
 
+    constexpr explicit getdents64(
+        int fd = -1,
+        std::span<std::byte> buffer = {}) noexcept
+        : fd(fd)
+        , buffer(buffer)
+    {}
+
     auto args() const
     {
         return fd_bytes_args(fd, buffer.size());
@@ -167,6 +200,10 @@ struct spawn_piped : wish<piped_child, "spawn-piped">
 {
     std::vector<std::string> argv;
     std::shared_ptr<piped_child> child = std::make_shared<piped_child>();
+
+    explicit spawn_piped(std::vector<std::string> argv = {})
+        : argv(std::move(argv))
+    {}
 
     auto args() const
     {
@@ -181,6 +218,15 @@ struct spawn_pty : wish<pty_child, "spawn-pty">
     std::size_t rows = 24;
     std::shared_ptr<pty_child> child = std::make_shared<pty_child>();
 
+    explicit spawn_pty(
+        std::vector<std::string> argv = {},
+        std::size_t columns = 80,
+        std::size_t rows = 24)
+        : argv(std::move(argv))
+        , columns(columns)
+        , rows(rows)
+    {}
+
     auto args() const
     {
         return wish_args(wish_arg{"argv", argv.size()});
@@ -192,6 +238,10 @@ struct wait_child : wish<child_result, "wait-child">
     int pidfd = -1;
     siginfo_t info{}; // NOLINT(misc-include-cleaner)
 
+    constexpr explicit wait_child(int pidfd = -1) noexcept
+        : pidfd(pidfd)
+    {}
+
     auto args() const
     {
         return pidfd_args(pidfd);
@@ -202,6 +252,13 @@ struct signal_child : wish<void, "signal-child">
 {
     int pidfd = -1;
     int signal = SIGTERM;
+
+    constexpr explicit signal_child(
+        int pidfd = -1,
+        int signal = SIGTERM) noexcept
+        : pidfd(pidfd)
+        , signal(signal)
+    {}
 
     auto args() const
     {
@@ -218,6 +275,15 @@ struct read_some : wish<std::size_t, "read">
     std::span<std::byte> buffer;
     off_t offset = -1;
 
+    constexpr explicit read_some(
+        int fd = -1,
+        std::span<std::byte> buffer = {},
+        off_t offset = -1) noexcept
+        : fd(fd)
+        , buffer(buffer)
+        , offset(offset)
+    {}
+
     auto args() const
     {
         return fd_bytes_args(fd, buffer.size());
@@ -229,6 +295,15 @@ struct write_some : wish<std::size_t, "write">
     int fd = -1;
     std::span<const std::byte> buffer;
     off_t offset = -1;
+
+    constexpr explicit write_some(
+        int fd = -1,
+        std::span<const std::byte> buffer = {},
+        off_t offset = -1) noexcept
+        : fd(fd)
+        , buffer(buffer)
+        , offset(offset)
+    {}
 
     auto args() const
     {
@@ -242,6 +317,15 @@ struct recv_some : wish<std::size_t, "recv">
     std::span<std::byte> buffer;
     int flags = 0;
 
+    constexpr explicit recv_some(
+        int fd = -1,
+        std::span<std::byte> buffer = {},
+        int flags = 0) noexcept
+        : fd(fd)
+        , buffer(buffer)
+        , flags(flags)
+    {}
+
     auto args() const
     {
         return fd_bytes_args(fd, buffer.size());
@@ -254,6 +338,15 @@ struct send_some : wish<std::size_t, "send">
     std::span<const std::byte> buffer;
     int flags = 0;
 
+    constexpr explicit send_some(
+        int fd = -1,
+        std::span<const std::byte> buffer = {},
+        int flags = 0) noexcept
+        : fd(fd)
+        , buffer(buffer)
+        , flags(flags)
+    {}
+
     auto args() const
     {
         return fd_bytes_args(fd, buffer.size());
@@ -265,6 +358,15 @@ struct connect : wish<void, "connect">
     int fd = -1;
     sockaddr_storage address{};
     socklen_t address_size = 0; // NOLINT(misc-include-cleaner)
+
+    constexpr explicit connect(
+        int fd = -1,
+        sockaddr_storage address = {},
+        socklen_t address_size = 0) noexcept
+        : fd(fd)
+        , address(address)
+        , address_size(address_size)
+    {}
 
     auto args() const
     {
@@ -279,11 +381,7 @@ struct connect : wish<void, "connect">
         if (address_size > sizeof(sockaddr_storage))
             throw runtime_error{"connect address is too large"};
 
-        auto op = connect{
-            .fd = fd,
-            .address = {},
-            .address_size = address_size,
-        };
+        auto op = connect{fd, {}, address_size};
         std::memcpy(&op.address, address, address_size);
         return op;
     }
@@ -303,6 +401,11 @@ struct accept : wish<int, "accept">
     int fd = -1;
     int flags = 0;
 
+    constexpr explicit accept(int fd = -1, int flags = 0) noexcept
+        : fd(fd)
+        , flags(flags)
+    {}
+
     auto args() const
     {
         return fd_args(fd);
@@ -313,6 +416,11 @@ struct poll : wish<int, "poll">
 {
     int fd = -1;
     short events = 0;
+
+    constexpr explicit poll(int fd = -1, short events = 0) noexcept
+        : fd(fd)
+        , events(events)
+    {}
 
     auto args() const
     {
@@ -326,6 +434,10 @@ struct timeout : wish<void, "timeout">
 {
     kernel_timespec duration{};
 
+    constexpr explicit timeout(kernel_timespec duration = {}) noexcept
+        : duration(duration)
+    {}
+
     auto args() const
     {
         return no_args();
@@ -333,9 +445,7 @@ struct timeout : wish<void, "timeout">
 
     static timeout after(std::chrono::nanoseconds duration)
     {
-        return timeout{
-            .duration = as_kernel_timespec(duration),
-        };
+        return timeout{as_kernel_timespec(duration)};
     }
 };
 
@@ -349,6 +459,15 @@ struct poll_until : wish<poll_until_result, "poll-until">
     short events = 0;
     kernel_timespec timeout{};
 
+    constexpr explicit poll_until(
+        int fd = -1,
+        short events = 0,
+        kernel_timespec timeout = {}) noexcept
+        : fd(fd)
+        , events(events)
+        , timeout(timeout)
+    {}
+
     auto args() const
     {
         return wish_args(
@@ -361,11 +480,7 @@ struct poll_until : wish<poll_until_result, "poll-until">
         short events,
         std::chrono::nanoseconds timeout)
     {
-        return poll_until{
-            .fd = fd,
-            .events = events,
-            .timeout = as_kernel_timespec(timeout),
-        };
+        return poll_until{fd, events, as_kernel_timespec(timeout)};
     }
 };
 

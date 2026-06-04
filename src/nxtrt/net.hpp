@@ -132,11 +132,7 @@ inline task<nxt::unique_fd> accept(int listener)
 #ifdef SOCK_CLOEXEC
     flags |= SOCK_CLOEXEC;
 #endif
-    auto fd = nxt::unique_fd{
-        co_await op::accept{
-            .fd = listener,
-            .flags = flags,
-        }};
+    auto fd = nxt::unique_fd{co_await op::accept{listener, flags}};
     if (fd.get() < 0)
         throw runtime_error{"accept returned invalid fd"};
     set_tcp_no_delay(fd.get());

@@ -68,10 +68,7 @@ nxtrt::task<void> epoll_poll_until_timeout(int rx)
 nxtrt::task<void> epoll_poll_cancelled(int rx)
 {
     try {
-        (void)co_await nxtrt::op::poll{
-            .fd = rx,
-            .events = POLLIN,
-        };
+        (void)co_await nxtrt::op::poll{rx, POLLIN};
     } catch (const nxtrt::operation_cancelled &) {
         co_return;
     }

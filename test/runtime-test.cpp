@@ -1318,7 +1318,7 @@ nxtrt::task<bool> shielded_child_stop_state()
 
 nxtrt::task<void> await_manual_token(nxtrt::coin_t token)
 {
-    co_await nxtrt::op::manual{.token = token};
+    co_await nxtrt::op::manual{token};
 }
 
 nxtrt::task<void> shielded_manual_token(nxtrt::coin_t token)
@@ -1677,7 +1677,7 @@ inline nxtrt::task<int> map_over_ready_hope()
 inline nxtrt::task<int> map_over_manual_wish(nxtrt::coin_t token)
 {
     co_return co_await nxtrt::map(
-        nxtrt::op::manual{.token = token}, [] { return 7; });
+        nxtrt::op::manual{token}, [] { return 7; });
 }
 
 static suite runtime_tests{
@@ -4018,7 +4018,7 @@ static suite runtime_tests{
                 auto task_body =
                     [](std::vector<int> & events) -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxtrt::op::manual{.token = 42};
+                    co_await nxtrt::op::manual{42};
                     events.push_back(2);
                 };
 
@@ -4057,7 +4057,7 @@ static suite runtime_tests{
                 auto task_body =
                     [](std::vector<int> & events) -> nxtrt::task<void> {
                     events.push_back(1);
-                    co_await nxtrt::op::manual{.token = 7};
+                    co_await nxtrt::op::manual{7};
                     events.push_back(2);
                 };
 
@@ -4093,7 +4093,7 @@ static suite runtime_tests{
                 auto root = nxtrt::root_task{
                     deck,
                     []() -> nxtrt::task<void> {
-                        co_await nxtrt::op::manual{.token = 99};
+                        co_await nxtrt::op::manual{99};
                     },
                 };
 
@@ -4542,7 +4542,8 @@ static suite runtime_tests{
                         auto chunk = co_await source.take_some();
                         if (!chunk)
                             co_return std::string{};
-                        co_return std::string{nxtrt::as_string_view(*chunk)};
+                        auto text = nxtrt::as_string_view(*chunk);
+                        co_return std::string{text.data(), text.size()};
                     });
 
                     expect(result == "xy");
@@ -4570,8 +4571,8 @@ static suite runtime_tests{
                         co_return chunk->size();
                     });
 
-                    expect(value_count(result) == std::size_t{2});
-                    expect(!is_eof(result));
+                    expect(nxtrt::value_count(result) == std::size_t{2});
+                    expect(!nxtrt::is_eof(result));
                 };
 
                 "buffers into its feed storage when the stream sink has no room"_test = [] {
@@ -4602,13 +4603,13 @@ static suite runtime_tests{
 
                     deck.sync_wait([&]() -> nxtrt::task<void> {
                         auto first = co_await source.stream(writer, 3);
-                        expect(value_count(first) == std::size_t{0});
-                        expect(!is_eof(first));
+                        expect(nxtrt::value_count(first) == std::size_t{0});
+                        expect(!nxtrt::is_eof(first));
                         expect(writer.text.empty());
                         expect(nxtrt::as_string_view(source.buffered_span()) == "abc");
 
                         auto second = co_await source.stream(writer, 3);
-                        expect(value_count(second) == std::size_t{3});
+                        expect(nxtrt::value_count(second) == std::size_t{3});
                     });
 
                     expect(writer.text == "abc");

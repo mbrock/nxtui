@@ -270,10 +270,7 @@ private:
                     events,
                     as_duration(*timeout))
                 : poll_until_result{
-                    .events = co_await op::poll{
-                        .fd = fd,
-                        .events = events,
-                    },
+                    .events = co_await op::poll{fd, events},
                     .timed_out = false,
                 };
             if (result.timed_out) {

@@ -18,37 +18,31 @@ using namespace std::chrono_literals;
 
 inline task<piped_child> spawn_piped(std::vector<std::string> argv)
 {
-    co_return co_await op::spawn_piped{.argv = std::move(argv)};
+    co_return co_await op::spawn_piped{std::move(argv)};
 }
 
 inline task<result> wait_child(piped_child const & child)
 {
-    co_return co_await op::wait_child{.pidfd = child.pid_fd()};
+    co_return co_await op::wait_child{child.pid_fd()};
 }
 
 inline task<result> wait_child(pty_child const & child)
 {
-    co_return co_await op::wait_child{.pidfd = child.pid_fd()};
+    co_return co_await op::wait_child{child.pid_fd()};
 }
 
 inline task<void> signal_child(
     piped_child const & child,
     int signal = SIGTERM)
 {
-    co_await op::signal_child{
-        .pidfd = child.pid_fd(),
-        .signal = signal,
-    };
+    co_await op::signal_child{child.pid_fd(), signal};
 }
 
 inline task<void> signal_child(
     pty_child const & child,
     int signal = SIGTERM)
 {
-    co_await op::signal_child{
-        .pidfd = child.pid_fd(),
-        .signal = signal,
-    };
+    co_await op::signal_child{child.pid_fd(), signal};
 }
 
 namespace detail {

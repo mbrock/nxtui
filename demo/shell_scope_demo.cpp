@@ -292,9 +292,8 @@ nxtrt::task<void> pump_stdin_to_pty(
             continue;
 
         auto n = co_await nxtrt::op::read_some{
-            .fd = STDIN_FILENO,
-            .buffer = std::span{storage},
-        };
+            STDIN_FILENO,
+            std::span{storage}};
         if (n == 0)
             co_return;
 

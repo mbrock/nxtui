@@ -105,10 +105,7 @@ public:
         auto offset = std::size_t{};
         while (offset < bytes.size()) {
             auto chunk = std::string_view{bytes}.substr(offset);
-            auto written = co_await op::write_some{
-                .fd = master_fd(),
-                .buffer = as_bytes(chunk),
-            };
+            auto written = co_await op::write_some{master_fd(), as_bytes(chunk)};
             if (written == 0)
                 throw runtime_error{"pty write made no progress"};
             offset += written;
@@ -122,9 +119,8 @@ public:
         while (true) {
             try {
                 auto read = co_await op::read_some{
-                    .fd = master_fd(),
-                    .buffer = std::span{storage},
-                };
+                    master_fd(),
+                    std::span{storage}};
                 if (read == 0)
                     break;
 
@@ -159,10 +155,9 @@ inline task<session> spawn(spawn_options options)
     auto columns = options.size.w.count();
     auto rows = options.size.h.count();
     auto child = co_await op::spawn_pty{
-        .argv = std::move(options.argv),
-        .columns = columns,
-        .rows = rows,
-    };
+        std::move(options.argv),
+        columns,
+        rows};
     co_return session{std::move(child), options.size};
 }
 
