@@ -1,80 +1,46 @@
 #lang racket
 (require redex/reduction-semantics)
 
-;; ============================================================
-;; The pristine ring buffer, as a protocol.
-;;
-;; Strip away the bytes. Strip away the wraparound arithmetic.
-;; What is left is the *protocol*: a bounded region with two
-;; monotone cursors. `produced` only climbs; `consumed` only
-;; climbs; and `consumed <= produced <= consumed + capacity`.
-;;
-;; The fill is the gap between the cursors (produced - consumed).
-;; The free space is capacity minus fill.
-;; You may PRODUCE only when there is free space (not full).
-;; You may CONSUME only when there is fill (not empty).
-;;
-;; That is the whole ring. The monotonicity of the cursors IS
-;; the irreversibility of time. The wraparound (cursor mod cap)
-;; and the actual stored values are *realization* — they belong
-;; to how you cash the protocol out onto physical land, not to
-;; the protocol itself.
-;; ============================================================
-
 (define-language Ring
-  ;; A ring is a capacity and two cursors. Nothing else.
-  ;;   (ring  capacity  produced  consumed)
   (r ::= (ring n n n))
   (n ::= natural))
 
-;; --- derived quantities, as metafunctions (just for reading) ---
-
 (define-metafunction Ring
   fill : r -> n
-  [(fill (ring n_cap n_p n_c)) ,(- (term n_p) (term n_c))])
+  [(fill (ring n_a n_b n_c))
+   ,(- (term n_b) (term n_c))])
 
 (define-metafunction Ring
   free : r -> n
-  [(free (ring n_cap n_p n_c)) ,(- (term n_cap) (term (fill (ring n_cap n_p n_c))))])
-
-;; --- the protocol: exactly two rules ---
+  [(free (ring n_a n_b n_c))
+   ,(- (term n_a) (term (fill (ring n_a n_b n_c))))])
 
 (define ring->
   (reduction-relation
    Ring
    #:domain r
 
-   ;; PRODUCE: advance the produced cursor, if there is room.
-   (--> (ring n_cap n_p n_c)
-        (ring n_cap ,(add1 (term n_p)) n_c)
-        (side-condition (positive? (term (free (ring n_cap n_p n_c)))))
+   (--> (ring n_a n_b n_c)
+        (ring n_a ,(+ 1 (term n_b)) n_c)
+        (side-condition
+         (positive? (term (free (ring n_a n_b n_c)))))
         produce)
 
-   ;; CONSUME: advance the consumed cursor, if there is stock.
-   (--> (ring n_cap n_p n_c)
-        (ring n_cap n_p ,(add1 (term n_c)))
-        (side-condition (positive? (term (fill (ring n_cap n_p n_c)))))
+   (--> (ring n_a n_b n_c)
+        (ring n_a n_b ,(+ 1 (term n_c)))
+        (side-condition
+         (positive? (term (fill (ring n_a n_b n_c)))))
         consume)))
-
-;; ============================================================
-;; The invariant the protocol is supposed to preserve:
-;;   0 <= fill <= capacity     (equivalently 0 <= consumed <= produced
-;;                              <= consumed + capacity)
-;; A holder with a release policy is *correct* iff every step keeps
-;; this true. We can ask Redex to try to break it.
-;; ============================================================
 
 (define-metafunction Ring
   valid? : r -> boolean
-  [(valid? (ring n_cap n_p n_c))
-   ,(and (<= (term n_c) (term n_p))                 ; consumed never passes produced
-         (<= (term (fill (ring n_cap n_p n_c)))     ; fill never exceeds capacity
-             (term n_cap)))])
+  [(valid? (ring n_a n_b n_c))
+   ,(and (<= (term n_c) (term n_b))
+         (<= (term (fill (ring n_a n_b n_c)))
+             (term n_a)))])
 
-;; Property: stepping a valid ring yields only valid rings.
-;; (Preservation / "the protocol cannot be driven into an illegal state.")
 (define (step-preserves-validity? r)
-  (or (not (term (valid? ,r)))                      ; ignore junk start states
+  (or (not (term (valid? ,r)))
       (for/and ([r* (in-list (apply-reduction-relation ring-> r))])
         (term (valid? ,r*)))))
 
@@ -92,10 +58,6 @@
            r
            (map first nexts)))
   selected)
-
-;; ============================================================
-;; Run it.
-;; ============================================================
 
 (module+ main
   (printf "~n=== a ring of capacity 2, starting empty ===~n")
