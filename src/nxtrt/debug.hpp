@@ -65,7 +65,7 @@ inline void install_signal_dump(int signal = SIGUSR1)
 {
     struct sigaction action {};
     action.sa_handler = detail::signal_handler;
-    ::sigemptyset(&action.sa_mask);
+    sigemptyset(&action.sa_mask);
     action.sa_flags = SA_RESTART;
     ::sigaction(signal, &action, nullptr);
 }

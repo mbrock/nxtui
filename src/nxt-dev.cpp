@@ -6,7 +6,9 @@ int nxt_tests_main(int argc, char ** argv);
 int nxtllm_main(int argc, char ** argv);
 int nxt_ls_demo_main(int argc, char ** argv);
 int nxt_tui_demo_main(int argc, char ** argv);
+#if defined(__linux__)
 int nxt_shell_scope_demo_main(int argc, char ** argv);
+#endif
 int nxt_http_client_demo_main(int argc, char ** argv);
 int nxt_openai_sse_demo_main(int argc, char ** argv);
 
@@ -23,7 +25,9 @@ constexpr command commands[] = {
     {"nxtllm", nxtllm_main},
     {"ls", nxt_ls_demo_main},
     {"tui", nxt_tui_demo_main},
+#if defined(__linux__)
     {"shell-scope", nxt_shell_scope_demo_main},
+#endif
     {"http-client", nxt_http_client_demo_main},
     {"openai-sse", nxt_openai_sse_demo_main},
 };

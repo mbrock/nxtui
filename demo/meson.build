@@ -20,11 +20,13 @@ if ls_demo_available
     dependencies : ls_demo_dependencies + [nxt_core_dep],
   )
 
-  executable('nxt-shell-scope-demo',
-    'shell_scope_demo.cpp',
-    include_directories : nxt_inc,
-    dependencies : ls_demo_dependencies + [nxt_core_dep],
-  )
+  if host_machine.system() == 'linux'
+    executable('nxt-shell-scope-demo',
+      'shell_scope_demo.cpp',
+      include_directories : nxt_inc,
+      dependencies : ls_demo_dependencies + [nxt_core_dep],
+    )
+  endif
 endif
 
 if ls_demo_available
