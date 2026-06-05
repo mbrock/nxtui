@@ -4,6 +4,7 @@
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/bell.hpp>
 #include <nxtrt/compression.hpp>
+#include <nxtrt/farm.hpp>
 #include <nxtrt/game.hpp>
 #include <nxtrt/http.hpp>
 #include <nxtrt/wand/kqueue.hpp>
@@ -4177,6 +4178,39 @@ static suite runtime_tests{
                 expect(chunks.chunks()[1][1] == 5_i);
 
                 ring.destroy_all();
+            };
+
+            "farms cache free slots over a mask"_test = [] {
+                auto values = std::array<int, 128>{};
+                auto farm = nxtrt::farm<int, values.size()>{&values};
+                auto & indices = static_cast<nxtrt::feed<std::size_t> &>(farm);
+
+                auto first = indices.take();
+                expect(first.is_ready());
+                auto first_index = first.take_ready();
+                expect(first_index.has_value());
+                expect(*first_index == std::size_t{0});
+
+                auto second = farm.alloc();
+                expect(second.is_ready());
+                auto * second_slot = second.take_ready();
+                expect(second_slot != nullptr);
+                expect(second_slot == values.data() + 1);
+                *second_slot = 42;
+                expect(*second_slot == 42_i);
+
+                farm.give(*first_index);
+                auto next = farm.take();
+                expect(next.is_ready());
+                auto next_index = next.take_ready();
+                expect(next_index.has_value());
+                expect(*next_index == std::size_t{2});
+
+                farm.release(second_slot);
+                auto saw_released = false;
+                for (auto i = std::size_t{0}; i < 64 && !saw_released; ++i)
+                    saw_released = farm.alloc().take_ready() == second_slot;
+                expect(saw_released);
             };
 
             "chunks are visited through reused storage"_test = [] {

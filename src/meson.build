@@ -30,6 +30,7 @@ nxt_core_deps = [
 ] + nxt_compression_deps
 
 nxt_core_sources = files(
+  'nxtrt/alloc_trace.cpp',
   'nxtrt/buffers.cpp',
   'nxtrt/compression.cpp',
   'nxtrt/crypto.cpp',

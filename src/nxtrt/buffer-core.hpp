@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
+#include <concepts>
 #include <cstddef>
 #include <cstring>
 #include <expected>
@@ -32,7 +34,8 @@ struct end_of_stream : buffer_error
 };
 
 /// View immutable bytes as text without copying.
-inline std::string_view as_string_view(std::span<const std::byte> bytes) noexcept
+inline std::string_view
+as_string_view(std::span<const std::byte> bytes) noexcept
 {
     return {
         reinterpret_cast<const char *>(bytes.data()),
@@ -46,8 +49,7 @@ inline std::span<const std::byte> as_bytes(std::string_view text) noexcept
 }
 
 inline std::size_t find_bytes(
-    std::span<const std::byte> haystack,
-    std::span<const std::byte> needle)
+    std::span<const std::byte> haystack, std::span<const std::byte> needle)
 {
     auto match = std::ranges::search(haystack, needle);
     return static_cast<std::size_t>(
@@ -61,18 +63,20 @@ inline constexpr auto eof = eof_t{};
 
 /// Values accepted by the requested destination, or explicit EOF.
 ///
-/// A successful zero count is valid progresslessness; EOF is represented by the
-/// error alternative instead of by a count value.
+/// A successful zero count is valid progresslessness; EOF is represented by
+/// the error alternative instead of by a count value.
 class fare_t
 {
 public:
     fare_t(std::size_t n = 0) noexcept
         : result_(n)
-    {}
+    {
+    }
 
     fare_t(eof_t) noexcept
         : result_(std::unexpected{eof})
-    {}
+    {
+    }
 
     [[nodiscard]] bool has_value() const noexcept
     {
@@ -217,7 +221,8 @@ private:
 template<typename T = std::byte, std::size_t Inline = 2>
 using byte_chunks = buffer_chunks<T, Inline>;
 
-/// View of raw storage where up to `size()` values of `T` may be constructed.
+/// View of raw storage where up to `size()` values of `T` may be
+/// constructed.
 ///
 /// Unlike `std::span<T>`, this does not claim that live `T` objects already
 /// exist. Producers must start object lifetimes before reporting values as
@@ -233,7 +238,8 @@ public:
     junk(value_type * data, std::size_t size)
         : data_(data)
         , size_(size)
-    {}
+    {
+    }
 
     [[nodiscard]] value_type * data() const noexcept
     {
@@ -269,7 +275,8 @@ private:
     std::size_t size_ = 0;
 };
 
-/// Scanner response for a frame whose complete source stock is not visible yet.
+/// Scanner response for a frame whose complete source stock is not visible
+/// yet.
 ///
 /// `minimum_buffered` is relative to the chunk view passed to the scanner.
 /// A length-prefixed scanner can ask for the whole next frame immediately,
@@ -283,8 +290,8 @@ struct chop_need_more
 ///
 /// This is the `(extent, frame)` pair described in
 /// @ref rfc_reels_chop "RFC 0001: Reels / Chop". The frame borrows from the
-/// chunks used to construct it; the extent is what lets the next scan start at
-/// the following frame boundary.
+/// chunks used to construct it; the extent is what lets the next scan start
+/// at the following frame boundary.
 template<typename Frame>
 struct frame_chop
 {
@@ -297,18 +304,17 @@ using chop_scan_result = std::variant<frame_chop<Frame>, chop_need_more>;
 
 template<typename Scanner, typename Stock, typename Frame>
 concept chop_scanner =
-    requires(
-        const Scanner & scanner,
-        buffer_chunks<const Stock> stock) {
-        { std::invoke(scanner, stock) }
-            -> std::same_as<chop_scan_result<Frame>>;
+    requires(const Scanner & scanner, buffer_chunks<const Stock> stock) {
+        {
+            std::invoke(scanner, stock)
+        } -> std::same_as<chop_scan_result<Frame>>;
     };
 
 template<typename Stock, typename Frame>
 struct static_chop_scanner
 {
-    chop_scan_result<Frame> operator()(
-        buffer_chunks<const Stock> stock) const
+    chop_scan_result<Frame>
+    operator()(buffer_chunks<const Stock> stock) const
     {
         return Frame::scan(stock);
     }
@@ -323,11 +329,9 @@ struct static_chop_scanner
 template<
     typename Stock,
     typename Frame,
-    chop_scanner<Stock, Frame> Scanner =
-        static_chop_scanner<Stock, Frame>>
+    chop_scanner<Stock, Frame> Scanner = static_chop_scanner<Stock, Frame>>
 class chop_view
-    : public std::ranges::view_interface<
-        chop_view<Stock, Frame, Scanner>>
+    : public std::ranges::view_interface<chop_view<Stock, Frame, Scanner>>
 {
 public:
     using stock_type = Stock;
@@ -335,12 +339,11 @@ public:
 
     chop_view() = default;
 
-    chop_view(
-        buffer_chunks<const Stock> stock,
-        Scanner scanner = {})
+    chop_view(buffer_chunks<const Stock> stock, Scanner scanner = {})
         : stock_(stock)
         , scanner_(std::move(scanner))
-    {}
+    {
+    }
 
     class iterator
     {
@@ -378,12 +381,11 @@ public:
 
         void operator++(int)
         {
-            (void)++*this;
+            (void) ++*this;
         }
 
-        [[nodiscard]] friend bool operator==(
-            const iterator & it,
-            std::default_sentinel_t) noexcept
+        [[nodiscard]] friend bool
+        operator==(const iterator & it, std::default_sentinel_t) noexcept
         {
             return !it.current_.has_value();
         }
@@ -435,7 +437,7 @@ public:
     {
         auto n = std::size_t{0};
         for (auto const & ignored : *this) {
-            (void)ignored;
+            (void) ignored;
             ++n;
         }
         return n;
@@ -446,15 +448,16 @@ public:
         if (n == 0)
             return true;
         for (auto const & ignored : *this) {
-            (void)ignored;
+            (void) ignored;
             if (--n == 0)
                 return true;
         }
         return false;
     }
 
-    [[nodiscard]] std::size_t extent(
-        std::size_t max_count = std::numeric_limits<std::size_t>::max()) const
+    [[nodiscard]] std::size_t
+    extent(std::size_t max_count = std::numeric_limits<std::size_t>::max())
+        const
     {
         auto out = std::size_t{0};
         for (auto const & item : *this) {
@@ -476,9 +479,8 @@ template<
     typename Frame,
     typename Scanner = static_chop_scanner<Stock, Frame>>
     requires chop_scanner<Scanner, Stock, Frame>
-[[nodiscard]] chop_view<Stock, Frame, Scanner> chop(
-    buffer_chunks<const Stock> stock,
-    Scanner scanner = {})
+[[nodiscard]] chop_view<Stock, Frame, Scanner>
+chop(buffer_chunks<const Stock> stock, Scanner scanner = {})
 {
     return {stock, std::move(scanner)};
 }
@@ -517,9 +519,7 @@ template<typename T>
 
 template<typename T>
 [[nodiscard]] std::size_t ring_write_index(
-    std::size_t capacity,
-    std::size_t seek,
-    std::size_t size) noexcept
+    std::size_t capacity, std::size_t seek, std::size_t size) noexcept
 {
     return (seek + size) % capacity;
 }
@@ -535,9 +535,7 @@ template<typename T>
         return {};
 
     auto write = ring_write_index<T>(capacity, seek, size);
-    auto n = write < seek
-        ? seek - write
-        : capacity - write;
+    auto n = write < seek ? seek - write : capacity - write;
     return std::span{data + write, std::min(n, capacity - size)};
 }
 
@@ -546,9 +544,9 @@ template<typename T>
 /// Borrowed ring storage with explicit constructed-value lifetime.
 ///
 /// `ring_region` is the pure storage/cursor layer below feeds and sinks. It
-/// knows about borrowed storage, two-span views, raw writable tail capacity,
-/// constructed prefixes, and destruction. It does not allocate, suspend, or
-/// know about higher-level runtime ownership.
+/// knows about borrowed storage, two-span views, raw writable tail
+/// capacity, constructed prefixes, and destruction. It does not allocate,
+/// suspend, or know about higher-level runtime ownership.
 template<typename T>
 class ring_region
 {
@@ -562,7 +560,8 @@ public:
     ring_region(value_type * data, std::size_t capacity)
         : data_(data)
         , capacity_(capacity)
-    {}
+    {
+    }
 
     [[nodiscard]] value_type * data() noexcept
     {
@@ -615,11 +614,7 @@ public:
 
     [[nodiscard]] std::span<value_type> unused_capacity() noexcept
     {
-        return detail::ring_unused_capacity(
-            data_,
-            capacity_,
-            seek_,
-            size_);
+        return detail::ring_unused_capacity(data_, capacity_, seek_, size_);
     }
 
     [[nodiscard]] junk<value_type> unconstructed_capacity() noexcept
@@ -640,7 +635,8 @@ public:
 
     [[nodiscard]] std::size_t write_index() const noexcept
     {
-        return detail::ring_write_index<value_type>(capacity_, seek_, size_);
+        return detail::ring_write_index<value_type>(
+            capacity_, seek_, size_);
     }
 
     [[nodiscard]] bool has_contiguous_constructed() const noexcept
