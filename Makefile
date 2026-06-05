@@ -1,4 +1,4 @@
-.PHONY: all setup setup-unity build dev full test setup-gcc13 build-gcc13 test-gcc13 gcc13 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec docs docs-publish clean traces
+.PHONY: all setup setup-unity build dev full test setup-gcc13 build-gcc13 test-gcc13 gcc13 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace setup-racket spec docs docs-publish clean traces
 
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
@@ -8,6 +8,9 @@ DEPS_FILE ?=
 DEPS_DEPTH ?= 4
 DEPS_FLAGS ?=
 NXT_MESON_LINK_ARGS ?= $(shell command -v mold >/dev/null 2>&1 && printf '%s' '-Dc_link_args=-fuse-ld=mold -Dcpp_link_args=-fuse-ld=mold')
+NXT_RACKET_COLLECTS := $(CURDIR):$(CURDIR)/vendor/racket:$(CURDIR)/vendor/racket/something-src
+NXT_RACKET := PLTCOLLECTS="$(NXT_RACKET_COLLECTS):$${PLTCOLLECTS}" racket
+NXT_RACKET_PKGS := syntax-classes br-parser-tools-lib brag-lib beautiful-racket crypto-lib mischief pretty-format predicates basedir request sha http-easy tabular
 
 all: build
 
@@ -109,15 +112,21 @@ bench-uring-duck: bench-build
 bench-uring-trace: bench-build
 	@BENCH_BIN="$(BENCH_BIN)" scripts/bench uring-trace
 
+setup-racket:
+	raco pkg install --auto --batch --skip-installed -D $(NXT_RACKET_PKGS)
+	raco pkg install --auto --batch --skip-installed --no-setup -D --link -n something vendor/racket/something-src
+	raco pkg install --auto --batch --skip-installed --no-setup -D --link -n forge vendor/racket/forge
+	raco pkg install --auto --batch --skip-installed --no-setup -D --link -n rdf-forge rdf-forge
+
 spec:
 	@echo "== rdf-forge ontology syntax =="
-	racket rdf-forge/tests/bfo-sketch-test.rkt
+	$(NXT_RACKET) rdf-forge/tests/bfo-sketch-test.rkt
 	@echo
 	@echo "== baseline runtime spec =="
-	racket nxtrt/model.rkt --run-all
+	$(NXT_RACKET) nxtrt/model.rkt --run-all
 	@echo
 	@echo "== next runtime spec =="
-	racket nxtrt/model-next.rkt --run-all
+	$(NXT_RACKET) nxtrt/model-next.rkt --run-all
 
 docs:
 	rm -rf docs/html

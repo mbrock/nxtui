@@ -13,11 +13,17 @@ single `#lang rdf-forge` source file.
 - `ontology-next.rkt` and `model-next.rkt` are matching entrypoints for the
   next model.
 
-Install the local language once in this checkout:
+On a fresh machine, install the ordinary Racket catalog dependencies and link
+the vendored Racket packages once:
 
 ```sh
-raco pkg install --auto --link -n rdf-forge rdf-forge
+make setup-racket
 ```
+
+The `forge` and `something` packages used by this model are vendored under
+`vendor/racket/` because this repo depends on small local patches to both.
+`make spec` prepends the vendored collections to `PLTCOLLECTS`, so it does not
+depend on sibling checkouts in `~/src`.
 
 Generate a basic Turtle/RDFS/OWL view of the ontology:
 

@@ -3,6 +3,7 @@
 #include "nxtrt/buffer-core.hpp"
 #include "nxtrt/deck.hpp"
 #include "nxtrt/task.hpp"
+#include "nxtrt/alloc_trace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -135,7 +136,16 @@ public:
     explicit rack(std::size_t size)
         : data_(size == 0 ? nullptr : allocator_.allocate(size))
         , size_(size)
-    {}
+    {
+        alloc_trace::event(
+            "rack",
+            "new",
+            data_,
+            sizeof(value_type) * size_,
+            alignof(value_type),
+            size_,
+            size_);
+    }
 
     rack(const rack &) = delete;
     rack & operator=(const rack &) = delete;
@@ -185,6 +195,13 @@ public:
 private:
     void deallocate() noexcept
     {
+        if (data_ != nullptr)
+            alloc_trace::event(
+                "rack",
+                "del",
+                data_,
+                sizeof(value_type) * size_,
+                alignof(value_type));
         if (data_ != nullptr)
             allocator_.deallocate(data_, size_);
         data_ = nullptr;

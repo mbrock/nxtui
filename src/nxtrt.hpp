@@ -10,6 +10,7 @@
 #include "nxtrt/debug.hpp"
 #include "nxtrt/deck.hpp"
 #include "nxtrt/exceptions.hpp"
+#include "nxtrt/farm.hpp"
 #include "nxtrt/fs.hpp"
 #include "nxtrt/game.hpp"
 #include "nxtrt/http.hpp"

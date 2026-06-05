@@ -5,6 +5,7 @@
 #include "nxtrt/env.hpp"
 #include "nxtrt/exceptions.hpp"
 #include "nxtrt/ids.hpp"
+#include "nxtrt/alloc_trace.hpp"
 #include "nxtrt/trace.hpp"
 #include "nxtrt/wand.hpp"
 #include "nxtrt/wish.hpp"
@@ -1938,11 +1939,26 @@ private:
         auto * storage = ::operator new(
             capacity,
             std::align_val_t{alignof(std::max_align_t)});
+        alloc_trace::event(
+            "frame-store",
+            "new",
+            storage,
+            capacity,
+            alignof(std::max_align_t),
+            capacity,
+            capacity);
         return static_cast<std::byte *>(storage);
     }
 
     void reset() noexcept
     {
+        if (bytes_ != nullptr)
+            alloc_trace::event(
+                "frame-store",
+                "del",
+                bytes_,
+                capacity_,
+                alignof(std::max_align_t));
         if (bytes_ != nullptr)
             ::operator delete(
                 bytes_,
@@ -3219,19 +3235,38 @@ namespace detail {
 
 inline void * allocate_task_frame(std::size_t size)
 {
-    if (auto * firm = current_firm())
-        return firm->allocate_frame(size);
+    if (auto * firm = current_firm()) {
+        auto * ptr = firm->allocate_frame(size);
+        alloc_trace::event(
+            "task-frame",
+            "new",
+            ptr,
+            size,
+            alignof(task_frame_header),
+            firm->frame_used(),
+            firm->frame_capacity());
+        return ptr;
+    }
 
     throw runtime_error{"nxtrt task created without current firm"};
 }
 
-inline void deallocate_task_frame(void * ptr, std::size_t) noexcept
+inline void deallocate_task_frame(void * ptr, std::size_t size) noexcept
 {
     if (ptr == nullptr)
         return;
 
-    [[maybe_unused]] auto * header =
+    auto * header =
         static_cast<task_frame_header *>(ptr) - 1;
+    auto * owner = header->owner;
+    alloc_trace::event(
+        "task-frame",
+        "del",
+        ptr,
+        size,
+        alignof(task_frame_header),
+        owner == nullptr ? 0 : owner->frame_used(),
+        owner == nullptr ? 0 : owner->frame_capacity());
 }
 
 } // namespace detail
