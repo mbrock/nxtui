@@ -26,6 +26,7 @@ nxt_libvterm_dep = declare_dependency(
 
 nxt_core_deps = [
   utf8proc_dep,
+  boost_dep,
   nxt_libvterm_dep,
 ] + nxt_compression_deps
 

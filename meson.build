@@ -15,7 +15,12 @@ nxt_section_args = [
 ]
 
 add_project_arguments(nxt_section_args, language : ['c', 'cpp'])
-add_project_link_arguments('-Wl,--gc-sections', language : ['cpp'])
+
+if host_machine.system() == 'darwin'
+  add_project_link_arguments('-Wl,-dead_strip', language : ['cpp'])
+else
+  add_project_link_arguments('-Wl,--gc-sections', language : ['cpp'])
+endif
 
 cpp = meson.get_compiler('cpp')
 
@@ -26,6 +31,7 @@ utf8proc_dep = dependency(
 )
 
 zlib_dep = dependency('zlib')
+boost_dep = dependency('boost')
 zstd_dep = cpp.find_library('zstd', required : false)
 brotli_dep = dependency('libbrotlidec', required : false)
 cares_dep = dependency('libcares', required : get_option('cares'))
@@ -76,19 +82,24 @@ subdir('bench')
 subdir('test')
 
 if get_option('demo') and get_option('tests') and get_option('llm_tool')
+  nxt_dev_sources = [
+    'src/nxt-dev.cpp',
+    'src/nxt/stacktrace.cpp',
+    'src/nxtai/nxtllm.cpp',
+    'demo/ls_demo.cpp',
+    'demo/tui_demo.cpp',
+    'demo/http_client_demo.cpp',
+    'demo/openai_sse_demo.cpp',
+  ]
+
+  if host_machine.system() == 'linux'
+    nxt_dev_sources += ['demo/shell_scope_demo.cpp']
+  endif
+
   nxt_dev = executable('nxt-dev',
-    [
-      'src/nxt-dev.cpp',
-      'src/nxt/stacktrace.cpp',
-      'src/nxtai/nxtllm.cpp',
-      'demo/ls_demo.cpp',
-      'demo/tui_demo.cpp',
-      'demo/shell_scope_demo.cpp',
-      'demo/http_client_demo.cpp',
-      'demo/openai_sse_demo.cpp',
-    ] + nxt_core_sources + nxt_test_sources,
+    nxt_dev_sources + nxt_core_sources + nxt_test_sources,
     include_directories : [nxt_inc, include_directories('test')],
-    dependencies : nxt_core_deps + nxt_stacktrace_deps + nxt_test_extra_deps,
+    dependencies : nxt_core_deps + nxt_stacktrace_deps + nxt_test_extra_deps + nxt_dns_deps,
     cpp_args : [
       '-DNXT_EMBEDDED_MAIN=1',
     ] + nxt_mdspan_args
