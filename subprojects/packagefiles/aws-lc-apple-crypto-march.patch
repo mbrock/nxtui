@@ -1,0 +1,33 @@
+Add +sha2+aes to the SHA3 -march flag so it doesn't strip Apple Silicon's
+implicit crypto features when meson's CMake subproject importer applies
+the file-scoped COMPILE_FLAGS to every source in the target. Without
+__ARM_FEATURE_AES / __ARM_FEATURE_SHA2 defined, cpu_aarch64_apple.c
+fails its static "NEON and crypto extensions should be statically
+available." check.
+
+--- a/crypto/fipsmodule/CMakeLists.txt
++++ b/crypto/fipsmodule/CMakeLists.txt
+@@ -303,7 +303,7 @@
+
+     # Check if assembler supports SHA3 extension
+     # (gcc supports it since gcc8, clang supports it since clang7)
+-    check_compiler("neon_sha3_check.c" MY_ASSEMBLER_SUPPORTS_NEON_SHA3_EXTENSION "-march=armv8.4-a+sha3")
++    check_compiler("neon_sha3_check.c" MY_ASSEMBLER_SUPPORTS_NEON_SHA3_EXTENSION "-march=armv8.4-a+sha3+sha2+aes")
+
+     # Note: Scalar Keccak-x1 and Batched Neoverse N1 Keccak-x4 assembly from s2n-bignum
+     # are included in the common s2n-bignum block above
+@@ -318,11 +318,11 @@
+            ${S2N_BIGNUM_DIR}/sha3/sha3_keccak4_f1600_alt2.S)
+
+         set_source_files_properties(${S2N_BIGNUM_DIR}/sha3/sha3_keccak_f1600_alt.S
+-                                    PROPERTIES COMPILE_FLAGS "-march=armv8.4-a+sha3")
++                                    PROPERTIES COMPILE_FLAGS "-march=armv8.4-a+sha3+sha2+aes")
+         set_source_files_properties(${S2N_BIGNUM_DIR}/sha3/sha3_keccak2_f1600.S
+-                                    PROPERTIES COMPILE_FLAGS "-march=armv8.4-a+sha3")
++                                    PROPERTIES COMPILE_FLAGS "-march=armv8.4-a+sha3+sha2+aes")
+         set_source_files_properties(${S2N_BIGNUM_DIR}/sha3/sha3_keccak4_f1600_alt2.S
+-                                    PROPERTIES COMPILE_FLAGS "-march=armv8.4-a+sha3")
++                                    PROPERTIES COMPILE_FLAGS "-march=armv8.4-a+sha3+sha2+aes")
+     endif()
+   endif()
+
