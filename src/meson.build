@@ -51,6 +51,7 @@ nxt_core_sources = files(
   'nxtui/input.cpp',
   'nxtui/raster.cpp',
   'wisp/heap.cpp',
+  'wisp/eval.cpp',
 )
 
 nxt_core_lib = library('nxt-core',
@@ -194,6 +195,7 @@ nxt_header_install_excludes = {
   ],
   'wisp' : [
     'heap.cpp',
+    'eval.cpp',
   ],
 }
 

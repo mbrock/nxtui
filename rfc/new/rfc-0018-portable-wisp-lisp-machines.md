@@ -348,11 +348,10 @@ the voice writing environment can build on that demonstrated boundary.
 ## First C++ heap slice
 
 [`src/wisp/heap.hpp`](../../src/wisp/heap.hpp) now provides the storage slice,
-with tests in [`test/wisp-test.cpp`](../../test/wisp-test.cpp). This is not yet
-an evaluator or a bootstrapped Lisp environment. It has the ten table schemas,
+with tests in [`test/wisp-test.cpp`](../../test/wisp-test.cpp). It has the ten table schemas,
 packed words, byte and word pools, roots, pins, continuation-frame copying, and
-a Tidy-style moving collector. Reader, package interning, evaluation, tape I/O,
-journaling, and the NXT event-loop adapter remain unimplemented.
+a Tidy-style moving collector. The evaluator slice below builds on it; reader,
+tape I/O, journaling, and the NXT event-loop adapter remain unimplemented.
 
 The reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
 `core/step.zig` in the Wisp revision linked above. The later
@@ -414,6 +413,79 @@ tests, not a verified passing baseline: the [prior Wisp verification
 thread](https://ampcode.com/threads/T-01a06ebb-d635-776d-a69c-95a0134cfbac)
 reports that it traps even before that thread's evaluator changes. Preserve it
 as an unresolved regression rather than inferring correctness from its presence.
+
+## First C++ evaluation slice
+
+[`wisp::evaluator`](../../src/wisp/eval.hpp) steps heap-resident `run` rows.
+`start(expression, environment)` creates a run; `step(run)` performs one
+transition; `advance(run, budget)` returns `runnable`, `done`, or `failed`.
+Zero budget only polls. Exhaustion is a normal host scheduling boundary, unlike
+Zig's evaluation-limit error. A transition may scan a list or allocate, so a
+step budget is not a wall-clock bound. This API does not yet schedule NXT tasks.
+
+The evaluator roots its WISP and KEYWORD packages, which retain interned
+symbols, definitions, and closures. Names are exact and case-sensitive; reader
+case folding and package inheritance are not implemented. The caller must root
+each run and any other host-held word before collection. Allocation never
+collects inside a transition. Once a transition returns, its complete guest
+control state is in `run`, `ktx`, and environment rows; scratch C++ registers and
+argument copies can disappear. For example, without a reader:
+
+```cpp
+wisp::heap heap;
+wisp::evaluator machine{heap};
+auto form = heap.cons(machine.intern("+"),
+    heap.cons(wisp::fixnum(19), heap.cons(wisp::fixnum(23), wisp::nil)));
+wisp::root run{heap, machine.start(form)};
+while (machine.advance(run.get(), 1) == wisp::evaluation::runnable)
+    heap.collect(); // Optional, explicit safepoint; updates run's word.
+// Inspect status and run.err; on success run.val is fixnum(42).
+```
+
+The current semantic subset is:
+
+- Fixnums, byte/word vectors, NIL, T, self-evaluating keywords, quotation,
+  lexical lookup, and global symbol values. Only NIL is false.
+- Separate symbol value and function namespaces. A call form's operator must
+  be a symbol; `CALL` and `APPLY` invoke computed function values. A call
+  resolves its function before evaluating arguments, left to right.
+- `IF`, `DO`, and parallel `LET`: initializers run left to right in the outer
+  environment, and all bindings become visible together. Final body forms are
+  in tail position, including singleton `DO` (which avoids Zig's extra frame).
+- `%FN` closures capture shared lexical store. `%SET!` updates the nearest
+  binding, or an already-bound global. Symbol value/function setters support
+  global definitions and later redefinition.
+- `%MACRO-FN` receives raw forms; its result is evaluated in the caller's
+  environment. Required parameters, `&OPTIONAL` with NIL defaults, `&REST`,
+  and `&BODY` work for closures. Lisp-defined `FN`, `DEFUN`, `DEFMACRO`, and
+  lambda-body pre-expansion still belong to the unported bootstrap.
+- Checked signed fixnum addition, subtraction, multiplication, comparisons,
+  identity, cons/list operations, function lookup, and environment inspection.
+  Unary subtraction deliberately retains Zig's identity behavior.
+
+Language failures stop the run with a heap condition vector in `run.err`;
+builtin failures wrap their cause. This is not yet Zig's handled `ERROR`
+effect protocol, and exact condition payload parity is not claimed. Dotted or
+cyclic argument lists and malformed bindings fail instead of accessing invalid
+native storage. Heap API contracts still apply to host-supplied pointers,
+environments, and machine rows. Host allocation exceptions escape; interrupted
+steps are not transactional or promised retryable. Internal NAH/ZAP/TOP markers
+are not accepted as literal expressions. Builtin indices are local to this
+subset, not Zig tape indices or a stable image ABI.
+
+[`test/wisp-eval-test.cpp`](../../test/wisp-eval-test.cpp) constructs forms
+directly, collects between individual steps, and checks scope restoration,
+shared mutation, macro expansion scope, argument accumulation, terminal errors,
+and bounded live continuation depth over 1,000 tail calls. Selected equivalent
+programs were also run against the linked Zig reference with Zig 0.16.0:
+argument order `(1 91 2 2)`, parallel LET `((3 40 9) 40)`, shared closures
+`(17 17 999)`, redefinition `(19 7 31)`, macro expansion `11`, and optional/rest
+arguments. Compare negative fixnums as words: that reference's reader treats
+`-7` as a symbol and its printer renders the computed negative value unsigned.
+
+Dynamic binding, prompts, continuation capture/invocation, deep handlers,
+reader/printer, and the Lisp bootstrap remain next layers. No changes to NXT's
+host task/deed/firm/exec semantics are part of this slice.
 
 ## Open design choices
 

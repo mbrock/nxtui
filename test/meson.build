@@ -8,6 +8,7 @@ if get_option('tests')
     'terminal-test.cpp',
     'mtproto-test.cpp',
     'wisp-test.cpp',
+    'wisp-eval-test.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [
