@@ -14,6 +14,7 @@ if get_option('tests')
     'wisp-primitives-test.cpp',
     'wisp-load-test.cpp',
     'wisp-runtime-test.cpp',
+    'wisp-tape-test.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [

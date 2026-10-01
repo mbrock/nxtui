@@ -140,6 +140,7 @@ public:
 private:
     friend class root;
     friend struct tidy;
+    friend struct tape_codec;
 
     template<tag T>
     word check(word x) const noexcept

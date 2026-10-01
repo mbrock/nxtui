@@ -351,8 +351,8 @@ the voice writing environment can build on that demonstrated boundary.
 with tests in [`test/wisp-test.cpp`](../../test/wisp-test.cpp). It has the ten table schemas,
 packed words, byte and word pools, roots, pins, continuation-frame copying, and
 a Tidy-style moving collector. The evaluator and source-loading slices below
-build on it, with a cooperative NXT driver. Tape I/O and journaling remain
-unimplemented.
+build on it, with a cooperative NXT driver and portable tape I/O. Journaling
+remains unimplemented.
 
 The reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
 `core/step.zig` in the Wisp revision linked above. The later
@@ -478,7 +478,8 @@ accessing invalid native storage. Heap API contracts still apply to host-supplie
 pointers, environments, and machine rows. Host allocation exceptions escape;
 interrupted steps are not transactional or promised retryable. Internal
 NAH/ZAP/TOP markers are not accepted as literal expressions. Builtin indices are
-local to this subset, not Zig tape indices or a stable image ABI.
+local to this subset, not Zig tape indices or a stable image ABI; C++ tapes
+resolve their saved indices through a name/control-kind manifest.
 
 [`test/wisp-eval-test.cpp`](../../test/wisp-eval-test.cpp) constructs forms
 directly, collects between individual steps, and checks scope restoration,
@@ -632,7 +633,7 @@ closure across collection, UTF-8 byte cursors, and dynamically handled output.
 The eager-lambda, callback-walking, branching-budget, and dynamic-output
 programs also pass against the pinned Zig reference. Reader/printer tests cover
 deep structures, malformed UTF-8, heap growth, cycles, and host input lifetime.
-Only the four full-bootstrap integration tests opt into a ten-second debug
+Only the five full-bootstrap integration tests opt into a ten-second debug
 deadline; ordinary unit tests retain their one-second deadline.
 
 ## Packages and cooperative host turns
@@ -684,17 +685,113 @@ collection before first resumption and between turns, cancellation/resumption,
 and a timer completion returning to a captured guest continuation with result
 42. No changes to NXT's task/deed/firm/exec semantics are part of this adapter.
 
-Remaining increments include host debugging/tracing, tape I/O, and journaling.
-Some loaded Lisp helpers still refer to these absent capabilities and cannot
-yet be used. Host effect routing and persistence policy remain explicit host
-responsibilities rather than automatic behavior of `drive`.
+## Portable C++ tapes
+
+[`wisp::tape`](../../src/wisp/tape.hpp) provides `encode`/`decode` for byte
+buffers and blocking `write`/`read` for host binary streams. `decode` returns a
+separate, address-stable `image` owning `storage`, `machine`, and the rooted
+`entry`. It never replaces or mutates a running machine. Its restore-only
+evaluator constructor does not install primitives over saved definitions.
+
+The tape preserves complete column tables and byte/word pools, evaluator roots
+and caches, current package, pin map/next ID, fresh-key sequence, GC-request
+flag, and one caller-selected entry value. A vector or list entry can hold
+several logical application roots. Sharing, cycles, closure environments, and
+captured control state remain guest data. Native root registrations, loader
+source/cursors, NXT tasks, and host resource ownership are not serialized.
+Other host roots must be explicitly reachable from the entry, pins, or
+evaluator roots to survive collection in the restored image.
+
+Save only between evaluator calls, as for collection. Encoding does not collect
+or mutate the source. Whole pools include unreachable data; in particular,
+Tidy still retains dead byte payloads. A tape is not a sanitized data export.
+Any external row causes rejection, including an unreachable row until the host
+explicitly collects it. Rebinding external capabilities is deliberately absent
+in this version; saving a numeric host handle would not save its resource.
+
+### Tape version 1 has an explicit byte encoding
+
+This is **not** the Zig `wisp tape v0.8.0` format. All integers below are unsigned
+32-bit little-endian unless specified otherwise. Text is a byte length followed
+by exactly that many bytes, without a terminator or alignment padding.
+
+| Order | Encoding |
+| --- | --- |
+| Header | Eight bytes `NXWISP\r\n`, version `1`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
+| Evaluator roots | Count, then `(text name, word value)` for each saved root |
+| Builtins | Count, then `(text name, control-kind 0/1)`; ordinal is the saved jet payload |
+| Byte pool | Byte count, then raw bytes |
+| Word pool | Word count, then little-endian words |
+| Tables | Table count, then each table as described below |
+| Pins | Count, then `(ID, value)` pairs; released handles may remain in guest data without map entries |
+| Integrity | 32 raw SHA-256 digest bytes over every preceding byte |
+
+Each table contains its explicit numeric tag, row count, column count, all
+`(text field-name, text field-kind)` descriptions, then each complete column's
+little-endian words in that description order. Field kinds are `value`,
+`offset`, `length`, `count`, and `external`. Tags and schema names identify the
+storage; C++ tuple order, member layout, and enum ordinals do not. Readers accept
+reordered table/column/root directories but require exactly the supported
+schema and root set. Writer traversal derives from `schema<T>::columns`.
+
+Root names are WISP, KEYWORD, KEY, packages, current, NIL-name, T-name, DO, IF,
+EVAL, LET, PROMPT, BINDING, &OPTIONAL, &REST, and &BODY. Builtin names are unique
+at compile time. Restore resolves names and control kinds against the current
+registry, then remaps jet words in every value field, word-pool element, root,
+pin value, and entry. Raw offsets, lengths, and call counts are never remapped.
+Names do not promise compatibility after a builtin's semantics change: an
+incompatible language or schema change needs a version bump or explicit
+migration, not silent acceptance.
+
+Decode checks the checksum before constructing a machine, bounds counts against
+remaining input before allocating, rejects trailing bytes, and validates tags,
+eras, indices, pool slices, pin sequences, canonical roots, package lists,
+environment shapes, and acyclic continuation links. List/continuation walks are
+iterative and memoize shared suffixes. Default input limit is 64 MiB and can be
+overridden; it is not a resident-memory or execution-time quota. Allocation and
+stream exceptions propagate with RAII cleanup. SHA-256 is corruption detection,
+not authentication. Load trusted checkpoints only: validation is not a proof of
+Lisp program semantics or a sandbox against malicious mutable machine state.
+
+The stream layer does not flush, close, fsync, or atomically replace files, and
+it adds no guest filesystem authority. The host must choose paths, check final
+close/durability errors, and perform atomic replacement when needed. A guest
+checkpoint effect can later hand this work to the host at a safepoint.
+
+[`test/wisp-tape-test.cpp`](../../test/wisp-tape-test.cpp) boots the guest
+library, suspends an effect with its request and resumption closure, writes an
+image, and destroys the original machine. A fresh decoded image collects and
+resumes on NXT with result 42, matching uninterrupted execution; another
+resumption with a different value returns 43. Other tests cover both eras,
+cycles/sharing, aliased vector payloads, pins, saved definitions/current package,
+fresh keys, pending GC, reordered builtin/table/column identities, malformed
+images with recomputed checksums, stream failures, and deep continuations.
+
+### A small executable host is the next runtime increment
+
+The next useful Node-style slice is a `wisp run`/REPL host driving guest runs on
+NXT, with explicit handlers for console I/O and timers. Give a request a logical
+ID, operation name, arguments, and rooted continuation; let NXT own the actual
+backend work. Add cancellation and a pending-request inspection command before
+growing the operation set to files and HTTP. A sleeping job that can be saved,
+the process stopped, then restored and resumed would exercise the whole design.
+
+Persist pending-operation descriptions, not native registrations. A restored
+timer needs a deadline/elapsed-time policy; a network write needs reconciliation
+or an explicit retry decision. Record results in an external-effect ledger
+before pursuing deterministic replay. Snapshot forks should initially have
+effects disabled, making them useful for inspection and speculative evaluation
+without duplicating real-world operations.
+
+Host debugging/tracing, journaling, external rebinding, guest checkpoint effects,
+and that executable host remain future work. `drive` itself still supplies only
+cooperative scheduling, not effect routing or persistence policy.
 
 ## Open design choices
 
 - Independent column allocations or a packed table allocation behind the same
   schema API.
-- Compatibility with current tape bytes, and the encoding and migration rules
-  for later schemas.
+- An importer for legacy Zig tapes, and migration rules for later schemas.
 - Retaining in-row forwarding or introducing a separate forwarding map after
   collector parity.
 - Borrowed-view lifetimes, host rooting APIs, and controlled mutation access.

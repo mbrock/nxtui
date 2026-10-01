@@ -125,39 +125,60 @@ struct condition
 
 } // namespace
 
-evaluator::evaluator(heap & storage)
+evaluator::evaluator(heap & storage, std::nullptr_t)
     : heap_(storage)
-    , base_(
-          storage,
-          storage.make<tag::pkg>({storage.newv08("WISP"), nil, nil}))
-    , keywords_(
-          storage,
-          storage.make<tag::pkg>({storage.newv08("KEYWORD"), nil, nil}))
-    , keys_(
-          storage,
-          storage.make<tag::pkg>({storage.newv08("KEY"), nil, nil}))
-    , packages_(
-          storage,
-          list(
-              storage,
-              std::array{keys_.get(), keywords_.get(), base_.get()}))
-    , current_(storage, base_.get())
-    , nil_name_(storage, storage.newv08("NIL"))
-    , true_name_(storage, storage.newv08("T"))
-    , do_(storage, intern("DO"))
-    , if_(storage, intern("IF"))
-    , eval_(storage, intern("EVAL"))
-    , let_(storage, intern("LET"))
-    , prompt_(storage, intern("PROMPT"))
-    , binding_(storage, intern("BINDING"))
-    , optional_(storage, intern("&OPTIONAL"))
-    , rest_(storage, intern("&REST"))
-    , body_(storage, intern("&BODY"))
+    , base_(storage)
+    , keywords_(storage)
+    , keys_(storage)
+    , packages_(storage)
+    , current_(storage)
+    , nil_name_(storage)
+    , true_name_(storage)
+    , do_(storage)
+    , if_(storage)
+    , eval_(storage)
+    , let_(storage)
+    , prompt_(storage)
+    , binding_(storage)
+    , optional_(storage)
+    , rest_(storage)
+    , body_(storage)
 {
+}
+
+evaluator::evaluator(heap & storage)
+    : evaluator(storage, nullptr)
+{
+    base_.set(storage.make<tag::pkg>({storage.newv08("WISP"), nil, nil}));
+    keywords_.set(
+        storage.make<tag::pkg>({storage.newv08("KEYWORD"), nil, nil}));
+    keys_.set(storage.make<tag::pkg>({storage.newv08("KEY"), nil, nil}));
+    packages_.set(list(
+        storage, std::array{keys_.get(), keywords_.get(), base_.get()}));
+    current_.set(base_.get());
+    nil_name_.set(storage.newv08("NIL"));
+    true_name_.set(storage.newv08("T"));
+    do_.set(intern("DO"));
+    if_.set(intern("IF"));
+    eval_.set(intern("EVAL"));
+    let_.set(intern("LET"));
+    prompt_.set(intern("PROMPT"));
+    binding_.set(intern("BINDING"));
+    optional_.set(intern("&OPTIONAL"));
+    rest_.set(intern("&REST"));
+    body_.set(intern("&BODY"));
     const auto jets = builtins();
     for (word i = 0; i < jets.size(); ++i)
         heap_.set<tag::sym, field::fun>(
             intern(jets[i].name), immediate(tag::jet, i));
+}
+
+std::vector<evaluator::jet_info> evaluator::jet_manifest()
+{
+    std::vector<jet_info> result;
+    for (const auto & jet : builtins())
+        result.push_back({jet.name, jet.control});
+    return result;
 }
 
 word evaluator::intern(std::string_view name, word package)
@@ -1444,6 +1465,15 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::get_field<tag::run, field::err>>(
             "RUN-ERR"),
     };
+    static_assert(
+        [] {
+            for (std::size_t i = 0; i < table.size(); ++i)
+                for (std::size_t j = 0; j < i; ++j)
+                    if (table[i].name == table[j].name)
+                        return false;
+            return true;
+        }(),
+        "builtin names are tape identities and must be unique");
     return table;
 }
 

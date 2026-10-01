@@ -63,6 +63,7 @@ nxt_core_sources = files(
   'wisp/reader.cpp',
   'wisp/printer.cpp',
   'wisp/load.cpp',
+  'wisp/tape.cpp',
 )
 
 nxt_core_lib = library('nxt-core',
@@ -210,6 +211,7 @@ nxt_header_install_excludes = {
     'reader.cpp',
     'printer.cpp',
     'load.cpp',
+    'tape.cpp',
     'base.wisp',
     'base.hpp.in',
   ],

@@ -68,6 +68,20 @@ public:
 
 private:
     friend struct eval_step;
+    friend struct tape_codec;
+    friend struct image;
+
+    // Restore registers roots without installing packages or overwriting
+    // saved definitions. Only a validated tape may fill these slots.
+    evaluator(heap & storage, std::nullptr_t);
+
+    struct jet_info
+    {
+        std::string_view name;
+        bool control;
+    };
+
+    static std::vector<jet_info> jet_manifest();
 
     heap & heap_;
     root base_;
