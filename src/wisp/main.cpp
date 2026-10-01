@@ -22,6 +22,23 @@ namespace {
 
 using namespace std::chrono;
 
+struct effect_error : std::runtime_error
+{
+    std::string_view code;
+
+    effect_error(std::string_view code, std::string_view message)
+        : std::runtime_error(std::string{message})
+        , code(code)
+    {
+    }
+};
+
+void effect_require(bool yes, std::string_view message)
+{
+    if (!yes)
+        throw effect_error{"INVALID-ARGUMENT", message};
+}
+
 void require(bool yes, std::string_view message)
 {
     if (!yes)
@@ -55,7 +72,7 @@ std::int64_t deadline_ms(const heap & h, word value)
     std::int64_t deadline = 0;
     const auto [end, error] =
         std::from_chars(str.data(), str.data() + str.size(), deadline);
-    require(
+    effect_require(
         error == std::errc{} && end == str.data() + str.size()
             && deadline >= 0,
         "invalid timer deadline");
@@ -186,7 +203,7 @@ struct host
         while (const auto byte = co_await input.take()) {
             if (*byte == std::byte{'\n'})
                 co_return value;
-            require(
+            effect_require(
                 value.size() < tape::default_limit,
                 "input line exceeds 64 MiB");
             value += char(std::to_integer<unsigned char>(*byte));
@@ -253,10 +270,12 @@ struct host
             std::string bytes;
             std::set<word> seen;
             for (auto cur = argument; cur != nil;) {
-                require(
+                effect_require(
                     tag_of(cur) == tag::duo && seen.insert(cur).second,
                     "invalid write arguments");
                 const auto [string, next] = h.read<tag::duo>(cur);
+                effect_require(
+                    tag_of(string) == tag::v08, "write expected a string");
                 bytes += text(h, string);
                 cur = next;
             }
@@ -270,7 +289,7 @@ struct host
             co_return value ? h.newv08(*value) : nil;
         }
         if (operation == vm.keyword("READ-BYTES")) {
-            require(
+            effect_require(
                 tag_of(argument) == tag::integer && integer(argument) >= 0
                     && integer(argument)
                            <= std::int64_t(tape::default_limit),
@@ -285,7 +304,20 @@ struct host
             }
             co_return h.newv08(bytes);
         }
-        throw std::runtime_error("unsupported host operation");
+        throw effect_error{
+            "UNSUPPORTED-OPERATION", "unsupported host operation"};
+    }
+
+    word
+    failure(word pending, std::string_view code, std::string_view message)
+    {
+        const auto operation = vector(h, vector(h, pending, 5)[1], 2)[0];
+        return h.newv32(
+            std::array{
+                vm.intern("HOST-ERROR"),
+                operation,
+                vm.keyword(code),
+                h.newv08(message)});
     }
 
     // Return false only after a successful save-and-stop at a timer.
@@ -319,28 +351,30 @@ struct host
                     "effects disabled; inspect the tape or restore with --effects");
                 root result{h};
                 bool failed = false;
+                bool armed = false;
                 try {
                     if (cancel) {
                         cancel = false;
-                        throw std::runtime_error("CANCELLED");
+                        throw effect_error{
+                            "CANCELLED", "operation cancelled"};
                     }
                     if (request[0] == vm.keyword("TIMER")
                         && record[2] == nil) {
-                        require(
+                        effect_require(
                             tag_of(request[1]) == tag::integer
                                 && integer(request[1]) >= 0,
                             "invalid timer delay");
                         const auto deadline = h.newv08(
                             std::to_string(now_ms() + integer(request[1])));
                         h.v32set(pending.get(), 2, deadline);
+                        armed = true;
                     }
-                } catch (const std::runtime_error & error) {
+                } catch (const effect_error & error) {
                     failed = true;
-                    result.set(h.newv08(error.what()));
+                    result.set(
+                        failure(pending.get(), error.code, error.what()));
                 }
-                if (!failed && !save.empty()
-                    && vector(h, vector(h, pending.get(), 5)[1], 2)[0]
-                           == vm.keyword("TIMER")) {
+                if (!failed && armed && !save.empty()) {
                     vm.collect();
                     checkpoint(save, vm, entry.get());
                     co_return false;
@@ -350,9 +384,23 @@ struct host
                         result.set(co_await perform(pending));
                     } catch (const nxtrt::operation_cancelled &) {
                         throw;
-                    } catch (const std::runtime_error & error) {
+                    } catch (const effect_error & error) {
                         failed = true;
-                        result.set(h.newv08(error.what()));
+                        result.set(failure(
+                            pending.get(), error.code, error.what()));
+                    } catch (const nxtrt::runtime_error & error) {
+                        failed = true;
+                        result.set(
+                            failure(pending.get(), "IO", error.what()));
+#ifdef NXT_HAVE_CPPTRACE
+                    } catch (const std::runtime_error & error) {
+                        // The core byte-stream library may have been built
+                        // without cpptrace while the application enables
+                        // it.
+                        failed = true;
+                        result.set(
+                            failure(pending.get(), "IO", error.what()));
+#endif
                     }
                 }
                 const auto callback =
@@ -401,6 +449,10 @@ struct host
                 (void) co_await run(true, {}, false, true);
             } catch (const nxtrt::operation_cancelled &) {
                 throw;
+#ifdef NXT_HAVE_CPPTRACE
+            } catch (const nxtrt::runtime_error & exception) {
+                error = exception.what();
+#endif
             } catch (const std::runtime_error & exception) {
                 error = exception.what();
             }

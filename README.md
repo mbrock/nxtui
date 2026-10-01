@@ -199,10 +199,15 @@ forms. Checkpoints replace the selected file atomically, with file and directory
 fsync. Only load trusted tapes: validation is not a security sandbox.
 
 Restores have **effects disabled** unless given `--effects`. `inspect` executes
-no guest code. Add `--cancel` to restore to deliver `"CANCELLED"` through the
+no guest code. Add `--cancel` to restore to deliver a `:CANCELLED` host condition through the
 pending request's guest error handler instead of performing it. Restoring again
 is a fork, not an exactly-once guarantee: explicitly enabling both forks can
 repeat effects. The input tape is never updated implicitly.
+
+Host conditions have shape `[HOST-ERROR operation code message]`, with codes
+such as `:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, `:IO`, and `:CANCELLED`.
+`restore --effects --checkpoint OUT` consumes saved timers and stops at the
+next newly issued timer, allowing checkpoints to be chained forward.
 
 This first host runs one sequential job, with at most one pending request.
 The REPL accepts complete forms on one line and preserves definitions between

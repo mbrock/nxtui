@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Process boundaries, real pipes/timers, and host checkpoint policy."""
 import pathlib
+import os
 import re
 import stat
 import subprocess
@@ -61,14 +62,31 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     assert expired.stdout == resumed.stdout
     assert tape.read_bytes() == original, "restores must not rewrite input"
 
+    # Chained checkpoints must consume the restored timer and stop at a
+    # newly issued one, even when both effects are inside the same form.
+    source.write_text('''
+      (print (let ((x 31)) (sleep-ms 1) (write "between\\n")
+                          (sleep-ms 1) (+ x 11)))
+    ''')
+    command("run", source, "--checkpoint", tape)
+    first = command("inspect", tape).stdout
+    next_tape = directory / "next.tape"
+    progress = command("restore", tape, "--effects", "--checkpoint", next_tape)
+    assert progress.stdout == b"between\n", progress.stdout
+    second = command("inspect", next_tape).stdout
+    assert re.search(rb"request-id: (.+)", first)[1] != re.search(rb"request-id: (.+)", second)[1]
+    assert command("restore", next_tape, "--effects").stdout == b"42\n"
+    repl = command("repl", input=b"(do (sleep-ms 1) (+ 19 4))\n")
+    assert repl.stdout == b"23\n", repl.stdout
+
     source.write_text('''
       (print (try (do (sleep-ms 10000) 'wrong)
-                  (error (reason continuation) 'cancelled)))
+                  (error (reason continuation) (vector-get (head reason) 2))))
       (print 19)
     ''')
     command("run", source, "--checkpoint", tape)
     cancelled = command("restore", tape, "--effects", "--cancel", timeout=2)
-    assert cancelled.stdout == b"CANCELLED\n19\n", cancelled.stdout
+    assert cancelled.stdout == b":CANCELLED\n19\n", cancelled.stdout
 
     source.write_text('''
       (write-error "diagnostic\\n")
@@ -86,6 +104,25 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     console = command("run", source, input=b"line\na\0b")
     assert console.stdout == b'"line"\na\0bNIL\nBAD-DELAY\nUNKNOWN-EFFECT\nBAD-WRITE\n73\n', console.stdout
     assert console.stderr == b"diagnostic\n", console.stderr
+
+    source.write_text('''
+      (try (write "lost")
+           (error (reason continuation)
+             (write-error (print-to-string (vector-get (head reason) 2)))))
+    ''')
+    read, write = os.pipe()
+    os.close(read)
+    try:
+        broken = subprocess.run([binary, "run", str(source)], stdout=write,
+                                stderr=subprocess.PIPE, timeout=20)
+    finally:
+        os.close(write)
+    assert broken.returncode == 0 and broken.stderr == b":IO", broken.stderr
+
+    source.write_text('(error "unhandled") (sleep-ms 1)')
+    absent = directory / "error.tape"
+    unhandled = command("run", source, "--checkpoint", absent, ok=False)
+    assert b"unhandled" in unhandled.stderr and not absent.exists()
 
     source.write_text('(sleep-ms 1) (write "must not run")')
     destination = directory / "existing-directory"

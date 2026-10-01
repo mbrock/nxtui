@@ -802,10 +802,15 @@ resume/raise closures, before the host starts the operation. All live words are
 rooted across awaits/collection. Successful completion or a host operation error
 installs a guest callback run before removing the pending record. Native task
 cancellation leaves the record pending; CLI `restore --effects --cancel`
-instead delivers the string `"CANCELLED"` through its raise closure. Ctrl-C
+instead delivers `[HOST-ERROR operation :CANCELLED message]` through its raise closure. Host
+conditions consistently include an operation and a machine-readable code,
+including `:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, and `:IO`; I/O delivery
+does not depend on whether NXT uses standard or cpptrace exception classes. Ctrl-C
 still terminates the process; it is not an automatic checkpoint or guest raise.
 
-`run SOURCE --checkpoint TAPE` saves and exits at the next timer. The source and
+`run SOURCE --checkpoint TAPE` saves and exits at the next newly armed timer.
+`restore --effects --checkpoint OUT` consumes saved timers before stopping at
+a newly issued one, rather than repeatedly copying the same pending operation. The source and
 byte offset are in the entry, not a native reader, so a fresh process resumes
 inside the current form and then reads later forms in the saved current package.
 The deadline is an absolute Unix-millisecond decimal string (epoch time exceeds
