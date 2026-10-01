@@ -55,7 +55,11 @@
  count
  ge
  always
+ eventually
  next-state
+ historically
+ once
+ prev-state
  prime
  model->forge-runs
  run-forge-model
@@ -64,14 +68,14 @@
  forge-run->text
  )
 
-(struct compiled-forge-model (sigs relations predicates runs checks options) #:transparent)
+(struct compiled-forge-model (sigs relations predicates runs run-bodies checks options) #:transparent)
 
 (struct forge-model (language options signatures predicates checks runs) #:transparent)
 (struct forge-signature (term fields) #:transparent)
 (struct forge-field (term multiplicity range variable?) #:transparent)
 (struct forge-predicate (name body) #:transparent)
 (struct forge-run (name body scope options) #:transparent)
-(struct forge-check (name body scope expect) #:transparent)
+(struct forge-check (name body scope expect options) #:transparent)
 (struct forge-option (name value) #:transparent)
 (struct forge-expr (op args) #:transparent)
 (struct forge-quant (kind bindings body) #:transparent)
@@ -136,8 +140,20 @@
 (define (always body)
   (forge-expr 'always (list body)))
 
+(define (eventually body)
+  (forge-expr 'eventually (list body)))
+
 (define (next-state body)
   (forge-expr 'next-state (list body)))
+
+(define (historically body)
+  (forge-expr 'historically (list body)))
+
+(define (once body)
+  (forge-expr 'once (list body)))
+
+(define (prev-state body)
+  (forge-expr 'prev-state (list body)))
 
 (define (prime expr)
   (forge-expr 'prime (list expr)))
@@ -251,20 +267,29 @@
 (define (predicate name body)
   (forge-predicate name body))
 
-(define (check name body #:for [scope 'default] #:expect [expect 'checked])
-  (forge-check name body scope expect))
+(define (tracelength-options min-tracelength max-tracelength)
+  (append (if min-tracelength
+              (list (forge-option 'min_tracelength min-tracelength))
+              '())
+          (if max-tracelength
+              (list (forge-option 'max_tracelength max-tracelength))
+              '())))
+
+;; expect is 'checked (body holds in every instance), 'sat, or 'unsat.
+(define (check name body
+               #:for [scope 'default]
+               #:expect [expect 'checked]
+               #:min-tracelength [min-tracelength #f]
+               #:max-tracelength [max-tracelength #f])
+  (forge-check name body scope expect
+               (tracelength-options min-tracelength max-tracelength)))
 
 (define (run name body
              #:for scope
              #:min-tracelength [min-tracelength #f]
              #:max-tracelength [max-tracelength #f])
   (forge-run name body scope
-             (append (if min-tracelength
-                         (list (forge-option 'min_tracelength min-tracelength))
-                         '())
-                     (if max-tracelength
-                         (list (forge-option 'max_tracelength max-tracelength))
-                         '()))))
+             (tracelength-options min-tracelength max-tracelength)))
 
 (define (ontology-class-terms ont)
   (filter (lambda (value)
@@ -728,7 +753,11 @@
              (f:int>/func (compile-arg (first args)) (compile-arg (second args)))
              (f:int=/func (compile-arg (first args)) (compile-arg (second args))))]
        ['always (f:always/func (compile-arg (first args)))]
+       ['eventually (f:eventually/func (compile-arg (first args)))]
        ['next-state (f:next_state/func (compile-arg (first args)))]
+       ['historically (f:historically/func (compile-arg (first args)))]
+       ['once (f:once/func (compile-arg (first args)))]
+       ['prev-state (f:prev_state/func (compile-arg (first args)))]
        ['prime (f:prime/func (compile-arg (first args)))]
        [other (raise-argument-error 'compile-forge-expr "known forge expression" other)])]
     [else (raise-argument-error 'compile-forge-expr "forge expression" expr)]))
@@ -763,7 +792,9 @@
 (define (scope-name->symbol name)
   (if (symbol? name) name (string->symbol name)))
 
-(define (model->compiled-forge model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])
+;; With #:make-runs? #f the run blocks are compiled to bodies but not handed
+;; to Forge, which would start solving them right away.
+(define (model->compiled-forge model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f] #:make-runs? [make-runs? #t])
   (cond
     [(eq? (forge-model-language model) 'forge/temporal)
      (set-checker-hash! temporal-checker-hash)
@@ -805,22 +836,30 @@
     (if field-constraints-for-run
         (f:&&/func field-constraints-for-run body)
         body))
-  (define (check-with-field-constraints body)
-    (cond
-      [(not field-constraints-for-run) body]
-      [else (f:=>/func field-constraints-for-run body)]))
   (define checks
     (for/list ([command (in-list (forge-model-checks model))])
       (define body (compile-forge-expr (forge-check-body command) sig-map relation-map predicate-map))
+      (define expect (forge-check-expect command))
+      ;; A checked property is posed as "no counterexample exists": the
+      ;; negated claim must be unsat alongside the field constraints. Going
+      ;; through Forge's own `checked` test instead (which negates the
+      ;; implication `field-constraints => claim`) let counterexamples
+      ;; violate the field multiplicities in temporal models.
       (forge-check (forge-check-name command)
-                   (check-with-field-constraints body)
+                   (if (eq? expect 'checked)
+                       (run-with-field-constraints (f:!/func body))
+                       (run-with-field-constraints body))
                    (forge-check-scope command)
-                   (forge-check-expect command))))
-  (define runs
+                   expect
+                   (forge-check-options command))))
+  (define run-bodies
     (for/hash ([command (in-list (forge-model-runs model))])
-      (define name (forge-run-name command))
       (define body (compile-forge-expr (forge-run-body command) sig-map relation-map predicate-map))
-      (define run-body (run-with-field-constraints body))
+      (values (forge-run-name command) (run-with-field-constraints body))))
+  (define runs
+    (for/hash ([command (in-list (if make-runs? (forge-model-runs model) '()))])
+      (define name (forge-run-name command))
+      (define run-body (hash-ref run-bodies name))
       (define run-options
         (forge-option-hash model
                            #:run-options (forge-run-options command)
@@ -834,7 +873,7 @@
                           #:sigs sigs
                           #:relations relations
                           #:options run-options))))
-  (compiled-forge-model sigs relations predicate-map runs checks options))
+  (compiled-forge-model sigs relations predicate-map runs run-bodies checks options))
 
 (define (model->forge-runs model #:run-sterling [run-sterling #f] #:export-run [export-run #f] #:export-xml [export-xml #f])
   (compiled-forge-model-runs
@@ -854,17 +893,56 @@
     (write-forge-run-xml run export-xml))
   run)
 
-(define (check-forge-model model)
-  (define compiled (model->compiled-forge model #:run-sterling 'off))
-  (for/list ([command (in-list (compiled-forge-model-checks compiled))])
-    (f:make-test #:name (forge-check-name command)
-                 #:preds (list (forge-check-body command))
-                 #:scope (scope->forge (forge-check-scope command)
-                                       (compiled-forge-model-sigs compiled))
-                 #:sigs (compiled-forge-model-sigs compiled)
-                 #:relations (compiled-forge-model-relations compiled)
-                 #:expect (forge-check-expect command)
-                 #:options (compiled-forge-model-options compiled))))
+;; Runs every check, plus a satisfiability check for every run block (a
+;; witness that cannot exist means the spec contradicts itself, which would
+;; also make every `checked` property vacuously true). Each outcome goes to
+;; `report` as (name expect failure), where failure is #f or a message.
+;; Returns the number of failures.
+(define (check-forge-model model
+                           #:report [report (lambda (name expect failure) (void))])
+  (define compiled (model->compiled-forge model #:run-sterling 'off #:make-runs? #f))
+  (define sigs (compiled-forge-model-sigs compiled))
+  (define (run-test name body scope expect options #:solve-as [solve-as expect])
+    (define failure
+      (with-handlers ([(lambda (e) #t)
+                       (lambda (e)
+                         (if (exn? e) (exn-message e) (format "~a" e)))])
+        (define run
+          (f:make-run #:name name
+                      #:preds (list body)
+                      #:scope (scope->forge scope sigs)
+                      #:sigs sigs
+                      #:relations (compiled-forge-model-relations compiled)
+                      #:options (forge-option-hash model
+                                                   #:run-options options
+                                                   #:run-sterling 'off)))
+        (define sat? (f:Sat? (f:tree:get-value (f:Run-result run))))
+        (begin0
+          (cond
+            [(eq? sat? (eq? solve-as 'sat)) #f]
+            [sat? (string-append "counterexample:\n" (forge-run->text run))]
+            [else "no instance exists"])
+          (f:close-run run))))
+    (report name expect failure)
+    (if failure 1 0))
+  (define run-failures
+    (for/sum ([command (in-list (forge-model-runs model))])
+      (run-test (forge-run-name command)
+                (hash-ref (compiled-forge-model-run-bodies compiled)
+                          (forge-run-name command))
+                (forge-run-scope command)
+                'sat
+                (forge-run-options command))))
+  (define check-failures
+    (for/sum ([command (in-list (compiled-forge-model-checks compiled))])
+      (define expect (forge-check-expect command))
+      (run-test (forge-check-name command)
+                (forge-check-body command)
+                (forge-check-scope command)
+                expect
+                (forge-check-options command)
+                #:solve-as (if (eq? expect 'checked) 'unsat expect))))
+  (+ run-failures check-failures))
 
 (define (forge-run->xml-string run)
   (define inst (f:tree:get-value (f:Run-result run)))

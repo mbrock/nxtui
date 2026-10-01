@@ -17,7 +17,11 @@
                     some
                     lone
                     always
+                    eventually
                     next-state
+                    historically
+                    once
+                    prev-state
                     not
                     block)
          (prefix-in f: "model.rkt"))
@@ -84,7 +88,11 @@
                      [forge-exists exists]
                      [forge-lone lone]
                      [forge-always always]
-                     [forge-next-state next-state]))
+                     [forge-eventually eventually]
+                     [forge-next-state next-state]
+                     [forge-historically historically]
+                     [forge-once once]
+                     [forge-prev-state prev-state]))
 
 (define either f:||)
 (define forge-and f:&&)
@@ -271,6 +279,18 @@
      #''name]
     [((~datum always) body)
      #`(f:always #,(runtime-ref #'body))]
+    [((~datum eventually) body)
+     #`(f:eventually #,(runtime-ref #'body))]
+    [((~datum next-state) body)
+     #`(f:next-state #,(runtime-ref #'body))]
+    [((~datum historically) body)
+     #`(f:historically #,(runtime-ref #'body))]
+    [((~datum once) body)
+     #`(f:once #,(runtime-ref #'body))]
+    [((~datum prev-state) body)
+     #`(f:prev-state #,(runtime-ref #'body))]
+    [((~datum not) body)
+     #`(f:not #,(runtime-ref #'body))]
     [((~datum block) body ...)
      #`(f:block #,@(map runtime-ref (syntax->list #'(body ...))))]
     [other
@@ -712,10 +732,77 @@
     [(_ name:expr #:for scope body)
      #`(f:run name (forge-body body) #:for #,(scope-ref #'scope))]))
 
+(begin-for-syntax
+  ;; A check body is a list of clause lines:
+  ;;   exactly N of A, B    scope, as in run blocks
+  ;;   for N steps          trace length, as in run blocks
+  ;;   expect sat|unsat     default is checked: assumptions imply claims
+  ;;   assume FORMULA       premise
+  ;;   show FORMULA         claim (a bare FORMULA line is also a claim)
+  (define (check-clause-formula pieces-stx)
+    (define pieces (syntax->list pieces-stx))
+    (runtime-ref (if (= (length pieces) 1)
+                     (car pieces)
+                     pieces-stx)))
+
+  (define (forge-check-form stx name-stx clauses
+                            #:scope [kw-scope #f]
+                            #:steps [kw-steps #f]
+                            #:expect [kw-expect #f])
+    (define scope-entries '())
+    (define steps kw-steps)
+    (define expect (and kw-expect (syntax-e kw-expect)))
+    (define assumes '())
+    (define shows '())
+    (for ([clause (in-list clauses)])
+      (syntax-parse clause
+        [scope:run-scope-clause
+         (set! scope-entries (append scope-entries (list #'scope.entries)))]
+        [steps-clause:run-steps-clause
+         (set! steps #'steps-clause.trace-length)]
+        [((~datum expect) which:id)
+         (set! expect (syntax-e #'which))]
+        [((~datum assume) piece ...+)
+         (set! assumes (append assumes (list (check-clause-formula #'(piece ...)))))]
+        [((~datum show) piece ...+)
+         (set! shows (append shows (list (check-clause-formula #'(piece ...)))))]
+        [other
+         (set! shows (append shows (list (runtime-ref #'other))))]))
+    (define expect* (or expect 'checked))
+    (unless (memq expect* '(checked sat unsat))
+      (raise-syntax-error #f "expected `expect sat`, `expect unsat`, or no expect line" stx))
+    (when (null? shows)
+      (raise-syntax-error #f "a check needs at least one `show` claim" stx))
+    (define body
+      (if (and (eq? expect* 'checked) (pair? assumes))
+          #`(f:=> (f:block #,@assumes) (f:block #,@shows))
+          #`(f:block #,@assumes #,@shows)))
+    (define scope
+      (cond
+        [kw-scope (scope-ref kw-scope)]
+        [(pair? scope-entries)
+         (run-scope-clauses->scope (datum->syntax stx scope-entries stx))]
+        [else #''default]))
+    #`(f:check '#,name-stx
+               #,body
+               #:for #,scope
+               #:expect '#,expect*
+               #,@(if steps
+                      (list #'#:min-tracelength steps #'#:max-tracelength steps)
+                      '()))))
+
 (define-syntax (forge-check stx)
   (syntax-parse stx
-    [(_ name:id ((~datum block) premise:id conclusion:id))
-     #'(f:check 'name (f:=> 'premise 'conclusion))]
+    [(_ name:id
+        (~alt (~optional (~seq #:for kw-scope))
+              (~optional (~seq #:trace-length kw-steps:expr))
+              (~optional (~seq #:expect kw-expect:id)))
+        ...
+        ((~datum block) clause ...))
+     (forge-check-form stx #'name (syntax->list #'(clause ...))
+                       #:scope (attribute kw-scope)
+                       #:steps (attribute kw-steps)
+                       #:expect (attribute kw-expect))]
     [(_ name:id body option ...)
      #'(f:check 'name (forge-body body) option ...)]
     [(_ name:expr body option ...)
@@ -838,3 +925,23 @@
   (syntax-parse stx
     [(_ body)
      #'(f:next-state (forge-body body))]))
+
+(define-syntax (forge-eventually stx)
+  (syntax-parse stx
+    [(_ body)
+     #'(f:eventually (forge-body body))]))
+
+(define-syntax (forge-historically stx)
+  (syntax-parse stx
+    [(_ body)
+     #'(f:historically (forge-body body))]))
+
+(define-syntax (forge-once stx)
+  (syntax-parse stx
+    [(_ body)
+     #'(f:once (forge-body body))]))
+
+(define-syntax (forge-prev-state stx)
+  (syntax-parse stx
+    [(_ body)
+     #'(f:prev-state (forge-body body))]))

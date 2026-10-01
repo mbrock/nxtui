@@ -1,6 +1,7 @@
 #lang racket/base
 
 (require racket/cmdline
+         racket/port
          racket/string
          "model.rkt")
 
@@ -29,7 +30,19 @@
                 (set! run-checks? #t)])
   (cond
     [run-checks?
-     (void (check-forge-model runtime-model))]
+     ;; Forge prints solver statistics; keep only the per-check report.
+     (define out (current-output-port))
+     (define (report name expect failure)
+       (fprintf out "~a ~a (~a)~n" (if failure "FAIL" "ok  ") name expect)
+       (when failure
+         (fprintf out "     ~a~n" (string-replace failure "\n" "\n     ")))
+       (flush-output out))
+     (define failures
+       (parameterize ([current-output-port (open-output-nowhere)])
+         (check-forge-model runtime-model #:report report)))
+     (unless (zero? failures)
+       (eprintf "~a: ~a check(s) failed~n" program failures)
+       (exit 1))]
     [run-all?
      (define texts
        (parameterize ([current-output-port (open-output-string)])
