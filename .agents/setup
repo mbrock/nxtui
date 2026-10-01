@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd -- "$repo_root"
+
+step() {
+  local label="$1" started=$SECONDS
+  shift
+  printf '\n== %s ==\n' "$label"
+  "$@"
+  printf '== %s: %ss ==\n' "$label" "$((SECONDS - started))"
+}
+
+# Avoid apt's network/update cost when reusing an installed snapshot.
+missing=()
+for package in ca-certificates curl xz-utils; do
+  if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]]; then
+    missing+=("$package")
+  fi
+done
+if ((${#missing[@]})); then
+  step 'Refresh system package index' sudo apt-get update
+  step 'Install Nix bootstrap prerequisites' sudo apt-get install -y "${missing[@]}"
+fi
+
+if [[ ! -x "$HOME/.nix-profile/bin/nix" ]]; then
+  installer="$(mktemp)"
+  trap 'rm -f -- "$installer"' EXIT
+  step 'Download Nix installer' curl --fail --location --retry 3 https://nixos.org/nix/install -o "$installer"
+  # Single-user Nix needs no daemon, which would not survive snapshot creation.
+  step 'Install Nix' bash "$installer" --no-daemon --yes
+  rm -f -- "$installer"
+  trap - EXIT
+fi
+# The installer cannot update the environment of this running process.
+source "$HOME/.nix-profile/etc/profile.d/nix.sh"
+mkdir -p "$HOME/.config/nix"
+nix_features='extra-experimental-features = nix-command flakes'
+if ! grep -Fqx "$nix_features" "$HOME/.config/nix/nix.conf" 2>/dev/null; then
+  printf '\n%s\n' "$nix_features" >> "$HOME/.config/nix/nix.conf"
+fi
+nix_command=("$HOME/.nix-profile/bin/nix" --extra-experimental-features 'nix-command flakes')
+
+# Keep the dev shell rooted against garbage collection and use flake.lock.
+mkdir -p .cache
+printf '\n== Realize locked development environment ==\n'
+started=$SECONDS
+dev_env="$("${nix_command[@]}" print-dev-env --no-write-lock-file \
+  --profile "$repo_root/.cache/orb-dev-shell" "$repo_root")"
+eval "$dev_env"
+eval "$shellHook"
+printf '== Realize locked development environment: %ss ==\n' "$((SECONDS - started))"
+
+# Amp and supervised services launch separately; export the entire dev shell,
+# not just compiler symlinks. IN_NIX_SHELL prevents recursive activation.
+profile_marker='# nxtui orb Nix development shell'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+if [[ -z "\${IN_NIX_SHELL:-}" && "\$PWD" == "$repo_root" ]]; then
+  source "\$HOME/.nix-profile/etc/profile.d/nix.sh"
+  eval "\$("\$HOME/.nix-profile/bin/nix" --extra-experimental-features 'nix-command flakes' print-dev-env --no-write-lock-file "$repo_root")"
+  eval "\$shellHook"
+fi
+EOF
+fi
+
+# A warm `make setup-racket` still takes about 50s checking linked packages.
+# Reuse the Makefile's version-keyed stamp, invalidating it when dependency
+# declarations change. Linked package sources remain live in the checkout.
+racket_stamp="$PLTADDONDIR/$(racket -e '(display (version))')/nxt-setup.stamp"
+if [[ ! -f "$racket_stamp" || Makefile -nt "$racket_stamp" ||
+      vendor/racket/forge/info.rkt -nt "$racket_stamp" ||
+      vendor/racket/something-src/info.rkt -nt "$racket_stamp" ||
+      rdf-forge/info.rkt -nt "$racket_stamp" ]]; then
+  step 'Install project-local Racket dependencies' make setup-racket
+else
+  printf '\n== Project-local Racket dependencies already installed ==\n'
+fi
+# setup-racket deliberately links Forge without compiling it. Cache the same
+# model entry points as `make spec` so its first run need not compile Forge.
+step 'Precompile runtime model dependencies' env \
+  PLTCOLLECTS="$repo_root:$repo_root/vendor/racket:$repo_root/vendor/racket/something-src:${PLTCOLLECTS:-}" \
+  raco make -j 4 rdf-forge/tests/bfo-sketch-test.rkt nxtrt/model.rkt nxtrt/model-next.rkt
+step 'Cache documentation generator' uvx poxy --version
+
+if [[ -f ../src/forge-graph/packages/forge-graph/package.json ]]; then
+  step 'Install optional graph documentation dependencies' bun install --frozen-lockfile
+else
+  printf '\nOptional graph documentation dependencies skipped: package.json requires ../src/forge-graph/packages/forge-graph.\n'
+fi
+
+if [[ -f build/meson-private/coredata.dat ]]; then
+  step 'Refresh Meson configuration' meson setup --reconfigure build
+else
+  step 'Configure Meson build' make setup
+fi
+printf '\nReady: make build, make test, make spec, and make docs.\n'

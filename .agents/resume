@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# No databases or user authentication are needed for local builds and tests.
+# The login profile activates Nix; do not reinstall dependencies on wake.
+printf 'nxtui orb resumed; cached toolchain and dependencies are ready.\n'

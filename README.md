@@ -226,6 +226,28 @@ nix develop          # compilers, Meson, AWS-LC, clangd, Racket, a JDK, docs too
 
 Inside `nix develop`, the plain `meson`/`make` commands above work as-is.
 
+### In Amp orbs
+
+`.agents/setup` installs Nix, realizes the development shell from `flake.lock`,
+installs the project-local Racket packages, precompiles the model dependencies,
+caches Poxy, and configures Meson.
+Amp snapshots these dependencies for reuse by fresh orbs. Repeated setup runs
+reuse installed packages; `.agents/resume` does not install anything.
+
+Setup adds a repository-scoped login-shell hook so agents can run `make build`,
+`make test`, `make spec`, and `make docs` directly from the repository root,
+without manually entering `nix develop`. No API credentials are needed for
+these local workflows.
+
+The separate Bun graph-documentation workflow requires the sibling checkout
+at `../src/forge-graph/packages/forge-graph` specified in `package.json`.
+Setup installs its locked dependencies when that checkout exists and reports
+the omission otherwise; this does not affect the C++ build, spec, or Poxy docs.
+
+The orb's host kernel also matters: on Linux 6.1, the `io_uring` subprocess
+tests fail because `IORING_OP_WAITID` is not supported. Installing a newer
+toolchain does not add host-kernel operations; those tests need a newer kernel.
+
 ### The runtime spec
 
 `make spec` checks the Racket model (`nxtrt/runtime.rkt` and friends): its

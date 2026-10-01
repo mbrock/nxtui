@@ -34,3 +34,6 @@ __pycache__/
 /result
 /result-*
 /.direnv/
+
+# Orb portal registrations are local to each machine/thread.
+/.amp/portals/*
