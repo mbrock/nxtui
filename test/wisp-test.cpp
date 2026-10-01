@@ -278,7 +278,7 @@ static suite wisp_tests{
             auto mac = h.make<tag::mac>({env, sym, fun, sym, 0xa8005678u});
             auto ext = h.make<tag::ext>({0xf0002468u, mac});
             auto frame = h.make<tag::ktx>({top, env, fun, nil, ext});
-            auto run = h.make<tag::run>({sym, nah, nil, env, frame});
+            auto run = h.make<tag::run>({sym, nah, nil, env, frame, top});
             h.set<tag::pkg, field::sym>(pkg, h.cons(sym, nil));
             h.set<tag::sym, field::fun>(sym, fun);
             root state{h, run};

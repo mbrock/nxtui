@@ -140,6 +140,8 @@ evaluator::evaluator(heap & storage, std::nullptr_t)
     , let_(storage)
     , prompt_(storage)
     , binding_(storage)
+    , continuation_(storage)
+    , resume_(storage)
     , optional_(storage)
     , rest_(storage)
     , body_(storage)
@@ -164,6 +166,8 @@ evaluator::evaluator(heap & storage)
     let_.set(intern("LET"));
     prompt_.set(intern("PROMPT"));
     binding_.set(intern("BINDING"));
+    continuation_.set(intern("CONTINUATION"));
+    resume_.set(intern("RESUME"));
     optional_.set(intern("&OPTIONAL"));
     rest_.set(intern("&REST"));
     body_.set(intern("&BODY"));
@@ -263,7 +267,8 @@ void evaluator::collect()
 
 word evaluator::start(word expression, word environment)
 {
-    return heap_.make<tag::run>({expression, nah, nil, environment, top});
+    return heap_.make<tag::run>(
+        {expression, nah, nil, environment, top, top});
 }
 
 evaluation evaluator::status(word run) const noexcept
@@ -271,6 +276,7 @@ evaluation evaluator::status(word run) const noexcept
     if (heap_.get<tag::run, field::err>(run) != nil)
         return evaluation::failed;
     if (heap_.get<tag::run, field::way>(run) == top
+        && heap_.get<tag::run, field::meta>(run) == top
         && heap_.get<tag::run, field::val>(run) != nah)
         return evaluation::done;
     return evaluation::runnable;
@@ -282,7 +288,7 @@ struct eval_step
 {
     evaluator & vm;
     heap & h;
-    word exp, val, err, env, way;
+    word exp, val, err, env, way, meta;
     values active_runs;
     word step_target = nil;
 
@@ -342,13 +348,20 @@ struct eval_step
             && h.get<tag::sym, field::pkg>(sym) == vm.keywords_.get())
             return sym;
         if (h.get<tag::sym, field::dyn>(sym) != nil) {
-            for (auto cur = way; cur != top;) {
+            for (auto cur = meta; cur != top;) {
                 const auto [hop, saved_env, fun, name, binding] =
                     h.read<tag::ktx>(cur);
                 if (fun == vm.binding_.get() && name == sym) {
-                    if (assign)
-                        h.set<tag::ktx, field::arg>(cur, value);
-                    return assign ? value : binding;
+                    const auto xs = h.v32slice(binding);
+                    const auto old = xs[0], segment = xs[1];
+                    if (assign) {
+                        auto entry = h.read<tag::ktx>(cur);
+                        entry[column_index<tag::ktx, field::arg>()] =
+                            h.newv32(std::array{value, segment});
+                        meta =
+                            append_meta(meta, cur, h.make<tag::ktx>(entry));
+                    }
+                    return assign ? value : old;
                 }
                 cur = hop;
             }
@@ -440,7 +453,7 @@ struct eval_step
                 fail(
                     "PROGRAM-ERROR",
                     {vm.intern("CONTINUATION-CALL-ERROR")});
-            way = copy_continuation(fun, top, way);
+            install(compose(context(fun)));
             give(args[0]);
             return;
         }
@@ -488,6 +501,12 @@ struct eval_step
 
     void proceed()
     {
+        if (way == top) {
+            const auto entry = h.read<tag::ktx>(meta);
+            install(outer(entry));
+            env = entry[column_index<tag::ktx, field::env>()];
+            return;
+        }
         const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(way);
         env = saved_env;
         if (fun == vm.do_.get()) {
@@ -501,8 +520,6 @@ struct eval_step
         } else if (fun == vm.eval_.get()) {
             way = hop;
             enter(val);
-        } else if (fun == vm.prompt_.get() || fun == vm.binding_.get()) {
-            way = hop;
         } else if (fun == vm.let_.get()) {
             // Reverse accumulator: name, value, name, ..., body.
             auto xs = scan(acc);
@@ -529,6 +546,7 @@ struct eval_step
                     fail("INVALID-BINDING", {binding});
                 require(pair[0], tag::sym, "SYMBOL");
                 auto next_acc = h.cons(pair[0], h.cons(val, acc));
+                writable_frame();
                 h.set<tag::ktx, field::acc>(way, next_acc);
                 h.set<tag::ktx, field::arg>(way, rest);
                 enter(pair[1]);
@@ -541,7 +559,8 @@ struct eval_step
                 return;
             }
             const auto remaining = scan(arg);
-            auto vector = acc;
+            writable_frame();
+            auto vector = h.get<tag::ktx, field::acc>(way);
             if (vector == nil) {
                 vector = h.filledv32(2 + remaining.size(), nil);
                 h.v32set(vector, 0, 0);
@@ -1218,35 +1237,92 @@ struct eval_step
                 : h.cons(vm.intern("EXP"), expression));
     }
 
-    // Copy [source, stop), joining its end to tail. Lexical vectors stay
-    // shared; each copied application frame owns a fresh argument vector.
-    word copy_continuation(word source, word stop, word tail)
+    // Ordinary frames end at TOP. Only dynamic boundaries link segments;
+    // their ARG is [handler-or-binding-value, suspended-outer-segment].
+    struct control_context
     {
+        word way = top;
+        word meta = top;
+    };
+
+    void install(control_context ctx)
+    {
+        way = ctx.way;
+        meta = ctx.meta;
+    }
+
+    word boundary(word kind, word key, word value)
+    {
+        return h.make<tag::ktx>(
+            {meta, env, kind, key, h.newv32(std::array{value, way})});
+    }
+
+    control_context outer(const row<tag::ktx> & entry)
+    {
+        return {
+            h.v32slice(entry[column_index<tag::ktx, field::arg>()])[1],
+            entry[column_index<tag::ktx, field::hop>()]};
+    }
+
+    word snapshot(control_context ctx)
+    {
+        h.freeze_continuations();
+        if (ctx.meta == top)
+            return ctx.way;
+        return h.make<tag::ktx>(
+            {top, nil, vm.continuation_.get(), ctx.way, ctx.meta});
+    }
+
+    control_context context(word ptr)
+    {
+        if (ptr == top)
+            return {};
+        require(ptr, tag::ktx, "CONTINUATION");
+        const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(ptr);
+        if (fun == vm.continuation_.get())
+            return {acc, arg};
+        return {ptr, top};
+    }
+
+    // Copy only the meta prefix; ordinary frames and lexical store stay
+    // shared. Boundary payloads are immutable (SET! replaces them).
+    word append_meta(word source, word stop, word tail)
+    {
+        std::vector<word> entries;
+        for (auto cur = source; cur != stop;
+             cur = h.get<tag::ktx, field::hop>(cur))
+            entries.push_back(cur);
         auto result = tail;
-        auto previous = top;
-        for (auto cur = source; cur != stop;) {
-            require(cur, tag::ktx, "CONTINUATION");
-            const auto copy = h.copy_continuation_frame(cur);
-            if (previous == top)
-                result = copy;
-            else
-                h.set<tag::ktx, field::hop>(previous, copy);
-            previous = copy;
-            cur = h.get<tag::ktx, field::hop>(cur);
+        for (auto i = entries.size(); i != 0; --i) {
+            auto entry = h.read<tag::ktx>(entries[i - 1]);
+            entry[column_index<tag::ktx, field::hop>()] = result;
+            result = h.make<tag::ktx>(entry);
         }
-        if (previous != top)
-            h.set<tag::ktx, field::hop>(previous, tail);
         return result;
+    }
+
+    control_context compose(control_context captured)
+    {
+        if (captured.way == top && captured.meta == top)
+            return {way, meta};
+        h.freeze_continuations();
+        // Tail resumes must not accumulate empty return boundaries.
+        const auto tail =
+            way == top ? meta : boundary(vm.resume_.get(), nil, nil);
+        return {captured.way, append_meta(captured.meta, top, tail)};
+    }
+
+    void writable_frame()
+    {
+        if (h.continuation_frozen(way))
+            way = h.copy_continuation_frame(way);
     }
 
     word find_prompt(word source, word prompt_tag)
     {
         for (auto cur = source; cur != top;) {
-            require(cur, tag::ktx, "CONTINUATION");
             const auto [hop, saved_env, fun, acc, arg] =
                 h.read<tag::ktx>(cur);
-            // Zig checks only acc. Require an actual prompt, so bindings
-            // and NIL accumulators cannot impersonate a delimiter.
             if (fun == vm.prompt_.get() && acc == prompt_tag)
                 return cur;
             cur = hop;
@@ -1255,33 +1331,34 @@ struct eval_step
     }
 
     void send_from(
-        word source,
+        control_context source,
         word prompt_tag,
         word value,
         word fallback,
         bool compose_outside)
     {
-        const auto prompt = find_prompt(source, prompt_tag);
+        const auto prompt = find_prompt(source.meta, prompt_tag);
         if (prompt == top) {
             if (fallback == nah)
                 fail("UNHANDLED-ERROR", {prompt_tag, value});
             give(fallback);
             return;
         }
-        const auto [outside, saved_env, fun, acc, handler] =
-            h.read<tag::ktx>(prompt);
-        const auto inside = copy_continuation(source, prompt, top);
-        way = compose_outside ? copy_continuation(outside, top, way)
-                              : outside;
-        if (way == top)
-            env = nil;
+        h.freeze_continuations();
+        const auto entry = h.read<tag::ktx>(prompt);
+        const auto handler =
+            h.v32slice(entry[column_index<tag::ktx, field::arg>()])[0];
+        const auto inside =
+            snapshot({source.way, append_meta(source.meta, prompt, top)});
+        const auto outside = outer(entry);
+        install(compose_outside ? compose(outside) : outside);
         const std::array args{value, inside};
         call(handler, args);
     }
 
     void send(word prompt_tag, word value, word fallback)
     {
-        send_from(way, prompt_tag, value, fallback, false);
+        send_from({way, meta}, prompt_tag, value, fallback, false);
     }
 
     void unhandled_error(word value)
@@ -1294,36 +1371,78 @@ struct eval_step
     void
     send_to(word continuation, word prompt_tag, word value, word fallback)
     {
-        send_from(continuation, prompt_tag, value, fallback, true);
+        send_from(context(continuation), prompt_tag, value, fallback, true);
     }
 
     void call_with_prompt(word prompt_tag, word thunk, word handler)
     {
-        push(vm.prompt_.get(), prompt_tag, handler);
+        meta = boundary(vm.prompt_.get(), prompt_tag, handler);
+        way = top;
         call(thunk, {});
     }
 
     void call_with_binding(word sym, word value, word thunk)
     {
         require(sym, tag::sym, "SYMBOL");
-        push(vm.binding_.get(), sym, value);
+        meta = boundary(vm.binding_.get(), sym, value);
+        way = top;
         call(thunk, {});
     }
 
     void get_cc()
     {
-        give(way);
+        give(snapshot({way, meta}));
     }
 
     void compose_continuation(word continuation)
     {
-        give(copy_continuation(continuation, top, way));
+        give(snapshot(compose(context(continuation))));
+    }
+
+    void run_way(word run)
+    {
+        require(run, tag::run, "EVALUATOR");
+        give(snapshot(
+            {h.get<tag::run, field::way>(run),
+             h.get<tag::run, field::meta>(run)}));
+    }
+
+    // Preserve the flattened public view without traversing ordinary
+    // frames during execution or capture. RESUME boundaries are invisible.
+    row<tag::ktx> continuation_view(word ptr)
+    {
+        auto ctx = context(ptr);
+        while (ctx.way == top && ctx.meta != top) {
+            const auto entry = h.read<tag::ktx>(ctx.meta);
+            const auto next = outer(entry);
+            if (entry[column_index<tag::ktx, field::fun>()]
+                != vm.resume_.get())
+                return {
+                    snapshot(next),
+                    entry[column_index<tag::ktx, field::env>()],
+                    entry[column_index<tag::ktx, field::fun>()],
+                    entry[column_index<tag::ktx, field::acc>()],
+                    h.v32slice(
+                        entry[column_index<tag::ktx, field::arg>()])[0]};
+            ctx = next;
+        }
+        require(ctx.way, tag::ktx, "CONTINUATION");
+        auto frame = h.read<tag::ktx>(ctx.way);
+        auto & hop = frame[column_index<tag::ktx, field::hop>()];
+        hop = snapshot({hop, ctx.meta});
+        return frame;
+    }
+
+    template<field F>
+    void ktx_part(word continuation)
+    {
+        give(continuation_view(continuation)[column_index<tag::ktx, F>()]);
     }
 
     void ktx_position(word continuation)
     {
-        require(continuation, tag::ktx, "CONTINUATION");
-        const auto acc = h.get<tag::ktx, field::acc>(continuation);
+        const auto acc = continuation_view(
+            continuation)[column_index<tag::ktx, field::acc>()];
         const auto xs =
             tag_of(acc) == tag::v32 ? h.v32slice(acc) : values{};
         give(xs.empty() ? 0 : xs[0]);
@@ -1404,16 +1523,11 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::get_cc>("GET/CC"),
         builtin::bind<&eval_step::compose_continuation>(
             "COMPOSE-CONTINUATION"),
-        builtin::bind<&eval_step::get_field<tag::ktx, field::hop>>(
-            "KTX-HOP"),
-        builtin::bind<&eval_step::get_field<tag::ktx, field::env>>(
-            "KTX-ENV"),
-        builtin::bind<&eval_step::get_field<tag::ktx, field::fun>>(
-            "KTX-FUN"),
-        builtin::bind<&eval_step::get_field<tag::ktx, field::acc>>(
-            "KTX-ACC"),
-        builtin::bind<&eval_step::get_field<tag::ktx, field::arg>>(
-            "KTX-ARG"),
+        builtin::bind<&eval_step::ktx_part<field::hop>>("KTX-HOP"),
+        builtin::bind<&eval_step::ktx_part<field::env>>("KTX-ENV"),
+        builtin::bind<&eval_step::ktx_part<field::fun>>("KTX-FUN"),
+        builtin::bind<&eval_step::ktx_part<field::acc>>("KTX-ACC"),
+        builtin::bind<&eval_step::ktx_part<field::arg>>("KTX-ARG"),
         builtin::bind<&eval_step::ktx_position>("KTX-POS"),
         builtin::bind<&eval_step::is_top>("TOP?"),
         builtin::bind<&eval_step::enter>("EVAL"),
@@ -1482,8 +1596,7 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::step_run>("STEP!"),
         builtin::bind<&eval_step::gc>("GC"),
         builtin::bind<&eval_step::run_expression>("RUN-EXP"),
-        builtin::bind<&eval_step::get_field<tag::run, field::way>>(
-            "RUN-WAY"),
+        builtin::bind<&eval_step::run_way>("RUN-WAY"),
         builtin::bind<&eval_step::get_field<tag::run, field::val>>(
             "RUN-VAL"),
         builtin::bind<&eval_step::get_field<tag::run, field::err>>(
@@ -1512,9 +1625,9 @@ evaluation evaluator::step(word run)
     auto current = run;
     while (status(current) == evaluation::runnable) {
         active.push_back(current);
-        const auto [exp, val, err, env, way] =
+        const auto [exp, val, err, env, way, meta] =
             heap_.read<tag::run>(current);
-        eval_step s{*this, heap_, exp, val, err, env, way, active};
+        eval_step s{*this, heap_, exp, val, err, env, way, meta, active};
         try {
             s.once();
         } catch (const condition & c) {
@@ -1524,7 +1637,8 @@ evaluation evaluator::step(word run)
                 s.err = unhandled.value;
             }
         }
-        heap_.put<tag::run>(current, {s.exp, s.val, s.err, s.env, s.way});
+        heap_.put<tag::run>(
+            current, {s.exp, s.val, s.err, s.env, s.way, s.meta});
         if (s.step_target == nil)
             break;
         current = s.step_target;

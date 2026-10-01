@@ -41,6 +41,7 @@ enum class field {
     arg,
     err,
     way,
+    meta,
 };
 
 enum class field_kind { value, offset, length, count, external };
@@ -117,7 +118,8 @@ struct schema<tag::run>
         column{field::val, "val"},
         column{field::err, "err"},
         column{field::env, "env"},
-        column{field::way, "way"}};
+        column{field::way, "way"},
+        column{field::meta, "meta"}};
 };
 
 template<>

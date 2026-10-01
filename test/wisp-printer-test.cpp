@@ -105,10 +105,10 @@ static suite printer_tests{
             expect(
                 print(h, ktx)
                 == "<%ktx hop=#<TOP> env=NIL fun=7 acc=11 arg=13>");
-            auto run = h.make<tag::run>({17, nah, nil, 19, ktx});
+            auto run = h.make<tag::run>({17, nah, nil, 19, ktx, top});
             expect(
                 print(h, run)
-                == "<run exp=17 val=#<NAH> err=NIL env=19 way=<%ktx hop=#<TOP> env=NIL fun=7 acc=11 arg=13>>");
+                == "<run exp=17 val=#<NAH> err=NIL env=19 way=<%ktx hop=#<TOP> env=NIL fun=7 acc=11 arg=13> meta=#<TOP>>");
         };
 
         "opaque diagnostics use local unsigned IDs and never follow pins"_test =
@@ -148,11 +148,11 @@ static suite printer_tests{
             h.v32set(vector, 1, h.cons(7, vector));
             expect(print(h, vector) == "#<#<CYCLE> (7 . #<CYCLE>)>");
             auto ktx = h.make<tag::ktx>({top, nil, 3, nil, nil});
-            auto run = h.make<tag::run>({5, nah, nil, nil, ktx});
+            auto run = h.make<tag::run>({5, nah, nil, nil, ktx, top});
             h.set<tag::ktx, field::hop>(ktx, run);
             expect(
                 print(h, run)
-                == "<run exp=5 val=#<NAH> err=NIL env=NIL way=<%ktx hop=#<CYCLE> env=NIL fun=3 acc=NIL arg=NIL>>");
+                == "<run exp=5 val=#<NAH> err=NIL env=NIL way=<%ktx hop=#<CYCLE> env=NIL fun=3 acc=NIL arg=NIL> meta=#<TOP>>");
         };
 
         "acyclic sharing is not mistaken for recursion"_test = [] {

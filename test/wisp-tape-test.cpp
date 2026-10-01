@@ -197,13 +197,13 @@ static suite tape_tests{
                     const auto data = tape::encode(vm, entry.get());
                     expect(tape::encode(vm, entry.get()) == data);
                     expect(
-                        get32(data, 8) == 1u
+                        get32(data, 8) == 2u
                         && get32(data, 12) == word(collect_first));
                     expect(
                         get32(data, 16) == 3u
                         && get32(data, 32) == entry.get());
                     expect(
-                        data[8] == std::byte{1} && data[9] == std::byte{0});
+                        data[8] == std::byte{2} && data[9] == std::byte{0});
                     expect(
                         std::string_view(
                             reinterpret_cast<const char *>(data.data()), 8)
@@ -335,6 +335,78 @@ static suite tape_tests{
                            .contains("INVALID-CONTINUATION"));
             };
 
+        "segmented tapes preserve run meta and frozen multi-shot snapshots"_test =
+            [] {
+                for (bool collect_first : {false, true}) {
+                    heap h;
+                    evaluator vm{h};
+                    evaluate(h, vm, R"(
+                  (set-symbol-dynamic! 'dyn t) (set-symbol-value! 'dyn 5)
+                  (call-with-prompt 'park
+                    (%fn nil () (call-with-binding 'dyn 10
+                      (%fn nil () (call-with-prompt 'inner
+                        (%fn nil () (+ dyn (send-with-default! 'park nil nil)))
+                        (%fn nil (v k) 999)))))
+                    (%fn nil (v k) (set-symbol-value! 'saved k))))");
+                    root run{
+                        h,
+                        vm.start(
+                            reader{h, vm, R"(
+                  (call-with-prompt 'done
+                    (%fn nil () (call-with-binding 'dyn 20
+                      (%fn nil () (+ 1 2 3))))
+                    (%fn nil (v k) 999)))"}
+                                .next()
+                                .value())};
+                    for (unsigned i = 0; i < 100; ++i) {
+                        if (h.get<tag::run, field::exp>(run.get()) == 2u
+                            && h.get<tag::run, field::way>(run.get()) != top
+                            && h.get<tag::run, field::meta>(run.get())
+                                   != top)
+                            break;
+                        expect(vm.step(run.get()) == evaluation::runnable);
+                    }
+                    expect((h.get<tag::run, field::exp>(run.get()) == 2u));
+                    h.set<tag::sym, field::val>(
+                        vm.intern("TARGET"), run.get());
+                    evaluate(
+                        h,
+                        vm,
+                        "(set-symbol-value! 'snapshot (run-way target))");
+                    if (collect_first)
+                        vm.collect();
+                    auto restored =
+                        tape::decode(tape::encode(vm, run.get()));
+                    auto & copy = restored->storage;
+                    auto & machine = restored->machine;
+                    // No post-restore GC: decode itself must freeze frames.
+                    expect(
+                        machine.advance(restored->entry.get(), 100)
+                        == evaluation::done);
+                    expect(
+                        (copy.get<tag::run, field::val>(
+                             restored->entry.get())
+                         == 6u));
+                    expect(
+                        (copy.get<tag::run, field::meta>(
+                             restored->entry.get())
+                         == top));
+                    expect(
+                        print(copy, evaluate(copy, machine, R"(
+                  (list (ktx-pos snapshot)
+                    (ktx-fun (ktx-hop snapshot))
+                    (ktx-arg (ktx-hop snapshot))
+                    (ktx-fun (ktx-hop (ktx-hop snapshot)))
+                    (top? (ktx-hop (ktx-hop (ktx-hop snapshot))))))"))
+                        == "(1 BINDING 20 PROMPT T)");
+                    expect(
+                        print(copy, evaluate(copy, machine, R"(
+                  (list (call snapshot 7) (call snapshot 9)
+                    (call saved 7) (call saved 9) dyn (ktx-pos snapshot)))"))
+                        == "(11 13 17 19 5 1)");
+                }
+            };
+
         "mutable environment keys and invalid uses retain their runtime meaning"_test =
             [] {
                 heap h;
@@ -422,7 +494,7 @@ static suite tape_tests{
                 const auto frame =
                     h.make<tag::ktx>({top, nil, plus, nil, nil});
                 const auto run =
-                    h.make<tag::run>({nah, plus, nil, nil, frame});
+                    h.make<tag::run>({nah, plus, nil, nil, frame, top});
                 h.make_pin(plus);
                 const auto entry = h.newv32(
                     std::array{plus, h.cons(minus, nil), closure, run});
@@ -498,7 +570,8 @@ static suite tape_tests{
                 const auto package = vm.find_package("WISP");
                 const auto symbols = h.get<tag::pkg, field::sym>(package);
                 const std::pair<std::size_t, word> corruptions[]{
-                    {8, 2},
+                    {8, 1}, // Pre-segmentation tapes are not migrated.
+                    {8, 3},
                     {12, 2},
                     {16, 0},
                     {28, 2},
@@ -542,6 +615,54 @@ static suite tape_tests{
                 seal(bad);
                 rejected(bad);
                 expect(tape::encode(vm, frame) == original);
+            };
+
+        "segmented private links and boundary payloads are validated"_test =
+            [] {
+                heap h;
+                evaluator vm{h};
+                const auto segment =
+                    h.make<tag::ktx>({top, nil, vm.intern("DO"), nil, nil});
+                const auto payload = h.newv32(std::array{nil, segment});
+                const auto boundary = h.make<tag::ktx>(
+                    {top, nil, vm.intern("PROMPT"), nil, payload});
+                const auto snapshot = h.make<tag::ktx>(
+                    {top,
+                     nil,
+                     vm.intern("CONTINUATION"),
+                     segment,
+                     boundary});
+                const auto run =
+                    h.make<tag::run>({nah, 7, nil, nil, segment, boundary});
+                const auto data =
+                    tape::encode(vm, h.newv32(std::array{run, snapshot}));
+                layout wire{data};
+                const auto ktx = [&](std::string name, word ptr) {
+                    return wire.tables.at(tag::ktx).columns.at(name)
+                           + 4 * index_of(ptr);
+                };
+                const std::pair<std::size_t, word> corruptions[]{
+                    {ktx("hop", boundary), boundary},
+                    {ktx("hop", boundary), segment},
+                    {ktx("arg", boundary), nil},
+                    {ktx("acc", snapshot), boundary},
+                    {ktx("arg", snapshot), segment},
+                    {wire.tables.at(tag::run).columns.at("meta"), segment},
+                    {wire.tables.at(tag::run).columns.at("way"), snapshot},
+                    {wire.tables.at(tag::v32).columns.at("len")
+                         + 4 * index_of(payload),
+                     1},
+                    {wire.word_count + 4
+                         + 4 * h.get<tag::v32, field::idx>(payload) + 4,
+                     boundary},
+                };
+                for (auto [offset, value] : corruptions) {
+                    auto bad = data;
+                    put32(bad, offset, value);
+                    seal(bad);
+                    rejected(bad);
+                }
+                expect(tape::decode(data)->entry.get() != nil);
             };
 
         "checksum, truncation, input limits, and stream errors are distinct failures"_test =

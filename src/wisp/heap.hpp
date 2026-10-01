@@ -106,6 +106,18 @@ public:
     word clonev32(word x);
     word copy_continuation_frame(word x);
 
+    // Allocation watermark: snapshots share frames until the evaluator
+    // needs to write one. Collection and restore freeze all survivors.
+    void freeze_continuations() noexcept
+    {
+        frozen_ktx_ = table<tag::ktx>().size();
+    }
+
+    bool continuation_frozen(word x) const noexcept
+    {
+        return check<tag::ktx>(x) < frozen_ktx_;
+    }
+
     /// Borrowed payloads expire on pool growth or collection. Mutation goes
     /// through operations, not writable spans. Appending a borrowed slice
     /// back into this same heap is supported, including across growth.
@@ -164,6 +176,7 @@ private:
     word next_pin_ = 1;
     root * roots_ = nullptr;
     bool era_ = false;
+    std::size_t frozen_ktx_ = 0;
     externals host_;
 };
 

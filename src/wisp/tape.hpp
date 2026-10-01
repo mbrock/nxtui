@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Logical heap images inspired by mbrock/wisp core/tape.zig, revision
-// 223535633179cdf2a49391820bdab16a5db5bf4e. Not the Zig tape byte format.
+// e1c9a96f6c543c858aeafb0dac26bafd649f82a7. Not the Zig tape byte format.
 #pragma once
 
 #include "wisp/eval.hpp"
@@ -44,13 +44,14 @@ inline constexpr std::size_t default_limit = 64 * 1024 * 1024;
 /// saved. Any ext row is rejected. Collect explicitly first if desired.
 /// The format is versioned, little-endian, schema-checked, and relocates
 /// builtin IDs by name. SHA-256 detects corruption, not authenticity.
+/// Version 2 adds segmented control state; version 1 tapes are rejected.
 std::vector<std::byte> encode(const evaluator &, word entry = nil);
 
 /// Restore into a separate owner or throw error; never changes a live
 /// machine. Validates references, private package indexes, cached roots,
-/// and acyclic continuation links. Mutable syntax, uses, environments and
-/// continuation payloads keep their runtime meaning, including conditions
-/// on use; they need not describe a successful program to be
+/// and acyclic segmented control links. Mutable syntax, uses, environments
+/// and continuation payloads keep their runtime meaning, including
+/// conditions on use; they need not describe a successful program to be
 /// checkpointable. Load trusted checkpoints only: this is not a sandbox for
 /// hostile executable images. Limits input bytes, not execution time or
 /// total resident memory. Allocation failures propagate normally.

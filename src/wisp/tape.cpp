@@ -11,7 +11,7 @@ namespace wisp {
 namespace {
 
 constexpr std::string_view magic = "NXWISP\r\n";
-constexpr word version = 1;
+constexpr word version = 2;
 
 void demand(bool good, const char * message)
 {
@@ -127,6 +127,8 @@ struct tape_codec
         saved_root{"LET", &evaluator::let_},
         saved_root{"PROMPT", &evaluator::prompt_},
         saved_root{"BINDING", &evaluator::binding_},
+        saved_root{"CONTINUATION", &evaluator::continuation_},
+        saved_root{"RESUME", &evaluator::resume_},
         saved_root{"&OPTIONAL", &evaluator::optional_},
         saved_root{"&REST", &evaluator::rest_},
         saved_root{"&BODY", &evaluator::body_},
@@ -309,31 +311,86 @@ struct tape_codec
             if (x != top)
                 typed(x, tag::ktx);
         };
-        std::vector<unsigned char> hops(sizes[word(tag::ktx)]);
-        for (word i = 0; i < hops.size(); ++i) {
-            auto cur = pointer(tag::ktx, i, h.era_);
-            while (cur != top) {
-                continuation(cur);
-                auto & color = hops[index_of(cur)];
+        const auto boundary_kind = [&](word kind) {
+            return kind == vm.prompt_.get() || kind == vm.binding_.get()
+                   || kind == vm.resume_.get();
+        };
+        const auto segment = [&](word x) {
+            continuation(x);
+            if (x != top) {
+                const auto kind = h.get<tag::ktx, field::fun>(x);
+                demand(
+                    !boundary_kind(kind) && kind != vm.continuation_.get(),
+                    "invalid continuation segment");
+            }
+        };
+        const auto meta = [&](word x) {
+            continuation(x);
+            if (x != top)
+                demand(
+                    boundary_kind(h.get<tag::ktx, field::fun>(x)),
+                    "invalid continuation meta chain");
+        };
+        // Private control edges now include wrapper registers and suspended
+        // segments, not just HOP. Validate their shape and acyclicity
+        // without recursion; guest syntax and mutable argument state remain
+        // data.
+        std::vector<std::array<word, 2>> edges(
+            sizes[word(tag::ktx)], {top, top});
+        for (word i = 0; i < edges.size(); ++i) {
+            const auto [hop, env, kind, acc, arg] =
+                h.read<tag::ktx>(pointer(tag::ktx, i, h.era_));
+            if (kind == vm.continuation_.get()) {
+                demand(hop == top, "invalid continuation wrapper");
+                segment(acc);
+                meta(arg);
+                edges[i] = {acc, arg};
+            } else if (boundary_kind(kind)) {
+                meta(hop);
+                typed(arg, tag::v32);
+                const auto xs = h.v32slice(arg);
+                demand(xs.size() == 2, "invalid continuation boundary");
+                segment(xs[1]);
+                edges[i] = {hop, xs[1]};
+            } else {
+                segment(hop);
+                edges[i][0] = hop;
+            }
+        }
+        std::vector<unsigned char> colors(edges.size());
+        std::vector<std::pair<word, bool>> pending;
+        for (word i = 0; i < edges.size(); ++i) {
+            pending.emplace_back(pointer(tag::ktx, i, h.era_), false);
+            while (!pending.empty()) {
+                const auto [cur, leaving] = pending.back();
+                pending.pop_back();
+                if (cur == top)
+                    continue;
+                auto & color = colors[index_of(cur)];
+                if (leaving) {
+                    color = 2;
+                    continue;
+                }
                 demand(color != 1, "cyclic continuation");
                 if (color == 2)
-                    break;
+                    continue;
                 color = 1;
-                cur = h.get<tag::ktx, field::hop>(cur);
-            }
-            for (cur = pointer(tag::ktx, i, h.era_);
-                 cur != top && hops[index_of(cur)] == 1;) {
-                hops[index_of(cur)] = 2;
-                cur = h.get<tag::ktx, field::hop>(cur);
+                pending.emplace_back(cur, true);
+                for (auto edge : edges[index_of(cur)])
+                    pending.emplace_back(edge, false);
             }
         }
         std::apply(
             [&]<tag... Tags>(const tab<Tags> &... tables) {
                 const auto check = [&]<tag T>(const tab<T> & table) {
-                    if constexpr (T == tag::run)
+                    if constexpr (T == tag::run) {
                         for (auto way :
                              table.col(column_index<T, field::way>()))
-                            continuation(way);
+                            segment(way);
+                        for (auto chain :
+                             table.col(column_index<T, field::meta>()))
+                            meta(chain);
+                    }
                     if constexpr (T == tag::fun || T == tag::mac)
                         for (auto name :
                              table.col(column_index<T, field::sym>()))
@@ -553,6 +610,7 @@ struct tape_codec
             },
             h.vat_);
         validate(vm, result->entry.get());
+        h.freeze_continuations();
         return result;
     }
 };

@@ -96,7 +96,8 @@ private:
     root true_name_;
     // Like Zig's cached keyword identities: never search the package list
     // on the transition hot path. Roots keep these current across GC.
-    root do_, if_, eval_, let_, prompt_, binding_, optional_, rest_, body_;
+    root do_, if_, eval_, let_, prompt_, binding_, continuation_, resume_;
+    root optional_, rest_, body_;
     bool collect_ = false;
     // Host-independent fresh keys: unique within this evaluator, not
     // Zig's date/random names or a portable identity across images.

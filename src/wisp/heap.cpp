@@ -300,6 +300,7 @@ struct tidy
         old.bytes_ = std::move(bytes);
         old.words_ = std::move(words);
         old.era_ = !old.era_;
+        old.freeze_continuations();
     }
 };
 

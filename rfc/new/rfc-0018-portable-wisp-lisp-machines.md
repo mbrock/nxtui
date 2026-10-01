@@ -354,9 +354,9 @@ a Tidy-style moving collector. The evaluator and source-loading slices below
 build on it, with a cooperative NXT driver and portable tape I/O. Journaling
 remains unimplemented.
 
-The reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
+The original reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
 `core/step.zig` in the Wisp revision linked above. The later
-[current reference checkout](https://github.com/mbrock/wisp/commit/223535633179cdf2a49391820bdab16a5db5bf4e)
+[evaluator baseline](https://github.com/mbrock/wisp/commit/223535633179cdf2a49391820bdab16a5db5bf4e)
 has the same heap layout and copying rules; its evaluator also pre-expands
 lambda bodies and uses collectible effect sentinels. Those evaluator changes
 must be considered when selecting the evaluator compatibility baseline.
@@ -514,7 +514,7 @@ it uses neither erased function-pointer casts nor C++26 reflection.
 The evaluator now also implements:
 
 - `SET-SYMBOL-DYNAMIC!` and `CALL-WITH-BINDING`. Marked symbols search the
-  continuation's nearest `BINDING` frame before lexical/global lookup or
+  meta chain's nearest `BINDING` entry before lexical/global lookup or
   assignment. Unmarked symbols ignore those frames. Exiting a binding restores
   the previous scope.
 - `CALL-WITH-PROMPT` and `SEND-WITH-DEFAULT!`. Tags match by identity. Sending
@@ -523,16 +523,16 @@ The evaluator now also implements:
   the outside context. No match returns the supplied default. Normal thunk
   return removes the delimiter without calling its handler.
 - Multi-shot `CALL`/`APPLY` of a continuation, with exactly one value. Invocation
-  copies its frames and appends the caller's context; it does not discard the
+  shares its segments and appends the caller's context; it does not discard the
   caller. Application accumulators are independent, lexical cells remain shared,
-  and dynamic binding values are copied with their frames. The captured original
+  and dynamic binding updates path-copy their meta entries. The captured original
   remains reusable.
 - `SEND-TO-WITH-DEFAULT!`, which searches a captured continuation rather than the
-  current one. It invokes the found handler with a copy of the inside frames,
-  composing the captured outside frames with the current caller's context.
+  current one. It invokes the found handler with a snapshot of the inside context,
+  composing the captured outside context with the current caller's context.
 - `GET/CC`, `COMPOSE-CONTINUATION`, `KTX-*`, `TOP?`, and `EVAL`. As in Zig,
-  `GET/CC` exposes the live context, not an immutable snapshot. Composition copies
-  its argument's frames and attaches the live caller context. `EVAL` evaluates
+  `GET/CC` exposes an immutable control snapshot. Composition shares its argument's
+  segments and attaches the caller context. `EVAL` evaluates
   the supplied form in the current environment.
 - Resumable language failures via the nearest `ERROR` prompt. Its handler can
   supply a replacement by calling the captured continuation. With no handler,
@@ -546,13 +546,30 @@ guest-defined recursive wrapper reinstalls the prompt for deep resumption,
 matching `CALL-WITH-EFFECT-HANDLER` in `base.wisp`. The source-loading slice
 now supplies the guest wrapper, its raise closure, and error helpers.
 
-Two deliberate safety differences from Zig are covered by tests: prompt lookup
-requires a `PROMPT` frame, rather than treating every frame whose accumulator
-equals the tag as a delimiter; `KTX-POS` returns zero for an empty vector
-accumulator, which is legal as a prompt tag, rather than indexing past its end.
+Prompt lookup requires an actual `PROMPT` entry, now also enforced by Zig's
+segmented implementation. The port still deliberately returns zero from
+`KTX-POS` for an empty vector accumulator (legal as a prompt tag), rather than
+indexing past its end.
 
-Control tests collect between every guest step. Equivalent programs run against
-the linked Zig checkout produced `((11 1) (11 2))` for shared lexical versus
+The segmented control port follows upstream
+[`e1c9a96`](https://github.com/mbrock/wisp/commit/e1c9a96f6c543c858aeafb0dac26bafd649f82a7):
+`run.way` holds ordinary frames, while `run.meta` holds `PROMPT`, `BINDING`, and
+invisible `RESUME` boundaries. A boundary suspends the outer segment and saves
+its environment. Capture searches only boundaries and copies only the crossed
+meta prefix; ordinary frames and partially evaluated argument vectors are shared
+until a write requires a copy. A heap allocation watermark freezes frames in
+constant time. Collection and tape restoration freeze all surviving frames.
+Tail resumption adds no empty `RESUME` entry. `GET/CC` and `RUN-WAY` produce stable
+snapshots; `KTX-*` projects the old flattened view without exposing `RESUME`.
+Tests cover nested prompts, repeated LET/DO and argument resumption, dynamic
+snapshots versus shared lexical store, `SEND-TO`, capture during resumption,
+GC and image round-trips. Structural checks compare one- and 128-frame segments
+and exercise 256 tail compositions; allocation depends on boundaries, not frame
+depth. These checks are not a claim of universal wall-clock speedup.
+
+Control tests exercise collection between every guest step as well as
+uninterrupted execution. Equivalent programs run against the linked Zig
+checkout produced `((11 1) (11 2))` for shared lexical versus
 copied dynamic mutation, 27 for shallow resumption, 1038 for composing both
 outside contexts when sending into a continuation, and `(5 42 7)` for supplying
 an unbound variable's replacement. The C++ deep-resumption test produces 50.
@@ -718,15 +735,17 @@ Any external row causes rejection, including an unreachable row until the host
 explicitly collects it. Rebinding external capabilities is deliberately absent
 in this version; saving a numeric host handle would not save its resource.
 
-### Tape version 1 has an explicit byte encoding
+### Tape version 2 has an explicit byte encoding
 
-This is **not** the Zig `wisp tape v0.8.0` format. All integers below are unsigned
+This is **not** the Zig `wisp tape v0.9.0` format. Version 2 adds `run.meta` and
+segmented contexts; version 1 tapes are explicitly rejected, without migration.
+All integers below are unsigned
 32-bit little-endian unless specified otherwise. Text is a byte length followed
 by exactly that many bytes, without a terminator or alignment padding.
 
 | Order | Encoding |
 | --- | --- |
-| Header | Eight bytes `NXWISP\r\n`, version `1`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
+| Header | Eight bytes `NXWISP\r\n`, version `2`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
 | Evaluator roots | Count, then `(text name, word value)` for each saved root |
 | Builtins | Count, then `(text name, control-kind 0/1)`; ordinal is the saved jet payload |
 | Byte pool | Byte count, then raw bytes |
@@ -744,9 +763,10 @@ reordered table/column/root directories but require exactly the supported
 schema and root set. Writer traversal derives from `schema<T>::columns`.
 
 Root names are WISP, KEYWORD, KEY, packages, current, NIL-name, T-name, DO, IF,
-EVAL, LET, PROMPT, BINDING, &OPTIONAL, &REST, and &BODY. Builtin names are unique
-at compile time. Restore resolves names and control kinds against the current
-registry, then remaps jet words in every value field, word-pool element, root,
+EVAL, LET, PROMPT, BINDING, CONTINUATION, RESUME, &OPTIONAL, &REST, and &BODY.
+Builtin names are unique at compile time. Restore resolves names and control
+kinds against the current registry, then remaps jet words in every value
+field, word-pool element, root,
 pin value, and entry. Raw offsets, lengths, and call counts are never remapped.
 Names do not promise compatibility after a builtin's semantics change: an
 incompatible language or schema change needs a version bump or explicit
@@ -755,7 +775,8 @@ migration, not silent acceptance.
 Decode checks the checksum before constructing a machine, bounds counts against
 remaining input before allocating, rejects trailing bytes, and validates tags,
 eras, indices, pool slices, pin sequences, canonical roots, private package
-indexes, and acyclic continuation links. Mutable uses lists, environments,
+indexes, and acyclic segmented control links, including wrapper registers and
+boundary payloads. Mutable uses lists, environments,
 syntax, and continuation payloads are checkpointable even when malformed:
 the evaluator must preserve their meaning, including a condition on later use.
 For example, a cyclic package uses list restores and still raises

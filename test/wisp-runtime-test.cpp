@@ -63,7 +63,8 @@ struct runtime_machine
              target,
              nil,
              nil,
-             h.make<tag::ktx>({top, nil, jet, nil, nil})});
+             h.make<tag::ktx>({top, nil, jet, nil, nil}),
+             top});
     }
 };
 

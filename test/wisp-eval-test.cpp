@@ -1,4 +1,6 @@
 #include <wisp/eval.hpp>
+#include <wisp/reader.hpp>
+#include <wisp/printer.hpp>
 
 #include "test.hpp"
 
@@ -799,7 +801,8 @@ static suite eval_tests{
                         m.f("COMPOSE-CONTINUATION",
                             {m.q(continuation.get())}),
                         true)};
-                expect(composed.get() != continuation.get());
+                // Composing with an empty caller shares the segment.
+                expect(composed.get() == continuation.get());
                 expect(
                     m.eval(m.f("CALL", {m.q(composed.get()), 13}), true)
                     == 55u);
@@ -808,17 +811,232 @@ static suite eval_tests{
                 expect(
                     m.h.v32slice(error)[1]
                     == m.s("CONTINUATION-CALL-ERROR"));
-                // GET/CC is a live frame reference, not prompt capture.
+                // GET/CC is a snapshot, including dynamic boundaries.
                 // A prompt tag can be an empty vector, with no position.
-                auto prompt = m.eval(
-                    m.f("CALL-WITH-PROMPT",
-                        {m.h.newv32({}), m.fn(nil, m.f("GET/CC")), nil}),
-                    true);
+                root prompt{
+                    m.h,
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {m.h.newv32({}),
+                             m.fn(nil, m.f("GET/CC")),
+                             nil}),
+                        true)};
                 expect(
-                    (m.h.get<tag::ktx, field::fun>(prompt)
+                    (m.eval(m.f("KTX-FUN", {m.q(prompt.get())}), true)
                      == m.s("PROMPT")));
-                expect(m.eval(m.f("KTX-POS", {m.q(prompt)}), true) == 0u);
+                expect(
+                    m.eval(m.f("KTX-POS", {m.q(prompt.get())}), true)
+                    == 0u);
             };
+
+        "segmented control preserves nested prompts, LET progress, and caller bindings"_test =
+            [] {
+                // Equivalent to the upstream segmented regression fixtures,
+                // using primitive forms so bootstrapping is not under test.
+                const std::pair<std::string_view, std::string_view> cases[] = {
+                    {R"((call-with-prompt 'outer
+                    (%fn nil () (+ 100 (call-with-prompt 'inner
+                      (%fn nil () (+ 10 (send-with-default! 'outer 3 nil)))
+                      (%fn nil (v k) 9999))))
+                    (%fn nil (v k) (call k (* v 2)))))",
+                     "116"},
+                    {R"((let ((saved nil) (store 0))
+                    (let ((initial (call-with-prompt 'save
+                      (%fn nil () (let ((a 1) (b (send-with-default! 'save 'pause nil)) (c 3))
+                        (%set! 'store (+ store 1)) (list a b c store)))
+                      (%fn nil (v k) (do (%set! 'saved k) v)))))
+                      (list initial (call saved 7) (call saved 9) store))))",
+                     "(PAUSE (1 7 3 1) (1 9 3 2) 2)"},
+                    {R"((do (set-symbol-dynamic! 'dyn t) (set-symbol-value! 'dyn 100)
+                    (let ((saved (call-with-prompt 'save
+                      (%fn nil () (call-with-binding 'dyn 10
+                        (%fn nil () (do (send-with-default! 'save nil nil)
+                          (%set! 'dyn (+ dyn 1)) dyn))))
+                      (%fn nil (v k) k))))
+                      (list (call saved nil) (call saved nil) dyn))))",
+                     "(11 11 100)"},
+                    {R"((do (set-symbol-dynamic! 'dyn t) (set-symbol-value! 'dyn 100)
+                    (let ((saved (call-with-prompt 'save
+                      (%fn nil () (do (send-with-default! 'save nil nil)
+                        (%set! 'dyn (+ dyn 1)) dyn))
+                      (%fn nil (v k) k))))
+                      (list
+                        (call-with-binding 'dyn 20 (%fn nil () (list (call saved nil) dyn)))
+                        (call-with-binding 'dyn 30 (%fn nil () (list (call saved nil) dyn)))
+                        dyn))))",
+                     "((21 21) (31 31) 100)"},
+                    {R"((let ((saved (call-with-prompt 'park
+                    (%fn nil () (+ 100 (call-with-prompt 'fault
+                      (%fn nil () (+ 10 (send-with-default! 'park nil nil)))
+                      (%fn nil (v k) (+ 1000 (call k v))))))
+                    (%fn nil (v k) k))))
+                    (list (send-to-with-default! saved 'absent 1 'missing)
+                      (+ 2000 (send-to-with-default! saved 'fault 7 'missing))
+                      (apply saved '(2)))))",
+                     "(MISSING 3117 112)"},
+                    {R"((let ((first (call-with-prompt 'park
+                    (%fn nil () (do (send-with-default! 'park nil nil)
+                      (send-with-default! 'outer nil nil)))
+                    (%fn nil (v k) k))))
+                    (let ((second (call-with-prompt 'outer
+                      (%fn nil () (+ 100 (call first nil)))
+                      (%fn nil (v k) k))))
+                      (+ 1000 (call second 7)))))",
+                     "1107"},
+                };
+                for (auto [source, want] : cases)
+                    for (bool collect : {false, true}) {
+                        language m;
+                        const auto form =
+                            reader{m.h, m.vm, source}.next().value();
+                        const auto result =
+                            print(m.h, m.eval(form, collect));
+                        expect(result == want) << result << " != " << want;
+                    }
+            };
+
+        "GET/CC freezes live argument state before it advances"_test = [] {
+            for (bool collect : {false, true}) {
+                language m;
+                const auto source = R"((call-with-prompt 'park
+                  (%fn nil () (do
+                    (set-symbol-value! 'saved (get/cc))
+                    (send-with-default! 'park 7 nil) 999))
+                  (%fn nil (v k) v)))";
+                expect(
+                    m.eval(
+                        reader{m.h, m.vm, source}.next().value(), collect)
+                    == 7u);
+                root saved{
+                    m.h, m.h.get<tag::sym, field::val>(m.s("SAVED"))};
+                for (int i = 0; i < 2; ++i)
+                    expect(
+                        m.eval(
+                            m.f("CALL", {m.q(saved.get()), nil}), collect)
+                        == 7u);
+            }
+        };
+
+        "capture and composition share deep segments and copy only meta entries"_test =
+            [] {
+                for (auto depth : {1u, 128u}) {
+                    language m;
+                    const auto handler =
+                        m.eval(m.fn(m.l({m.s("V"), m.s("K")}), m.s("K")));
+                    word segment = top;
+                    for (unsigned i = 0; i < depth; ++i)
+                        segment = m.h.make<tag::ktx>(
+                            {segment,
+                             nil,
+                             m.s("IF"),
+                             nil,
+                             m.h.cons(7, 11)});
+                    const auto target = m.h.make<tag::ktx>(
+                        {top,
+                         nil,
+                         m.s("PROMPT"),
+                         m.s("TARGET"),
+                         m.h.newv32(std::array{handler, top})});
+                    const auto inner = m.h.make<tag::ktx>(
+                        {target,
+                         nil,
+                         m.s("PROMPT"),
+                         m.s("INNER"),
+                         m.h.newv32(std::array{handler, segment})});
+                    const auto binding = m.h.make<tag::ktx>(
+                        {inner,
+                         nil,
+                         m.s("BINDING"),
+                         m.s("X"),
+                         m.h.newv32(std::array{31u, top})});
+                    const auto args =
+                        m.h.newv32(std::array{2u, m.s("TARGET"), 3u, nil});
+                    const auto send = m.h.make<tag::ktx>(
+                        {segment,
+                         nil,
+                         m.h.get<tag::sym, field::fun>(
+                             m.s("SEND-WITH-DEFAULT!")),
+                         args,
+                         nil});
+                    m.run.set(m.h.make<tag::run>(
+                        {nah, nil, nil, nil, send, binding}));
+                    const auto before = m.h.table<tag::ktx>().size();
+                    expect(m.vm.step(m.run.get()) == evaluation::runnable);
+                    expect(m.h.table<tag::ktx>().size() == before + 3);
+                    expect(m.vm.step(m.run.get()) == evaluation::done);
+                    const auto captured =
+                        m.h.get<tag::run, field::val>(m.run.get());
+                    expect(
+                        (m.h.get<tag::ktx, field::acc>(captured)
+                         == segment));
+                    const auto copied_binding =
+                        m.h.get<tag::ktx, field::arg>(captured);
+                    const auto copied_prompt =
+                        m.h.get<tag::ktx, field::hop>(copied_binding);
+                    expect(
+                        m.h.v32slice(
+                            m.h.get<tag::ktx, field::arg>(copied_prompt))[1]
+                        == segment);
+                    const auto compose = m.h.get<tag::sym, field::fun>(
+                        m.s("COMPOSE-CONTINUATION"));
+                    const auto frame = m.h.make<tag::ktx>(
+                        {segment, nil, compose, nil, nil});
+                    m.run.set(m.h.make<tag::run>(
+                        {nah, captured, nil, nil, frame, top}));
+                    const auto count = m.h.table<tag::ktx>().size();
+                    expect(m.vm.step(m.run.get()) == evaluation::runnable);
+                    expect(m.h.table<tag::ktx>().size() == count + 4);
+                    const auto composed =
+                        m.h.get<tag::run, field::val>(m.run.get());
+                    expect(
+                        (m.h.get<tag::ktx, field::acc>(composed)
+                         == segment));
+                    expect(m.h.continuation_frozen(segment));
+                    if (depth == 1) {
+                        auto view = composed;
+                        for (auto kind :
+                             {"IF", "BINDING", "PROMPT", "IF", "IF"}) {
+                            expect(
+                                m.eval(m.f("KTX-FUN", {m.q(view)}))
+                                == m.s(kind));
+                            view = m.eval(m.f("KTX-HOP", {m.q(view)}));
+                        }
+                        expect(
+                            view
+                            == top); // RESUME is not in the public view.
+                    }
+                }
+            };
+
+        "tail composition adds no empty RESUME boundary"_test = [] {
+            language m;
+            const auto segment = m.h.make<tag::ktx>(
+                {top, nil, m.s("IF"), nil, m.h.cons(7, 11)});
+            const auto prompt = m.h.make<tag::ktx>(
+                {top,
+                 nil,
+                 m.s("PROMPT"),
+                 nil,
+                 m.h.newv32(std::array{nil, top})});
+            const auto compose =
+                m.h.get<tag::sym, field::fun>(m.s("COMPOSE-CONTINUATION"));
+            const auto frame =
+                m.h.make<tag::ktx>({top, nil, compose, nil, nil});
+            m.run.set(m.h.make<tag::run>(
+                {nah, segment, nil, nil, frame, prompt}));
+            const auto before = m.h.table<tag::ktx>().size();
+            for (int i = 0; i < 256; ++i) {
+                expect(m.vm.step(m.run.get()) == evaluation::runnable);
+                const auto result =
+                    m.h.get<tag::run, field::val>(m.run.get());
+                expect((m.h.get<tag::ktx, field::acc>(result) == segment));
+                expect((m.h.get<tag::ktx, field::arg>(result) == prompt));
+                m.h.put<tag::run>(
+                    m.run.get(), {nah, segment, nil, nil, frame, prompt});
+            }
+            // Only the public context wrapper is allocated per snapshot.
+            expect(m.h.table<tag::ktx>().size() == before + 256);
+        };
 
         "EVAL evaluates a computed form in the current lexical environment"_test =
             [] {
