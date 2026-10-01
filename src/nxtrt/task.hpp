@@ -5,6 +5,7 @@
 #include "nxtrt/env.hpp"
 #include "nxtrt/exceptions.hpp"
 #include "nxtrt/ids.hpp"
+#include "nxtrt/land.hpp"
 #include "nxtrt/alloc_trace.hpp"
 #include "nxtrt/trace.hpp"
 #include "nxtrt/wand.hpp"
@@ -1859,117 +1860,23 @@ private:
     mutable std::optional<detail::deed_result_state<void>> state_;
 };
 
-struct frame_storage_ref
+/// The unit of frame land. Frame blocks are whole cells, so land typed as
+/// cells is aligned for any task frame.
+struct alignas(std::max_align_t) frame_cell
 {
-    frame_storage_ref() = default;
-
-    explicit frame_storage_ref(std::span<std::byte> bytes)
-        : bytes(bytes)
-    {}
-
-    std::span<std::byte> bytes;
+    std::byte bytes[alignof(std::max_align_t)];
 };
 
-template<std::size_t N>
-class static_frame_storage
-{
-public:
-    [[nodiscard]] frame_storage_ref ref() noexcept
-    {
-        return frame_storage_ref{std::span{storage_}};
-    }
+/// Frame land is raw land of frame cells.
+using frame_storage_ref = value_storage_ref<frame_cell>;
 
-    [[nodiscard]] operator frame_storage_ref() noexcept
-    {
-        return ref();
-    }
+/// Inline frame land of at least `Bytes` bytes.
+template<std::size_t Bytes>
+using static_frame_storage = static_value_storage<
+    frame_cell,
+    (Bytes + sizeof(frame_cell) - 1) / sizeof(frame_cell)>;
 
-private:
-    alignas(std::max_align_t) std::array<std::byte, N == 0 ? 1 : N> storage_{};
-};
-
-class owned_frame_storage
-{
-public:
-    owned_frame_storage() = default;
-
-    explicit owned_frame_storage(std::size_t capacity)
-        : bytes_(allocate(capacity))
-        , capacity_(capacity)
-    {}
-
-    owned_frame_storage(const owned_frame_storage &) = delete;
-    owned_frame_storage & operator=(const owned_frame_storage &) = delete;
-
-    owned_frame_storage(owned_frame_storage && other) noexcept
-        : bytes_(std::exchange(other.bytes_, nullptr))
-        , capacity_(std::exchange(other.capacity_, 0))
-    {}
-
-    owned_frame_storage & operator=(owned_frame_storage && other) noexcept
-    {
-        if (this == &other)
-            return *this;
-        reset();
-        bytes_ = std::exchange(other.bytes_, nullptr);
-        capacity_ = std::exchange(other.capacity_, 0);
-        return *this;
-    }
-
-    ~owned_frame_storage()
-    {
-        reset();
-    }
-
-    [[nodiscard]] frame_storage_ref ref() noexcept
-    {
-        return frame_storage_ref{std::span{bytes_, capacity_}};
-    }
-
-    [[nodiscard]] operator frame_storage_ref() noexcept
-    {
-        return ref();
-    }
-
-private:
-    [[nodiscard]] static std::byte * allocate(std::size_t capacity)
-    {
-        if (capacity == 0)
-            return nullptr;
-        auto * storage = ::operator new(
-            capacity,
-            std::align_val_t{alignof(std::max_align_t)});
-        alloc_trace::event(
-            "frame-store",
-            "new",
-            storage,
-            capacity,
-            alignof(std::max_align_t),
-            capacity,
-            capacity);
-        return static_cast<std::byte *>(storage);
-    }
-
-    void reset() noexcept
-    {
-        if (bytes_ != nullptr)
-            alloc_trace::event(
-                "frame-store",
-                "del",
-                bytes_,
-                capacity_,
-                alignof(std::max_align_t));
-        if (bytes_ != nullptr)
-            ::operator delete(
-                bytes_,
-                std::align_val_t{alignof(std::max_align_t)});
-        bytes_ = nullptr;
-        capacity_ = 0;
-    }
-
-    std::byte * bytes_ = nullptr;
-    std::size_t capacity_ = 0;
-};
+using owned_frame_storage = rack<frame_cell>;
 
 struct firm_child_storage_ref
 {
@@ -2449,8 +2356,8 @@ public:
 
     firm_frame_arena() = default;
 
-    explicit firm_frame_arena(frame_storage_ref storage)
-        : storage_(storage.bytes)
+    explicit firm_frame_arena(frame_storage_ref land)
+        : storage_(std::as_writable_bytes(std::span{land.data, land.size}))
     {}
 
     firm_frame_arena(const firm_frame_arena &) = delete;
@@ -2499,7 +2406,10 @@ public:
 
     [[nodiscard]] frame_storage_ref storage() const noexcept
     {
-        return frame_storage_ref{storage_};
+        return {
+            reinterpret_cast<frame_cell *>(storage_.data()),
+            storage_.size() / sizeof(frame_cell),
+        };
     }
 
     [[nodiscard]] static constexpr std::size_t block_size(
@@ -2784,7 +2694,7 @@ public:
     static constexpr std::size_t default_child_capacity = 4096;
 
     firm()
-        : owned_frame_storage_(default_frame_capacity)
+        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , owned_child_storage_(default_child_capacity)
@@ -2822,7 +2732,7 @@ public:
     }
 
     explicit firm(firm_child_storage_ref children)
-        : owned_frame_storage_(default_frame_capacity)
+        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
@@ -2842,7 +2752,7 @@ public:
     firm(
         firm_child_storage_ref children,
         firm_deed_storage_ref deeds)
-        : owned_frame_storage_(default_frame_capacity)
+        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)
@@ -2858,7 +2768,7 @@ public:
     }
 
     explicit firm(firm_bookkeeping_storage_ref storage)
-        : owned_frame_storage_(default_frame_capacity)
+        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(storage.children.slots)
@@ -2915,7 +2825,7 @@ public:
     firm(
         firm_child_storage_ref children,
         firm_join_storage_ref join)
-        : owned_frame_storage_(default_frame_capacity)
+        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
         , frames_(owned_frame_storage_)
         , uses_owned_frame_storage_(true)
         , child_slots_(children.slots)

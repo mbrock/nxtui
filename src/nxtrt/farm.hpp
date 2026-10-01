@@ -1,175 +1,115 @@
 #pragma once
 
+#include "nxtrt/land.hpp"
 #include "nxtrt/value-buffers.hpp"
 
 #include <array>
-#include <bit>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <new>
 #include <optional>
+#include <span>
 #include <type_traits>
 
 namespace nxtrt {
 
-using u64 = std::uint64_t;
-
-template<std::size_t N>
-concept PowerOfTwo = N >= 1 && std::has_single_bit(N);
-
-template<std::size_t N>
-    requires PowerOfTwo<N>
-struct mask;
-
-template<std::size_t N>
-    requires PowerOfTwo<N> && (N <= 64)
-struct mask<N>
+/// Land for a farm's free-index bookkeeping: a hot ring of recently given
+/// indices and the words of the cold mask.
+struct farm_index_storage_ref
 {
-    u64 bits = 0;
-    static constexpr std::size_t width = N;
-
-    [[nodiscard]] bool empty() const noexcept
-    {
-        return bits == 0;
-    }
-
-    [[nodiscard]] std::size_t peek() const noexcept
-    {
-        if (!bits)
-            return N;
-        return std::countl_zero(bits) - (64 - N);
-    }
-
-    std::size_t take() noexcept
-    {
-        auto i = peek();
-        if (i != N)
-            bits &= ~(u64{1} << (N - 1 - i));
-        return i;
-    }
-
-    void give(std::size_t i) noexcept
-    {
-        assert(i < N);
-        bits |= u64{1} << (N - 1 - i);
-    }
+    std::span<std::size_t> hot;
+    std::span<std::uint64_t> cold;
 };
 
+/// Inline farm index land for `N` slots.
 template<std::size_t N>
-    requires PowerOfTwo<N> && (N > 64)
-struct mask<N>
+class static_farm_index_storage
 {
-    using half = mask<N / 2>;
+public:
+    static constexpr std::size_t hot_capacity = N < 64 ? N : 64;
 
-    half hi = {};
-    half lo = {};
-
-    static constexpr std::size_t width = N;
-
-    [[nodiscard]] bool empty() const noexcept
+    [[nodiscard]] farm_index_storage_ref ref() noexcept
     {
-        return hi.empty() && lo.empty();
+        return {
+            std::span{hot_.data(), hot_capacity},
+            std::span{cold_},
+        };
     }
 
-    [[nodiscard]] std::size_t peek() const noexcept
-    {
-        auto h = hi.peek();
-        if (h != N / 2)
-            return h;
-        return N / 2 + lo.peek();
-    }
-
-    std::size_t take() noexcept
-    {
-        auto h = hi.peek();
-        if (h != N / 2)
-            return hi.take();
-        return N / 2 + lo.take();
-    }
-
-    void give(std::size_t i) noexcept
-    {
-        assert(i < N);
-        if (i < N / 2)
-            hi.give(i);
-        else
-            lo.give(i - N / 2);
-    }
+private:
+    std::array<std::size_t, hot_capacity == 0 ? 1 : hot_capacity> hot_{};
+    std::array<std::uint64_t, mask<>::words_for(N)> cold_{};
 };
 
-namespace detail {
+/// A pool of slots that hands out free slots by streaming their indices.
+///
+/// The farm is a `feed<std::size_t>` of free indices: `alloc()` reads the next
+/// free index and `give()` writes one back. Indices given back recently wait
+/// in the feed's hot ring and come out first in, first out; the rest wait in
+/// a cold `mask`, which refills the ring with the lowest indices first, so
+/// busy slots stay packed toward the front.
+///
+/// `farm<T>` borrows its slots and index land, so its capacity can be chosen
+/// at run time. `farm<T, N>` keeps its index land inline.
+template<typename T, std::size_t N = std::dynamic_extent>
+class farm;
 
-template<std::size_t N>
-struct farm_index_storage
-{
-    using index_type = std::size_t;
-
-    [[nodiscard]] index_type * data() noexcept
-    {
-        return std::launder(
-            reinterpret_cast<index_type *>(storage.data()));
-    }
-
-    alignas(index_type) std::array<
-        std::byte,
-        sizeof(index_type) * (N == 0 ? 1 : N)>
-        storage{};
-};
-
-} // namespace detail
-
-template<typename T, std::size_t N>
-    requires PowerOfTwo<N>
-class farm
-    : private detail::farm_index_storage<N < 64 ? N : 64>
-    , public feed<std::size_t>
+template<typename T>
+class farm<T, std::dynamic_extent> : public feed<std::size_t>
 {
 public:
     using value_type = std::remove_cv_t<T>;
     using index_type = std::size_t;
     using index_feed = feed<index_type>;
-    using index_storage = detail::farm_index_storage<N < 64 ? N : 64>;
 
-    static constexpr std::size_t capacity = N;
-    static constexpr std::size_t hot_capacity = N < 64 ? N : 64;
+    /// Index land needed for `slots` slots: `hot_capacity` ring entries
+    /// (any nonzero size works; 64 is plenty) and `mask<>::words_for(slots)`
+    /// mask words.
+    [[nodiscard]] static constexpr std::size_t hot_capacity_for(
+        std::size_t slots) noexcept
+    {
+        return slots < 64 ? (slots == 0 ? 1 : slots) : 64;
+    }
 
-    explicit farm(std::array<value_type, N> * buffer) noexcept
+    /// Every slot starts free.
+    farm(std::span<value_type> slots, farm_index_storage_ref indices) noexcept
         : index_feed(
               value_storage_ref<index_type>{
-                  index_storage::data(),
-                  hot_capacity,
+                  indices.hot.data(),
+                  indices.hot.size(),
               })
-        , buffer_(buffer)
+        , slots_(slots)
+        , cold_(indices.cold, slots.size())
     {
-        for (auto i = index_type{0}; i < N; ++i)
-            cold_.give(i);
+        cold_.fill();
     }
 
     farm(const farm &) = delete;
     farm & operator=(const farm &) = delete;
 
-    [[nodiscard]] std::array<value_type, N> * buffer() noexcept
+    [[nodiscard]] std::size_t capacity() const noexcept
     {
-        return buffer_;
+        return slots_.size();
     }
 
     [[nodiscard]] value_type * data() noexcept
     {
-        return buffer_->data();
+        return slots_.data();
     }
 
     [[nodiscard]] value_type * at(index_type index) noexcept
     {
-        assert(index < N);
-        return data() + index;
+        assert(index < slots_.size());
+        return slots_.data() + index;
     }
 
+    /// True when every slot is handed out.
     [[nodiscard]] bool empty() const noexcept
     {
         return this->buffered_size() == 0 && cold_.empty();
     }
 
+    /// The next free slot, or null when every slot is handed out.
     [[nodiscard]] hope<value_type *> alloc()
     {
         auto index = this->take();
@@ -180,7 +120,7 @@ public:
 
     void give(index_type index) noexcept
     {
-        assert(index < N);
+        assert(index < slots_.size());
         if (this->unused_capacity_size() != 0)
             this->emplace(index);
         else
@@ -189,9 +129,9 @@ public:
 
     void release(value_type * slot) noexcept
     {
-        assert(slot >= data());
-        assert(slot < data() + N);
-        give(static_cast<index_type>(slot - data()));
+        assert(slot >= slots_.data());
+        assert(slot < slots_.data() + slots_.size());
+        give(static_cast<index_type>(slot - slots_.data()));
     }
 
 protected:
@@ -202,11 +142,8 @@ protected:
         auto dst = sink.uninitialized_capacity().first(limit);
         auto n = std::size_t{0};
 
-        while (n < dst.size()) {
-            auto index = cold_.take();
-            if (index == N)
-                break;
-            std::construct_at(dst.data() + n, index);
+        while (n < dst.size() && !cold_.empty()) {
+            std::construct_at(dst.data() + n, cold_.take());
             ++n;
         }
 
@@ -230,8 +167,30 @@ private:
         co_return at_or_null(co_await index);
     }
 
+    std::span<value_type> slots_;
+    mask<> cold_;
+};
+
+template<typename T, std::size_t N>
+class farm
+    : private static_farm_index_storage<N>
+    , public farm<T>
+{
+public:
+    using value_type = typename farm<T>::value_type;
+
+    explicit farm(std::array<value_type, N> * buffer) noexcept
+        : farm<T>(std::span{*buffer}, static_farm_index_storage<N>::ref())
+        , buffer_(buffer)
+    {}
+
+    [[nodiscard]] std::array<value_type, N> * buffer() noexcept
+    {
+        return buffer_;
+    }
+
+private:
     std::array<value_type, N> * buffer_ = nullptr;
-    mask<N> cold_ = {};
 };
 
 } // namespace nxtrt

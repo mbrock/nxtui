@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/land.hpp"
 #include "nxtrt/task.hpp"
 
 #include <algorithm>
@@ -220,60 +221,6 @@ private:
 
 template<typename T = std::byte, std::size_t Inline = 2>
 using byte_chunks = buffer_chunks<T, Inline>;
-
-/// View of raw storage where up to `size()` values of `T` may be
-/// constructed.
-///
-/// Unlike `std::span<T>`, this does not claim that live `T` objects already
-/// exist. Producers must start object lifetimes before reporting values as
-/// constructed to a ring, feed, or sink.
-template<typename T>
-class junk
-{
-public:
-    using value_type = std::remove_cv_t<T>;
-
-    junk() = default;
-
-    junk(value_type * data, std::size_t size)
-        : data_(data)
-        , size_(size)
-    {
-    }
-
-    [[nodiscard]] value_type * data() const noexcept
-    {
-        return data_;
-    }
-
-    [[nodiscard]] std::size_t size() const noexcept
-    {
-        return size_;
-    }
-
-    [[nodiscard]] bool empty() const noexcept
-    {
-        return size_ == 0;
-    }
-
-    [[nodiscard]] junk first(std::size_t n) const noexcept
-    {
-        return {data_, std::min(n, size_)};
-    }
-
-    [[nodiscard]] std::span<std::byte> as_writable_bytes() const noexcept
-        requires std::is_trivially_copyable_v<value_type>
-    {
-        return {
-            reinterpret_cast<std::byte *>(data_),
-            size_ * sizeof(value_type),
-        };
-    }
-
-private:
-    value_type * data_ = nullptr;
-    std::size_t size_ = 0;
-};
 
 /// Scanner response for a frame whose complete source stock is not visible
 /// yet.

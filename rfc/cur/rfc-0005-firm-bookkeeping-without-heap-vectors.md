@@ -51,7 +51,8 @@ That full-land aggregate does not introduce a new owner; it is just a named
 bundle of borrowed frame storage plus the borrowed bookkeeping-storage bundle.
 
 The convenience `firm{}` path still owns default frame backing, but it now uses
-an explicit aligned `owned_frame_storage` block instead of
+an explicit owned block of frame cells (`owned_frame_storage`, which is
+`rack<frame_cell>`) instead of
 `std::vector<std::byte>`. That keeps the default path as a bounded byte region
 with a visible capacity, matching the borrowed frame-storage API more closely.
 Default child-record, child-completion, and join-failure backing have the same
@@ -173,10 +174,10 @@ the selected result.
 
 In the current implementation, result evacuation and frame reuse are separate
 events. Evacuation moves or reports the typed result into the deed slot, then
-destroys the coroutine frame. The first firm frame arena remains monotonic:
-destroying the frame runs destructors and unregisters runtime state, but it
-does not make those arena bytes available to a later child until the whole firm
-settles or a future arena policy chooses explicit reuse.
+destroys the coroutine frame. Destroying the frame also returns its bytes to
+the firm's frame arena, which reuses them for the next frame of the same size
+(see [RFC 0002](rfc-0002-firm-frame-arenas.md)); frame land is no longer
+monotonic, though the bookkeeping cells below still are.
 
 Result-storage pools follow the same first policy. Borrowing a
 `deed_result_storage<T>` cell advances a monotonic cursor. Taking the evacuated
@@ -266,8 +267,10 @@ join_failure exceptions[J]
 ```
 
 Later versions can use the extracted ring geometry from
-[RFC 0007](rfc-0007-ring-geometry-extraction.md) for completion queues and
-free lists.
+[RFC 0007](rfc-0007-ring-geometry-extraction.md) for completion queues, and a
+`farm` over the record cells for free lists: `farm<T>` hands out slot indices
+lowest first from a borrowed `mask<>` summary tree, with capacity chosen at
+run time, which is the shape per-cell reuse would need.
 
 The first reuse policy is monotonic within a firm settlement epoch. Child
 records, completion records, join-failure records, deed result-storage cells,

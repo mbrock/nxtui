@@ -24,6 +24,7 @@
 #include <memory>
 #include <ranges>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -4355,6 +4356,95 @@ static suite runtime_tests{
                 expect(chunks.chunks()[1][1] == 5_i);
 
                 ring.destroy_all();
+            };
+
+            "masks size their summary tree by powers of 64"_test = [] {
+                expect(nxtrt::mask<>::words_for(1) == std::size_t{1});
+                expect(nxtrt::mask<>::words_for(64) == std::size_t{1});
+                expect(nxtrt::mask<>::words_for(65) == std::size_t{3});
+                expect(nxtrt::mask<>::words_for(4096) == std::size_t{65});
+                expect(nxtrt::mask<>::words_for(4097) == std::size_t{68});
+                expect(nxtrt::mask<4096>::words == std::size_t{65});
+            };
+
+            "masks hand out their lowest member first"_test = [] {
+                auto bits = nxtrt::mask<4096>{};
+                expect(bits.empty());
+                expect(bits.take() == std::size_t{4096});
+                for (auto index : {4095uz, 64uz, 3uz, 63uz, 1000uz})
+                    bits.give(index);
+                for (auto index : {3uz, 63uz, 64uz, 1000uz, 4095uz}) {
+                    expect(bits.contains(index));
+                    expect(bits.take() == index);
+                    expect(!bits.contains(index));
+                }
+                expect(bits.empty());
+            };
+
+            "masks agree with a set under random takes and gives"_test = [] {
+                for (auto capacity : {1uz, 5uz, 63uz, 64uz, 65uz, 200uz,
+                                      4095uz, 4096uz, 4097uz, 300000uz}) {
+                    auto words = std::vector<std::uint64_t>(
+                        nxtrt::mask<>::words_for(capacity));
+                    auto bits = nxtrt::mask<>{words, capacity};
+                    auto model = std::set<std::size_t>{};
+                    auto state = std::uint64_t{capacity * 2654435761u + 1};
+                    auto next = [&] {
+                        state = state * 6364136223846793005u
+                            + 1442695040888963407u;
+                        return static_cast<std::size_t>(state >> 33);
+                    };
+
+                    if (capacity <= 4097) {
+                        bits.fill();
+                        for (auto i = 0uz; i < capacity; ++i)
+                            model.insert(i);
+                    }
+                    for (auto step = 0; step < 4000; ++step) {
+                        if (next() % 3 == 0) {
+                            auto expected = model.empty()
+                                ? capacity
+                                : *model.begin();
+                            expect(bits.take() == expected);
+                            if (!model.empty())
+                                model.erase(model.begin());
+                        } else {
+                            auto index = next() % capacity;
+                            if (!model.contains(index)) {
+                                bits.give(index);
+                                model.insert(index);
+                            }
+                        }
+                        expect(bits.empty() == model.empty());
+                    }
+                }
+            };
+
+            "runtime-sized farms hand out every slot once"_test = [] {
+                auto values = std::vector<int>(300);
+                auto hot = std::vector<std::size_t>(
+                    nxtrt::farm<int>::hot_capacity_for(values.size()));
+                auto cold = std::vector<std::uint64_t>(
+                    nxtrt::mask<>::words_for(values.size()));
+                auto farm = nxtrt::farm<int>{values, {hot, cold}};
+                expect(farm.capacity() == std::size_t{300});
+
+                auto seen = std::set<int *>{};
+                for (auto i = 0uz; i < values.size(); ++i) {
+                    auto * slot = farm.alloc().take_ready();
+                    expect(slot != nullptr);
+                    expect(slot == values.data() + i);
+                    seen.insert(slot);
+                }
+                expect(seen.size() == values.size());
+                expect(farm.empty());
+                expect(farm.alloc().take_ready() == nullptr);
+
+                farm.release(values.data() + 7);
+                farm.release(values.data() + 299);
+                expect(farm.alloc().take_ready() == values.data() + 7);
+                expect(farm.alloc().take_ready() == values.data() + 299);
+                expect(farm.alloc().take_ready() == nullptr);
             };
 
             "farms cache free slots over a mask"_test = [] {
