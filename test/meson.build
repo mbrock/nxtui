@@ -7,6 +7,7 @@ if get_option('tests')
     'runtime-test.cpp',
     'terminal-test.cpp',
     'mtproto-test.cpp',
+    'wisp-test.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [
@@ -79,4 +80,13 @@ if get_option('tests')
     cpp_args : nxt_test_cpp_args,
   )
   test('nxt-tests', nxt_tests)
+
+  # Fault injection replaces operator new only in this executable. Compile
+  # the guest heap directly rather than linking nxt-core's allocation hooks.
+  wisp_alloc_tests = executable('wisp-alloc-tests',
+    'wisp-alloc-test.cpp', 'test-main.cpp', '../src/wisp/heap.cpp',
+    include_directories : [nxt_inc, include_directories('.')],
+    dependencies : [nxt_stacktrace_dep],
+  )
+  test('wisp-alloc-tests', wisp_alloc_tests)
 endif

@@ -74,6 +74,13 @@ and application events.
 
 ## Proposed integration boundary
 
+Think of the result as a scripting runtime in the same broad sense as Node.js:
+a language machine together with an event loop and host facilities. Here NXT
+supplies the event loop rather than Wisp growing a second scheduler. One host
+turn advances a bounded amount of guest work; an I/O completion makes a rooted
+guest continuation runnable again. The language machine can also be stepped
+without an event loop, which keeps embedding and semantic tests small.
+
 ```text
 editor and agents
     structured requests and restart descriptions
@@ -337,6 +344,76 @@ and its recorded inputs; the host recreates the available operating environment.
 The first integrated demonstration should be small: one computation, one
 suspended request, one saved image, and a resumed result. Behavioral rules and
 the voice writing environment can build on that demonstrated boundary.
+
+## First C++ heap slice
+
+[`src/wisp/heap.hpp`](../../src/wisp/heap.hpp) now provides the storage slice,
+with tests in [`test/wisp-test.cpp`](../../test/wisp-test.cpp). This is not yet
+an evaluator or a bootstrapped Lisp environment. It has the ten table schemas,
+packed words, byte and word pools, roots, pins, continuation-frame copying, and
+a Tidy-style moving collector. Reader, package interning, evaluation, tape I/O,
+journaling, and the NXT event-loop adapter remain unimplemented.
+
+The reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
+`core/step.zig` in the Wisp revision linked above. The later
+[current reference checkout](https://github.com/mbrock/wisp/commit/223535633179cdf2a49391820bdab16a5db5bf4e)
+has the same heap layout and copying rules; its evaluator also pre-expands
+lambda bodies and uses collectible effect sentinels. Those evaluator changes
+must be considered when selecting the evaluator compatibility baseline.
+The ported sources retain Wisp's AGPL-3.0-or-later license notice.
+
+The first storage choices and contracts are:
+
+- `orb` in Zig Wisp means allocator, not scheduler. The C++ vat owns one
+  `nxtrt::rack<word>` per column. Capacity is raw land; append constructs rows.
+  Farms and firm frame arenas still manage host slots and coroutine frames,
+  not guest reachability or Lisp control state.
+- Words retain the explicit five-bit tags, 26-bit row index, one-bit era, and
+  signed 31-bit fixnums. Field names and column order match Zig. Schema metadata
+  distinguishes traced values from raw offsets, lengths, counters, and external
+  IDs; all fields are physically words, not yet strongly typed wrappers. Neither
+  tuple position nor C++ enum ordinals define a future wire format.
+- Allocation does not collect. `collect()` is an explicit safepoint. Row reads
+  return copies; column and payload spans are read-only borrows that expire at
+  growth or collection. Mutation goes through heap operations. A nonmovable
+  `root` owns a host slot rewritten by collection; a pin is a stable immediate
+  ID retaining its referent until explicitly freed. The heap outlives its roots.
+- Ordinary pointer equality is identity within one heap and current era. The
+  era bit is a debugging aid, not a durable generation number: it wraps after
+  two collections. Cross-heap pointers and unrooted stale words are invalid.
+  `zap` is collector-only and cannot occupy a live row's first column.
+- Collection preserves cycles and shared object identity, copies each live
+  word-vector payload, and retains the entire byte pool. A shallow descriptor
+  copy initially aliases vector payload, but Zig Tidy copies distinct descriptor
+  payloads separately during GC. This surprising behavior is retained and tested,
+  not silently reinterpreted as a permanent aliasing guarantee.
+- Continuation-frame copies share lexical environments but clone argument
+  accumulators for function/builtin application frames. A vector in a non-call
+  frame is not automatically cloned. This is only the frame-copy operation;
+  prompt capture, composition, and invocation still need the evaluator.
+- Before forwarding, collection reserves space for all existing rows and the
+  sum of descriptor payload lengths. Unlike Zig's destructive allocating path,
+  allocation failure at this stage leaves old rows, roots, and pins untouched.
+  This trades conservative peak memory for a simple failure boundary; it is not
+  a transactional journal. Pins scan in ID order, roots newest first, and tables
+  in vat order. Exact relocated indices are not a Zig tape-compatibility claim.
+- An optional nonthrowing host callback releases unreachable external rows and
+  the remaining rows at heap destruction. It is a host binding, not image data;
+  callers must arrange one owned external reference per row and must not reenter
+  the heap from the callback.
+
+The next evaluator corpus should include the existing `core/step.zig` examples:
+repeated argument continuation invocation yielding
+`(pause (before one after) (before two after))`; a deep handler resuming requests
+2 and 3 with ten times their values, yielding 50; a pinned callback resumed after
+GC yielding `SECOND`; and raising into a suspended handler yielding
+`(caught nope)`. These distinguish shared store, copied control state, deep
+handler reinstatement, and error delivery. Heap tests alone do not establish
+these language-level behaviors. The last case is an expected result in the Zig
+tests, not a verified passing baseline: the [prior Wisp verification
+thread](https://ampcode.com/threads/T-01a06ebb-d635-776d-a69c-95a0134cfbac)
+reports that it traps even before that thread's evaluator changes. Preserve it
+as an unresolved regression rather than inferring correctness from its presence.
 
 ## Open design choices
 

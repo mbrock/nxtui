@@ -1,0 +1,194 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// C++ port of mbrock/wisp's core/heap.zig and core/tidy.zig.
+#pragma once
+
+#include "wisp/vat.hpp"
+
+#include <map>
+#include <vector>
+
+namespace wisp {
+
+class root;
+struct tidy;
+
+/// A host binding, never a guest pointer or part of a portable image.
+/// One release per unreachable ext row, and per remaining row at teardown.
+/// The callback must not throw, allocate guest objects, or reenter this
+/// heap.
+struct externals
+{
+    void * context = nullptr;
+    void (*release)(void *, word) noexcept = nullptr;
+};
+
+/// Single-threaded guest storage. Allocation grows but never collects;
+/// collect() is an explicit safepoint. Only registered roots and pins
+/// survive it. The heap must outlive its roots. Guest words are not native
+/// addresses.
+class heap
+{
+public:
+    explicit heap(externals host = {}) noexcept
+        : host_(host)
+    {
+    }
+
+    ~heap();
+    heap(const heap &) = delete;
+    heap & operator=(const heap &) = delete;
+    heap(heap &&) = delete;
+    heap & operator=(heap &&) = delete;
+
+    bool era() const noexcept
+    {
+        return era_;
+    }
+
+    template<tag T>
+    const tab<T> & table() const noexcept
+    {
+        return std::get<tab<T>>(vat_);
+    }
+
+    /// Low-level schema operation: payload descriptors must describe valid
+    /// pool slices. Use newv08/newv32 for fresh payloads. zap is reserved
+    /// for the collector and cannot occupy a live row's first column.
+    template<tag T>
+    word make(row<T> data)
+    {
+        assert(data[0] != zap);
+        return pointer(T, std::get<tab<T>>(vat_).push(data), era_);
+    }
+
+    template<tag T>
+    row<T> read(word x) const noexcept
+    {
+        return table<T>().read(check<T>(x));
+    }
+
+    template<tag T, field F>
+    word get(word x) const noexcept
+    {
+        return table<T>().get(check<T>(x), column_index<T, F>());
+    }
+
+    template<tag T, field F>
+    void set(word x, word value) noexcept
+    {
+        constexpr auto c = column_index<T, F>();
+        assert(c != 0 || value != zap);
+        std::get<tab<T>>(vat_).set(check<T>(x), c, value);
+    }
+
+    template<tag T>
+    void put(word x, row<T> data) noexcept
+    {
+        assert(data[0] != zap);
+        std::get<tab<T>>(vat_).put(check<T>(x), data);
+    }
+
+    /// Shallow copy: vector descriptors share payload until collection.
+    template<tag T>
+    word copy(word x)
+    {
+        return make<T>(read<T>(x));
+    }
+
+    word cons(word car, word cdr)
+    {
+        return make<tag::duo>({car, cdr});
+    }
+
+    word newv08(std::string_view data);
+    word newv32(std::span<const word> data);
+    word filledv32(std::size_t length, word value);
+    word clonev32(word x);
+    word copy_continuation_frame(word x);
+
+    /// Borrowed payloads expire on pool growth or collection. Mutation goes
+    /// through operations, not writable spans. Appending a borrowed slice
+    /// back into this same heap is supported, including across growth.
+    std::string_view v08slice(word x) const noexcept;
+    std::span<const word> v32slice(word x) const noexcept;
+    void v32set(word x, std::size_t i, word value) noexcept;
+
+    std::size_t byte_count() const noexcept
+    {
+        return bytes_.size();
+    }
+
+    std::size_t word_count() const noexcept
+    {
+        return words_.size();
+    }
+
+    /// Pins are stable immediate IDs, not fixed-address objects. They keep
+    /// their value reachable until free_pin(), even if no guest holds the
+    /// ID.
+    word make_pin(word value);
+    word pinned(word pin) const noexcept;
+    void free_pin(word pin) noexcept;
+
+    /// Tidy's era-flipping copying collector, with in-row forwarding.
+    /// All destination capacity is reserved before forwarding begins: an
+    /// allocation failure leaves the old heap and host roots untouched.
+    /// This conservative reservation may need as much space as the old vat.
+    void collect();
+
+private:
+    friend class root;
+    friend struct tidy;
+
+    template<tag T>
+    word check(word x) const noexcept
+    {
+        assert(tag_of(x) == T && era_of(x) == era_);
+        auto i = index_of(x);
+        assert(i < table<T>().size());
+        return i;
+    }
+
+    void release_externals() noexcept;
+
+    vat vat_;
+    std::vector<char> bytes_;
+    std::vector<word> words_;
+    std::map<word, word> pins_;
+    word next_pin_ = 1;
+    root * roots_ = nullptr;
+    bool era_ = false;
+    externals host_;
+};
+
+/// An address-stable host slot rewritten by collection. Nonmovable so its
+/// intrusive registration cannot dangle; destruction unlinks in any order.
+class root
+{
+public:
+    explicit root(heap & owner, word value = nil) noexcept;
+    ~root();
+    root(const root &) = delete;
+    root & operator=(const root &) = delete;
+    root(root &&) = delete;
+    root & operator=(root &&) = delete;
+
+    word get() const noexcept
+    {
+        return value_;
+    }
+
+    void set(word value) noexcept
+    {
+        value_ = value;
+    }
+
+private:
+    friend struct tidy;
+    heap & owner_;
+    word value_;
+    root * prev_ = nullptr;
+    root * next_ = nullptr;
+};
+
+} // namespace wisp

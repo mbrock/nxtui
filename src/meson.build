@@ -50,6 +50,7 @@ nxt_core_sources = files(
   'nxtui/glyph-table.cpp',
   'nxtui/input.cpp',
   'nxtui/raster.cpp',
+  'wisp/heap.cpp',
 )
 
 nxt_core_lib = library('nxt-core',
@@ -191,9 +192,12 @@ nxt_header_install_excludes = {
     'input.cpp',
     'raster.cpp',
   ],
+  'wisp' : [
+    'heap.cpp',
+  ],
 }
 
-foreach dir : ['nxt', 'nxtai', 'nxtrt', 'nxtui']
+foreach dir : ['nxt', 'nxtai', 'nxtrt', 'nxtui', 'wisp']
   install_subdir(dir,
     install_dir : get_option('includedir'),
     exclude_files : nxt_header_install_excludes.get(dir, []),

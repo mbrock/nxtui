@@ -95,6 +95,11 @@ public:
         return data_;
     }
 
+    [[nodiscard]] const value_type * data() const noexcept
+    {
+        return data_;
+    }
+
     [[nodiscard]] std::size_t size() const noexcept
     {
         return size_;
