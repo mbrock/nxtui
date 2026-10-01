@@ -261,13 +261,37 @@ public:
     template<typename T>
     void start(task<T> & t);
 
-    /// Drive one root task until completion on this deck.
+    /// Rejects an already-created task at compile time.
+    ///
+    /// A task's frame is allocated in the current firm when the task is
+    /// created, and the root firm only exists inside `sync_wait`, so the root
+    /// must be created there: pass the factory instead.
+    template<typename T>
+    void sync_wait(task<T>)
+    {
+        static_assert(
+            sizeof(T *) == 0,
+            "deck::sync_wait takes a task factory, not a task: write "
+            "d.sync_wait(make_task) or d.sync_wait([&] { return "
+            "make_task(args); }) so the root task is created inside its firm");
+    }
+
+    /// Create and drive a task from a nullary task factory.
+    ///
+    /// This is a tiny sender-like convenience: the callable is a lazy recipe
+    /// that produces a fresh task when `sync_wait` starts it.
+    template<task_factory Fn>
+    [[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
+    sync_wait(Fn && fn);
+
+private:
+    /// Drive one root task, created inside its root firm, until completion.
     ///
     /// The deadlock check catches the seed runtime's only current blocking
     /// condition: a task suspended but no future event/timer/fd machinery exists
     /// to enqueue it again.
     template<typename T>
-    [[nodiscard]] T sync_wait(task<T> t)
+    [[nodiscard]] T drive(task<T> t)
     {
         start(t);
         while (!t.done()) {
@@ -286,15 +310,6 @@ public:
         }
     }
 
-    /// Create and drive a task from a nullary task factory.
-    ///
-    /// This is a tiny sender-like convenience: the callable is a lazy recipe
-    /// that produces a fresh task when `sync_wait` starts it.
-    template<task_factory Fn>
-    [[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
-    sync_wait(Fn && fn);
-
-private:
     /// @cond
     friend struct detail::promise_base;
     template<typename T>

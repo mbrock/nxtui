@@ -3248,7 +3248,10 @@ inline void * allocate_task_frame(std::size_t size)
         return ptr;
     }
 
-    throw runtime_error{"nxtrt task created without current firm"};
+    throw runtime_error{
+        "nxtrt task created without current firm (root tasks must be "
+        "created inside runtime::run or deck::sync_wait: pass a task "
+        "factory)"};
 }
 
 inline void deallocate_task_frame(void * ptr, std::size_t size) noexcept
@@ -4341,7 +4344,7 @@ deck::sync_wait(Fn && fn)
         root_env.replace<firm_key>(&root_firm);
     auto root_guard = detail::env_guard{root_env, this, nullptr};
 
-    return sync_wait(with_firm(factory_type{std::forward<Fn>(fn)}));
+    return drive(with_firm(factory_type{std::forward<Fn>(fn)}));
 }
 
 namespace detail {

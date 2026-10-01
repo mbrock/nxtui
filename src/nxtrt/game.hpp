@@ -379,12 +379,6 @@ sync_wait_firm(deck & d, Fn && fn)
         });
 }
 
-template<typename Event, typename T>
-[[nodiscard]] T sync_wait_game(deck & d, task<T> root)
-{
-    return d.sync_wait(detail::run_game_root<Event>(std::move(root)));
-}
-
 template<typename Event, typename Fn>
     requires stored_task_factory<std::decay_t<Fn>>
 [[nodiscard]] stored_task_result_t<std::decay_t<Fn>>

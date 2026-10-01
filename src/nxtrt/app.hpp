@@ -121,17 +121,16 @@ public:
                 duration));
     }
 
+    /// Rejects an already-created task at compile time; see
+    /// `deck::sync_wait(task<T>)`.
     template<typename T>
-    [[nodiscard]] T run(task<T> root)
+    void run(task<T>)
     {
-        deck_.start(root);
-        wand_.run_until_done(deck_, root);
-
-        if constexpr (std::is_void_v<T>) {
-            std::move(root).result();
-        } else {
-            return std::move(root).result();
-        }
+        static_assert(
+            sizeof(T *) == 0,
+            "runtime::run takes a task factory, not a task: write "
+            "rt.run(make_task) or rt.run([&] { return make_task(args); }) "
+            "so the root task is created inside its firm");
     }
 
     template<typename Fn>
@@ -145,7 +144,7 @@ public:
             root_env.replace<firm_key>(&root_firm);
         auto root_guard = detail::env_guard{root_env, &deck_, nullptr};
 
-        return run(
+        return drive(
             detail::run_in_root_firm(
                 std::decay_t<Fn>{std::forward<Fn>(fn)}));
     }
@@ -164,6 +163,19 @@ public:
     }
 
 private:
+    template<typename T>
+    [[nodiscard]] T drive(task<T> root)
+    {
+        deck_.start(root);
+        wand_.run_until_done(deck_, root);
+
+        if constexpr (std::is_void_v<T>) {
+            std::move(root).result();
+        } else {
+            return std::move(root).result();
+        }
+    }
+
     arch::wand wand_;
     deck deck_;
     bell damage_bell_;
