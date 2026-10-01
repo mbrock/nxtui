@@ -407,6 +407,21 @@ private:
                     }
                 }
 
+                if constexpr (std::is_same_v<T, child_result>) {
+                    if (result >= 0) {
+                        auto & wish = std::get<op::wait_child>(request);
+                        auto rc = ::waitid(
+                            P_PIDFD,
+                            wish.pidfd,
+                            &wish.info,
+                            WEXITED | WNOHANG);
+                        if (rc < 0)
+                            result = -errno;
+                        else if (wish.info.si_pid == 0)
+                            result = -EAGAIN;
+                    }
+                }
+
                 if (result < 0) {
                     if (result == -EINTR) {
                         state_->set_exception(
@@ -1238,8 +1253,11 @@ inline bool stage_uring(uring_submission & submission, op::wait_child & wish)
         return false;
     }
 
+    // IORING_OP_WAITID requires Linux 6.7. Polling a pidfd and then
+    // waitid(P_PIDFD) works since Linux 5.4. Reap only on successful,
+    // uncancelled completion so a cancelled wait can be retried.
     auto * sqe = submission.get_sqe();
-    io_uring_prep_waitid(sqe, P_PIDFD, wish.pidfd, &wish.info, WEXITED, 0);
+    io_uring_prep_poll_add(sqe, wish.pidfd, POLLIN);
     submission.attach(sqe);
     return true;
 }

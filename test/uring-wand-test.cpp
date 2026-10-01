@@ -11,10 +11,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -24,6 +26,7 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -260,6 +263,16 @@ nxtrt::task<nxtrt::child_result> terminate_sleeping_shell()
 
     co_await nxtrt::op::signal_child{child.pid_fd(), SIGTERM};
     co_return co_await nxtrt::op::wait_child{child.pid_fd()};
+}
+
+nxtrt::task<bool> wait_child_until_stopped(int pidfd)
+{
+    try {
+        (void) co_await nxtrt::op::wait_child{pidfd};
+    } catch (const nxtrt::operation_cancelled &) {
+        co_return true;
+    }
+    co_return false;
 }
 
 nxtrt::task<nxtrt::child_result> run_shell_in_pty()
@@ -805,6 +818,101 @@ static suite uring_wand_tests{
 
                 expect(status.signaled);
                 expect(status.signal == SIGTERM);
+            };
+
+            "cancelled submitted waits leave children waitable"_test = [] {
+                for (auto already_exited : {false, true}) {
+                    auto child = nxtrt::run([already_exited] {
+                        auto argv =
+                            std::vector<std::string>{"/bin/sleep", "10"};
+                        if (already_exited)
+                            argv = {"/bin/sh", "-c", "exit 23"};
+                        return nxtrt::subprocess::spawn_piped(
+                            std::move(argv));
+                    });
+
+                    if (already_exited) {
+                        auto info = siginfo_t{};
+                        expect(
+                            ::waitid(
+                                P_PIDFD,
+                                child.pid_fd(),
+                                &info,
+                                WEXITED | WNOWAIT)
+                            == 0_i);
+                        expect(info.si_status == 23_i);
+                    }
+
+                    auto wand = nxtrt::uring_wand{};
+                    auto deck = nxtrt::deck{&wand};
+                    auto root = nxtrt::root_task{
+                        deck,
+                        [&] {
+                            return wait_child_until_stopped(child.pid_fd());
+                        },
+                    };
+                    root.start();
+                    deck.run_ready();
+                    expect(!root.inner().done());
+
+                    // Do not consume the poll CQE before requesting stop:
+                    // even a ready child must not be reaped by
+                    // cancellation.
+                    root.inner().request_stop();
+                    expect(uring_pump_until_done(deck, wand, root.inner()));
+
+                    auto cleanup = nxtrt::root_task{
+                        deck,
+                        [&] {
+                            if (already_exited)
+                                return nxtrt::subprocess::wait_child(child);
+                            return nxtrt::subprocess::terminate_and_wait(
+                                child);
+                        },
+                    };
+                    cleanup.start();
+                    auto status =
+                        uring_pump_until_done(deck, wand, cleanup.inner());
+                    expect(status.pid == child.pid);
+                    if (already_exited) {
+                        expect(status.exited);
+                        expect(status.exit_code == 23_i);
+                    } else {
+                        expect(status.signaled);
+                        expect(status.signal == SIGTERM);
+                    }
+                    expect(::waitpid(child.pid, nullptr, WNOHANG) == -1_i);
+                    expect(errno == ECHILD);
+                }
+            };
+
+            "child waits report reap and pidfd errors"_test = [] {
+                auto child = nxtrt::run([] {
+                    return nxtrt::subprocess::spawn_piped(
+                        {"/bin/sh", "-c", "exit 17"});
+                });
+                auto status = nxtrt::run(
+                    [&] { return nxtrt::subprocess::wait_child(child); });
+                expect(status.pid == child.pid);
+                expect(status.exit_code == 17_i);
+
+                for (auto code : {ECHILD, EBADF}) {
+                    if (code == EBADF)
+                        child.pidfd.reset();
+                    auto failed = false;
+                    try {
+                        (void) nxtrt::run([&] {
+                            return nxtrt::subprocess::wait_child(child);
+                        });
+                    } catch (const nxtrt::runtime_error & error) {
+                        failed = true;
+                        expect(
+                            std::string_view{error.what()}.find(
+                                std::strerror(code))
+                            != std::string_view::npos);
+                    }
+                    expect(failed);
+                }
             };
         };
 

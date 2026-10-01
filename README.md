@@ -248,9 +248,12 @@ at `../src/forge-graph/packages/forge-graph` specified in `package.json`.
 Setup installs its locked dependencies when that checkout exists and reports
 the omission otherwise; this does not affect the C++ build, spec, or Poxy docs.
 
-The orb's host kernel also matters: on Linux 6.1, the `io_uring` subprocess
-tests fail because `IORING_OP_WAITID` is not supported. Installing a newer
-toolchain does not add host-kernel operations; those tests need a newer kernel.
+The orb's host kernel also matters. Subprocess waits use `io_uring` to poll
+pidfds, then reap ready children with ordinary `waitid(P_PIDFD)`. This works
+on Linux 6.1 without `IORING_OP_WAITID` (which requires Linux 6.7); the pidfd
+wait mechanism itself requires Linux 5.4 or later. The `io_uring` backend
+still requires io_uring to be enabled and permitted by the host; there is no
+automatic switch to epoll if ring creation is unavailable.
 
 ### The runtime spec
 

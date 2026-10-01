@@ -10,14 +10,12 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
-#include <signal.h>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 struct io_uring
@@ -332,26 +330,6 @@ inline void io_uring_prep_statx(
         mask,
         nxtrt::raw_uring_detail::ptr_to_u64(statxbuf));
     sqe->statx_flags = static_cast<std::uint32_t>(flags);
-}
-
-inline void io_uring_prep_waitid(
-    io_uring_sqe * sqe,
-    idtype_t idtype,
-    id_t id,
-    siginfo_t * infop,
-    int options,
-    unsigned int flags) noexcept
-{
-    nxtrt::raw_uring_detail::prep_rw(
-        IORING_OP_WAITID,
-        sqe,
-        id,
-        nullptr,
-        static_cast<unsigned>(idtype),
-        0);
-    sqe->waitid_flags = flags;
-    sqe->file_index = static_cast<std::uint32_t>(options);
-    sqe->addr2 = nxtrt::raw_uring_detail::ptr_to_u64(infop);
 }
 
 inline void io_uring_prep_read(

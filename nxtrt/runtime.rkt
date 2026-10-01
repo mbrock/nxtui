@@ -154,7 +154,11 @@ model runtime-model
             (some (intersect (a has-settled-phase) ready-to-retire-phase))))
 
   // uring handle_op_cqe: the op CQE settles into waiting_cancel_cqe only
-  // while a cancel SQE is in flight.
+  // while a cancel SQE is in flight. A wait-child exec uses a pidfd poll
+  // as its op SQE; successful, uncancelled completion reaps with ordinary
+  // nonblocking waitid before settling. Cancellation only drains the poll
+  // and cancel CQEs, leaving the child waitable. No extra exec phase is
+  // needed for reaping, so the same lifecycle rules apply.
   predicate drains-only-after-cancel
     all ([a exec])
       (=> (some (intersect (a has-settled-phase) draining-phase))
