@@ -350,8 +350,9 @@ the voice writing environment can build on that demonstrated boundary.
 [`src/wisp/heap.hpp`](../../src/wisp/heap.hpp) now provides the storage slice,
 with tests in [`test/wisp-test.cpp`](../../test/wisp-test.cpp). It has the ten table schemas,
 packed words, byte and word pools, roots, pins, continuation-frame copying, and
-a Tidy-style moving collector. The evaluator slice below builds on it; reader,
-tape I/O, journaling, and the NXT event-loop adapter remain unimplemented.
+a Tidy-style moving collector. The evaluator and source-loading slices below
+build on it; tape I/O, journaling, and the NXT event-loop adapter remain
+unimplemented.
 
 The reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
 `core/step.zig` in the Wisp revision linked above. The later
@@ -414,8 +415,9 @@ in the Zig tests, not a verified passing baseline: the [prior Wisp verification
 thread](https://ampcode.com/threads/T-01a06ebb-d635-776d-a69c-95a0134cfbac)
 reports that it traps even before that thread's evaluator changes. Preserve it
 as an unresolved regression rather than inferring correctness from its presence.
-The C++ deep-handler test exercises resumption, not that full high-level raise
-protocol; sending into a captured continuation is tested separately below.
+The source-loading slice below now exercises that high-level raise protocol in
+C++, including both an ERROR prompt in the captured slice and a fallback to the
+caller's ERROR prompt.
 
 ## First C++ evaluation slice
 
@@ -426,9 +428,10 @@ Zero budget only polls. Exhaustion is a normal host scheduling boundary, unlike
 Zig's evaluation-limit error. A transition may scan a list or allocate, so a
 step budget is not a wall-clock bound. This API does not yet schedule NXT tasks.
 
-The evaluator roots its WISP and KEYWORD packages, which retain interned
-symbols, definitions, and closures. Names are exact and case-sensitive; reader
-case folding and package inheritance are not implemented. The caller must root
+The evaluator roots its WISP, KEYWORD, and KEY packages, which retain interned
+symbols, definitions, and closures. The host interning API is exact and
+case-sensitive; the reader folds ASCII names. Package inheritance is not
+implemented. The caller must root
 each run and any other host-held word before collection. Allocation never
 collects inside a transition. Once a transition returns, its complete guest
 control state is in `run`, `ktx`, and environment rows; scratch C++ registers and
@@ -461,7 +464,7 @@ The current semantic subset is:
 - `%MACRO-FN` receives raw forms; its result is evaluated in the caller's
   environment. Required parameters, `&OPTIONAL` with NIL defaults, `&REST`,
   and `&BODY` work for closures. Lisp-defined `FN`, `DEFUN`, `DEFMACRO`, and
-  lambda-body pre-expansion still belong to the unported bootstrap.
+  lambda-body pre-expansion come from the explicitly loaded bootstrap below.
 - Checked signed fixnum addition, subtraction, multiplication, comparisons,
   identity, cons/list operations, function lookup, and environment inspection.
   Unary subtraction deliberately retains Zig's identity behavior.
@@ -530,8 +533,8 @@ The evaluator now also implements:
 
 Low-level prompts are shallow: resuming does not reinstall their handler. A
 guest-defined recursive wrapper reinstalls the prompt for deep resumption,
-matching the resume half of `CALL-WITH-EFFECT-HANDLER` in `base.wisp`. The full
-bootstrap, including its raise closure and error helpers, is not yet ported.
+matching `CALL-WITH-EFFECT-HANDLER` in `base.wisp`. The source-loading slice
+now supplies the guest wrapper, its raise closure, and error helpers.
 
 Two deliberate safety differences from Zig are covered by tests: prompt lookup
 requires a `PROMPT` frame, rather than treating every frame whose accumulator
@@ -544,10 +547,96 @@ copied dynamic mutation, 27 for shallow resumption, 1038 for composing both
 outside contexts when sending into a continuation, and `(5 42 7)` for supplying
 an unbound variable's replacement. The C++ deep-resumption test produces 50.
 
-Reader/printer, remaining data primitives, package inheritance, Lisp bootstrap
-and lambda pre-expansion, tape I/O, and the NXT event-loop adapter remain later
-increments. No changes to NXT's host task/deed/firm/exec semantics are part of
-this slice.
+## C++ source loading and guest library
+
+[`wisp::reader`](../../src/wisp/reader.hpp) owns its UTF-8 source and returns
+one unrooted form at a time, with EOF distinct from NIL. Its cursor and
+`read_error::offset` are byte offsets. Parsing uses explicit frames, not the
+native stack; it retains no guest words between calls. It never collects, so
+the caller roots each result before a safepoint. Malformed input throws a read
+error rather than trapping or hanging. A final line comment may end at EOF.
+
+Successful reference syntax is preserved, including ASCII-only case folding,
+unsigned digit-prefix splitting, `-7` as a symbol, and dot-at-list-tail behavior.
+Tabs and CR remain invalid between forms; symbol bars/backslashes have no escape
+meaning; the reference's ordinary-symbol classification still shadows tilde
+key syntax. Characters consume one Unicode scalar. String escapes are quote,
+backslash, and newline only. String streams use this UTF-8 reader rather than
+the reference's bytewise string-stream reader.
+
+[`wisp::print`](../../src/wisp/printer.hpp) is a compact diagnostic printer,
+not serialization. It uses an explicit work stack and active-path cycle
+detection, prints repeated acyclic sharing normally, and emits `#<CYCLE>` on
+recursive edges. The heap is unchanged. Signed fixnums correct the reference's
+unsigned-negative printing bug; string quotes, backslashes, and newlines are
+escaped. Vectors retain `#<...>` notation; characters, pins, and jets use numeric
+diagnostics. Symbols use a fixed WISP context, with KEYWORD colon prefixes and
+bare KEY names. Not every printed value is readable, and reading does not
+promise to preserve identity or sharing.
+
+The typed builtin registry now includes pair mutation, vector operations,
+byte-string operations, floor division and positive-divisor modulo, type and
+jet inspection, one-step macro expansion, closure code/name/call-count access,
+package queries and exact interning, fresh keys, pin release, and run inspection.
+Templated field accessors select schema tags and fields. The evaluator retains
+rooted control-symbol identities so transitions do not repeatedly scan the
+growing package list. Public `intern(name)` and `intern(name, package)` retain
+their exact-case behavior; no package inheritance or current-package API is
+implied.
+
+Additional deliberate differences and boundaries are:
+
+- `GENKEY!`/`FRESH-SYMBOL!` use a per-evaluator 48-bit serial in the reference's
+  little-endian ZB32 spelling with a fixed epoch date. They skip preinterned
+  names, produce self-evaluating KEY symbols, and require no host randomness or
+  clock. They do not promise cross-machine uniqueness or reader round-trip
+  identity.
+- `SET-FUNCTION-NAME!` completes and returns its closure, fixing the missing
+  result in Zig. Closure names must be NIL or actual symbols, including in
+  `%FN`; malformed names cannot later crash diagnostic printing.
+- `TYPE-OF` reports TOP as CONTINUATION and rejects other machine-only system
+  markers. Empty division, invalid/reversed slices, and malformed/cyclic lists
+  raise conditions. Repeated pin release is idempotent. `RUN-VAL` exposes the
+  machine's raw value field; its unfinished NAH marker is not an ordinary guest
+  result. Use `RUN-EXP` to inspect pending evaluation.
+- `READ-FROM-STRING` reads one form and signals END-OF-FILE on empty input;
+  `READ-MANY-FROM-STRING` returns a proper list. String streams are validated
+  `[STRING-INPUT-STREAM, byte-offset, string]` vectors, returning `(value)` or NIL
+  at EOF. Parse failures become READ-ERROR conditions and do not advance a
+  stream cursor; allocation and interning are not rolled back.
+
+[`wisp::loader`](../../src/wisp/load.hpp) reads and evaluates top-level forms
+in order. Reading one form or stepping one transition consumes a unit of its
+budget. Zero only polls; a read or evaluation failure stops before later forms.
+The loader owns the source and roots its current run, permitting collection
+between calls. Its source/cursor are host state, not portable image data.
+
+`base_library()` exposes the embedded [`base.wisp`](../../src/wisp/base.wisp),
+ported from the pinned reference. Loading is explicit, not an evaluator
+constructor side effect. The library supplies definitions, quasiquotation,
+condition helpers, dynamic binding macros, deep effects, and bounded eager
+macro expansion. Definition/compiler diagnostic prints are omitted. Stream
+effects remain guest code; unhandled process-I/O fallbacks signal
+HOST-IO-UNAVAILABLE rather than acquiring implicit stdin/stdout authority.
+`UNHANDLED-ERROR` re-signals at the caller, allowing a raise that misses ERROR
+inside a captured slice to reach an outside handler.
+
+The source tests boot the library and collect between loading turns. They check
+optional/rest arguments, quasiquote splicing, eager standalone lambdas, walking
+callback bodies, a shared branching-expansion budget, deep resumption (50),
+outside and inside raises (`(CAUGHT NOPE)` and `(INSIDE REMOTE)`), a saved resume
+closure across collection, UTF-8 byte cursors, and dynamically handled output.
+The eager-lambda, callback-walking, branching-budget, and dynamic-output
+programs also pass against the pinned Zig reference. Reader/printer tests cover
+deep structures, malformed UTF-8, heap growth, cycles, and host input lifetime.
+Only the three full-bootstrap integration tests opt into a ten-second debug
+deadline; ordinary unit tests retain their one-second deadline.
+
+Remaining increments include package creation/current-package/inheritance,
+guest `GC` and `STEP!` safepoint policy, host debugging/tracing, tape I/O,
+journaling, and the NXT event-loop adapter. Some loaded Lisp helpers refer to
+these absent capabilities and cannot yet be used. No changes to NXT's host
+task/deed/firm/exec semantics are part of this slice.
 
 ## Open design choices
 

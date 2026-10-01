@@ -9,6 +9,10 @@ if get_option('tests')
     'mtproto-test.cpp',
     'wisp-test.cpp',
     'wisp-eval-test.cpp',
+    'wisp-reader-test.cpp',
+    'wisp-printer-test.cpp',
+    'wisp-primitives-test.cpp',
+    'wisp-load-test.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [
@@ -80,7 +84,9 @@ if get_option('tests')
     dependencies : nxt_test_deps,
     cpp_args : nxt_test_cpp_args,
   )
-  test('nxt-tests', nxt_tests)
+  # Includes full Lisp bootstrap tests, run once for discovery and again
+  # for execution. Each leaf still has its own deadline in test.hpp.
+  test('nxt-tests', nxt_tests, timeout : 120)
 
   # Fault injection replaces operator new only in this executable. Compile
   # the guest heap directly rather than linking nxt-core's allocation hooks.

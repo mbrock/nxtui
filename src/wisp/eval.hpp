@@ -10,8 +10,8 @@ enum class evaluation { runnable, done, failed };
 
 /// The language machine, independent of any host event loop. All suspended
 /// execution is in run/ktx rows, not in this object's native stack. The
-/// heap must outlive the evaluator. One evaluator installs a fresh WISP and
-/// KEYWORD package; package inheritance and the Lisp bootstrap come later.
+/// heap must outlive the evaluator. One evaluator installs fresh WISP,
+/// KEYWORD, and KEY packages; package inheritance comes later.
 class evaluator
 {
 public:
@@ -21,7 +21,12 @@ public:
     /// Interned symbols are retained by their rooted package. WISP's NIL
     /// and T are immediates. Keywords self-evaluate.
     word intern(std::string_view name);
+    /// package must be a live package from this evaluator; no inheritance
+    /// is searched yet. WISP NIL/T and KEYWORD evaluation behave as above.
+    word intern(std::string_view name, word package);
     word keyword(std::string_view name);
+    /// Exact name lookup; NIL means absent, not a usable package.
+    word find_package(std::string_view name) const noexcept;
 
     /// Inputs must be live words in this heap; an environment is NIL or a
     /// list of even-length name/value vectors. As with heap's low-level
@@ -42,11 +47,19 @@ public:
 
 private:
     friend struct eval_step;
-    word intern(std::string_view name, word package);
 
     heap & heap_;
     root base_;
     root keywords_;
+    root keys_;
+    root nil_name_;
+    root true_name_;
+    // Like Zig's cached keyword identities: never search the package list
+    // on the transition hot path. Roots keep these current across GC.
+    root do_, if_, eval_, let_, prompt_, binding_, optional_, rest_, body_;
+    // Host-independent fresh keys: unique within this evaluator, not
+    // Zig's date/random names or a portable identity across images.
+    std::uint64_t next_key_ = 0;
 };
 
 } // namespace wisp

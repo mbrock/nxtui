@@ -146,9 +146,7 @@ word heap::pinned(word pin) const noexcept
 void heap::free_pin(word pin) noexcept
 {
     assert(tag_of(pin) == tag::pin);
-    auto entry = pins_.find(payload_of(pin));
-    assert(entry != pins_.end());
-    pins_.erase(entry);
+    pins_.erase(payload_of(pin));
 }
 
 root::root(heap & owner, word value) noexcept

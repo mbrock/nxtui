@@ -1,0 +1,2 @@
+// Generated from base.wisp; do not edit this header.
+constexpr std::string_view base_source = R"WISP_BASE(@WISP_BASE@)WISP_BASE";

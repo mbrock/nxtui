@@ -34,6 +34,14 @@ nxt_core_deps = [
   declare_dependency(include_directories : nxt_libvterm_inc),
 ] + nxt_compression_deps
 
+wisp_base_config = configuration_data()
+wisp_base_config.set('WISP_BASE', import('fs').read('wisp/base.wisp'))
+configure_file(
+  input : 'wisp/base.hpp.in',
+  output : 'wisp-base.hpp',
+  configuration : wisp_base_config,
+)
+
 nxt_core_sources = files(
   'nxtrt/alloc_trace.cpp',
   'nxtrt/buffers.cpp',
@@ -52,6 +60,9 @@ nxt_core_sources = files(
   'nxtui/raster.cpp',
   'wisp/heap.cpp',
   'wisp/eval.cpp',
+  'wisp/reader.cpp',
+  'wisp/printer.cpp',
+  'wisp/load.cpp',
 )
 
 nxt_core_lib = library('nxt-core',
@@ -196,6 +207,11 @@ nxt_header_install_excludes = {
   'wisp' : [
     'heap.cpp',
     'eval.cpp',
+    'reader.cpp',
+    'printer.cpp',
+    'load.cpp',
+    'base.wisp',
+    'base.hpp.in',
   ],
 }
 

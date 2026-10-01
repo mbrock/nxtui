@@ -128,6 +128,7 @@ public:
     /// ID.
     word make_pin(word value);
     word pinned(word pin) const noexcept;
+    /// Idempotent: releasing an already freed pin has no effect.
     void free_pin(word pin) noexcept;
 
     /// Tidy's era-flipping copying collector, with in-row forwarding.

@@ -110,7 +110,7 @@ inline void write_signal_cstr(const char * text)
 
 [[noreturn]] inline void test_timeout_handler(int)
 {
-    write_signal_text("\n\nTEST TIMEOUT after 1s: ");
+    write_signal_text("\n\nTEST TIMEOUT ");
     write_signal_cstr(active_timeout_label);
     write_signal_text("\n");
     nxt::debug::print_current_stacktrace(
@@ -142,13 +142,14 @@ inline void set_timeout_label(std::string_view label)
     active_timeout_label[n] = '\0';
 }
 
-inline void arm_test_timeout(std::string_view label)
+inline void
+arm_test_timeout(std::string_view label, std::chrono::seconds timeout)
 {
     install_timeout_handler();
     set_timeout_label(label);
 
     auto timer = itimerval{};
-    timer.it_value.tv_sec = test_timeout.count();
+    timer.it_value.tv_sec = timeout.count();
     setitimer(ITIMER_REAL, &timer, nullptr);
 }
 
@@ -333,6 +334,14 @@ struct scoped_test
 struct test_case
 {
     std::string_view name;
+    std::chrono::seconds timeout = test_timeout;
+
+    // Full-system integration tests can opt into a longer deadline without
+    // weakening the one-second limit on ordinary unit tests.
+    test_case with_timeout(std::chrono::seconds limit) const
+    {
+        return {name, limit};
+    }
 
     template<typename F>
     void operator=(F && f) const
@@ -359,9 +368,12 @@ struct test_case
         auto count_this_test =
             phase == run_phase::execution && active_leaf_path == path;
         auto scope = scoped_test{result, path};
-        auto timeout_label =
-            std::format("{} {}", format_path(path), result.name);
-        arm_test_timeout(timeout_label);
+        auto timeout_label = std::format(
+            "after {}s: {} {}",
+            timeout.count(),
+            format_path(path),
+            result.name);
+        arm_test_timeout(timeout_label, timeout);
         auto start = std::chrono::steady_clock::now();
         try {
             std::forward<F>(f)();
@@ -391,11 +403,13 @@ struct test_case
             result.counted = true;
             ++tests_run;
         }
-        if (count_this_test && result.elapsed_ms >= slow_test_failure_ms) {
+        const auto timeout_ms =
+            std::chrono::duration<double, std::milli>(timeout).count();
+        if (count_this_test && result.elapsed_ms >= timeout_ms) {
             ++failures;
             std::cerr << result.name
                       << ": too slow: " << format_ms(result.elapsed_ms)
-                      << " >= " << format_ms(slow_test_failure_ms) << '\n';
+                      << " >= " << format_ms(timeout_ms) << '\n';
         }
 
         result.failed = result.failed || failures != failures_before
