@@ -395,7 +395,7 @@ try {
     }
 
     auto rt = nxtrt::runtime{};
-    rt.run(run_scoped_command(std::move(command)));
+    rt.run([&] { return run_scoped_command(std::move(command)); });
     return 0;
 } catch (std::exception const & error) {
     std::cout << "\x1b[?25h\x1b[0m\x1b[?1049l" << std::flush;

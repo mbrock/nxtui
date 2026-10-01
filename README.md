@@ -18,7 +18,7 @@ nxtrt::task<void> main_task()
 int main()
 {
     auto rt = nxtrt::runtime{};
-    rt.run(main_task());
+    rt.run(main_task);
 }
 ```
 

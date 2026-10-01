@@ -123,7 +123,7 @@ nxtrt::task<void> run_demo()
 int nxt_tui_demo_main(int, char **)
 try {
     auto rt = nxtrt::runtime{};
-    rt.run(run_demo());
+    rt.run(run_demo);
     return 0;
 } catch (std::exception const & error) {
     std::cout << "\x1b[?25h\x1b[0m" << std::flush;
