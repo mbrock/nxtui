@@ -1,4 +1,4 @@
-.PHONY: all setup setup-unity build dev full test setup-gcc13 build-gcc13 test-gcc13 gcc13 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace setup-racket spec docs docs-publish clean traces
+.PHONY: all setup setup-unity build dev full test setup-gcc13 build-gcc13 test-gcc13 gcc13 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace setup-racket spec spec-witnesses docs docs-publish clean traces
 
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
@@ -138,9 +138,16 @@ spec:
 	$(NXT_RACKET) rdf-forge/tests/bfo-sketch-test.rkt
 	@echo
 	@echo "== baseline runtime spec =="
-	$(NXT_RACKET) nxtrt/model.rkt --run-all
+	$(NXT_RACKET) nxtrt/model.rkt --check
 	@echo
 	@echo "== next runtime spec =="
+	$(NXT_RACKET) nxtrt/model-next.rkt --check
+
+# Print the example traces from every run block instead of checking.
+spec-witnesses:
+	@test -f "$(NXT_RACKET_STAMP)" || $(MAKE) setup-racket
+	$(NXT_RACKET_ENV) raco make -j 4 $(NXT_SPEC_SOURCES)
+	$(NXT_RACKET) nxtrt/model.rkt --run-all
 	$(NXT_RACKET) nxtrt/model-next.rkt --run-all
 
 docs:

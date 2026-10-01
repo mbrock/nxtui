@@ -46,6 +46,33 @@ Run the model with:
 make spec
 ```
 
+`make spec` is pass/fail: every `run` block must be satisfiable (a witness that
+cannot exist means the spec contradicts itself, which would make every property
+vacuously true), and every `check` block must hold. A failing `checked` property
+prints its counterexample as a step-by-step trace. `make spec-witnesses` prints
+the example traces of the `run` blocks instead.
+
+Checks read like run blocks:
+
+```
+check retire-only-when-ready :for ([1 ...] [2 exec task deed]) :trace-length 6
+  assume execs-start-prepared
+  assume always structural-invariants
+  assume always lifecycle-transitions
+  show always retires-only-when-ready
+```
+
+`assume` lines are premises and `show` lines are claims; without an `expect`
+line the claims must hold in every trace allowed by the premises, and
+`:expect sat` / `:expect unsat` (or an `expect sat` line in block form) ask for
+satisfiability instead. Comments in `#lang rdf-forge` start with `//`.
+
+Phase fields are `lone`, so `in (a has-settled-phase) draining-phase` is
+vacuously true when the exec has no settled phase. Test phase membership with
+`some (intersect (a has-settled-phase) draining-phase)`. When adding a property,
+check that it can fail: delete the rule it depends on and confirm `make spec`
+reports it.
+
 or, inside `nix develop` after one `make spec` has set up `.racket/`,
 directly with:
 

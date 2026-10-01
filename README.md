@@ -228,7 +228,10 @@ Inside `nix develop`, the plain `meson`/`make` commands above work as-is.
 
 ### The runtime spec
 
-`make spec` checks the Racket model (`nxtrt/runtime.rkt` and friends). It
+`make spec` checks the Racket model (`nxtrt/runtime.rkt` and friends): its
+example scenarios must be satisfiable and its lifecycle properties must hold
+(for instance, that an exec only retires once its cancel CQE has drained, as
+`is_retirable` requires); `make spec-witnesses` prints the example traces. It
 needs Racket and a Java runtime (Forge's Pardinus solver runs on the JVM);
 `nix develop` provides both. Racket packages install into the project-local
 `.racket/<racket-version>/`, compiled code included, so nothing touches your
