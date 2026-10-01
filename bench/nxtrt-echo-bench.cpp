@@ -55,11 +55,7 @@ nxtrt::task<std::size_t> send_all_socket(
     while (!remaining.empty()) {
         auto written = std::size_t{0};
         try {
-            written = co_await nxtrt::op::send_some{
-                .fd = fd,
-                .buffer = remaining,
-                .flags = 0,
-            };
+            written = co_await nxtrt::op::send_some{fd, remaining, 0};
         } catch (const nxtrt::interrupted_system_call &) {
             continue;
         }
@@ -80,11 +76,7 @@ nxtrt::task<void> recv_exact_socket(
     while (!remaining.empty()) {
         auto read = std::size_t{0};
         try {
-            read = co_await nxtrt::op::recv_some{
-                .fd = fd,
-                .buffer = remaining,
-                .flags = 0,
-            };
+            read = co_await nxtrt::op::recv_some{fd, remaining, 0};
         } catch (const nxtrt::interrupted_system_call &) {
             continue;
         }
@@ -106,11 +98,7 @@ nxtrt::task<void> echo_connection(
     while (true) {
         auto read = std::size_t{0};
         try {
-            read = co_await nxtrt::op::recv_some{
-                .fd = fd.get(),
-                .buffer = std::span{buffer},
-                .flags = 0,
-            };
+            read = co_await nxtrt::op::recv_some{fd.get(), std::span{buffer}};
         } catch (const nxtrt::interrupted_system_call &) {
             continue;
         }
