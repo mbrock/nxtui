@@ -926,6 +926,7 @@ struct firm_child_record_header
     firm * owner = nullptr;
     task_id task;
     bool completion_reported = false;
+    bool result_observed = false;
 };
 
 struct child_completion
@@ -1448,7 +1449,8 @@ struct child_record final : child_record_base
 
     [[nodiscard]] bool result_observed() const noexcept override
     {
-        return result != nullptr && result->record.observed;
+        return this->firm_record.result_observed
+               || (result != nullptr && result->record.observed);
     }
 
     [[nodiscard]] bool result_exported() const noexcept override
@@ -1464,8 +1466,10 @@ struct child_record final : child_record_base
 
     void drop_result_state(deed_result_state_base * state) noexcept override
     {
-        if (state == result)
+        if (state == result) {
+            this->firm_record.result_observed = state->record.observed;
             result = nullptr;
+        }
     }
 
     void replace_result_state(
@@ -1505,8 +1509,8 @@ struct child_record final : child_record_base
                 result->set_exception(failure_);
         }
         evacuated_ = true;
-        if (result != nullptr)
-            result->record.child = nullptr;
+        // Keep the bookkeeping link until either side dies. The frame is
+        // gone, but a returned/moved deed must still retarget this record.
         destroy_frame();
     }
 
@@ -1598,7 +1602,8 @@ struct child_record<void> final : child_record_base
 
     [[nodiscard]] bool result_observed() const noexcept override
     {
-        return result != nullptr && result->record.observed;
+        return this->firm_record.result_observed
+               || (result != nullptr && result->record.observed);
     }
 
     [[nodiscard]] bool result_exported() const noexcept override
@@ -1614,8 +1619,10 @@ struct child_record<void> final : child_record_base
 
     void drop_result_state(deed_result_state_base * state) noexcept override
     {
-        if (state == result)
+        if (state == result) {
+            this->firm_record.result_observed = state->record.observed;
             result = nullptr;
+        }
     }
 
     void replace_result_state(
@@ -1654,8 +1661,8 @@ struct child_record<void> final : child_record_base
                 result->set_exception(failure_);
         }
         evacuated_ = true;
-        if (result != nullptr)
-            result->record.child = nullptr;
+        // As for valued deeds, moves still retarget the settlement record
+        // after the task frame has been evacuated.
         destroy_frame();
     }
 
@@ -3790,6 +3797,7 @@ template<typename T, typename Adaptor>
 class stop_on_failure : public firm
 {
 public:
+    using firm::firm;
     stop_on_failure() = default;
     stop_on_failure(stop_on_failure &&) noexcept = default;
     stop_on_failure & operator=(stop_on_failure &&) = delete;
@@ -3817,6 +3825,7 @@ private:
 class stop_on_success : public firm
 {
 public:
+    using firm::firm;
     stop_on_success() = default;
     stop_on_success(stop_on_success &&) noexcept = default;
     stop_on_success & operator=(stop_on_success &&) = delete;
@@ -3838,6 +3847,21 @@ private:
     }
 
     bool succeeded_ = false;
+};
+
+/// Stop siblings on either success or failure; always join before
+/// returning.
+class stop_on_completion : public firm
+{
+public:
+    using firm::firm;
+
+private:
+    void child_finished(
+        detail::child_record_base &, std::exception_ptr) noexcept override
+    {
+        stop();
+    }
 };
 
 namespace detail {
@@ -3864,6 +3888,54 @@ template<typename Base, typename Fn>
 {
     return firm_body<Base, std::decay_t<Fn>>{std::forward<Fn>(fn)};
 }
+
+template<typename Work>
+    requires(is_task_v<Work> || stored_task_factory<Work>)
+[[nodiscard]] auto start_firm_work(Work & work)
+{
+    if constexpr (is_task_v<Work>)
+        return std::move(work);
+    else
+        return std::invoke(work);
+}
+
+template<typename Work>
+using firm_work_result_t =
+    task_result_t<decltype(start_firm_work(std::declval<Work &>()))>;
+
+template<typename Policy, typename... Work>
+class tuple_firm : public Policy
+{
+public:
+    using deeds_type =
+        std::tuple<catching_deed<firm_work_result_t<Work>>...>;
+
+    tuple_firm(
+        firm_bookkeeping_storage_ref storage, std::tuple<Work...> & work)
+        : Policy(storage)
+        , work_(work)
+    {
+    }
+
+    task<deeds_type> operator()()
+    {
+        if (this->stop_requested())
+            throw operation_cancelled{};
+        // Braced initialization admits work left to right. The owning
+        // coroutine keeps factories alive even if a later factory throws.
+        auto deeds = std::apply(
+            [this](auto &... work) {
+                return deeds_type{
+                    this->fork(start_firm_work(work)).cope()...};
+            },
+            work_);
+        co_await this->join();
+        co_return deeds;
+    }
+
+private:
+    std::tuple<Work...> & work_;
+};
 
 template<typename, typename T>
 using repeat_type = T;
@@ -3951,11 +4023,11 @@ template<typename T>
     rethrow(value.error());
 }
 
-inline void take_deed_result(catching_deed<void> deed)
+inline std::monostate take_deed_result(catching_deed<void> deed)
 {
     auto value = std::move(deed).get();
     if (value)
-        return;
+        return {};
     rethrow(value.error());
 }
 
@@ -3971,8 +4043,67 @@ template<typename Tuple, std::size_t... Is>
 
 } // namespace detail
 
+/// A closed set of children, with one bookkeeping slot per tuple element.
+/// Elements are tasks or owned nullary task factories. Factories run once,
+/// under the new firm, and survive all child settlement (including
+/// failure). Preconstructed tasks retain their original frame allocation;
+/// both forms run under this firm's environment. Additional forks require a
+/// nested firm. Returns settled catching deeds; the policy controls sibling
+/// cancellation, not result extraction. Frame-byte capacity is independent
+/// of child count and retains the ordinary firm default.
+template<typename Policy = firm, typename... Work>
+    requires std::derived_from<Policy, firm>
+             && std::
+                 constructible_from<Policy, firm_bookkeeping_storage_ref>
+             && ((is_task_v<Work> || stored_task_factory<Work>) && ...)
+[[nodiscard]] task<
+    std::tuple<catching_deed<detail::firm_work_result_t<Work>>...>>
+with_firm(std::tuple<Work...> work)
+{
+    // This backing is nonmovable. Keep it in the coroutine frame, not in
+    // the movable policy passed to run_firm's owning awaiter.
+    auto storage = static_firm_bookkeeping_storage<sizeof...(Work)>{};
+    co_return co_await detail::tuple_firm<Policy, Work...>{storage, work};
+}
+
+/// Fixed-set all: results retain tuple order; void positions are monostate.
+template<typename... Work>
+    requires((is_task_v<Work> || stored_task_factory<Work>) && ...)
+[[nodiscard]] auto when_all(std::tuple<Work...> work)
+    -> task<std::tuple<std::conditional_t<
+        std::is_void_v<detail::firm_work_result_t<Work>>,
+        std::monostate,
+        detail::firm_work_result_t<Work>>...>>
+{
+    auto deeds = co_await with_firm<stop_on_failure>(std::move(work));
+    co_return detail::take_all_or_throw(
+        deeds, std::index_sequence_for<Work...>{});
+}
+
+/// Fixed-set first success, not first completion; all failures are grouped.
+template<typename First, typename... Rest>
+    requires(is_task_v<First> || stored_task_factory<First>)
+            && ((is_task_v<Rest> || stored_task_factory<Rest>) && ...)
+            && (std::same_as<
+                    detail::firm_work_result_t<First>,
+                    detail::firm_work_result_t<Rest>>
+                && ...)
+[[nodiscard]] task<detail::firm_work_result_t<First>>
+wait_any(std::tuple<First, Rest...> work)
+{
+    using result_type = detail::firm_work_result_t<First>;
+    auto deeds = co_await with_firm<stop_on_success>(std::move(work));
+    if constexpr (std::is_void_v<result_type>) {
+        detail::take_first_void_success_or_throw(
+            deeds, std::index_sequence_for<First, Rest...>{});
+    } else {
+        co_return detail::take_first_success_or_throw<result_type>(
+            deeds, std::index_sequence_for<First, Rest...>{});
+    }
+}
+
 template<typename... Tasks>
-    requires (sizeof...(Tasks) > 0)
+    requires(sizeof...(Tasks) > 0) && (is_task_v<Tasks> && ...)
 [[nodiscard]] task<std::tuple<task_result_t<Tasks>...>>
 when_all(Tasks... tasks)
 {
@@ -4497,21 +4628,6 @@ using poll_until_deeds =
         catching_deed<poll_until_result>,
         catching_deed<poll_until_result>>;
 
-inline task<poll_until_deeds> fork_poll_until_race(
-    task<poll_until_result> ready,
-    task<poll_until_result> deadline)
-{
-    auto ready_deed =
-        fork(stop_firm_on_completion(std::move(ready))).cope();
-    auto deadline_deed =
-        fork(stop_firm_on_completion(std::move(deadline))).cope();
-    co_await join();
-    co_return poll_until_deeds{
-        std::move(ready_deed),
-        std::move(deadline_deed),
-    };
-}
-
 inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
 {
     auto ready_result = std::move(std::get<0>(deeds)).get();
@@ -4541,15 +4657,10 @@ inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
     short events,
     std::chrono::nanoseconds timeout)
 {
-    auto ready = detail::poll_ready(op::poll{fd, events});
-    auto deadline = detail::poll_deadline(timeout);
-    auto deeds = co_await with_firm(
-        [ready = std::move(ready),
-         deadline = std::move(deadline)]() mutable {
-            return detail::fork_poll_until_race(
-                std::move(ready),
-                std::move(deadline));
-        });
+    auto deeds = co_await with_firm<stop_on_completion>(std::tuple{
+        [fd, events] { return detail::poll_ready(op::poll{fd, events}); },
+        [timeout] { return detail::poll_deadline(timeout); },
+    });
     co_return detail::take_poll_until_result(deeds);
 }
 

@@ -69,6 +69,15 @@ Higher-level helpers such as `when_all`, `wait_any`, and `with_timeout` are
 written in terms of firms. They are not separate schedulers; they are
 composition patterns over the same task and deck machinery.
 
+For a closed set of children, pass a tuple of tasks or nullary task factories:
+`when_all(std::tuple{f, g})`, `wait_any(std::tuple{f, g})`, or
+`with_firm<Policy>(std::tuple{f, g})`. Bookkeeping has exactly two slots in this
+example, and owned factories stay alive until all children have drained. Further
+forks need a nested firm. Callable firms and variadic/range helpers retain open
+admission; the tuple form does not change them. See the
+[implemented tuple contract](../rfc/new/rfc-0014-idea-algebra.md#implemented-closed-task-tuples)
+for results, cancellation policies, and the separate frame-byte budget.
+
 Concrete API:
 
 - @ref nxtrt::firm "nxtrt::firm"

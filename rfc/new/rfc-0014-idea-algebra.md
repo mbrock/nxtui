@@ -78,6 +78,65 @@ Names such as `all`, `race`, and `then` may be clearer than symbolic operators
 for the first implementation. Operators can be added only where the meaning is
 pleasant and unsurprising.
 
+## Implemented: closed task tuples
+
+The first concrete API uses the existing names and an explicit tuple, rather
+than new operators or a type-erased `idea` wrapper:
+
+```cpp
+auto [config, index] = co_await when_all(std::tuple{
+    [&] { return read_config(); },
+    [&] { return read_index(); },
+});
+
+auto answer = co_await wait_any(std::tuple{
+    [&] { return query_primary(); },
+    [&] { return query_replica(); },
+});
+
+auto outcomes = co_await with_firm<stop_on_completion>(std::tuple{
+    [&] { return response_task(); },
+    [&] { return timeout_after(1s); },
+});
+```
+
+Each tuple element can be a task or an owned nullary task factory. Factories
+are invoked once, left to right, under the receiving firm. Their storage stays
+alive through settlement, including cancellation or an exception while invoking
+a later factory. This also keeps a capturing coroutine factory's closure alive;
+ordinary `fork(temporary_coroutine_lambda)` does **not** gain that guarantee.
+Preconstructed tasks retain their original frame allocation.
+
+`with_firm<Policy>(tuple)` returns a tuple of settled `catching_deed<T>` values;
+the policy controls sibling cancellation, and the caller selects outcomes.
+`when_all(tuple)` stops siblings on failure and returns values in tuple order,
+using `std::monostate` for void positions. The empty tuple succeeds.
+`wait_any(tuple)` requires a nonempty tuple of matching result types (including
+void), returns the first successful result selected in tuple order after drain,
+and groups failures if none succeeds. Failure alone does not win this race.
+`stop_on_completion` instead stops siblings on either success or failure; it is
+used by the fixed readiness/deadline pair in `poll_until_after`.
+
+For N tuple elements, child, deed, completion and join-failure bookkeeping each
+have exactly N inline slots, rather than four default allocations sized for
+4,096 children. The backing lives in the owning coroutine frame; the movable
+policy borrows it. The existing 4 MiB frame arena remains separately allocated:
+task count does not bound the bytes used by nested coroutine calls, so this is
+not an allocation-free API.
+
+The tuple explicitly closes admission. A child that wants more forks must open
+a nested firm. Existing callable firms, variadic/range combinators, and
+`with_timeout` keep their open admission behavior: arbitrary tasks, especially
+HTTP handlers, may already fork into their ambient firm. Only known closed
+sets have migrated: readiness/deadline races and the cgroup sampling batch.
+
+Settlement records retain their bidirectional deed link after evacuating a task
+frame. Moving a joined deed retargets the record; destroying either side detaches
+the other. Clearing only the deed's link at evacuation left a stale pointer in
+borrowed bookkeeping, exposed when returning fixed-set outcomes. Records also
+retain observation when a deed is released, so a later join does not report an
+already handled failure again.
+
 ## Time As Territory
 
 The runtime is already moving toward explicit space budgets: frame arenas,

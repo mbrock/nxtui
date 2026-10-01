@@ -1410,6 +1410,39 @@ nxtrt::task<int> throw_int_after_yield()
     throw nxtrt::runtime_error{"firm child int boom"};
 }
 
+nxtrt::task<int> tuple_wait_for_stop(std::vector<int> & events, int value)
+{
+    while (!nxtrt::stop_requested())
+        co_await nxtrt::yield();
+    events.push_back(value);
+    throw nxtrt::operation_cancelled{};
+}
+
+nxtrt::task<int> tuple_ambient_fork(std::vector<int> & events)
+{
+    nxtrt::fork(record_after_yield(events, 3));
+    co_return 17;
+}
+
+struct borrowed_deeds_firm : nxtrt::firm
+{
+    using firm::firm;
+
+    static nxtrt::task<void> empty_child()
+    {
+        co_await nxtrt::yield();
+    }
+
+    nxtrt::task<std::tuple<nxtrt::deed<int>, nxtrt::deed<void>>>
+    operator()()
+    {
+        auto a = fork(value_after_yield(41));
+        auto b = fork(empty_child());
+        co_await join();
+        co_return std::tuple{std::move(a), std::move(b)};
+    }
+};
+
 struct external_result_firm : nxtrt::firm
 {
     explicit external_result_firm(int & target)
@@ -4125,6 +4158,306 @@ static suite runtime_tests{
                 expect(threw);
                 expect(events == std::vector<int>{8});
             };
+
+            "moved joined deeds detach from borrowed child records"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto storage =
+                        nxtrt::static_firm_bookkeeping_storage<2>{};
+                    auto deeds = deck.sync_wait([&] {
+                        return nxtrt::run_firm(
+                            borrowed_deeds_firm{storage});
+                    });
+                    auto records = storage.children().slots;
+                    {
+                        auto first = std::move(std::get<0>(deeds));
+                        auto second = std::move(std::get<1>(deeds));
+                        expect(records[0].record->result_exported());
+                        expect(records[1].record->result_exported());
+                        expect(std::move(first).get() == 41);
+                        std::move(second).get();
+                    }
+                    // The records outlive the firm and both moved deeds. A
+                    // one-sided evacuation unlink leaves stale pointers
+                    // here.
+                    expect(!records[0].record->result_exported());
+                    expect(!records[1].record->result_exported());
+                    expect(records[0].record->result_observed());
+                    expect(records[1].record->result_observed());
+                };
+
+            "rejoining does not repeat failures from released observed deeds"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto events = std::vector<int>{};
+                    deck.sync_wait([&] {
+                        return nxtrt::with_firm([&]() -> nxtrt::task<void> {
+                            {
+                                auto first =
+                                    nxtrt::fork(throw_int_after_yield())
+                                        .cope();
+                                auto second = nxtrt::fork(throw_after_yield(
+                                                              events, 13))
+                                                  .cope();
+                                co_await nxtrt::join();
+                                expect(!std::move(first).get());
+                                expect(!std::move(second).get());
+                            }
+                            co_await nxtrt::join();
+                        });
+                    });
+                    expect(events == std::vector<int>{131});
+                };
+
+            "tuple all owns factories and sizes heterogeneous bookkeeping"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto events = std::vector<int>{};
+                    auto calls = 0;
+                    auto values = deck.sync_wait([&] {
+                        return nxtrt::when_all(
+                            std::tuple{
+                                // Deliberately test a capturing coroutine
+                                // factory:
+                                // its move-only closure must survive
+                                // suspension.
+                                [value = std::make_unique<int>(29),
+                                 &calls]()
+                                    -> nxtrt::task<std::unique_ptr<int>> {
+                                    ++calls;
+                                    auto & scope = *nxtrt::current_firm();
+                                    expect(scope.child_capacity() == 3);
+                                    expect(scope.deed_capacity() == 3);
+                                    expect(
+                                        scope.child_completion_capacity()
+                                        == 3);
+                                    expect(
+                                        scope.join_failure_capacity() == 3);
+                                    co_await nxtrt::yield();
+                                    co_return std::make_unique<int>(*value);
+                                },
+                                value_after_yield(7),
+                                [&] {
+                                    return record_after_yield(events, 5);
+                                },
+                            });
+                    });
+                    static_assert(std::same_as<
+                                  decltype(values),
+                                  std::tuple<
+                                      std::unique_ptr<int>,
+                                      int,
+                                      std::monostate>>);
+                    expect(*std::get<0>(values) == 29);
+                    expect(std::get<1>(values) == 7);
+                    expect(calls == 1);
+                    expect(events == std::vector<int>{51, 52});
+                };
+
+            "tuple factories are lazy and run inside their receiving firm"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto calls = 0;
+                    auto result = deck.sync_wait(
+                        [&]() -> nxtrt::task<std::tuple<int>> {
+                            auto * parent = nxtrt::current_firm();
+                            auto work =
+                                nxtrt::when_all(std::tuple{[&, parent] {
+                                    ++calls;
+                                    expect(nxtrt::current_firm() != parent);
+                                    expect(
+                                        nxtrt::current_firm()
+                                            ->child_capacity()
+                                        == 1);
+                                    return value_after_yield(53);
+                                }});
+                            expect(calls == 0);
+                            co_return co_await std::move(work);
+                        });
+                    expect(calls == 1 && std::get<0>(result) == 53);
+                    auto empty = deck.sync_wait(
+                        [] { return nxtrt::when_all(std::tuple{}); });
+                    static_assert(std::tuple_size_v<decltype(empty)> == 0);
+                };
+
+            "tuple first success skips failures and drains losers"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto events = std::vector<int>{};
+                    auto result = deck.sync_wait([&] {
+                        return nxtrt::wait_any(
+                            std::tuple{
+                                throw_int_after_yield,
+                                [] { return value_after_yield(37); },
+                                [&] {
+                                    return tuple_wait_for_stop(events, 19);
+                                },
+                            });
+                    });
+                    expect(result == 37);
+                    expect(events == std::vector<int>{19});
+                    auto grouped = false;
+                    try {
+                        (void) deck.sync_wait([] {
+                            return nxtrt::wait_any(
+                                std::tuple{
+                                    throw_int_after_yield,
+                                    throw_int_after_yield});
+                        });
+                    } catch (const nxtrt::exception_group & group) {
+                        grouped = true;
+                        expect(group.exceptions().size() == 2);
+                    }
+                    expect(grouped);
+                    deck.sync_wait([] {
+                        return nxtrt::wait_any(
+                            std::tuple{
+                                borrowed_deeds_firm::empty_child,
+                                borrowed_deeds_firm::empty_child});
+                    });
+                };
+
+            "tuple all and first completion stop on failure"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto failed = false;
+                try {
+                    (void) deck.sync_wait([&] {
+                        return nxtrt::when_all(
+                            std::tuple{
+                                throw_int_after_yield,
+                                [&] {
+                                    return tuple_wait_for_stop(events, 11);
+                                },
+                            });
+                    });
+                } catch (const nxtrt::runtime_error & error) {
+                    failed = std::string_view{error.what()}
+                             == "firm child int boom";
+                }
+                expect(failed);
+                expect(events == std::vector<int>{11});
+                auto deeds = deck.sync_wait([&] {
+                    return nxtrt::with_firm<nxtrt::stop_on_completion>(
+                        std::tuple{
+                            throw_int_after_yield,
+                            [&] { return tuple_wait_for_stop(events, 23); },
+                        });
+                });
+                auto first = std::move(std::get<0>(deeds)).get();
+                auto second = std::move(std::get<1>(deeds)).get();
+                expect(!first && !second);
+                expect(!nxtrt::is_operation_cancelled(first.error()));
+                expect(nxtrt::is_operation_cancelled(second.error()));
+                expect(events == std::vector<int>{11, 23});
+            };
+
+            "tuple factory failure retains and drains earlier factories"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto events = std::vector<int>{};
+                    auto skipped = 0;
+                    auto failed = false;
+                    try {
+                        (void) deck.sync_wait([&] {
+                            return nxtrt::when_all(
+                                std::tuple{
+                                    [value = std::make_unique<int>(43),
+                                     &events]() -> nxtrt::task<int> {
+                                        co_await nxtrt::yield();
+                                        expect(nxtrt::stop_requested());
+                                        events.push_back(*value);
+                                        co_return *value;
+                                    },
+                                    []() -> nxtrt::task<int> {
+                                        throw std::domain_error{
+                                            "factory failed"};
+                                    },
+                                    [&] {
+                                        ++skipped;
+                                        return value_after_yield(1);
+                                    },
+                                });
+                        });
+                    } catch (const std::domain_error & error) {
+                        failed = std::string_view{error.what()}
+                                 == "factory failed";
+                    }
+                    expect(failed && skipped == 0);
+                    expect(events == std::vector<int>{43});
+                };
+
+            "tuple bound is explicit and open combinators keep ambient forks"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto events = std::vector<int>{};
+                    auto result = deck.sync_wait([&] {
+                        return nxtrt::when_all(
+                            tuple_ambient_fork(events),
+                            value_after_yield(7));
+                    });
+                    expect(
+                        std::get<0>(result) == 17
+                        && std::get<1>(result) == 7);
+                    expect(events == std::vector<int>{31, 32});
+                    events.clear();
+                    auto full = false;
+                    try {
+                        (void) deck.sync_wait([&] {
+                            return nxtrt::when_all(
+                                std::tuple{
+                                    [&] {
+                                        return tuple_ambient_fork(events);
+                                    },
+                                    [&] {
+                                        return tuple_wait_for_stop(
+                                            events, 47);
+                                    },
+                                });
+                        });
+                    } catch (const nxtrt::runtime_error & error) {
+                        full = std::string_view{error.what()}.contains(
+                            "child storage is full");
+                    }
+                    expect(full);
+                    expect(events == std::vector<int>{47});
+                };
+
+            "tuple all accepts cancellation at every startup turn"_test =
+                [] {
+                    for (int turns = 0; turns < 20; ++turns) {
+                        auto deck = nxtrt::deck{};
+                        auto events = std::vector<int>{};
+                        auto calls = 0;
+                        auto root = nxtrt::root_task{
+                            deck, [&] {
+                                return nxtrt::when_all(std::tuple{[&] {
+                                    ++calls;
+                                    return tuple_wait_for_stop(events, 61);
+                                }});
+                            }};
+                        root.start();
+                        for (int i = 0; i < turns; ++i)
+                            deck.run_ready();
+                        root.inner().request_stop();
+                        deck.run_until_idle();
+                        expect(root.inner().done());
+                        auto cancelled = false;
+                        try {
+                            (void) std::move(root.inner()).result();
+                        } catch (const nxtrt::operation_cancelled &) {
+                            cancelled = true;
+                        }
+                        expect(cancelled);
+                        if (turns == 0)
+                            expect(calls == 0);
+                        expect(calls <= 1);
+                        expect(
+                            events
+                            == (calls ? std::vector<int>{61}
+                                      : std::vector<int>{}));
+                    }
+                };
         };
 
         "tool batches"_test = [] {
