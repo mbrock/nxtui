@@ -10,7 +10,9 @@ nxt_libvterm_sources = files(
   '../vendor/libvterm/src/vterm.c',
 )
 
-nxt_libvterm = library('vterm',
+# libvterm is linked whole into nxt-core, so installs carry no separate
+# libvterm that could clash with a system copy.
+nxt_libvterm = static_library('nxt-vterm',
   nxt_libvterm_sources,
   include_directories : include_directories(
     '../vendor/libvterm/include',
@@ -19,15 +21,17 @@ nxt_libvterm = library('vterm',
   override_options : ['warning_level=0'],
 )
 
+nxt_libvterm_inc = include_directories('../vendor/libvterm/include')
+
 nxt_libvterm_dep = declare_dependency(
   link_with : nxt_libvterm,
-  include_directories : include_directories('../vendor/libvterm/include'),
+  include_directories : nxt_libvterm_inc,
 )
 
 nxt_core_deps = [
   utf8proc_dep,
   boost_dep,
-  nxt_libvterm_dep,
+  declare_dependency(include_directories : nxt_libvterm_inc),
 ] + nxt_compression_deps
 
 nxt_core_sources = files(
@@ -52,6 +56,7 @@ nxt_core_lib = library('nxt-core',
   nxt_core_sources,
   include_directories : nxt_inc,
   dependencies : nxt_core_deps,
+  link_whole : nxt_libvterm,
   cpp_args : nxt_mdspan_args + nxt_compression_args,
   install : true,
 )
@@ -119,6 +124,7 @@ nxt_stacktrace_lib = library('nxt-stacktrace',
   include_directories : nxt_inc,
   dependencies : nxt_stacktrace_deps,
   cpp_args : nxt_stacktrace_cpp_args,
+  install : true,
 )
 
 nxt_stacktrace_dep = declare_dependency(
@@ -136,6 +142,7 @@ if get_option('llm_tool')
       nxt_stacktrace_dep,
     ] + nxt_dns_deps,
     cpp_args : nxt_dns_args,
+    install : true,
   )
 
   nxtmt = executable('nxtmt',
@@ -146,5 +153,73 @@ if get_option('llm_tool')
       nxt_stacktrace_dep,
     ] + nxt_dns_deps,
     cpp_args : nxt_dns_args,
+    install : true,
   )
 endif
+
+# Public headers. The vendored headers that public headers include
+# (<vterm.h>, <experimental/mdspan>, <boost/container/hub.hpp>) go under
+# include/nxt-vendor so they never shadow system copies.
+nxt_header_install_excludes = {
+  'nxt' : [
+    'crypto.cpp',
+    'crypto/aes128gcm.cpp',
+    'crypto/mlkem_libcrypto.cpp',
+    'crypto/sha1.cpp',
+    'crypto/sha256.cpp',
+    'crypto/x25519.cpp',
+    'png.cpp',
+    'stacktrace.cpp',
+  ],
+  'nxtai' : [
+    'nxtllm.cpp',
+    'nxtmt.cpp',
+    'tool_tui.cpp',
+    'trace_tui.cpp',
+  ],
+  'nxtrt' : [
+    'alloc_trace.cpp',
+    'buffers.cpp',
+    'compression.cpp',
+    'crypto.cpp',
+    'tls.cpp',
+  ],
+  'nxtui' : [
+    'ansi.cpp',
+    'compositor.cpp',
+    'glyph-table.cpp',
+    'input.cpp',
+    'raster.cpp',
+  ],
+}
+
+foreach dir : ['nxt', 'nxtai', 'nxtrt', 'nxtui']
+  install_subdir(dir,
+    install_dir : get_option('includedir'),
+    exclude_files : nxt_header_install_excludes.get(dir, []),
+  )
+endforeach
+
+install_headers('nxtrt.hpp')
+
+nxt_vendor_includedir = get_option('includedir') / 'nxt-vendor'
+
+install_headers(
+  '../vendor/libvterm/include/vterm.h',
+  '../vendor/libvterm/include/vterm_keycodes.h',
+  install_dir : nxt_vendor_includedir,
+)
+install_subdir('../vendor/mdspan/include/experimental',
+  install_dir : nxt_vendor_includedir,
+)
+install_subdir('../vendor/hub/include/boost',
+  install_dir : nxt_vendor_includedir,
+)
+
+import('pkgconfig').generate(nxt_core_lib,
+  libraries : [nxt_stacktrace_lib],
+  name : 'nxt',
+  description : 'nxt coroutine runtime and terminal toolkit',
+  subdirs : ['.', 'nxt-vendor'],
+  extra_cflags : nxt_mdspan_args + nxt_compression_args,
+)

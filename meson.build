@@ -81,7 +81,7 @@ endif
 subdir('bench')
 subdir('test')
 
-if get_option('demo') and get_option('tests') and get_option('llm_tool')
+if get_option('dev') and get_option('demo') and get_option('tests') and get_option('llm_tool')
   nxt_dev_sources = [
     'src/nxt-dev.cpp',
     'src/nxt/stacktrace.cpp',
@@ -99,7 +99,8 @@ if get_option('demo') and get_option('tests') and get_option('llm_tool')
   nxt_dev = executable('nxt-dev',
     nxt_dev_sources + nxt_core_sources + nxt_test_sources,
     include_directories : [nxt_inc, include_directories('test')],
-    dependencies : nxt_core_deps + nxt_stacktrace_deps + nxt_test_extra_deps + nxt_dns_deps,
+    dependencies : nxt_core_deps + [nxt_libvterm_dep] + nxt_stacktrace_deps
+      + nxt_test_extra_deps + nxt_dns_deps,
     cpp_args : [
       '-DNXT_EMBEDDED_MAIN=1',
     ] + nxt_mdspan_args

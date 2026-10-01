@@ -197,12 +197,43 @@ meson compile -C build
 build/nxt-tests
 ```
 
-The default build produces `nxt-tests`, `nxtllm`, `libnxt-core.a`, and the demo
-programs. Try the small TUI demo with:
+The default build produces `nxt-tests`, `nxtllm`, `nxtmt`, the shared
+`libnxt-core`, the demo programs, and `nxt-dev` (one binary bundling all of
+them). Try the small TUI demo with:
 
 ```sh
 build/demo/nxt-tui-demo
 ```
+
+`meson install` gives a self-contained install: the libraries, tools, demos,
+public headers (with the vendored libvterm/mdspan/hub headers under
+`include/nxt-vendor`), and an `nxt.pc` for pkg-config. Consumers also need
+Boost headers and `-std=c++23`.
+
+The tests that cross-check crypto against a reference `libcrypto` (RSA/ECDSA
+fixtures and ML-KEM-768) expect AWS-LC's headers; with OpenSSL or no
+`libcrypto` they are skipped at configure time.
+
+### With Nix
+
+The flake is optional and wraps the same Meson build:
+
+```sh
+nix build            # ./result: libnxt-core, headers, nxt.pc, nxtllm, demos
+nix flake check      # the package (with tests) plus a pkg-config consumer build
+nix develop          # compilers, Meson, AWS-LC, clangd, Racket, a JDK, docs tools
+```
+
+Inside `nix develop`, the plain `meson`/`make` commands above work as-is.
+
+### The runtime spec
+
+`make spec` checks the Racket model (`nxtrt/runtime.rkt` and friends). It
+needs Racket and a Java runtime (Forge's Pardinus solver runs on the JVM);
+`nix develop` provides both. Racket packages install into the project-local
+`.racket/<racket-version>/`, compiled code included, so nothing touches your
+global Racket setup and a Racket upgrade just triggers a fresh setup on the
+next `make spec`.
 
 Regenerate local API docs (poxy + Doxygen) with:
 

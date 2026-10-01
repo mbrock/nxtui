@@ -7,6 +7,9 @@ option('tests', type : 'boolean', value : true,
 option('llm_tool', type : 'boolean', value : true,
   description : 'Build the nxtllm tool')
 
+option('dev', type : 'boolean', value : true,
+  description : 'Build the nxt-dev multi-command developer binary')
+
 option('benchmarks', type : 'boolean', value : false,
   description : 'Build benchmark executables')
 

@@ -11,12 +11,14 @@ if ls_demo_available
   executable('nxt-ls-demo',
     'ls_demo.cpp',
     include_directories : nxt_inc,
+    install : true,
     dependencies : ls_demo_dependencies + [nxt_core_dep],
   )
 
   executable('nxt-tui-demo',
     'tui_demo.cpp',
     include_directories : nxt_inc,
+    install : true,
     dependencies : ls_demo_dependencies + [nxt_core_dep],
   )
 
@@ -24,6 +26,7 @@ if ls_demo_available
     executable('nxt-shell-scope-demo',
       'shell_scope_demo.cpp',
       include_directories : nxt_inc,
+    install : true,
       dependencies : ls_demo_dependencies + [nxt_core_dep],
     )
   endif
@@ -40,6 +43,7 @@ if http_client_demo_available
   executable('nxt-http-client-demo',
     'http_client_demo.cpp',
     include_directories : nxt_inc,
+    install : true,
     dependencies : http_client_demo_dependencies,
     cpp_args : nxt_dns_args,
   )
@@ -47,6 +51,7 @@ if http_client_demo_available
   executable('nxt-openai-sse-demo',
     'openai_sse_demo.cpp',
     include_directories : nxt_inc,
+    install : true,
     dependencies : http_client_demo_dependencies,
     cpp_args : nxt_dns_args,
   )

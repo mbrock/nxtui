@@ -26,3 +26,11 @@ __pycache__/
 /subprojects/packagecache/*
 !/subprojects/packagecache/utf8proc-2.10.0.tar.gz
 !/subprojects/packagecache/utf8proc_2.10.0-1_patch.zip
+
+# Project-local Racket packages (see NXT_RACKET_ADDON_DIR in the Makefile).
+/.racket/
+
+# Nix
+/result
+/result-*
+/.direnv/

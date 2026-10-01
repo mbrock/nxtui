@@ -46,11 +46,26 @@ Run the model with:
 make spec
 ```
 
-or directly with:
+or, inside `nix develop` after one `make spec` has set up `.racket/`,
+directly with:
 
 ```sh
 racket nxtrt/model.rkt --run-all
 ```
+
+Racket packages and compiled code for the spec live in the project-local,
+version-keyed `.racket/` dir (see `NXT_RACKET_ADDON_DIR` in the Makefile),
+never in the user's global Racket setup.
+
+## Build And Nix
+
+Meson is the build system; the Nix flake (`flake.nix`, `nix/package.nix`)
+only wraps it. `nix develop` gives the full toolchain (including Racket, a JDK
+for Forge, and AWS-LC for the crypto cross-check tests), `nix build` builds the
+installable package with tests, and `nix flake check` also builds a small
+pkg-config consumer (`nix/consumer.cpp`) against the install. When adding a
+public header directory or a `.cpp` file under `src/`, keep the header install
+excludes in `src/meson.build` in sync.
 
 For wand bugs, first map the concrete operation to the model vocabulary:
 `has-lifecycle`, `prepared-state`, `parked-state`, `settled-state`,
