@@ -3548,39 +3548,23 @@ template<typename T, typename Cleanup>
         && std::is_void_v<stored_task_result_t<Cleanup>>
 [[nodiscard]] task<T> finally(task<T> child, Cleanup cleanup)
 {
+    using result_type = std::conditional_t<
+        std::is_void_v<T>,
+        std::monostate,
+        std::remove_cv_t<T>>;
+
+    auto result = std::optional<result_type>{};
     auto body_failure = std::exception_ptr{};
     auto cleanup_failure = std::exception_ptr{};
 
-    if constexpr (std::is_void_v<T>) {
-        try {
+    try {
+        if constexpr (std::is_void_v<T>) {
             co_await child;
-        } catch (...) {
-            body_failure = std::current_exception();
-        }
-    } else {
-        auto result = std::optional<std::remove_cv_t<T>>{};
-        try {
+        } else {
             result.emplace(co_await child);
-        } catch (...) {
-            body_failure = std::current_exception();
         }
-
-        try {
-            co_await shield(std::invoke(cleanup));
-        } catch (...) {
-            cleanup_failure = std::current_exception();
-        }
-
-        if (body_failure && cleanup_failure)
-            throw_exceptions(
-                "task body and cleanup failed",
-                {body_failure, cleanup_failure});
-        if (cleanup_failure)
-            rethrow(std::move(cleanup_failure));
-        if (body_failure)
-            rethrow(std::move(body_failure));
-
-        co_return std::move(*result);
+    } catch (...) {
+        body_failure = std::current_exception();
     }
 
     try {
@@ -3597,6 +3581,9 @@ template<typename T, typename Cleanup>
         rethrow(std::move(cleanup_failure));
     if (body_failure)
         rethrow(std::move(body_failure));
+
+    if constexpr (!std::is_void_v<T>)
+        co_return std::move(*result);
 }
 
 template<typename F>
