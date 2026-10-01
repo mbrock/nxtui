@@ -1,0 +1,376 @@
+# RFC 0018: Portable Wisp Lisp Machines {#rfc_portable_wisp}
+
+Status: new
+
+## Summary
+
+Develop a modern C++ implementation of Wisp with the same Lisp semantics,
+integrated with NXT. The central object is a portable Lisp machine: a live
+environment that an agent can inspect, extend, suspend, save, restore, and fork.
+Its execution state belongs to the Lisp heap, so a saved image can carry an
+unfinished computation as well as its data and definitions.
+
+This RFC proposes the C++ port and its NXT integration. Existing behavior,
+historical experiments, and proposed extensions are distinguished below. Storage
+choices and public APIs remain open until small implementations establish their
+behavior.
+
+## Motivation
+
+Wisp already combines live Lisp definitions, explicit evaluator state, delimited
+continuations, native and WebAssembly execution, and heap images. The C++
+implementation should preserve these properties while making Wisp easy to embed
+in NXT applications. NXT supplies scheduling, asynchronous operations,
+behavioral coordination, terminal presentation, and model integration.
+
+Agents should be able to work inside their own Lisp environments: define
+helpers, inspect objects and suspended computations, change code, and continue.
+A machine can be saved as a file, forked into another experiment, or restored in
+another compatible host. External resources need a separate rebinding protocol;
+a heap image cannot itself preserve a live socket, process, or arbitrary host
+object.
+
+A first application is the live voice writing environment discussed alongside
+Swash. Tentative recognition, revised recognition, interpretation, editing
+suggestions, and committed prose can coexist as distinct hypotheses. Behavioral
+rules govern when each hypothesis changes and when an edit is published. Audio
+archiving and system integration remain useful adjacent services with their own
+lifecycles.
+
+A possible workbench would show the current document, live hypotheses, Lisp
+objects, and suspended request cards. A request card would expose the
+operation's available continuations or restarts. Users and agents could act on
+the same structured descriptions. This is a proposed interface, not a current
+implementation.
+
+## Existing foundations
+
+The original [Wisp platform
+notes](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/etc/platform.org#L19)
+already connect serializable continuations, suspended processes moving between
+nodes, restartable conditions, a dashboard for resolving conditions, and
+replicated heap transactions. The present project develops that direction with a
+C++ implementation and NXT as an embedding environment.
+
+Wisp's current [deep effect
+handler](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/core/lisp/base.wisp#L470)
+receives a request and explicit functions for resuming with a value or raising
+an error inside the suspended continuation. Resumption reinstalls the handler.
+Standard input and output are [handled
+effects](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/core/lisp/base.wisp#L643);
+JavaScript promise completion and rejection also use the handler protocol.
+
+The browser debugger retains a condition, its continuation, and a body for
+retry. Its generic actions supply a value, use nil, retry the entire guarded
+body, or abort. The richer operation-defined restart protocol in
+[CONDITIONS.md](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/CONDITIONS.md#L765)
+is a design proposal. It should be developed as an extension after the port
+reproduces existing behavior.
+
+NXT already contains a behavioral coordinator, `game<Event>`, whose
+[documentation identifies Swash 2024 as its ancestor](../../docs/rt-game.md).
+This provides an existing place to explore temporal rules around guest requests
+and application events.
+
+## Proposed integration boundary
+
+```text
+editor and agents
+    structured requests and restart descriptions
+        NXT host adapter
+            Wisp machine: values, definitions, evaluator, continuations
+            NXT runtime: tasks, firms, platform I/O, model calls, presentation
+```
+
+The host advances a guest machine in bounded steps until it completes, reaches a
+scheduling boundary, or exposes a request. The guest retains its future as heap
+data. NXT services the request and delivers a result or condition through a
+rooted guest continuation. Host tasks and registrations may need cancellation or
+asynchronous teardown before their storage can be reused; restoring an image
+recreates those host bindings under an explicit policy.
+
+The first adapter should use existing NXT machinery. It does not require the
+unimplemented wish-draining firm or first-order game-card proposals catalogued
+in [State of the Frontier](rfc-0017-state-of-the-frontier.md). A durable guest
+behavioral coordinator can be investigated separately from the current
+coroutine-based `game<Event>`.
+
+## Preserve Wisp semantics
+
+The existing Zig implementation is the behavioral reference. Preserve reader
+behavior, value representation, packages and symbol identity, macros, lexical
+and dynamic binding, function redefinition, evaluation order, mutation,
+condition propagation, prompt delimitation, continuation composition, and
+repeated continuation invocation.
+
+Continuation copying needs particular care. Wisp [shares lexical environments
+but copies partially filled argument
+vectors](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/core/heap.zig#L571):
+the former are shared store, while the latter are mutable control state. A
+general environment clone would change this behavior.
+
+Keep guest execution and continuations as explicit heap objects. NXT's C++
+coroutine frames can perform host work and drive the machine, but they should
+not become the serialized representation of Lisp control state. Host task
+ownership, stop tokens, and native environment bindings have their own
+semantics.
+
+Language compatibility and compatibility with existing tape bytes are separate
+targets. Determine whether the initial port must read and write the current tape
+format. Preserve explicit tag and field identities, fixed-width values, and
+documented encoding rules rather than deriving a durable format from tuple order
+or compiler object layout.
+
+## Heap schemas and column storage
+
+The proposed vat is a tuple of schema-specific tables. Within each table, fields
+have a common row domain and columnar storage. Each schema declares its Wisp
+tag, ordered fields, stable field identities, and the meaning of each field.
+Physical storage can remain 32-bit words even where the API distinguishes Lisp
+values, offsets, lengths, counters, and external identifiers.
+
+Moppe's
+[Bundle](https://github.com/mbrock/moppe/blob/3000786a292b5f54ba82b69681773919a93a63ec/moppe/spatial/bundle.hh#L89)
+is the main inspiration: heterogeneous typed columns over one domain, access by
+semantic specification or position, lightweight row views, and compile-time
+rejection of repeated specifications. Its domain is finite; a Wisp table's row
+domain must grow during allocation and change during collection. Borrow the
+abstraction without importing terrain, interpolation, or physical-unit
+requirements into the guest heap.
+
+An illustrative declaration, using proposed types, is:
+
+```cpp
+using duo = schema<tag::duo,
+    field<"car", lisp_value>,
+    field<"cdr", lisp_value>>;
+
+using byte_vector = schema<tag::v08,
+    field<"idx", byte_offset>,
+    field<"len", byte_count>>;
+
+// Other schemas are declared in the same way.
+using vat = std::tuple<
+    tab<duo>, tab<symbol>, tab<function>, tab<macro>,
+    tab<byte_vector>, tab<word_vector>, tab<package>,
+    tab<run>, tab<context>, tab<external>>;
+```
+
+The tuple assembles tables with different schemas. Inside a table, an
+`std::array` of column owners is a simple initial storage strategy because
+current fields are uniformly 32 bits. A packed allocation with derived column
+spans is another candidate. Keep that choice behind the table interface and
+measure it before making performance claims.
+
+The schema should support field access, collector traversal, debugger
+presentation, tape encoding, and journal records. Tracing still needs explicit
+rules for raw metadata and tag-specific payloads. Moppe also has an [Étalon
+experiment](https://github.com/mbrock/moppe/blob/3000786a292b5f54ba82b69681773919a93a63ec/etalon/src/bundle.zig#L41)
+that derives a Zig MultiArrayList from a row schema; it provides another useful
+reference.
+
+## Moving collection and borrowed views
+
+Port
+[Tidy](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/core/tidy.zig#L40)
+faithfully before changing the collector. It creates a destination heap with the
+era flipped, copies reachable objects, and scans new rows and word-vector
+contents until all scan cursors catch up. The old rows hold forwarding
+information: the first two columns temporarily become a forwarding marker and
+destination pointer. That collector representation must be supported explicitly
+by the table implementation.
+
+There is an important allocation boundary in [field
+tracing](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/core/tidy.zig#L223).
+Copying a referent can grow the same destination table that is being scanned.
+Read the field value, relocate it, then resolve the destination storage again
+before writing. A long-lived C++ reference or span into a column can become
+invalid during this operation.
+
+Use lightweight row views containing a table identity and row index, with a
+documented lifetime across allocation and collection. Use registered roots or
+pins for host values that must survive a collection. Root registration and
+release can have RAII wrappers, but guest reachability remains the collector's
+responsibility.
+
+Current Tidy copies live word-vector payloads into a new pool while retaining
+the existing byte pool. Browser external objects have separate release behavior.
+Keep these policies explicit. Collection order and root ordering matter if a
+replica must reproduce the same relocated state. Decide how collection failures
+and journal publication are handled before claiming transactional replay.
+
+## NXT Storage Farm and Hub
+
+NXT currently has both `nxtrt::farm` and a vendored `boost::container::hub`.
+
+[Farm](../../src/nxtrt/farm.hpp) manages reusable slots in borrowed storage. The
+current `farm<T>` accepts a runtime-sized span of slots plus borrowed storage
+for free-index bookkeeping. `farm<T, N>` provides inline index bookkeeping over
+a caller-owned `std::array<T, N>`. The current implementation no longer requires
+a power-of-two capacity.
+
+Recently returned indices pass through a hot FIFO ring. The remaining free
+indices live in `mask`, which refills the ring with the lowest indices first.
+The current [mask](../../src/nxtrt/land.hpp) is a 64-ary summary tree: each
+level records which child words are nonempty. Inline `mask<N>` and borrowed
+runtime-sized `mask<>` share this structure. Allocation returns `hope<T*>`, with
+null when all slots are handed out; this is not a promise to wait for a later
+release.
+
+Farm suggests useful patterns for bounded host resources: pending-request slots,
+staging buffers, and other records with explicit acquisition and return. Its
+borrowed storage and compact free-index bookkeeping can inspire heap storage
+policies and bounded table segments. Guest allocation still needs Wisp's growth,
+reachability, relocation, and image semantics.
+
+NXT's [vendored Hub note](../../vendor/hub/README.nxtui.md) identifies the
+upstream library as Joaquin M Lopez Munoz's Hub and explains its use for
+stable-address execution records. The kqueue, io_uring, and epoll wands hold
+`boost::container::hub<exec>` containers. These are concrete current uses of the
+vendored header; no assumption about availability in an installed Boost release
+is required.
+
+In the [kqueue wand](../../src/nxtrt/wand/kqueue.hpp), native event registration
+refers to a record's address, and public wait tokens encode that address.
+[Retirement](../../src/nxtrt/wand/kqueue.hpp) delays erasure until registration
+users are gone. This is a useful host-side lifetime model for effects. A
+portable guest request should instead carry an image-safe identity that the host
+maps to its current execution record.
+
+[RFC 0004](rfc-0004-wand-completion-routing.md) proposes direct task-slot
+routing for common one-shot completions, while retaining execution records for
+operations that need them. The Wisp adapter should work with either host
+realization. Its portable request identity must not depend on Hub remaining the
+default container.
+
+The [land layer](../../src/nxtrt/land.hpp) gives storage one home:
+`value_storage_ref<T>` borrows, `static_value_storage<T, N>` embeds storage, and
+`rack<T>` owns it. `junk<T>` distinguishes uninitialized capacity from live
+values. A table can follow this ownership discipline while retaining its own
+rules for growth and collection. Raw capacity and initialized rows should remain
+distinct.
+
+Other NXT patterns are also relevant: compact [index-and-era task
+IDs](../../src/nxtrt/ids.hpp), explicit [storage owners and borrowed
+references](../../src/nxtrt/land.hpp), tuple composition, ready-or-pending
+`hope<T>`, and the [prepared, parked, settled, retired execution
+lifecycle](../../src/nxtrt/exec_lifecycle.hpp). Reuse their discipline where the
+semantics fit.
+
+## System requests and operation defined restarts
+
+Proposed protocol: an operation emits a structured request and suspends its
+continuation. A host handler, behavioral policy, agent, or user decides how it
+proceeds. Ordinary service requests and exceptional conditions use related
+control machinery, while retaining their distinct meanings.
+
+The operation should define its meaningful recoveries. A model request might
+accept a supplied result, retry with another provider, or cancel its enclosing
+operation. A parser might accept a replacement value or skip a record. Each
+descriptor should contain a stable identity, human-readable report, argument
+descriptions, association with the suspended request, and a bounded invocation
+capability.
+
+The Wisp-specific design is to send the selected restart request into the
+captured continuation, where a local handler performs the recovery. The
+continuation is both a suspended future and an address into its still-live
+dynamic context. Exact syntax and handler return behavior remain open questions
+in CONDITIONS.md.
+
+The same descriptions should support a browser or terminal card and automatic
+agent policies. Fast decision models could choose among well-defined
+alternatives; more capable agents could inspect the surrounding environment or
+develop new Lisp helpers. Model choice belongs to the host policy and can change
+without changing the guest evaluator.
+
+## Images mutation journals and external effects
+
+The intended persistence model is a checkpoint image plus a sequence of changes.
+The historical [replication
+notes](https://github.com/mbrock/wisp/blob/6c735711ad34688665009fe40cceb4d3a7564271/etc/platform.org#L62)
+describe a primary instance performing I/O and broadcasting heap transactions to
+inspectable replicas. The old heap emitted allocation and mutation records. The
+implementation was removed on April 27, 2022 in
+[a155168](https://github.com/mbrock/wisp/commit/a15516852346e6f9bad4e84232270cd736490e67),
+with the stated reason that it was unmaintained. The inspected code contained a
+writer and a REPL buffer, but did not establish a complete durable replay
+implementation.
+
+A new heap journal should cover allocations, field and row updates, payload
+changes, relevant root and pin changes, and collection boundaries. Normal
+mutation must pass through tracked operations or slot proxies. Mutable column
+references require controlled access so writes cannot silently bypass the
+journal. Stable schema identities should make records interpretable across the
+port.
+
+Use a separate external-effect ledger for requests and results, including model
+responses and other nondeterministic inputs. Pending and completed effects need
+correlation identities and a restoration policy. After restoration, reconcile
+outstanding operations with the host rather than blindly issuing them again. A
+heap journal by itself does not establish exactly-once network behavior.
+
+Forking should explicitly define which external authorities and resources are
+shared, rebound, or unavailable. The portable object is the guest computation
+and its recorded inputs; the host recreates the available operating environment.
+
+## Implementation sequence
+
+1. Establish the semantic reference corpus from existing Wisp programs and
+   tests. Separate evaluator compatibility from tape-format compatibility.
+2. Implement word packing, schemas, tables, vat, roots, and pins. Preserve tag
+   and field identities and exercise growth boundaries.
+3. Port Tidy and validate cycles, sharing, relocation, vector payloads, roots,
+   and external-object handling.
+4. Port the evaluator, macros, binding, prompts, deep handlers, and continuation
+   copying. Compare observable results, conditions, and request traces with Zig
+   Wisp.
+5. Add image restoration and one NXT host adapter. Run a Lisp computation until
+   it requests an external value; save it; restore it in a fresh machine;
+   deliver the value and continue. Compare the result with an uninterrupted run.
+6. Develop operation-defined restart descriptions and UI or agent policies.
+   Extend the existing handler behavior deliberately rather than changing it
+   incidentally during the port.
+7. Add complete mutation replay and an external-effect ledger. Verify that a
+   checkpoint plus journal reconstructs the chosen state, including across
+   collection boundaries.
+
+The first integrated demonstration should be small: one computation, one
+suspended request, one saved image, and a resumed result. Behavioral rules and
+the voice writing environment can build on that demonstrated boundary.
+
+## Open design choices
+
+- C++23 as the initial baseline, or selected newer features where native and
+  WebAssembly toolchains support them.
+- Independent column allocations or a packed table allocation behind the same
+  schema API.
+- Compatibility with current tape bytes, and the encoding and migration rules
+  for later schemas.
+- Retaining in-row forwarding or introducing a separate forwarding map after
+  collector parity.
+- Borrowed-view lifetimes, host rooting APIs, and controlled mutation access.
+- The exact restart interface, decline behavior, request identities, and
+  restored external capabilities.
+- Whether behavioral rules eventually execute within the guest machine, in NXT,
+  or at both levels with an explicit bridge.
+
+The project direction is established: preserve Wisp's Lisp and portable control
+state, use modern C++ for the implementation, and integrate through NXT's
+existing host machinery. The choices above remain experiments rather than
+commitments.
+
+ ## Related RFCs
+
+- [RFC 0000: Prolegomena to NXT System Theory](rfc-0000-prolegomena.md) supplies
+  the distinction between stored state, requests, and execution.
+- [RFC 0002: Firm Frame Arenas](../cur/rfc-0002-firm-frame-arenas.md) describes
+  host frame territory and ownership.
+- [RFC 0004: Wand Completion Routing](rfc-0004-wand-completion-routing.md) keeps
+  guest identities independent of host execution-record routing.
+- [RFC 0010: Firm Buffer Groups and I/O
+  Land](rfc-0010-firm-buffer-groups-and-io-land.md) explores the authority to
+  hold and use I/O storage.
+- [RFC 0015: Async RAII Resources](rfc-0015-async-raii-resources.md) proposes
+  scoped acquisition, readiness, and asynchronous teardown.
+- [State of the Frontier](rfc-0017-state-of-the-frontier.md) distinguishes
+  implemented NXT machinery from proposed vocabulary and mechanisms.

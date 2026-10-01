@@ -27,3 +27,4 @@ speculative scaffolding.
 - [RFC 0015: Async RAII Resources](../rfc/new/rfc-0015-async-raii-resources.md)
 - [RFC 0016: Temporal Algebras](../rfc/new/rfc-0016-temporal-algebras.md)
 - [State of the Frontier](../rfc/new/rfc-0017-state-of-the-frontier.md)
+- [RFC 0018: Portable Wisp Lisp Machines](../rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
