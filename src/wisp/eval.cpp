@@ -136,6 +136,12 @@ evaluator::evaluator(heap & storage)
     , keys_(
           storage,
           storage.make<tag::pkg>({storage.newv08("KEY"), nil, nil}))
+    , packages_(
+          storage,
+          list(
+              storage,
+              std::array{keys_.get(), keywords_.get(), base_.get()}))
+    , current_(storage, base_.get())
     , nil_name_(storage, storage.newv08("NIL"))
     , true_name_(storage, storage.newv08("T"))
     , do_(storage, intern("DO"))
@@ -162,13 +168,36 @@ word evaluator::intern(std::string_view name, word package)
         if (name == "T")
             return t;
     }
-    const auto symbols = heap_.get<tag::pkg, field::sym>(package);
-    for (auto cur = symbols; cur != nil;) {
-        const auto [sym, next] = heap_.read<tag::duo>(cur);
-        if (heap_.v08slice(heap_.get<tag::sym, field::str>(sym)) == name)
-            return sym;
+    const auto find = [&](word pkg) -> std::optional<word> {
+        for (auto cur = heap_.get<tag::pkg, field::sym>(pkg); cur != nil;) {
+            const auto [sym, next] = heap_.read<tag::duo>(cur);
+            if (heap_.v08slice(heap_.get<tag::sym, field::str>(sym))
+                == name)
+                return sym;
+            cur = next;
+        }
+        return std::nullopt;
+    };
+    if (auto own = find(package))
+        return *own;
+    auto cur = heap_.get<tag::pkg, field::use>(package), slow = cur;
+    bool move_slow = false;
+    while (cur != nil) {
+        if (tag_of(cur) != tag::duo)
+            throw std::invalid_argument("malformed package uses list");
+        const auto [used, next] = heap_.read<tag::duo>(cur);
+        if (tag_of(used) != tag::pkg)
+            throw std::invalid_argument("non-package in uses list");
+        if (auto inherited = find(used))
+            return *inherited;
         cur = next;
+        if (move_slow)
+            slow = heap_.get<tag::duo, field::cdr>(slow);
+        move_slow = !move_slow;
+        if (cur != nil && cur == slow)
+            throw std::invalid_argument("cyclic package uses list");
     }
+    const auto symbols = heap_.get<tag::pkg, field::sym>(package);
     const auto sym =
         heap_.make<tag::sym>({heap_.newv08(name), package, nah, nil, nil});
     heap_.set<tag::pkg, field::sym>(package, heap_.cons(sym, symbols));
@@ -187,10 +216,28 @@ word evaluator::keyword(std::string_view name)
 
 word evaluator::find_package(std::string_view name) const noexcept
 {
-    for (auto pkg : {base_.get(), keywords_.get(), keys_.get()})
+    for (auto cur = packages_.get(); cur != nil;) {
+        const auto [pkg, next] = heap_.read<tag::duo>(cur);
         if (heap_.v08slice(heap_.get<tag::pkg, field::nam>(pkg)) == name)
             return pkg;
+        cur = next;
+    }
     return nil;
+}
+
+word evaluator::define_package(std::string_view name)
+{
+    if (find_package(name) != nil)
+        throw std::invalid_argument("package already exists");
+    const auto pkg = heap_.make<tag::pkg>({heap_.newv08(name), nil, nil});
+    packages_.set(heap_.cons(pkg, packages_.get()));
+    return pkg;
+}
+
+void evaluator::collect()
+{
+    heap_.collect();
+    collect_ = false;
 }
 
 word evaluator::start(word expression, word environment)
@@ -215,6 +262,8 @@ struct eval_step
     evaluator & vm;
     heap & h;
     word exp, val, err, env, way;
+    values active_runs;
+    word step_target = nil;
 
     [[noreturn]] void
     fail(std::string_view name, std::initializer_list<word> details = {})
@@ -930,7 +979,7 @@ struct eval_step
 
     void print_to_string(word x)
     {
-        give(h.newv08(print(h, x)));
+        give(h.newv08(print(h, x, vm.current_package())));
     }
 
     template<bool Many>
@@ -989,15 +1038,56 @@ struct eval_step
 
     void packages()
     {
-        const std::array all{
-            vm.keys_.get(), vm.keywords_.get(), vm.base_.get()};
-        give(list(h, all));
+        // Return a fresh spine; guest pair mutation cannot damage the
+        // evaluator's package registry.
+        give(list(h, scan(vm.packages_.get())));
+    }
+
+    void define_package(word name)
+    {
+        const auto text = string(name);
+        if (vm.find_package(text) != nil)
+            fail("PACKAGE-EXISTS", {name});
+        give(vm.define_package(text));
+    }
+
+    void package_uses(word pkg, word uses)
+    {
+        require(pkg, tag::pkg, "PACKAGE");
+        for (auto used : scan(uses))
+            require(used, tag::pkg, "PACKAGE");
+        h.set<tag::pkg, field::use>(pkg, uses);
+        give(pkg);
+    }
+
+    void defpackage(word name, word uses)
+    {
+        require(name, tag::sym, "SYMBOL");
+        for (auto used : scan(uses))
+            require(used, tag::pkg, "PACKAGE");
+        define_package(h.get<tag::sym, field::str>(name));
+        h.set<tag::pkg, field::use>(val, uses);
+    }
+
+    void in_package(word name)
+    {
+        require(name, tag::sym, "SYMBOL");
+        const auto pkg =
+            vm.find_package(string(h.get<tag::sym, field::str>(name)));
+        if (pkg == nil)
+            fail("UNDEFINED-PACKAGE", {name});
+        vm.current_.set(pkg);
+        give(pkg);
     }
 
     void intern(word name, word pkg)
     {
         require(pkg, tag::pkg, "PACKAGE");
-        give(vm.intern(string(name), pkg));
+        try {
+            give(vm.intern(string(name), pkg));
+        } catch (const std::invalid_argument &) {
+            fail("INVALID-PACKAGE-USES", {pkg});
+        }
     }
 
     void fresh_symbol()
@@ -1056,6 +1146,21 @@ struct eval_step
     void run(word expression)
     {
         give(vm.start(expression, env));
+    }
+
+    void step_run(word target)
+    {
+        require(target, tag::run, "EVALUATOR");
+        if (std::ranges::find(active_runs, target) != active_runs.end())
+            fail("ACTIVE-EVALUATOR", {target});
+        step_target = target;
+        give(nil);
+    }
+
+    void gc()
+    {
+        vm.collect_ = true;
+        give(nil);
     }
 
     void run_expression(word run)
@@ -1323,8 +1428,14 @@ std::span<const builtin> builtins()
             "PACKAGE-SYMBOLS"),
         builtin::bind<&eval_step::get_field<tag::pkg, field::use>>(
             "PACKAGE-USES"),
+        builtin::bind<&eval_step::package_uses>("PACKAGE-SET-USES!"),
+        builtin::bind<&eval_step::define_package>("%DEFPACKAGE"),
+        builtin::bind<&eval_step::defpackage>("DEFPACKAGE", true),
+        builtin::bind<&eval_step::in_package>("IN-PACKAGE", true),
         builtin::bind<&eval_step::intern>("INTERN"),
         builtin::bind<&eval_step::run>("RUN"),
+        builtin::bind<&eval_step::step_run>("STEP!"),
+        builtin::bind<&eval_step::gc>("GC"),
         builtin::bind<&eval_step::run_expression>("RUN-EXP"),
         builtin::bind<&eval_step::get_field<tag::run, field::way>>(
             "RUN-WAY"),
@@ -1340,27 +1451,37 @@ std::span<const builtin> builtins()
 
 evaluation evaluator::step(word run)
 {
-    if (status(run) != evaluation::runnable)
-        return status(run);
-    const auto [exp, val, err, env, way] = heap_.read<tag::run>(run);
-    eval_step s{*this, heap_, exp, val, err, env, way};
-    try {
-        s.once();
-    } catch (const condition & c) {
+    // STEP! can itself step another run. Commit each row before dispatching
+    // the next, without growing the native stack or collecting scratch
+    // words.
+    std::vector<word> active;
+    auto current = run;
+    while (status(current) == evaluation::runnable) {
+        active.push_back(current);
+        const auto [exp, val, err, env, way] =
+            heap_.read<tag::run>(current);
+        eval_step s{*this, heap_, exp, val, err, env, way, active};
         try {
-            s.send(intern("ERROR"), c.value, nah);
-        } catch (const condition & unhandled) {
-            s.err = unhandled.value;
+            s.once();
+        } catch (const condition & c) {
+            try {
+                s.send(intern("ERROR"), c.value, nah);
+            } catch (const condition & unhandled) {
+                s.err = unhandled.value;
+            }
         }
+        heap_.put<tag::run>(current, {s.exp, s.val, s.err, s.env, s.way});
+        if (s.step_target == nil)
+            break;
+        current = s.step_target;
     }
-    heap_.put<tag::run>(run, {s.exp, s.val, s.err, s.env, s.way});
     return status(run);
 }
 
 evaluation evaluator::advance(word run, std::size_t budget)
 {
     auto state = status(run);
-    while (budget-- != 0 && state == evaluation::runnable)
+    while (budget-- != 0 && state == evaluation::runnable && !collect_)
         state = step(run);
     return state;
 }

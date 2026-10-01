@@ -133,16 +133,20 @@ word reader::symbol()
     const auto start = position_;
     const auto text = name();
     const auto colon = text.find(':');
-    if (colon == std::string::npos)
-        return evaluator_.intern(text);
-    const auto extra = text.find(':', colon + 1);
-    if (extra != std::string::npos)
-        throw read_error(start + extra, "colon in symbol name");
-    const auto package = evaluator_.find_package(text.substr(0, colon));
-    if (package == nil)
-        throw read_error(start, "no such package");
-    return evaluator_.intern(
-        std::string_view{text}.substr(colon + 1), package);
+    try {
+        if (colon == std::string::npos)
+            return evaluator_.intern(text, evaluator_.current_package());
+        const auto extra = text.find(':', colon + 1);
+        if (extra != std::string::npos)
+            throw read_error(start + extra, "colon in symbol name");
+        const auto package = evaluator_.find_package(text.substr(0, colon));
+        if (package == nil)
+            throw read_error(start, "no such package");
+        return evaluator_.intern(
+            std::string_view{text}.substr(colon + 1), package);
+    } catch (const std::invalid_argument & error) {
+        throw read_error(start, error.what());
+    }
 }
 
 word reader::number()

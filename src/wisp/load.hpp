@@ -11,8 +11,10 @@ std::string_view base_library() noexcept;
 
 /// Read and evaluate one top-level form at a time. Owns the input and roots
 /// the current run, so callers may collect between advance() calls. The
-/// heap and evaluator must outlive this loader. No implicit collection or
-/// I/O. A loader's source/cursor are host state, not a portable heap image.
+/// heap and evaluator must outlive this loader. Guest GC requests collect
+/// between committed transitions; callers must root other live words.
+/// No I/O. A loader's source/cursor are host state, not a portable heap
+/// image.
 class loader
 {
 public:

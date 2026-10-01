@@ -13,6 +13,7 @@ if get_option('tests')
     'wisp-printer-test.cpp',
     'wisp-primitives-test.cpp',
     'wisp-load-test.cpp',
+    'wisp-runtime-test.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [

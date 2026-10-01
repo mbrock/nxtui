@@ -351,7 +351,7 @@ the voice writing environment can build on that demonstrated boundary.
 with tests in [`test/wisp-test.cpp`](../../test/wisp-test.cpp). It has the ten table schemas,
 packed words, byte and word pools, roots, pins, continuation-frame copying, and
 a Tidy-style moving collector. The evaluator and source-loading slices below
-build on it; tape I/O, journaling, and the NXT event-loop adapter remain
+build on it, with a cooperative NXT driver. Tape I/O and journaling remain
 unimplemented.
 
 The reference is `core/word.zig`, `core/heap.zig`, `core/tidy.zig`, and
@@ -426,13 +426,14 @@ caller's ERROR prompt.
 transition; `advance(run, budget)` returns `runnable`, `done`, or `failed`.
 Zero budget only polls. Exhaustion is a normal host scheduling boundary, unlike
 Zig's evaluation-limit error. A transition may scan a list or allocate, so a
-step budget is not a wall-clock bound. This API does not yet schedule NXT tasks.
+step budget is not a wall-clock bound. The evaluator remains independent of
+NXT; the separate driver described below supplies cooperative scheduling.
 
-The evaluator roots its WISP, KEYWORD, and KEY packages, which retain interned
-symbols, definitions, and closures. The host interning API is exact and
-case-sensitive; the reader folds ASCII names. Package inheritance is not
-implemented. The caller must root
-each run and any other host-held word before collection. Allocation never
+The evaluator roots its package registry and current package, initially WISP,
+alongside KEYWORD and KEY. Packages retain interned symbols, definitions, and
+closures. The host interning API is exact and case-sensitive; the reader folds
+ASCII names. The caller must root each run and any other host-held word before
+collection. Allocation never
 collects inside a transition. Once a transition returns, its complete guest
 control state is in `run`, `ktx`, and environment rows; scratch C++ registers and
 argument copies can disappear. For example, without a reader:
@@ -570,8 +571,10 @@ detection, prints repeated acyclic sharing normally, and emits `#<CYCLE>` on
 recursive edges. The heap is unchanged. Signed fixnums correct the reference's
 unsigned-negative printing bug; string quotes, backslashes, and newlines are
 escaped. Vectors retain `#<...>` notation; characters, pins, and jets use numeric
-diagnostics. Symbols use a fixed WISP context, with KEYWORD colon prefixes and
-bare KEY names. Not every printed value is readable, and reading does not
+diagnostics. Symbols default to a WISP context; an optional current-package
+argument selects another package by identity. Guest `PRINT-TO-STRING` supplies
+the evaluator's current package. KEYWORD colon prefixes and bare KEY names
+remain unchanged. Not every printed value is readable, and reading does not
 promise to preserve identity or sharing.
 
 The typed builtin registry now includes pair mutation, vector operations,
@@ -581,8 +584,8 @@ package queries and exact interning, fresh keys, pin release, and run inspection
 Templated field accessors select schema tags and fields. The evaluator retains
 rooted control-symbol identities so transitions do not repeatedly scan the
 growing package list. Public `intern(name)` and `intern(name, package)` retain
-their exact-case behavior; no package inheritance or current-package API is
-implied.
+their exact-case behavior. The former always uses WISP; the latter also
+searches direct used packages, as described below.
 
 Additional deliberate differences and boundaries are:
 
@@ -629,14 +632,62 @@ closure across collection, UTF-8 byte cursors, and dynamically handled output.
 The eager-lambda, callback-walking, branching-budget, and dynamic-output
 programs also pass against the pinned Zig reference. Reader/printer tests cover
 deep structures, malformed UTF-8, heap growth, cycles, and host input lifetime.
-Only the three full-bootstrap integration tests opt into a ten-second debug
+Only the four full-bootstrap integration tests opt into a ten-second debug
 deadline; ordinary unit tests retain their one-second deadline.
 
-Remaining increments include package creation/current-package/inheritance,
-guest `GC` and `STEP!` safepoint policy, host debugging/tracing, tape I/O,
-journaling, and the NXT event-loop adapter. Some loaded Lisp helpers refer to
-these absent capabilities and cannot yet be used. No changes to NXT's host
-task/deed/firm/exec semantics are part of this slice.
+## Packages and cooperative host turns
+
+Package creation and selection now include `%DEFPACKAGE`, `DEFPACKAGE`,
+`PACKAGE-SET-USES!`, and `IN-PACKAGE`. The base library replaces the primitive
+`DEFPACKAGE` control form with its own macro. The reader selects the current
+package for each unqualified symbol, so a loader's `IN-PACKAGE` affects later
+forms, not symbols already read in the same form. Host `intern(name)` remains
+independent of this state; `current_package()` exposes it explicitly.
+
+Interning searches the package's own symbols first, then each directly used
+package in list order, then creates a local symbol. Inheritance is deliberately
+not transitive, matching Zig. WISP's NIL/T immediate special case is not
+inherited. Uses lists retain reference aliasing, but setters reject improper,
+cyclic, or non-package lists before mutation; lookup rejects malformed portions
+it encounters after later alias mutation. Duplicate package names raise
+`PACKAGE-EXISTS` rather than relying on Zig's no-clobber assertion. `PACKAGES`
+returns a fresh list spine so guest mutation cannot damage the rooted registry.
+
+Guest `GC` sets `collection_requested()` and returns NIL. `advance` stops early
+while a request is pending; `step` can still perform one transition. Neither
+collects inside an evaluator transition. The host services the request with
+`evaluator::collect()`, which clears it after successful collection. The loader
+does this automatically between committed transitions, so all other live host
+words must be rooted across loading calls, not just between them.
+
+`STEP!` advances another heap-resident run once and returns NIL; failure remains
+in the target's error field, and terminal targets are unchanged. Nested steps
+commit each run before dispatching the next, using an iterative loop rather
+than native recursion. Stepping an active ancestor signals `ACTIVE-EVALUATOR`.
+Collection waits until the whole chain returns. A budget counts outer evaluator
+calls, not every nested step, and still makes no wall-clock guarantee.
+
+[`wisp::drive`](../../src/wisp/nxt.hpp) is a small, optional NXT coroutine
+adapter. It advances a rooted run with a positive quantum, services pending
+collection, and yields between unfinished turns. Taking a root by reference
+also permits collection before the task's first resumption. Cancellation is
+checked before each turn and leaves the guest run resumable; it does not
+translate host cancellation into guest ERROR or install implicit I/O handlers.
+The evaluator, heap, and root must outlive the task, and all other host-held
+words must remain rooted across awaits.
+
+[`test/wisp-runtime-test.cpp`](../../test/wisp-runtime-test.cpp) exercises
+package order, shadowing, direct-only inheritance, malformed uses, a full
+bootstrap with current-package changes, GC pauses, STEP! isolation and cycles,
+and a 2,000-run nested stepping chain. NXT tests check sibling progress,
+collection before first resumption and between turns, cancellation/resumption,
+and a timer completion returning to a captured guest continuation with result
+42. No changes to NXT's task/deed/firm/exec semantics are part of this adapter.
+
+Remaining increments include host debugging/tracing, tape I/O, and journaling.
+Some loaded Lisp helpers still refer to these absent capabilities and cannot
+yet be used. Host effect routing and persistence policy remain explicit host
+responsibilities rather than automatic behavior of `drive`.
 
 ## Open design choices
 

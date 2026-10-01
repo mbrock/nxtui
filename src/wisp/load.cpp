@@ -43,6 +43,10 @@ evaluation loader::advance(std::size_t budget)
         } else if (machine_.step(run_.get()) == evaluation::failed) {
             state_ = evaluation::failed;
         }
+        // Every transition has committed its registers, including nested
+        // STEP! targets. input_ retains no guest words between forms.
+        if (machine_.collection_requested())
+            machine_.collect();
     }
     return state_;
 }

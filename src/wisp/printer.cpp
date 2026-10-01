@@ -23,6 +23,7 @@ class compact_printer
     };
 
     const heap & h_;
+    word current_;
     std::string out_;
     std::vector<command> pending_;
     std::unordered_set<word> active_;
@@ -78,7 +79,10 @@ class compact_printer
                 h_.v08slice(h_.get<tag::pkg, field::nam>(package));
             if (name == "KEYWORD") {
                 out_ += ':';
-            } else if (name != "WISP" && name != "KEY") {
+            } else if (
+                name != "KEY"
+                && (current_ == nil ? name != "WISP"
+                                    : package != current_)) {
                 out_ += name;
                 out_ += ':';
             }
@@ -200,8 +204,9 @@ class compact_printer
     }
 
 public:
-    explicit compact_printer(const heap & h)
+    compact_printer(const heap & h, word current)
         : h_(h)
+        , current_(current)
     {
     }
 
@@ -262,9 +267,9 @@ public:
 
 } // namespace
 
-std::string print(const heap & h, word x)
+std::string print(const heap & h, word x, word current)
 {
-    return compact_printer{h}.run(x);
+    return compact_printer{h, current}.run(x);
 }
 
 } // namespace wisp

@@ -27,7 +27,8 @@ namespace wisp {
 /// names are preserved verbatim. Symbol spelling is therefore not always
 /// reader-safe. Without evaluator context, packages named WISP and KEY
 /// print bare symbols, KEYWORD uses ':', other packages use 'NAME:', and
-/// uninterned symbols use '#:'. There is no dynamic current-package state.
-std::string print(const heap &, word);
+/// uninterned symbols use '#:'. Supplying a live current package replaces
+/// the WISP default with that identity; KEY and KEYWORD keep their syntax.
+std::string print(const heap &, word, word current_package = nil);
 
 } // namespace wisp
