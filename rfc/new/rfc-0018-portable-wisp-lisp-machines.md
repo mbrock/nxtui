@@ -388,8 +388,8 @@ The first storage choices and contracts are:
   not silently reinterpreted as a permanent aliasing guarantee.
 - Continuation-frame copies share lexical environments but clone argument
   accumulators for function/builtin application frames. A vector in a non-call
-  frame is not automatically cloned. This is only the frame-copy operation;
-  prompt capture, composition, and invocation still need the evaluator.
+  frame is not automatically cloned. The evaluator uses this operation for
+  prompt capture, composition, and repeated invocation.
 - Before forwarding, collection reserves space for all existing rows and the
   sum of descriptor payload lengths. Unlike Zig's destructive allocating path,
   allocation failure at this stage leaves old rows, roots, and pins untouched.
@@ -401,18 +401,21 @@ The first storage choices and contracts are:
   callers must arrange one owned external reference per row and must not reenter
   the heap from the callback.
 
-The next evaluator corpus should include the existing `core/step.zig` examples:
-repeated argument continuation invocation yielding
-`(pause (before one after) (before two after))`; a deep handler resuming requests
-2 and 3 with ten times their values, yielding 50; a pinned callback resumed after
-GC yielding `SECOND`; and raising into a suspended handler yielding
-`(caught nope)`. These distinguish shared store, copied control state, deep
-handler reinstatement, and error delivery. Heap tests alone do not establish
-these language-level behaviors. The last case is an expected result in the Zig
-tests, not a verified passing baseline: the [prior Wisp verification
+The evaluator corpus includes equivalents of the existing `core/step.zig`
+examples for repeated argument continuation invocation and a deep handler
+resuming requests 2 and 3 with ten times their values, yielding 50. The C++ tests
+also retain a continuation only through a host pin, collect, then invoke it in a
+fresh run. The Zig argument-snapshot, deep-resumption, and pinned-callback
+examples pass in the current reference checkout. These distinguish shared
+store, copied control state, handler reinstatement, and host retention.
+
+Raising into a suspended handler, yielding `(caught nope)`, is an expected result
+in the Zig tests, not a verified passing baseline: the [prior Wisp verification
 thread](https://ampcode.com/threads/T-01a06ebb-d635-776d-a69c-95a0134cfbac)
 reports that it traps even before that thread's evaluator changes. Preserve it
 as an unresolved regression rather than inferring correctness from its presence.
+The C++ deep-handler test exercises resumption, not that full high-level raise
+protocol; sending into a captured continuation is tested separately below.
 
 ## First C++ evaluation slice
 
@@ -463,15 +466,15 @@ The current semantic subset is:
   identity, cons/list operations, function lookup, and environment inspection.
   Unary subtraction deliberately retains Zig's identity behavior.
 
-Language failures stop the run with a heap condition vector in `run.err`;
-builtin failures wrap their cause. This is not yet Zig's handled `ERROR`
-effect protocol, and exact condition payload parity is not claimed. Dotted or
-cyclic argument lists and malformed bindings fail instead of accessing invalid
-native storage. Heap API contracts still apply to host-supplied pointers,
-environments, and machine rows. Host allocation exceptions escape; interrupted
-steps are not transactional or promised retryable. Internal NAH/ZAP/TOP markers
-are not accepted as literal expressions. Builtin indices are local to this
-subset, not Zig tape indices or a stable image ABI.
+Language failures are heap condition vectors; builtin failures wrap their
+cause. The control slice below delivers these through `ERROR` prompts, stopping
+the run in `run.err` if delivery fails. Exact condition payload parity is not
+claimed. Dotted or cyclic argument lists and malformed bindings fail instead of
+accessing invalid native storage. Heap API contracts still apply to host-supplied
+pointers, environments, and machine rows. Host allocation exceptions escape;
+interrupted steps are not transactional or promised retryable. Internal
+NAH/ZAP/TOP markers are not accepted as literal expressions. Builtin indices are
+local to this subset, not Zig tape indices or a stable image ABI.
 
 [`test/wisp-eval-test.cpp`](../../test/wisp-eval-test.cpp) constructs forms
 directly, collects between individual steps, and checks scope restoration,
@@ -483,14 +486,71 @@ argument order `(1 91 2 2)`, parallel LET `((3 40 9) 40)`, shared closures
 arguments. Compare negative fixnums as words: that reference's reader treats
 `-7` as a symbol and its printer renders the computed negative value unsigned.
 
-Dynamic binding, prompts, continuation capture/invocation, deep handlers,
-reader/printer, and the Lisp bootstrap remain next layers. No changes to NXT's
-host task/deed/firm/exec semantics are part of this slice.
+## C++ control and builtin declarations
+
+Builtin metadata is now derived from C++23 member-function signatures, rather
+than a separate arity table and dispatch switch. `builtin::bind<&method>(name)`
+generates a typed dispatch thunk at compile time: each `word` parameter consumes
+one argument, and a trailing `values` span consumes the rest. For example,
+`subtract(word first, values rest)` states its minimum arity directly. Unsupported
+parameter types and misplaced rest spans are compile-time errors. Template
+parameters also select schema fields for symbol setters and continuation
+inspection. This is the portable counterpart to Zig's comptime jet declarations;
+it uses neither erased function-pointer casts nor C++26 reflection.
+
+The evaluator now also implements:
+
+- `SET-SYMBOL-DYNAMIC!` and `CALL-WITH-BINDING`. Marked symbols search the
+  continuation's nearest `BINDING` frame before lexical/global lookup or
+  assignment. Unmarked symbols ignore those frames. Exiting a binding restores
+  the previous scope.
+- `CALL-WITH-PROMPT` and `SEND-WITH-DEFAULT!`. Tags match by identity. Sending
+  captures the frames inside the nearest matching prompt, excludes the prompt
+  itself, and calls its handler with the request and captured continuation in
+  the outside context. No match returns the supplied default. Normal thunk
+  return removes the delimiter without calling its handler.
+- Multi-shot `CALL`/`APPLY` of a continuation, with exactly one value. Invocation
+  copies its frames and appends the caller's context; it does not discard the
+  caller. Application accumulators are independent, lexical cells remain shared,
+  and dynamic binding values are copied with their frames. The captured original
+  remains reusable.
+- `SEND-TO-WITH-DEFAULT!`, which searches a captured continuation rather than the
+  current one. It invokes the found handler with a copy of the inside frames,
+  composing the captured outside frames with the current caller's context.
+- `GET/CC`, `COMPOSE-CONTINUATION`, `KTX-*`, `TOP?`, and `EVAL`. As in Zig,
+  `GET/CC` exposes the live context, not an immutable snapshot. Composition copies
+  its argument's frames and attaches the live caller context. `EVAL` evaluates
+  the supplied form in the current environment.
+- Resumable language failures via the nearest `ERROR` prompt. Its handler can
+  supply a replacement by calling the captured continuation. With no handler,
+  `run.err` becomes `[UNHANDLED-ERROR, ERROR, condition]`. An error during a guest
+  handler's subsequent evaluation searches outside that handler's removed
+  delimiter. A failure while entering the handler itself is terminal, as in the
+  current Zig error-delivery path.
+
+Low-level prompts are shallow: resuming does not reinstall their handler. A
+guest-defined recursive wrapper reinstalls the prompt for deep resumption,
+matching the resume half of `CALL-WITH-EFFECT-HANDLER` in `base.wisp`. The full
+bootstrap, including its raise closure and error helpers, is not yet ported.
+
+Two deliberate safety differences from Zig are covered by tests: prompt lookup
+requires a `PROMPT` frame, rather than treating every frame whose accumulator
+equals the tag as a delimiter; `KTX-POS` returns zero for an empty vector
+accumulator, which is legal as a prompt tag, rather than indexing past its end.
+
+Control tests collect between every guest step. Equivalent programs run against
+the linked Zig checkout produced `((11 1) (11 2))` for shared lexical versus
+copied dynamic mutation, 27 for shallow resumption, 1038 for composing both
+outside contexts when sending into a continuation, and `(5 42 7)` for supplying
+an unbound variable's replacement. The C++ deep-resumption test produces 50.
+
+Reader/printer, remaining data primitives, package inheritance, Lisp bootstrap
+and lambda pre-expansion, tape I/O, and the NXT event-loop adapter remain later
+increments. No changes to NXT's host task/deed/firm/exec semantics are part of
+this slice.
 
 ## Open design choices
 
-- C++23 as the initial baseline, or selected newer features where native and
-  WebAssembly toolchains support them.
 - Independent column allocations or a packed table allocation behind the same
   schema API.
 - Compatibility with current tape bytes, and the encoding and migration rules

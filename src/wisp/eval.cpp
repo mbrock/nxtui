@@ -208,6 +208,18 @@ struct eval_step
         if (!assign
             && h.get<tag::sym, field::pkg>(sym) == vm.keywords_.get())
             return sym;
+        if (h.get<tag::sym, field::dyn>(sym) != nil) {
+            for (auto cur = way; cur != top;) {
+                const auto [hop, saved_env, fun, name, binding] =
+                    h.read<tag::ktx>(cur);
+                if (fun == vm.intern("BINDING") && name == sym) {
+                    if (assign)
+                        h.set<tag::ktx, field::arg>(cur, value);
+                    return assign ? value : binding;
+                }
+                cur = hop;
+            }
+        }
         for (auto cur = env; cur != nil;) {
             const auto [scope, next] = h.read<tag::duo>(cur);
             const auto xs = h.v32slice(scope);
@@ -286,6 +298,15 @@ struct eval_step
 
     void call(word fun, std::span<const word> args)
     {
+        if (tag_of(fun) == tag::ktx || fun == top) {
+            if (args.size() != 1)
+                fail(
+                    "PROGRAM-ERROR",
+                    {vm.intern("CONTINUATION-CALL-ERROR")});
+            way = copy_continuation(fun, top, way);
+            give(args[0]);
+            return;
+        }
         switch (tag_of(fun)) {
         case tag::jet:
             operate(fun, args);
@@ -342,6 +363,9 @@ struct eval_step
         } else if (fun == vm.intern("EVAL")) {
             way = hop;
             enter(val);
+        } else if (
+            fun == vm.intern("PROMPT") || fun == vm.intern("BINDING")) {
+            way = hop;
         } else if (fun == vm.intern("LET")) {
             // Reverse accumulator: name, value, name, ..., body.
             if (arg == nil) {
@@ -575,6 +599,122 @@ struct eval_step
         give(env);
     }
 
+    // Copy [source, stop), joining its end to tail. Lexical vectors stay
+    // shared; each copied application frame owns a fresh argument vector.
+    word copy_continuation(word source, word stop, word tail)
+    {
+        auto result = tail;
+        auto previous = top;
+        for (auto cur = source; cur != stop;) {
+            require(cur, tag::ktx, "CONTINUATION");
+            const auto copy = h.copy_continuation_frame(cur);
+            if (previous == top)
+                result = copy;
+            else
+                h.set<tag::ktx, field::hop>(previous, copy);
+            previous = copy;
+            cur = h.get<tag::ktx, field::hop>(cur);
+        }
+        if (previous != top)
+            h.set<tag::ktx, field::hop>(previous, tail);
+        return result;
+    }
+
+    word find_prompt(word source, word prompt_tag)
+    {
+        for (auto cur = source; cur != top;) {
+            require(cur, tag::ktx, "CONTINUATION");
+            const auto [hop, saved_env, fun, acc, arg] =
+                h.read<tag::ktx>(cur);
+            // Zig checks only acc. Require an actual prompt, so bindings
+            // and NIL accumulators cannot impersonate a delimiter.
+            if (fun == vm.intern("PROMPT") && acc == prompt_tag)
+                return cur;
+            cur = hop;
+        }
+        return top;
+    }
+
+    void send_from(
+        word source,
+        word prompt_tag,
+        word value,
+        word fallback,
+        bool compose_outside)
+    {
+        const auto prompt = find_prompt(source, prompt_tag);
+        if (prompt == top) {
+            if (fallback == nah)
+                fail("UNHANDLED-ERROR", {prompt_tag, value});
+            give(fallback);
+            return;
+        }
+        const auto [outside, saved_env, fun, acc, handler] =
+            h.read<tag::ktx>(prompt);
+        const auto inside = copy_continuation(source, prompt, top);
+        way = compose_outside ? copy_continuation(outside, top, way)
+                              : outside;
+        if (way == top)
+            env = nil;
+        const std::array args{value, inside};
+        call(handler, args);
+    }
+
+    void send(word prompt_tag, word value, word fallback)
+    {
+        send_from(way, prompt_tag, value, fallback, false);
+    }
+
+    void
+    send_to(word continuation, word prompt_tag, word value, word fallback)
+    {
+        send_from(continuation, prompt_tag, value, fallback, true);
+    }
+
+    void call_with_prompt(word prompt_tag, word thunk, word handler)
+    {
+        push(vm.intern("PROMPT"), prompt_tag, handler);
+        call(thunk, {});
+    }
+
+    void call_with_binding(word sym, word value, word thunk)
+    {
+        require(sym, tag::sym, "SYMBOL");
+        push(vm.intern("BINDING"), sym, value);
+        call(thunk, {});
+    }
+
+    void get_cc()
+    {
+        give(way);
+    }
+
+    void compose_continuation(word continuation)
+    {
+        give(copy_continuation(continuation, top, way));
+    }
+
+    template<field F>
+    void ktx_field(word continuation)
+    {
+        require(continuation, tag::ktx, "CONTINUATION");
+        give(h.get<tag::ktx, F>(continuation));
+    }
+
+    void ktx_position(word continuation)
+    {
+        require(continuation, tag::ktx, "CONTINUATION");
+        const auto acc = h.get<tag::ktx, field::acc>(continuation);
+        const auto xs =
+            tag_of(acc) == tag::v32 ? h.v32slice(acc) : values{};
+        give(xs.empty() ? 0 : xs[0]);
+    }
+
+    void is_top(word continuation)
+    {
+        give(continuation == top ? t : nil);
+    }
+
     void once()
     {
         if (val != nah) {
@@ -636,6 +776,23 @@ std::span<const builtin> builtins()
             "SET-SYMBOL-VALUE!"),
         builtin::bind<&eval_step::set>("%SET!"),
         builtin::bind<&eval_step::environment>("ENV"),
+        builtin::bind<&eval_step::set_symbol<field::dyn>>(
+            "SET-SYMBOL-DYNAMIC!"),
+        builtin::bind<&eval_step::call_with_binding>("CALL-WITH-BINDING"),
+        builtin::bind<&eval_step::call_with_prompt>("CALL-WITH-PROMPT"),
+        builtin::bind<&eval_step::send>("SEND-WITH-DEFAULT!"),
+        builtin::bind<&eval_step::send_to>("SEND-TO-WITH-DEFAULT!"),
+        builtin::bind<&eval_step::get_cc>("GET/CC"),
+        builtin::bind<&eval_step::compose_continuation>(
+            "COMPOSE-CONTINUATION"),
+        builtin::bind<&eval_step::ktx_field<field::hop>>("KTX-HOP"),
+        builtin::bind<&eval_step::ktx_field<field::env>>("KTX-ENV"),
+        builtin::bind<&eval_step::ktx_field<field::fun>>("KTX-FUN"),
+        builtin::bind<&eval_step::ktx_field<field::acc>>("KTX-ACC"),
+        builtin::bind<&eval_step::ktx_field<field::arg>>("KTX-ARG"),
+        builtin::bind<&eval_step::ktx_position>("KTX-POS"),
+        builtin::bind<&eval_step::is_top>("TOP?"),
+        builtin::bind<&eval_step::enter>("EVAL"),
     };
     return table;
 }
@@ -651,7 +808,11 @@ evaluation evaluator::step(word run)
     try {
         s.once();
     } catch (const condition & c) {
-        s.err = c.value;
+        try {
+            s.send(intern("ERROR"), c.value, nah);
+        } catch (const condition & unhandled) {
+            s.err = unhandled.value;
+        }
     }
     heap_.put<tag::run>(run, {s.exp, s.val, s.err, s.env, s.way});
     return status(run);

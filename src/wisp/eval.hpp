@@ -35,8 +35,9 @@ public:
     /// allocate, so this is not a wall-clock bound. No method collects or
     /// invokes host callbacks. Collect between calls, rooting the run and
     /// every other host-held value. Return values are unrooted words.
-    /// Language errors populate run.err; host allocation exceptions escape
-    /// and do not promise rollback or safe retry of the interrupted step.
+    /// Language errors go to ERROR prompts; failed delivery populates
+    /// run.err. Host allocation exceptions escape and do not promise
+    /// rollback or safe retry of the interrupted step.
     evaluation advance(word run, std::size_t budget);
 
 private:

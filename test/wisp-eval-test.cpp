@@ -71,7 +71,12 @@ struct language
         const auto before = h.read<tag::run>(run.get());
         expect(vm.advance(run.get(), 100) == evaluation::failed);
         expect(h.read<tag::run>(run.get()) == before);
-        return h.get<tag::run, field::err>(run.get());
+        const auto condition =
+            h.v32slice(h.get<tag::run, field::err>(run.get()));
+        expect(condition.size() == 3u);
+        expect(condition[0] == s("UNHANDLED-ERROR"));
+        expect(condition[1] == s("ERROR"));
+        return condition[2];
     }
 
     word cause(word error)
@@ -431,6 +436,400 @@ static suite eval_tests{
             expect((m.h.get<tag::run, field::val>(m.run.get()) == 500500u));
             expect(maximum <= 3u);
         };
+
+        "dynamic bindings shadow lexical scope only for marked symbols"_test =
+            [] {
+                language m;
+                auto x = m.s("X");
+                m.eval(
+                    m.f("DO",
+                        {m.f("SET-SYMBOL-VALUE!", {m.q(x), 7}),
+                         m.f("SET-SYMBOL-DYNAMIC!", {m.q(x), t}),
+                         m.f("SET-SYMBOL-FUNCTION!",
+                             {m.q(m.s("READ-X")), m.fn(nil, x)})}),
+                    true);
+                x = m.s("X");
+                auto inner = m.f(
+                    "CALL-WITH-BINDING",
+                    {m.q(x),
+                     20,
+                     m.fn(
+                         nil,
+                         m.f("LIST", {x, m.f("%SET!", {m.q(x), 23})}))});
+                auto outer =
+                    m.f("CALL-WITH-BINDING",
+                        {m.q(x),
+                         10,
+                         m.fn(
+                             nil,
+                             m.f("LIST",
+                                 {m.f("READ-X"),
+                                  inner,
+                                  x,
+                                  m.f("%SET!", {m.q(x), 14})}))});
+                auto program = m.f(
+                    "LET", {m.l({m.l({x, 2})}), m.f("LIST", {outer, x})});
+                const auto result = m.eval(program, true);
+                const auto bound = m.h.get<tag::duo, field::car>(result);
+                expect((m.h.get<tag::duo, field::car>(bound) == 10u));
+                const auto rest = m.h.get<tag::duo, field::cdr>(bound);
+                m.values(m.h.get<tag::duo, field::car>(rest), {20, 23});
+                m.values(m.h.get<tag::duo, field::cdr>(rest), {10, 14});
+                m.values(m.h.get<tag::duo, field::cdr>(result), {2});
+                expect(m.eval(m.s("X"), true) == 7u);
+                x = m.s("X");
+                expect(
+                    m.eval(
+                        m.f("DO",
+                            {m.f("SET-SYMBOL-DYNAMIC!", {m.q(x), nil}),
+                             m.f("CALL-WITH-BINDING",
+                                 {m.q(x), 99, m.fn(nil, x)})}),
+                        true)
+                    == 7u);
+            };
+
+        "prompts match by identity and only actual prompt frames match"_test =
+            [] {
+                language m;
+                auto v = m.s("V"), k = m.s("K"), tag = m.s("TAG");
+                auto handler = m.fn(m.l({v, k}), m.f("+", {v, 1}));
+                auto inner = m.f(
+                    "CALL-WITH-PROMPT",
+                    {m.q(tag),
+                     m.fn(
+                         nil, m.f("SEND-WITH-DEFAULT!", {m.q(tag), 7, 90})),
+                     handler});
+                auto outer = m.f(
+                    "CALL-WITH-PROMPT",
+                    {m.q(tag), m.fn(nil, inner), m.fn(m.l({v, k}), 99)});
+                expect(m.eval(outer, true) == 8u);
+                v = m.s("V");
+                k = m.s("K");
+                tag = m.s("TAG");
+                // BINDING.acc equals TAG, but this frame is not a prompt.
+                auto binding = m.f(
+                    "CALL-WITH-BINDING",
+                    {m.q(tag),
+                     100,
+                     m.fn(
+                         nil,
+                         m.f("SEND-WITH-DEFAULT!", {m.q(tag), 5, 31}))});
+                expect(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {m.q(tag),
+                             m.fn(nil, binding),
+                             m.fn(m.l({v, k}), m.f("+", {v, 2}))}),
+                        true)
+                    == 7u);
+                // DO.acc is NIL. Sending to NIL must skip it, too.
+                v = m.s("V");
+                k = m.s("K");
+                auto body = m.f(
+                    "DO", {m.f("SEND-WITH-DEFAULT!", {nil, 17, 55}), 99});
+                expect(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {nil, m.fn(nil, body), m.fn(m.l({v, k}), v)}),
+                        true)
+                    == 17u);
+                expect(
+                    m.eval(
+                        m.f("DO",
+                            {m.f("SEND-WITH-DEFAULT!", {nil, 1, 12}), 19}),
+                        true)
+                    == 19u);
+                expect(
+                    m.eval(
+                        m.f("SEND-WITH-DEFAULT!",
+                            {m.q(m.s("MISSING")), 1, 23}),
+                        true)
+                    == 23u);
+                expect(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {nil,
+                             m.fn(nil, 29),
+                             m.fn(
+                                 m.l({m.s("V"), m.s("K")}),
+                                 m.s("UNBOUND"))}),
+                        true)
+                    == 29u);
+            };
+
+        "multi-shot continuations snapshot arguments and compose with the caller"_test =
+            [] {
+                language m;
+                auto saved = m.s("SAVED"), v = m.s("V"), k = m.s("K"),
+                     initial = m.s("INITIAL");
+                auto body = m.f(
+                    "LIST",
+                    {11,
+                     m.f("SEND-WITH-DEFAULT!", {m.q(m.s("SAVE")), 99, nil}),
+                     31});
+                auto handler = m.fn(
+                    m.l({v, k}),
+                    m.f("DO",
+                        {m.f("SET-SYMBOL-VALUE!", {m.q(saved), k}), v}));
+                auto capture =
+                    m.f("CALL-WITH-PROMPT",
+                        {m.q(m.s("SAVE")), m.fn(nil, body), handler});
+                auto program =
+                    m.f("LET",
+                        {m.l({m.l({initial, capture})}),
+                         m.f("LIST",
+                             {initial,
+                              m.f("CALL", {saved, 1}),
+                              m.f("APPLY", {saved, m.q(m.l({2}))})})});
+                const auto result = m.eval(program, true);
+                expect((m.h.get<tag::duo, field::car>(result) == 99u));
+                auto rest = m.h.get<tag::duo, field::cdr>(result);
+                m.values(m.h.get<tag::duo, field::car>(rest), {11, 1, 31});
+                rest = m.h.get<tag::duo, field::cdr>(rest);
+                m.values(m.h.get<tag::duo, field::car>(rest), {11, 2, 31});
+                expect((m.h.get<tag::duo, field::cdr>(rest) == nil));
+                auto continuation =
+                    m.h.get<tag::sym, field::val>(m.s("SAVED"));
+                auto acc = m.h.get<tag::ktx, field::acc>(continuation);
+                expect(
+                    std::ranges::equal(
+                        m.h.v32slice(acc),
+                        std::array{word{1}, word{11}, nil, nil}));
+                // Keep it only through a host pin, then resume in a fresh
+                // run.
+                const auto pin = m.h.make_pin(continuation);
+                m.h.set<tag::sym, field::val>(m.s("SAVED"), nil);
+                m.run.set(nil);
+                m.h.collect();
+                m.values(
+                    m.eval(m.f("CALL", {m.q(m.h.pinned(pin)), 43}), true),
+                    {11, 43, 31});
+                m.h.free_pin(pin);
+            };
+
+        "resumption shares lexical cells but snapshots dynamic binding frames"_test =
+            [] {
+                language m;
+                auto local = m.s("LOCAL"), dyn = m.s("DYN"),
+                     saved = m.s("SAVED"), k = m.s("K");
+                auto body = m.f(
+                    "DO",
+                    {m.f("SEND-WITH-DEFAULT!", {m.q(m.s("SAVE")), 0, nil}),
+                     m.f("%SET!", {m.q(dyn), m.f("+", {dyn, 1})}),
+                     m.f("%SET!", {m.q(local), m.f("+", {local, 1})}),
+                     m.f("LIST", {dyn, local})});
+                auto binding = m.f(
+                    "CALL-WITH-BINDING", {m.q(dyn), 10, m.fn(nil, body)});
+                auto handler = m.fn(
+                    m.l({m.s("V"), k}),
+                    m.f("SET-SYMBOL-VALUE!", {m.q(saved), k}));
+                auto program = m.f(
+                    "LET",
+                    {m.l({m.l({local, 0})}),
+                     m.f("SET-SYMBOL-DYNAMIC!", {m.q(dyn), t}),
+                     m.f("CALL-WITH-PROMPT",
+                         {m.q(m.s("SAVE")), m.fn(nil, binding), handler}),
+                     m.f("LIST",
+                         {m.f("CALL", {saved, nil}),
+                          m.f("CALL", {saved, nil})})});
+                const auto result = m.eval(program, true);
+                m.values(m.h.get<tag::duo, field::car>(result), {11, 1});
+                const auto rest = m.h.get<tag::duo, field::cdr>(result);
+                m.values(m.h.get<tag::duo, field::car>(rest), {11, 2});
+                expect((m.h.get<tag::duo, field::cdr>(rest) == nil));
+            };
+
+        "shallow prompts do not silently reinstall themselves on resumption"_test =
+            [] {
+                language m;
+                auto tag = m.s("ASK"), v = m.s("V"), k = m.s("K");
+                auto body =
+                    m.f("+",
+                        {m.f("SEND-WITH-DEFAULT!", {m.q(tag), 2, 80}),
+                         m.f("SEND-WITH-DEFAULT!", {m.q(tag), 3, 7})});
+                auto handler =
+                    m.fn(m.l({v, k}), m.f("CALL", {k, m.f("*", {v, 10})}));
+                expect(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {m.q(tag), m.fn(nil, body), handler}),
+                        true)
+                    == 27u);
+            };
+
+        "deep handlers can be expressed in Lisp by reinstalling the prompt"_test =
+            [] {
+                language m;
+                auto tag = m.s("TAG"), thunk = m.s("THUNK"),
+                     handler = m.s("HANDLER");
+                auto request = m.s("REQUEST"), k = m.s("K"),
+                     value = m.s("VALUE");
+                // The resume half of base.wisp's CALL-WITH-EFFECT-HANDLER,
+                // expressed entirely as guest closures rather than a host
+                // jet.
+                auto resume = m.fn(
+                    m.l({value}),
+                    m.f("HANDLE",
+                        {tag,
+                         m.fn(nil, m.f("CALL", {k, value})),
+                         handler}));
+                auto prompt_handler = m.fn(
+                    m.l({request, k}),
+                    m.f("CALL", {handler, request, resume}));
+                auto handle = m.fn(
+                    m.l({tag, thunk, handler}),
+                    m.f("CALL-WITH-PROMPT", {tag, thunk, prompt_handler}));
+                m.eval(
+                    m.f("SET-SYMBOL-FUNCTION!",
+                        {m.q(m.s("HANDLE")), handle}),
+                    true);
+                request = m.s("REQUEST");
+                auto resume_sym = m.s("RESUME");
+                auto body = m.f(
+                    "+",
+                    {m.f("SEND-WITH-DEFAULT!", {m.q(m.s("ASK")), 2, 80}),
+                     m.f("SEND-WITH-DEFAULT!", {m.q(m.s("ASK")), 3, 7})});
+                auto answer = m.fn(
+                    m.l({request, resume_sym}),
+                    m.f("CALL", {resume_sym, m.f("*", {request, 10})}));
+                expect(
+                    m.eval(
+                        m.f("HANDLE",
+                            {m.q(m.s("ASK")), m.fn(nil, body), answer}),
+                        true)
+                    == 50u);
+            };
+
+        "sending to a captured continuation composes both outside contexts"_test =
+            [] {
+                language m;
+                auto v = m.s("V"), k = m.s("K");
+                auto send =
+                    m.f("SEND-WITH-DEFAULT!", {m.q(m.s("SAVE")), 5, nil});
+                auto inner =
+                    m.f("CALL-WITH-PROMPT",
+                        {m.q(m.s("REMOTE")),
+                         m.fn(nil, m.f("+", {100, send})),
+                         m.fn(m.l({v, k}), m.f("+", {v, 1}))});
+                auto outer_handler = m.fn(
+                    m.l({v, k}),
+                    m.f("+",
+                        {1000,
+                         m.f("SEND-TO-WITH-DEFAULT!",
+                             {k, m.q(m.s("REMOTE")), 7, 99})}));
+                expect(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {m.q(m.s("SAVE")),
+                             m.fn(nil, m.f("+", {30, inner})),
+                             outer_handler}),
+                        true)
+                    == 1038u);
+            };
+
+        "language errors are resumable effects and handler errors reach outer prompts"_test =
+            [] {
+                language m;
+                auto e = m.s("E"), k = m.s("K");
+                auto body = m.f("LIST", {5, m.s("UNBOUND"), 7});
+                auto handler = m.fn(m.l({e, k}), m.f("CALL", {k, 42}));
+                m.values(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {m.q(m.s("ERROR")), m.fn(nil, body), handler}),
+                        true),
+                    {5, 42, 7});
+                e = m.s("E");
+                k = m.s("K");
+                auto inner =
+                    m.f("CALL-WITH-PROMPT",
+                        {m.q(m.s("ERROR")),
+                         m.fn(nil, m.f("HEAD", {1})),
+                         m.fn(m.l({e, k}), m.s("ALSO-UNBOUND"))});
+                expect(
+                    m.eval(
+                        m.f("CALL-WITH-PROMPT",
+                            {m.q(m.s("ERROR")),
+                             m.fn(nil, inner),
+                             m.fn(m.l({e, k}), 73)}),
+                        true)
+                    == 73u);
+            };
+
+        "continuation inspection, TOP identity, and arity are explicit"_test =
+            [] {
+                language m;
+                expect(m.eval(m.f("GET/CC"), true) == top);
+                expect(
+                    m.eval(m.f("COMPOSE-CONTINUATION", {m.q(top)}), true)
+                    == top);
+                expect(m.eval(m.f("CALL", {m.q(top), 17}), true) == 17u);
+                auto error = m.cause(m.error(m.f("CALL", {m.q(top)})));
+                expect(
+                    m.h.v32slice(error)[1]
+                    == m.s("CONTINUATION-CALL-ERROR"));
+                auto v = m.s("V"), k = m.s("K");
+                auto handler = m.fn(m.l({v, k}), k);
+                auto body =
+                    m.f("+",
+                        {19, m.f("SEND-WITH-DEFAULT!", {nil, 1, nil}), 23});
+                auto captured = m.eval(
+                    m.f("CALL-WITH-PROMPT",
+                        {nil, m.fn(nil, body), handler}),
+                    true);
+                root continuation{m.h, captured};
+                expect(
+                    m.eval(m.f("KTX-POS", {m.q(continuation.get())}), true)
+                    == 1u);
+                auto fun =
+                    m.eval(m.f("KTX-FUN", {m.q(continuation.get())}), true);
+                expect((fun == m.h.get<tag::sym, field::fun>(m.s("+"))));
+                expect(
+                    m.eval(
+                        m.f("TOP?",
+                            {m.f("KTX-HOP", {m.q(continuation.get())})}),
+                        true)
+                    == t);
+                expect(
+                    m.eval(m.f("CALL", {m.q(continuation.get()), 7}), true)
+                    == 49u);
+                root composed{
+                    m.h,
+                    m.eval(
+                        m.f("COMPOSE-CONTINUATION",
+                            {m.q(continuation.get())}),
+                        true)};
+                expect(composed.get() != continuation.get());
+                expect(
+                    m.eval(m.f("CALL", {m.q(composed.get()), 13}), true)
+                    == 55u);
+                error = m.cause(
+                    m.error(m.f("CALL", {m.q(continuation.get()), 1, 2})));
+                expect(
+                    m.h.v32slice(error)[1]
+                    == m.s("CONTINUATION-CALL-ERROR"));
+                // GET/CC is a live frame reference, not prompt capture.
+                // A prompt tag can be an empty vector, with no position.
+                auto prompt = m.eval(
+                    m.f("CALL-WITH-PROMPT",
+                        {m.h.newv32({}), m.fn(nil, m.f("GET/CC")), nil}),
+                    true);
+                expect(
+                    (m.h.get<tag::ktx, field::fun>(prompt)
+                     == m.s("PROMPT")));
+                expect(m.eval(m.f("KTX-POS", {m.q(prompt)}), true) == 0u);
+            };
+
+        "EVAL evaluates a computed form in the current lexical environment"_test =
+            [] {
+                language m;
+                auto x = m.s("X");
+                auto program =
+                    m.f("LET",
+                        {m.l({m.l({x, 19})}),
+                         m.f("EVAL", {m.q(m.f("+", {x, 23}))})});
+                expect(m.eval(program, true) == 42u);
+            };
     }};
 
 } // namespace
