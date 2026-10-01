@@ -36,11 +36,6 @@
                 clang-tools
                 gnumake
 
-                # `make spec`: the Racket model, and the JVM that Forge's
-                # Pardinus/Kodkod solver backend runs on.
-                racket
-                jdk21_headless
-
                 # `make docs`
                 uv
                 doxygen
@@ -49,6 +44,16 @@
                 mold
                 gdb
               ];
+          };
+
+          # Opt-in model development; basic orbs do not realize these tools
+          # or install the project-local Racket packages.
+          spec = pkgs.mkShell {
+            packages = with pkgs; [
+              racket
+              jdk21_headless
+              gnumake
+            ];
 
             shellHook = ''
               # Same project-local Racket package and compiled-code dirs the

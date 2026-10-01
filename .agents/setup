@@ -67,23 +67,6 @@ fi
 EOF
 fi
 
-# A warm `make setup-racket` still takes about 50s checking linked packages.
-# Reuse the Makefile's version-keyed stamp, invalidating it when dependency
-# declarations change. Linked package sources remain live in the checkout.
-racket_stamp="$PLTADDONDIR/$(racket -e '(display (version))')/nxt-setup.stamp"
-if [[ ! -f "$racket_stamp" || Makefile -nt "$racket_stamp" ||
-      vendor/racket/forge/info.rkt -nt "$racket_stamp" ||
-      vendor/racket/something-src/info.rkt -nt "$racket_stamp" ||
-      rdf-forge/info.rkt -nt "$racket_stamp" ]]; then
-  step 'Install project-local Racket dependencies' make setup-racket
-else
-  printf '\n== Project-local Racket dependencies already installed ==\n'
-fi
-# setup-racket deliberately links Forge without compiling it. Cache the same
-# model entry points as `make spec` so its first run need not compile Forge.
-step 'Precompile runtime model dependencies' env \
-  PLTCOLLECTS="$repo_root:$repo_root/vendor/racket:$repo_root/vendor/racket/something-src:${PLTCOLLECTS:-}" \
-  raco make -j 4 rdf-forge/tests/bfo-sketch-test.rkt nxtrt/model.rkt nxtrt/model-next.rkt
 step 'Cache documentation generator' uvx poxy --version
 
 if [[ -f ../src/forge-graph/packages/forge-graph/package.json ]]; then
@@ -97,4 +80,5 @@ if [[ -f build/meson-private/coredata.dat ]]; then
 else
   step 'Configure Meson build' make setup
 fi
-printf '\nReady: make build, make test, make spec, and make docs.\n'
+printf '\nReady: make build, make test, and make docs.\n'
+printf 'Optional model checks: nix develop .#spec -c make spec\n'

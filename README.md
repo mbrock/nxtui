@@ -221,23 +221,27 @@ The flake is optional and wraps the same Meson build:
 ```sh
 nix build            # ./result: libnxt-core, headers, nxt.pc, nxtllm, demos
 nix flake check      # the package (with tests) plus a pkg-config consumer build
-nix develop          # compilers, Meson, AWS-LC, clangd, Racket, a JDK, docs tools
+nix develop          # compilers, Meson, AWS-LC, clangd, docs tools
+nix develop .#spec   # optional Racket + JDK environment for the runtime model
 ```
 
-Inside `nix develop`, the plain `meson`/`make` commands above work as-is.
+Inside `nix develop`, the plain C++ build/test and docs commands above work
+as-is. The independent `spec` shell shares the same `flake.lock` but is not
+part of the default development environment.
 
 ### In Amp orbs
 
 `.agents/setup` installs Nix, realizes the development shell from `flake.lock`,
-installs the project-local Racket packages, precompiles the model dependencies,
-caches Poxy, and configures Meson.
-Amp snapshots these dependencies for reuse by fresh orbs. Repeated setup runs
-reuse installed packages; `.agents/resume` does not install anything.
+caches Poxy, and configures Meson. It does not download Racket or Java, install
+Racket packages, or compile the model. Amp snapshots the base dependencies for
+reuse by fresh orbs. Repeated setup runs reuse installed packages;
+`.agents/resume` does not install anything.
 
 Setup adds a repository-scoped login-shell hook so agents can run `make build`,
-`make test`, `make spec`, and `make docs` directly from the repository root,
-without manually entering `nix develop`. No API credentials are needed for
-these local workflows.
+`make test`, and `make docs` directly from the repository root, without manually
+entering `nix develop`. Model work is opt-in with
+`nix develop .#spec -c make spec`. No API credentials are needed for these local
+workflows.
 
 The separate Bun graph-documentation workflow requires the sibling checkout
 at `../src/forge-graph/packages/forge-graph` specified in `package.json`.
@@ -255,10 +259,17 @@ example scenarios must be satisfiable and its lifecycle properties must hold
 (for instance, that an exec only retires once its cancel CQE has drained, as
 `is_retirable` requires); `make spec-witnesses` prints the example traces. It
 needs Racket and a Java runtime (Forge's Pardinus solver runs on the JVM);
-`nix develop` provides both. Racket packages install into the project-local
-`.racket/<racket-version>/`, compiled code included, so nothing touches your
-global Racket setup and a Racket upgrade just triggers a fresh setup on the
-next `make spec`.
+enter `nix develop .#spec` or run:
+
+```sh
+nix develop .#spec -c make spec
+```
+
+Racket and Java come from Nix. The first `make spec` still installs the Racket
+library packages from their catalogs into the project-local
+`.racket/<racket-version>/`, compiled code included; those libraries are not
+Nix derivations. Later runs reuse them, nothing touches your global Racket
+setup, and a Racket upgrade triggers a fresh setup on the next `make spec`.
 
 Regenerate local API docs (poxy + Doxygen) with:
 
