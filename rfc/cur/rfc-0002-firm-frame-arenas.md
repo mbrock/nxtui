@@ -150,6 +150,46 @@ This should be a structured runtime diagnostic, not an unexplained
 [stacktrace.hpp](../../src/nxt/stacktrace.hpp) where that helps explain where
 the frame allocation was attempted.
 
+## Implementation: Stack Top Plus Size-Class Reuse
+
+The ring sketched above was measured against the echo bench before it was
+built, and it does not reclaim anything there. The bench forks one long-lived
+loop per client; each iteration awaits a few short tasks. Replaying the bench's
+frame trace (4 clients, ~10k frames before the old bump arena overflowed):
+
+| allocator | peak frame land |
+| --- | --- |
+| bump only (before) | 4.2 MB, overflowed the 4 MiB default |
+| ring, retiring dead prefixes and a dead tail | 4.2 MB |
+| bump + top retraction + exact-size free lists | 12.6 KB |
+| live frames at any instant (lower bound) | 10.2 KB, 23 frames |
+
+The worker loops are allocated first and never die, so in ring order they sit
+at the head and pin it: no prefix ever retires, and the ring cannot wrap past
+them. That is not a bench quirk but the ordinary shape of structured work, a
+long-lived child that keeps awaiting short ones.
+
+[`firm_frame_arena`](../../src/nxtrt/task.hpp) is therefore:
+
+- bump allocation from the top of the firm's borrowed bytes;
+- a freed frame on top retracts the top (stack discipline for inline awaits);
+- any other freed frame joins a free list for its exact block size, and the
+  next frame of that size reuses it. Coroutine frames come in very few sizes,
+  one per coroutine function (9 in the bench), so exact sizes almost always
+  match. The list is intrusive, living in the dead frame itself;
+- up to 16 size classes; a freed block with no free class is stranded until
+  reset and reported as such;
+- the whole arena resets when its last frame dies.
+
+Allocation never suspends and never falls back to the heap. Exhaustion throws
+a `runtime_error` naming the firm, the frame and block size, alignment, live
+bytes and frames, top, high-water mark, free-listed and stranded bytes, and
+the task that was creating the frame. With reuse, 240k frames in the bench run
+fit in 13.9 KB.
+
+A firm cannot be moved once a frame lives in its land, because frame headers
+name their arena; the firm move constructor aborts if that happens.
+
 ## Invariants
 
 A task frame allocated from firm land may not outlive that firm.
@@ -204,10 +244,14 @@ territory idea from coroutine frames to I/O buffers.
 
 ## Open Questions
 
-- What is the smallest ring-shaped frame allocator that can support aligned
-  coroutine frames and prefix retirement?
-- Do completed child frames get reused before firm settlement, or only after
-  the firm joins or a contiguous frame prefix retires?
+- ~~What is the smallest ring-shaped frame allocator that can support aligned
+  coroutine frames and prefix retirement?~~ A ring does not fit frame
+  lifetimes; see the implementation section.
+- ~~Do completed child frames get reused before firm settlement?~~ Yes: a
+  frame's land is reusable as soon as that frame is destroyed.
+- Should frame exhaustion become backpressure instead of an error? With task
+  factories, a firm could make `fork(fn, args...)` wait for frame land the way
+  `farm::alloc()` waits for a slot, before constructing the frame.
 - What does the root-firm entrypoint look like when task construction itself
   requires a firm?
 - What debugging hooks should expose frame high-water marks and allocation

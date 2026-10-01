@@ -983,6 +983,50 @@ nxtrt::task<void> aggregate_firm_storage_probe(
     };
 }
 
+nxtrt::task<int> frame_reuse_step(int value)
+{
+    co_return value + 1;
+}
+
+nxtrt::task<void> frame_reuse_worker(int iterations, int & total)
+{
+    for (auto i = 0; i < iterations; ++i) {
+        total = co_await frame_reuse_step(total);
+        co_await nxtrt::yield();
+    }
+}
+
+/// Long-lived forked workers that keep awaiting short tasks: the shape that
+/// exhausted bump-only frame land (the echo bench's client loops).
+struct frame_reuse_firm : nxtrt::firm
+{
+    frame_reuse_firm(
+        nxtrt::frame_storage_ref storage,
+        int iterations,
+        std::array<int, 4> & totals,
+        std::size_t & high_water)
+        : nxtrt::firm(storage)
+        , iterations(iterations)
+        , totals(&totals)
+        , high_water(&high_water)
+    {}
+
+    frame_reuse_firm(frame_reuse_firm &&) noexcept = default;
+    frame_reuse_firm & operator=(frame_reuse_firm &&) = delete;
+
+    nxtrt::task<void> operator()()
+    {
+        for (auto & total : *totals)
+            nxtrt::fork(frame_reuse_worker(iterations, total));
+        co_await nxtrt::join();
+        *high_water = frame_high_water();
+    }
+
+    int iterations = 0;
+    std::array<int, 4> * totals = nullptr;
+    std::size_t * high_water = nullptr;
+};
+
 nxtrt::task<int> root_task_probe(std::size_t & before, std::size_t & after)
 {
     auto * firm = nxtrt::current_firm();
@@ -2770,6 +2814,139 @@ static suite runtime_tests{
                 }
 
                 expect(failed);
+            };
+
+            "frame land retracts its top when the newest frame dies"_test = [] {
+                auto storage = nxtrt::static_frame_storage<1024>{};
+                auto arena = nxtrt::firm_frame_arena{storage};
+                auto * a = arena.allocate(40);
+                auto * b = arena.allocate(40);
+                auto const top_after_a =
+                    nxtrt::firm_frame_arena::block_size(40);
+
+                arena.deallocate(b);
+                expect(arena.top() == top_after_a);
+                expect(arena.live_frames() == std::size_t{1});
+                expect(arena.free_listed_bytes() == std::size_t{0});
+
+                arena.deallocate(a);
+                expect(arena.top() == std::size_t{0});
+                expect(arena.used() == std::size_t{0});
+                expect(arena.high_water() == 2 * top_after_a);
+            };
+
+            "frame land hands a freed block to the next frame of its size"_test = [] {
+                auto storage = nxtrt::static_frame_storage<1024>{};
+                auto arena = nxtrt::firm_frame_arena{storage};
+                auto * oldest = arena.allocate(40);
+                auto * middle = arena.allocate(40);
+                auto * newest = arena.allocate(40);
+                auto const top = arena.top();
+
+                arena.deallocate(middle);
+                expect(arena.free_listed_bytes()
+                       == nxtrt::firm_frame_arena::block_size(40));
+
+                auto * other_size = arena.allocate(200);
+                expect(other_size != middle);
+                auto * same_size = arena.allocate(40);
+                expect(same_size == middle);
+                expect(arena.free_listed_bytes() == std::size_t{0});
+                expect(arena.top()
+                       == top + nxtrt::firm_frame_arena::block_size(200));
+
+                arena.deallocate(other_size);
+                arena.deallocate(same_size);
+                arena.deallocate(newest);
+                arena.deallocate(oldest);
+                expect(arena.live_frames() == std::size_t{0});
+                expect(arena.top() == std::size_t{0});
+            };
+
+            "frame land resets once no frame is live"_test = [] {
+                auto storage = nxtrt::static_frame_storage<4096>{};
+                auto arena = nxtrt::firm_frame_arena{storage};
+                auto frames = std::array<void *, 20>{};
+                for (auto i = std::size_t{0}; i < frames.size(); ++i)
+                    frames[i] = arena.allocate(16 * (i + 1));
+
+                // Free oldest first: none of these is on top, and 20 sizes
+                // overflow the 16 size classes, so some blocks strand.
+                for (auto i = std::size_t{0}; i + 1 < frames.size(); ++i)
+                    arena.deallocate(frames[i]);
+                expect(arena.stranded_bytes() > std::size_t{0});
+                expect(arena.free_listed_bytes() > std::size_t{0});
+
+                arena.deallocate(frames.back());
+                expect(arena.top() == std::size_t{0});
+                expect(arena.free_listed_bytes() == std::size_t{0});
+                expect(arena.stranded_bytes() == std::size_t{0});
+            };
+
+            "frame land reports exhaustion without throwing"_test = [] {
+                auto storage = nxtrt::static_frame_storage<256>{};
+                auto arena = nxtrt::firm_frame_arena{storage};
+                auto * fits = arena.allocate(200);
+                expect(fits != nullptr);
+                expect(arena.allocate(200) == nullptr);
+                arena.deallocate(fits);
+                expect(arena.allocate(200) != nullptr);
+            };
+
+            "firm frame land is reused by long-lived workers' awaits"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto storage = nxtrt::static_frame_storage<16 * 1024>{};
+                auto totals = std::array<int, 4>{};
+                auto high_water = std::size_t{};
+                constexpr auto iterations = 5000;
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await frame_reuse_firm{
+                        storage,
+                        iterations,
+                        totals,
+                        high_water,
+                    };
+                });
+
+                for (auto total : totals)
+                    expect(total == iterations);
+                // 20000 step frames would need far more than 16 KiB without
+                // reuse; the footprint stays near the live set instead.
+                expect(high_water < std::size_t{16 * 1024});
+            };
+
+            "firm frame arena overflow names the land it ran out of"_test = [] {
+                struct overflowing_firm : nxtrt::firm
+                {
+                    explicit overflowing_firm(nxtrt::frame_storage_ref storage)
+                        : nxtrt::firm(storage)
+                    {}
+
+                    overflowing_firm(overflowing_firm &&) noexcept = default;
+                    overflowing_firm & operator=(overflowing_firm &&) = delete;
+
+                    nxtrt::task<void> operator()()
+                    {
+                        co_return;
+                    }
+                };
+
+                auto deck = nxtrt::deck{};
+                auto storage = nxtrt::static_frame_storage<1>{};
+                auto message = std::string{};
+
+                try {
+                    deck.sync_wait([&]() -> nxtrt::task<void> {
+                        co_await overflowing_firm{storage};
+                    });
+                } catch (const std::exception & e) {
+                    message = e.what();
+                }
+
+                expect(message.contains("bytes for a"));
+                expect(message.contains("live frames"));
+                expect(message.contains("high water"));
             };
 
             "firm child storage reports borrowed slot overflow"_test = [] {
