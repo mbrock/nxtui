@@ -98,4 +98,11 @@ if get_option('tests')
     dependencies : [nxt_stacktrace_dep],
   )
   test('wisp-alloc-tests', wisp_alloc_tests)
+
+  if get_option('wisp_tool')
+    test('wisp-host-tests', find_program('python3'),
+      args : [files('wisp-host-test.py'), wisp_tool],
+      timeout : 120,
+    )
+  endif
 endif

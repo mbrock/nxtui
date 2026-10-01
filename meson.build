@@ -111,6 +111,15 @@ if get_option('dev') and get_option('demo') and get_option('tests') and get_opti
   )
 endif
 
+if get_option('wisp_tool')
+  custom_target('wisp-root-link',
+    output : 'wisp',
+    input : wisp_tool,
+    command : ['ln', '-sf', 'src/wisp', '@OUTPUT@'],
+    build_by_default : true,
+  )
+endif
+
 if get_option('llm_tool')
   custom_target('nxtllm-root-link',
     output : 'nxtllm',

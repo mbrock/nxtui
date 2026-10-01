@@ -176,11 +176,46 @@ executable. The OpenAI event/data types live under
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
+## Wisp — a portable Lisp job on NXT
+
+The `wisp` executable runs Wisp's guest evaluator on the same NXT deck, with
+console effects and `sleep-ms` timers. The guest heap holds closures, suspended
+control state, source position, and the pending request; native coroutines hold
+only the live host operation. See [RFC 0018](rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
+for the language, GC, and portable tape contracts.
+
+```sh
+nix develop -c meson compile -C build wisp-root-link
+build/wisp repl
+build/wisp run demo/wisp-timer.wisp --checkpoint build/job.tape
+build/wisp inspect build/job.tape
+build/wisp restore build/job.tape --effects
+```
+
+`--checkpoint` saves and exits at the next timer, before waiting. Restore uses
+the saved absolute deadline; an elapsed timer fires immediately. The source is
+inside the tape, so restore needs no source file and does not repeat earlier
+forms. Checkpoints replace the selected file atomically, with file and directory
+fsync. Only load trusted tapes: validation is not a security sandbox.
+
+Restores have **effects disabled** unless given `--effects`. `inspect` executes
+no guest code. Add `--cancel` to restore to deliver `"CANCELLED"` through the
+pending request's guest error handler instead of performing it. Restoring again
+is a fork, not an exactly-once guarantee: explicitly enabling both forks can
+repeat effects. The input tape is never updated implicitly.
+
+This first host runs one sequential job, with at most one pending request.
+The REPL accepts complete forms on one line and preserves definitions between
+lines. `write`, `print`, `write-error`, `read-line`, and `read-bytes` are hooked
+up; Lisp-form reads from stdin, concurrent guest jobs, files/HTTP, and effect
+result logging remain future work. Disable the tool with `-Dwisp_tool=false`.
+
 ## Repository map
 
 - `src/nxtrt` — the structured coroutine runtime.
 - `src/nxtui` — terminal, raster, compositor, input, and layout code.
 - `src/nxtai` — the LLM/OpenAI client and `nxtllm`.
+- `src/wisp` — the guest Lisp machine, moving heap, tapes, and executable host.
 - `src/nxt` — shared protocol and utility code (crypto, TLS, JSON, PNG,
   stacktraces) not tied to one root namespace.
 - `demo` — small runtime, terminal, HTTP, SSE, and shell demos.
@@ -197,9 +232,9 @@ meson compile -C build
 build/nxt-tests
 ```
 
-The default build produces `nxt-tests`, `nxtllm`, `nxtmt`, the shared
-`libnxt-core`, the demo programs, and `nxt-dev` (one binary bundling all of
-them). Try the small TUI demo with:
+The default build produces `nxt-tests`, `nxtllm`, `nxtmt`, `wisp`, the shared
+`libnxt-core`, the demo programs, and the `nxt-dev` developer command bundle.
+Try the small TUI demo with:
 
 ```sh
 build/demo/nxt-tui-demo

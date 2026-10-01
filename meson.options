@@ -4,6 +4,9 @@ option('demo', type : 'boolean', value : true,
 option('tests', type : 'boolean', value : true,
   description : 'Build and register tests')
 
+option('wisp_tool', type : 'boolean', value : true,
+  description : 'Build the Wisp console and timer host')
+
 option('llm_tool', type : 'boolean', value : true,
   description : 'Build the nxtllm tool')
 

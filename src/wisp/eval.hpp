@@ -39,8 +39,11 @@ public:
     }
 
     /// Inputs must be live words in this heap; an environment is NIL or a
-    /// list of even-length name/value vectors. As with heap's low-level
-    /// API, fabricated pointers and malformed machine rows are not checked.
+    /// list of even-length key/value vectors (only symbol keys can match).
+    /// Mutable syntax, environments, and continuation payloads are checked
+    /// on use and signal conditions. As with heap's low-level API,
+    /// fabricated pointers and malformed private machine links are not
+    /// supported.
     word start(word expression, word environment = nil);
     evaluation status(word run) const noexcept;
     evaluation step(word run);

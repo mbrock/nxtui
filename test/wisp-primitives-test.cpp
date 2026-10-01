@@ -660,13 +660,19 @@ static suite primitive_tests{
                 expect(m.call("SYMBOL?", {top}) == nil);
                 result = m.call("PACKAGE-SYMBOLS", {base.get()});
                 expect(
-                    result == (m.h.get<tag::pkg, field::sym>(base.get())));
+                    result != (m.h.get<tag::pkg, field::sym>(base.get())));
                 auto found = false;
                 for (auto cur = result; cur != nil;
                      cur = m.h.get<tag::duo, field::cdr>(cur))
                     found |=
                         m.h.get<tag::duo, field::car>(cur) == lower.get();
                 expect(found);
+                m.h.set<tag::duo, field::car>(result, 19);
+                m.h.set<tag::duo, field::cdr>(result, result);
+                expect(m.vm.intern("mixed", base.get()) == lower.get());
+                expect(
+                    tag_of(m.vm.intern("NEW-SYMBOL", base.get()))
+                    == tag::sym);
                 result = m.call("PACKAGE-NAME", {keywords.get()});
                 expect(m.h.v08slice(result) == "KEYWORD");
                 expect(m.call("PACKAGE-USES", {base.get()}) == nil);

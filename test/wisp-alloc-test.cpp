@@ -85,11 +85,18 @@ static suite allocation_tests{
                                 ++*static_cast<std::size_t *>(p);
                             }}};
                     (void) h.make<tag::ext>({19, nil});
-                    auto pair = h.cons(7, nil);
-                    auto vec = h.newv32(std::array<word, 2>{pair, pair});
+                    (void) h.newv08("garbage");
+                    auto text = h.newv08("live");
+                    auto shared = h.copy<tag::v08>(text);
+                    auto text_row = h.read<tag::v08>(text);
+                    auto borrowed = h.v08slice(text);
+                    auto pair = h.cons(text, nil);
+                    auto vec =
+                        h.newv32(std::array<word, 3>{pair, pair, shared});
                     h.set<tag::duo, field::cdr>(pair, vec);
                     root live{h, vec};
                     auto pin = h.make_pin(pair);
+                    auto text_pin = h.make_pin(text);
                     try {
                         fail_after fault{n};
                         h.collect();
@@ -100,12 +107,19 @@ static suite allocation_tests{
                     if (!succeeded) {
                         expect(!h.era());
                         expect(live.get() == vec && h.pinned(pin) == pair);
+                        expect(h.pinned(text_pin) == text);
                         expect(
                             h.read<tag::duo>(pair)
-                            == row<tag::duo>{7, vec});
+                            == row<tag::duo>{text, vec});
+                        expect(h.read<tag::v08>(text) == text_row);
+                        expect(h.read<tag::v08>(shared) == text_row);
+                        expect(h.byte_count() == 11u && borrowed == "live");
+                        expect(h.v08slice(text).data() == borrowed.data());
+                        expect(h.word_count() == 3u);
                         expect(
                             h.v32slice(vec)[0] == pair
-                            && h.v32slice(vec)[1] == pair);
+                            && h.v32slice(vec)[1] == pair
+                            && h.v32slice(vec)[2] == shared);
                         expect(releases == 0u);
                         h.collect(); // Recover using the very same heap.
                     }
@@ -114,8 +128,21 @@ static suite allocation_tests{
                     expect(
                         h.get<tag::duo, field::cdr>(h.pinned(pin))
                         == live.get());
+                    expect(
+                        h.get<tag::duo, field::car>(h.pinned(pin))
+                        == h.pinned(text_pin));
+                    expect(h.byte_count() == 8u);
+                    expect(h.v08slice(h.pinned(text_pin)) == "live");
+                    expect(h.v08slice(h.v32slice(live.get())[2]) == "live");
                 }
-                expect(succeeded && failures >= 3u);
+                // Every occupied table column and both payload reserves
+                // must fail safely, including the final byte-pool reserve.
+                expect(succeeded);
+                expect(
+                    failures
+                    == tab<tag::duo>::width + tab<tag::v32>::width
+                           + tab<tag::v08>::width + tab<tag::ext>::width
+                           + 2);
             };
 
         "failed vector append rolls back its payload and descriptor"_test =

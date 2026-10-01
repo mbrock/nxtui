@@ -382,8 +382,10 @@ The first storage choices and contracts are:
   era bit is a debugging aid, not a durable generation number: it wraps after
   two collections. Cross-heap pointers and unrooted stale words are invalid.
   `zap` is collector-only and cannot occupy a live row's first column.
-- Collection preserves cycles and shared object identity, copies each live
-  word-vector payload, and retains the entire byte pool. A shallow descriptor
+- Collection preserves cycles and shared object identity and copies each live
+  byte- and word-vector payload. Unlike Zig Tidy, dead byte payloads are
+  reclaimed, making repeated string allocation viable in a long-lived host.
+  A shallow descriptor
   copy initially aliases vector payload, but Zig Tidy copies distinct descriptor
   payloads separately during GC. This surprising behavior is retained and tested,
   not silently reinterpreted as a permanent aliasing guarantee.
@@ -474,8 +476,14 @@ Language failures are heap condition vectors; builtin failures wrap their
 cause. The control slice below delivers these through `ERROR` prompts, stopping
 the run in `run.err` if delivery fails. Exact condition payload parity is not
 claimed. Dotted or cyclic argument lists and malformed bindings fail instead of
-accessing invalid native storage. Heap API contracts still apply to host-supplied
-pointers, environments, and machine rows. Host allocation exceptions escape;
+accessing invalid native storage. Checks run again when guest mutation could
+have changed sequence tails, LET accumulators/bindings, application cursors or
+remaining arity, and environment spines/frame lengths. Environment keys need
+not be symbols; non-symbol keys simply cannot match a lookup. `PACKAGE-SYMBOLS`
+now returns a fresh spine, like `PACKAGES`, so pair mutation cannot damage the
+private index used even when constructing conditions. Symbol identity is shared.
+Heap API contracts still apply to fabricated pointers and private machine links.
+Host allocation exceptions escape;
 interrupted steps are not transactional or promised retryable. Internal
 NAH/ZAP/TOP markers are not accepted as literal expressions. Builtin indices are
 local to this subset, not Zig tape indices or a stable image ABI; C++ tapes
@@ -703,8 +711,9 @@ Other host roots must be explicitly reachable from the entry, pins, or
 evaluator roots to survive collection in the restored image.
 
 Save only between evaluator calls, as for collection. Encoding does not collect
-or mutate the source. Whole pools include unreachable data; in particular,
-Tidy still retains dead byte payloads. A tape is not a sanitized data export.
+or mutate the source. Whole pools include unreachable data unless collected
+first. Tidy reclaims both byte and word payloads, but a tape is still not a
+sanitized data export.
 Any external row causes rejection, including an unreachable row until the host
 explicitly collects it. Rebinding external capabilities is deliberately absent
 in this version; saving a numeric host handle would not save its resource.
@@ -745,8 +754,13 @@ migration, not silent acceptance.
 
 Decode checks the checksum before constructing a machine, bounds counts against
 remaining input before allocating, rejects trailing bytes, and validates tags,
-eras, indices, pool slices, pin sequences, canonical roots, package lists,
-environment shapes, and acyclic continuation links. List/continuation walks are
+eras, indices, pool slices, pin sequences, canonical roots, private package
+indexes, and acyclic continuation links. Mutable uses lists, environments,
+syntax, and continuation payloads are checkpointable even when malformed:
+the evaluator must preserve their meaning, including a condition on later use.
+For example, a cyclic package uses list restores and still raises
+`INVALID-PACKAGE-USES`; an application with a damaged cursor restores and
+raises `INVALID-CONTINUATION`. List/continuation validation walks are
 iterative and memoize shared suffixes. Default input limit is 64 MiB and can be
 overridden; it is not a resident-memory or execution-time quota. Allocation and
 stream exceptions propagate with RAII cleanup. SHA-256 is corruption detection,
@@ -767,25 +781,55 @@ cycles/sharing, aliased vector payloads, pins, saved definitions/current package
 fresh keys, pending GC, reordered builtin/table/column identities, malformed
 images with recomputed checksums, stream failures, and deep continuations.
 
-### A small executable host is the next runtime increment
+### The first executable host runs console and timer effects
 
-The next useful Node-style slice is a `wisp run`/REPL host driving guest runs on
-NXT, with explicit handlers for console I/O and timers. Give a request a logical
-ID, operation name, arguments, and rooted continuation; let NXT own the actual
-backend work. Add cancellation and a pending-request inspection command before
-growing the operation set to files and HTTP. A sleeping job that can be saved,
-the process stopped, then restored and resumed would exercise the whole design.
+[`wisp`](../../src/wisp/main.cpp) now supplies `run`, a line-oriented REPL,
+`inspect`, and `restore`. Its optional [`host.wisp`](../../src/wisp/host.wisp)
+library routes console output, line/byte input, and `sleep-ms` through `send!`
+effects. It adds no jets or authority to the portable base. NXT drives bounded
+evaluator turns, file-descriptor I/O and timer waits; source-file loading and
+checkpoint file replacement are explicitly blocking host operations.
 
-Persist pending-operation descriptions, not native registrations. A restored
-timer needs a deadline/elapsed-time policy; a network write needs reconciliation
-or an explicit retry decision. Record results in an external-effect ledger
-before pursuing deterministic replay. Snapshot forks should initially have
-effects disabled, making them useful for inspection and speculative evaluation
-without duplicating real-world operations.
+One sequential job has one heap entry:
 
-Host debugging/tracing, journaling, external rebinding, guest checkpoint effects,
-and that executable host remain future work. `drive` itself still supplies only
-cooperative scheduling, not effect routing or persistence policy.
+```
+[:NXT-WISP-1 source byte-offset run pending last-result]
+pending = NIL | [id [operation arguments] deadline resume raise]
+```
+
+The deep handler writes the pending record, with a GENKEY identity and guest
+resume/raise closures, before the host starts the operation. All live words are
+rooted across awaits/collection. Successful completion or a host operation error
+installs a guest callback run before removing the pending record. Native task
+cancellation leaves the record pending; CLI `restore --effects --cancel`
+instead delivers the string `"CANCELLED"` through its raise closure. Ctrl-C
+still terminates the process; it is not an automatic checkpoint or guest raise.
+
+`run SOURCE --checkpoint TAPE` saves and exits at the next timer. The source and
+byte offset are in the entry, not a native reader, so a fresh process resumes
+inside the current form and then reads later forms in the saved current package.
+The deadline is an absolute Unix-millisecond decimal string (epoch time exceeds
+a fixnum). Timer waits recheck wall time in at most one-second monotonic waits;
+wall-clock adjustments affect them, and already elapsed timers fire immediately.
+Files use mode 0600, same-directory temporary creation, checked writes/close,
+file fsync, atomic rename, and directory fsync. A directory fsync failure after
+rename reports uncertain durability; it cannot roll the rename back. No timer
+means no checkpoint, reported as a CLI error. Saving does not retain an OS task.
+
+Restore requires `--effects` before dispatching any operation. `inspect` prints
+the request ID, operation, deadline, and source offset without running the guest.
+Neither command implicitly updates the input tape. Enabling effects in multiple
+forks can duplicate output: there is no exactly-once promise or result ledger,
+and deterministic GENKEY IDs are not globally unique across forks.
+
+[`test/wisp-host-test.py`](../../test/wisp-host-test.py) exercises actual process
+exit/restart, deletion of the original source, future and expired deadlines,
+effect gating, cancellation/error handlers, binary input, REPL recovery, and
+checkpoint file failures. The first host deliberately has no concurrent guest
+jobs, Lisp-form stdin reader, file/HTTP capabilities, debugger, external resource
+rebinding, or guest checkpoint effect. Add result reconciliation before file or
+network effects; pursue journaling only after whole-image semantics are settled.
+`drive` itself still supplies only scheduling, not this host's effect policy.
 
 ## Open design choices
 

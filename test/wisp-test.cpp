@@ -186,7 +186,7 @@ static suite wisp_tests{
                 expect(h.table<tag::duo>().size() == 0u);
             };
 
-        "Tidy scans nested vector cycles and retains the byte pool"_test =
+        "Tidy scans nested vector cycles and reclaims dead byte payloads"_test =
             [] {
                 heap h;
                 (void) h.newv08("garbage");
@@ -202,7 +202,7 @@ static suite wisp_tests{
                 for (int pass = 0; pass < 3; ++pass) {
                     h.collect();
                     expect(h.word_count() == 5u);
-                    expect(h.byte_count() == 11u);
+                    expect(h.byte_count() == 4u);
                     expect(h.table<tag::v08>().size() == 1u);
                     auto a = h.v32slice(live.get());
                     auto b = h.v32slice(a[0]);
@@ -213,6 +213,57 @@ static suite wisp_tests{
                         == row<tag::duo>{a[0], live.get()});
                     expect(a[2] == 0x900003bbu);
                 }
+            };
+
+        "byte collection preserves roots pins and shared descriptors"_test =
+            [] {
+                heap h;
+                (void) h.newv08("garbage");
+                root text{h, h.newv08(std::string_view{"a\0b!", 4})};
+                root duplicate{h, text.get()};
+                root shallow{h, h.copy<tag::v08>(text.get())};
+                auto [idx, len] = h.read<tag::v08>(text.get());
+                auto pin = h.make_pin(h.make<tag::v08>({idx + 1, len - 1}));
+                root empty{h, h.make<tag::v08>({idx + len, 0})};
+                expect(h.byte_count() == 11u);
+                for (int pass = 0; pass < 4; ++pass) {
+                    (void) h.newv08("more garbage");
+                    h.collect();
+                    expect(h.era() == (pass % 2 == 0));
+                    expect(h.byte_count() == 11u); // 4 + 4 + 3 + 0.
+                    expect(h.table<tag::v08>().size() == 4u);
+                    expect(text.get() == duplicate.get());
+                    expect(text.get() != shallow.get());
+                    expect(
+                        h.v08slice(text.get())
+                        == std::string_view{"a\0b!", 4});
+                    expect(
+                        h.v08slice(shallow.get())
+                        == h.v08slice(text.get()));
+                    expect(
+                        h.v08slice(h.pinned(pin))
+                        == std::string_view{"\0b!", 3});
+                    expect(h.v08slice(empty.get()).empty());
+                    expect(
+                        h.get<tag::v08, field::idx>(text.get())
+                        != h.get<tag::v08, field::idx>(shallow.get()));
+                }
+                text.set(nil);
+                duplicate.set(nil);
+                shallow.set(nil);
+                h.collect();
+                expect(h.byte_count() == 3u);
+                expect(
+                    h.v08slice(h.pinned(pin))
+                    == std::string_view{"\0b!", 3});
+                h.free_pin(pin);
+                h.collect();
+                expect(h.byte_count() == 0u);
+                expect(h.v08slice(empty.get()).empty());
+                empty.set(nil);
+                h.collect();
+                expect(h.byte_count() == 0u);
+                expect(h.table<tag::v08>().size() == 0u);
             };
 
         "all schema tables trace values but not raw metadata"_test = [] {

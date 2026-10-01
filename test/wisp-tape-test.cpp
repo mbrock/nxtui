@@ -289,6 +289,96 @@ static suite tape_tests{
                      == 32u));
             };
 
+        "mid-argument accumulation survives restore and corrupt cursors signal conditions"_test =
+            [] {
+                heap h;
+                evaluator vm{h};
+                root run{
+                    h,
+                    vm.start(
+                        reader{h, vm, "(- 91 (+ 7 13) 5)"}.next().value())};
+                word acc = nil;
+                for (unsigned i = 0; i < 100 && acc == nil; ++i) {
+                    expect(vm.step(run.get()) == evaluation::runnable);
+                    const auto way = h.get<tag::run, field::way>(run.get());
+                    if (way != top) {
+                        const auto candidate =
+                            h.get<tag::ktx, field::acc>(way);
+                        if (tag_of(candidate) == tag::v32
+                            && h.v32slice(candidate)[0] == 1)
+                            acc = candidate;
+                    }
+                }
+                expect(acc != nil);
+                if (acc == nil)
+                    return;
+                expect(h.v32slice(acc)[1] == 91u);
+                auto restored = tape::decode(tape::encode(vm, run.get()));
+                restored->machine.collect();
+                expect(
+                    restored->machine.advance(restored->entry.get(), 100)
+                    == evaluation::done);
+                expect(
+                    (restored->storage.get<tag::run, field::val>(
+                         restored->entry.get())
+                     == 66u));
+                h.v32set(acc, 0, 999);
+                restored = tape::decode(tape::encode(vm, run.get()));
+                restored->machine.collect();
+                expect(
+                    restored->machine.advance(restored->entry.get(), 100)
+                    == evaluation::failed);
+                expect(print(
+                           restored->storage,
+                           restored->storage.get<tag::run, field::err>(
+                               restored->entry.get()))
+                           .contains("INVALID-CONTINUATION"));
+            };
+
+        "mutable environment keys and invalid uses retain their runtime meaning"_test =
+            [] {
+                heap h;
+                evaluator vm{h};
+                root run{
+                    h,
+                    vm.start(
+                        vm.intern("X"),
+                        h.cons(
+                            h.newv32(
+                                std::array{17u, 31u, vm.intern("X"), 42u}),
+                            nil))};
+                auto restored = tape::decode(tape::encode(vm, run.get()));
+                expect(
+                    restored->machine.advance(restored->entry.get(), 10)
+                    == evaluation::done);
+                expect(
+                    (restored->storage.get<tag::run, field::val>(
+                         restored->entry.get())
+                     == 42u));
+                evaluate(h, vm, R"(
+                (%defpackage "P")
+                (set-symbol-value! 'uses (list (find-package "WISP")))
+                (package-set-uses! (find-package "P") uses)
+                (set-tail! uses uses))");
+                run.set(vm.start(
+                    reader{
+                        h,
+                        vm,
+                        R"((intern "NOT-PRESENT" (find-package "P")))"}
+                        .next()
+                        .value()));
+                restored = tape::decode(tape::encode(vm, run.get()));
+                restored->machine.collect();
+                expect(
+                    restored->machine.advance(restored->entry.get(), 100)
+                    == evaluation::failed);
+                expect(print(
+                           restored->storage,
+                           restored->storage.get<tag::run, field::err>(
+                               restored->entry.get()))
+                           .contains("INVALID-PACKAGE-USES"));
+            };
+
         "a guest library continuation outlives its source machine and resumes on NXT"_test
             .with_timeout(10s) = [] {
             bytes data;
@@ -402,7 +492,6 @@ static suite tape_tests{
                 const auto frame =
                     h.make<tag::ktx>({top, nil, vm.intern("DO"), nil, nil});
                 const auto vector = h.newv32(std::array{17u, 31u});
-                const auto invalid_environment = h.cons(vector, nil);
                 const auto pin = h.make_pin(vector);
                 const auto original = tape::encode(vm, frame);
                 layout wire{original};
@@ -428,8 +517,6 @@ static suite tape_tests{
                     {wire.tables.at(tag::v32).columns.at("len"),
                      0xffffffffu},
                     {wire.tables.at(tag::ktx).columns.at("hop"), frame},
-                    {wire.tables.at(tag::ktx).columns.at("env"),
-                     invalid_environment},
                     {wire.tables.at(tag::duo).columns.at("cdr")
                          + 4 * index_of(symbols),
                      symbols},

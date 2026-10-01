@@ -147,6 +147,21 @@ nxt_stacktrace_dep = declare_dependency(
   compile_args : nxt_stacktrace_cpp_args,
 )
 
+if get_option('wisp_tool')
+  wisp_host_config = configuration_data()
+  wisp_host_config.set('WISP_HOST', import('fs').read('wisp/host.wisp'))
+  configure_file(
+    input : 'wisp/host.hpp.in',
+    output : 'wisp-host.hpp',
+    configuration : wisp_host_config,
+  )
+  wisp_tool = executable('wisp', 'wisp/main.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_core_dep, nxt_stacktrace_dep],
+    install : true,
+  )
+endif
+
 if get_option('llm_tool')
   nxtllm = executable('nxtllm',
     'nxtai/nxtllm.cpp',
@@ -214,6 +229,9 @@ nxt_header_install_excludes = {
     'tape.cpp',
     'base.wisp',
     'base.hpp.in',
+    'main.cpp',
+    'host.wisp',
+    'host.hpp.in',
   ],
 }
 

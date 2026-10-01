@@ -132,9 +132,13 @@ public:
     void free_pin(word pin) noexcept;
 
     /// Tidy's era-flipping copying collector, with in-row forwarding.
-    /// All destination capacity is reserved before forwarding begins: an
-    /// allocation failure leaves the old heap and host roots untouched.
-    /// This conservative reservation may need as much space as the old vat.
+    /// Copies live byte and word payloads per descriptor, rewriting
+    /// offsets; distinct descriptors no longer share payload after
+    /// collection. All destination capacity is reserved before forwarding
+    /// begins: an allocation failure leaves the old heap and host roots
+    /// untouched. Reservation covers every old row and the sum of
+    /// descriptor lengths, including unreachable and shared slices, before
+    /// reclaiming garbage.
     void collect();
 
 private:

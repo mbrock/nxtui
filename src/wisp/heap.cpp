@@ -173,6 +173,7 @@ struct tidy
 {
     heap & old;
     vat next;
+    std::vector<char> bytes;
     std::vector<word> words;
     std::array<std::size_t, std::tuple_size_v<vat>> scan{};
     std::size_t word_scan = 0;
@@ -192,6 +193,11 @@ struct tidy
                  column_index<tag::v32, field::len>()))
             total = pool_size(total, len);
         words.reserve(total);
+        total = 0;
+        for (word len : old.table<tag::v08>().col(
+                 column_index<tag::v08, field::len>()))
+            total = pool_size(total, len);
+        bytes.reserve(total);
     }
 
     template<tag T>
@@ -206,8 +212,14 @@ struct tidy
         auto data = from.read(i);
         if constexpr (T == tag::v32) {
             auto payload = old.v32slice(x);
-            data[0] = static_cast<word>(words.size());
+            data[column_index<T, field::idx>()] =
+                static_cast<word>(words.size());
             words.insert(words.end(), payload.begin(), payload.end());
+        } else if constexpr (T == tag::v08) {
+            auto payload = old.v08slice(x);
+            data[column_index<T, field::idx>()] =
+                static_cast<word>(bytes.size());
+            bytes.insert(bytes.end(), payload.begin(), payload.end());
         }
         auto & to = std::get<tab<T>>(next);
         auto y = pointer(T, to.push(data), !old.era_);
@@ -285,9 +297,9 @@ struct tidy
         } while (changed);
         old.release_externals(); // Forwarded rows are marked, not released.
         old.vat_ = std::move(next);
+        old.bytes_ = std::move(bytes);
         old.words_ = std::move(words);
         old.era_ = !old.era_;
-        // Byte payloads deliberately stay put, including unreachable bytes.
     }
 };
 

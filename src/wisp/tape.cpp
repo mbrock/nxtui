@@ -217,10 +217,9 @@ struct tape_codec
                                 "invalid pool slice");
                             total += length;
                         }
-                        if constexpr (T == tag::v32)
-                            demand(
-                                total <= std::numeric_limits<word>::max(),
-                                "collected word pool would overflow");
+                        demand(
+                            total <= std::numeric_limits<word>::max(),
+                            "collected payload pool would overflow");
                     }
                 };
                 (check(tables), ...);
@@ -237,17 +236,16 @@ struct tape_codec
                 typed(pkg, tag::pkg);
         }
 
-        // Memoize proper-list suffixes separately for each element type.
-        // Sharing is allowed; cycles in data are allowed, not in these
-        // machine-owned package/environment list spines.
-        std::array<std::vector<unsigned char>, 3> lists;
+        // Only private package indexes are required to be proper lists.
+        // Environments, uses, syntax and continuation payloads are mutable
+        // guest data. Runtime readers check them on use; a checkpoint must
+        // preserve their conditions, not silently impose stronger
+        // semantics.
+        std::array<std::vector<unsigned char>, 2> lists;
         for (auto & colors : lists)
             colors.resize(sizes[word(tag::duo)]);
         const auto proper = [&](word head, tag element) {
-            auto & colors = lists
-                [element == tag::pkg   ? 0
-                 : element == tag::sym ? 1
-                                       : 2];
+            auto & colors = lists[element == tag::pkg ? 0 : 1];
             auto cur = head;
             while (cur != nil) {
                 typed(cur, tag::duo);
@@ -258,12 +256,6 @@ struct tape_codec
                 color = 1;
                 const auto [item, next] = h.read<tag::duo>(cur);
                 typed(item, element);
-                if (element == tag::v32) {
-                    const auto pairs = h.v32slice(item);
-                    demand(pairs.size() % 2 == 0, "odd environment vector");
-                    for (std::size_t i = 0; i < pairs.size(); i += 2)
-                        typed(pairs[i], tag::sym);
-                }
                 cur = next;
             }
             for (cur = head; cur != nil && colors[index_of(cur)] == 1;) {
@@ -275,7 +267,6 @@ struct tape_codec
             auto [name, symbols, uses] = h.table<tag::pkg>().read(i);
             typed(name, tag::v08);
             proper(symbols, tag::sym);
-            proper(uses, tag::pkg);
         }
         proper(vm.packages_.get(), tag::pkg);
         std::set<std::string_view> package_names;
@@ -339,12 +330,6 @@ struct tape_codec
         std::apply(
             [&]<tag... Tags>(const tab<Tags> &... tables) {
                 const auto check = [&]<tag T>(const tab<T> & table) {
-                    if constexpr (
-                        T == tag::fun || T == tag::mac || T == tag::run
-                        || T == tag::ktx)
-                        for (auto env :
-                             table.col(column_index<T, field::env>()))
-                            proper(env, tag::v32);
                     if constexpr (T == tag::run)
                         for (auto way :
                              table.col(column_index<T, field::way>()))

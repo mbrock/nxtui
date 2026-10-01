@@ -47,10 +47,13 @@ inline constexpr std::size_t default_limit = 64 * 1024 * 1024;
 std::vector<std::byte> encode(const evaluator &, word entry = nil);
 
 /// Restore into a separate owner or throw error; never changes a live
-/// machine. Validates storage references and machine structure, not Lisp
-/// program semantics. Load trusted checkpoints only: this is not a sandbox
-/// for hostile executable images. Limits input bytes, not execution time
-/// or total resident memory. Allocation failures propagate normally.
+/// machine. Validates references, private package indexes, cached roots,
+/// and acyclic continuation links. Mutable syntax, uses, environments and
+/// continuation payloads keep their runtime meaning, including conditions
+/// on use; they need not describe a successful program to be
+/// checkpointable. Load trusted checkpoints only: this is not a sandbox for
+/// hostile executable images. Limits input bytes, not execution time or
+/// total resident memory. Allocation failures propagate normally.
 std::unique_ptr<image>
 decode(std::span<const std::byte>, std::size_t limit = default_limit);
 

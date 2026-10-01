@@ -353,9 +353,11 @@ struct eval_step
                 cur = hop;
             }
         }
-        for (auto cur = env; cur != nil;) {
-            const auto [scope, next] = h.read<tag::duo>(cur);
+        for (auto scope : scan(env)) {
+            require(scope, tag::v32, "VECTOR");
             const auto xs = h.v32slice(scope);
+            if (xs.size() % 2 != 0)
+                fail("INVALID-ENVIRONMENT", {scope});
             for (std::size_t i = 0; i < xs.size(); i += 2) {
                 if (xs[i] == sym) {
                     if (assign)
@@ -363,7 +365,6 @@ struct eval_step
                     return assign ? value : xs[i + 1];
                 }
             }
-            cur = next;
         }
         const auto old = h.get<tag::sym, field::val>(sym);
         if (old == nah)
@@ -375,6 +376,9 @@ struct eval_step
 
     void sequence(word body)
     {
+        // Body spines are guest data: an earlier form may have changed
+        // the rest since the application first checked it.
+        (void) scan(body);
         if (body == nil) {
             give(nil);
             return;
@@ -490,6 +494,7 @@ struct eval_step
             way = hop;
             sequence(arg);
         } else if (fun == vm.if_.get()) {
+            require(arg, tag::duo, "CONS");
             const auto [yes, no] = h.read<tag::duo>(arg);
             way = hop;
             enter(val == nil ? no : yes);
@@ -500,8 +505,13 @@ struct eval_step
             way = hop;
         } else if (fun == vm.let_.get()) {
             // Reverse accumulator: name, value, name, ..., body.
+            auto xs = scan(acc);
+            if (xs.empty() || xs.size() % 2 != 0)
+                fail("INVALID-CONTINUATION", {way});
+            for (std::size_t i = 0; i + 1 < xs.size(); i += 2)
+                require(xs[i], tag::sym, "SYMBOL");
+            (void) scan(arg);
             if (arg == nil) {
-                auto xs = scan(acc);
                 const auto body = xs.back();
                 xs.pop_back();
                 // The newest name takes val; earlier entries are stored
@@ -515,6 +525,9 @@ struct eval_step
             } else {
                 const auto [binding, rest] = h.read<tag::duo>(arg);
                 const auto pair = scan(binding);
+                if (pair.size() != 2)
+                    fail("INVALID-BINDING", {binding});
+                require(pair[0], tag::sym, "SYMBOL");
                 auto next_acc = h.cons(pair[0], h.cons(val, acc));
                 h.set<tag::ktx, field::acc>(way, next_acc);
                 h.set<tag::ktx, field::arg>(way, rest);
@@ -527,13 +540,19 @@ struct eval_step
                 call(fun, args);
                 return;
             }
+            const auto remaining = scan(arg);
             auto vector = acc;
             if (vector == nil) {
-                vector = h.filledv32(2 + scan(arg).size(), nil);
+                vector = h.filledv32(2 + remaining.size(), nil);
                 h.v32set(vector, 0, 0);
                 h.set<tag::ktx, field::acc>(way, vector);
             }
-            const auto pos = h.v32slice(vector)[0];
+            require(vector, tag::v32, "VECTOR");
+            const auto xs = h.v32slice(vector);
+            if (xs.size() < 2 || xs[0] >= xs.size() - 1
+                || remaining.size() != xs.size() - xs[0] - 2)
+                fail("INVALID-CONTINUATION", {way});
+            const auto pos = xs[0];
             h.v32set(vector, pos + 1, val);
             h.v32set(vector, 0, pos + 1);
             if (arg == nil) {
@@ -790,7 +809,12 @@ struct eval_step
     void get_field(word x)
     {
         require(x, T, type_name(T));
-        give(h.get<T, F>(x));
+        if constexpr (T == tag::pkg && F == field::sym)
+            // As with PACKAGES, expose a snapshot, not the private index
+            // that interning (including condition creation) must trust.
+            give(list(h, scan(h.get<T, F>(x))));
+        else
+            give(h.get<T, F>(x));
     }
 
     template<tag T, field F>

@@ -102,6 +102,83 @@ nxtrt::task<word> host_effect(runtime_machine & m)
 
 static suite runtime_tests{
     "WISP RUNTIME", [] {
+        "mutable LET bindings and environments fail as language conditions"_test =
+            [] {
+                runtime_machine m;
+                m.fails(
+                    R"(
+                (set-symbol-value! 'c '((a (set-tail! (head (tail c)) nil)) (b 2)))
+                (eval (list 'let c 'a)))",
+                    "INVALID-BINDING");
+                m.fails(
+                    R"(
+                (let ((x 1))
+                  (set-head! (env) (vector 'x)) x))",
+                    "INVALID-ENVIRONMENT");
+                m.fails(
+                    R"(
+                (let ((x 1))
+                  (set-head! (env) 19) x))",
+                    "TYPE-MISMATCH");
+                m.fails(
+                    R"(
+                (let ((x 1))
+                  (set-tail! (env) (env)) x))",
+                    "CYCLIC-LIST");
+            };
+
+        "captured application accumulators reject corrupt cursors and changed arity"_test =
+            [] {
+                runtime_machine m;
+                for (auto cursor : {"999", "nil"}) {
+                    m.fails(
+                        std::string{R"(
+                    (+ 11 (do
+                      (set-symbol-value! 'k (get/cc))
+                      (set-symbol-value! 'k (ktx-hop (ktx-hop k)))
+                      (vector-set! (ktx-acc k) 0 )"}
+                            + cursor + R"()
+                      7) 23))",
+                        "INVALID-CONTINUATION");
+                }
+                m.fails(
+                    R"(
+                (+ 11 (do
+                  (set-symbol-value! 'k (get/cc))
+                  (set-symbol-value! 'k (ktx-hop (ktx-hop k)))
+                  (set-tail! (ktx-arg k) (list 41))
+                  7) 23))",
+                    "INVALID-CONTINUATION");
+                m.fails(
+                    R"(
+                (+ 11 (do
+                  (set-symbol-value! 'k (get/cc))
+                  (set-symbol-value! 'k (ktx-hop (ktx-hop k)))
+                  (set-tail! (ktx-arg k) (ktx-arg k))
+                  7) 23))",
+                    "CYCLIC-LIST");
+            };
+
+        "mutable sequence and LET accumulator spines are checked on resumption"_test =
+            [] {
+                runtime_machine m;
+                m.fails(
+                    R"(
+                (do
+                  (set-symbol-value! 'k (get/cc))
+                  (set-tail! (tail (ktx-arg (ktx-hop k))) 19)
+                  7 23))",
+                    "TYPE-MISMATCH");
+                m.fails(
+                    R"(
+                (let ((x (do
+                  (set-symbol-value! 'k (get/cc))
+                  (set-symbol-value! 'k (ktx-hop (ktx-hop k)))
+                  (set-tail! (ktx-acc k) nil)
+                  7))) x))",
+                    "INVALID-CONTINUATION");
+            };
+
         "package lookup is own-first, ordered, direct-only, and rooted"_test =
             [] {
                 runtime_machine m;
