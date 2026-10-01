@@ -17,6 +17,15 @@ publishing releases, deploying, or other destructive/shared-state operations.
 Report what was verified and whether the work was actually committed and pushed;
 do not call local-only work delivered if a push remains blocked.
 
+## Wisp Port
+
+Incrementally preserve Wisp's language semantics, checking against the Zig
+reference and documenting deliberate differences. Keep guest control state in
+the heap. Use portable C++23 templates, concepts, and constexpr/consteval where
+they make Zig's comptime-driven declarations equally concise and semantic;
+derive metadata from types rather than maintaining parallel tables. Do not use
+C++26 reflection until it is supported by mainline Clang as well as GCC.
+
 ## Coroutine Wisdom
 
 COROUTINE LAMBDAS THAT CAPTURE WILL CAUSE SEGFAULTS AND VERY ANNOYING

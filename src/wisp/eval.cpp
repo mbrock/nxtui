@@ -2,38 +2,16 @@
 // C++ port of mbrock/wisp's core/step.zig and core/jets-{ctl,fun}.zig.
 #include "wisp/eval.hpp"
 
+#include <concepts>
+#include <functional>
 #include <initializer_list>
 
 namespace wisp {
+struct eval_step;
+
 namespace {
 
-// Local builtin identities, NOT Zig tape indices or a durable image ABI.
-enum class op : word {
-    quote,
-    function,
-    fn,
-    macro_fn,
-    if_,
-    do_,
-    let,
-    add,
-    subtract,
-    multiply,
-    less,
-    greater,
-    eq,
-    cons,
-    head,
-    tail,
-    list,
-    call,
-    apply,
-    symbol_function,
-    set_function,
-    set_value,
-    set,
-    env,
-};
+using values = std::span<const word>;
 
 struct builtin
 {
@@ -41,36 +19,57 @@ struct builtin
     bool control;
     std::size_t minimum;
     std::size_t maximum;
+    void (*invoke)(eval_step &, values);
+
+    // A word consumes one argument; a final values parameter consumes the
+    // rest. Signature, arity, and invocation cannot drift apart. No erased
+    // function-pointer casts or compiler reflection are needed.
+    template<auto Function>
+    static consteval builtin
+    bind(std::string_view name, bool control = false)
+    {
+        return bind<Function>(name, control, Function);
+    }
+
+private:
+    template<typename Arg, std::size_t I>
+    static Arg argument(values args)
+    {
+        if constexpr (std::same_as<Arg, word>)
+            return args[I];
+        else
+            return args.subspan(I);
+    }
+
+    template<auto Function, typename... Args>
+    static consteval builtin
+    bind(std::string_view name, bool control, void (eval_step::*)(Args...))
+    {
+        static_assert(
+            ((std::same_as<Args, word> || std::same_as<Args, values>)
+             && ...));
+        constexpr auto rest = (0 + ... + int(std::same_as<Args, values>));
+        static_assert(rest <= 1);
+        if constexpr (rest != 0)
+            static_assert(std::same_as<
+                          std::tuple_element_t<
+                              sizeof...(Args) - 1,
+                              std::tuple<Args...>>,
+                          values>);
+        return {
+            name,
+            control,
+            sizeof...(Args) - rest,
+            rest ? std::size_t(-1) : sizeof...(Args),
+            [](eval_step & step, values args) {
+                [&]<std::size_t... I>(std::index_sequence<I...>) {
+                    (step.*Function)(argument<Args, I>(args)...);
+                }(std::index_sequence_for<Args...>{});
+            }};
+    }
 };
 
-constexpr auto many = std::size_t(-1);
-constexpr std::array builtins{
-    builtin{"QUOTE", true, 1, 1},
-    builtin{"FUNCTION", true, 1, 1},
-    builtin{"%FN", true, 3, 3},
-    builtin{"%MACRO-FN", true, 2, 2},
-    builtin{"IF", true, 3, 3},
-    builtin{"DO", true, 0, many},
-    builtin{"LET", true, 1, many},
-    builtin{"+", false, 0, many},
-    builtin{"-", false, 1, many},
-    builtin{"*", false, 0, many},
-    builtin{"<", false, 2, 2},
-    builtin{">", false, 2, 2},
-    builtin{"EQ?", false, 2, 2},
-    builtin{"CONS", false, 2, 2},
-    builtin{"HEAD", false, 1, 1},
-    builtin{"TAIL", false, 1, 1},
-    builtin{"LIST", false, 0, many},
-    builtin{"CALL", false, 1, many},
-    builtin{"APPLY", false, 2, 2},
-    builtin{"SYMBOL-FUNCTION", false, 1, 1},
-    builtin{"SET-SYMBOL-FUNCTION!", false, 2, 2},
-    builtin{"SET-SYMBOL-VALUE!", false, 2, 2},
-    builtin{"%SET!", false, 2, 2},
-    builtin{"ENV", false, 0, 0},
-};
-static_assert(builtins.size() == word(op::env) + 1);
+std::span<const builtin> builtins();
 
 word list(heap & h, std::span<const word> xs)
 {
@@ -96,9 +95,10 @@ evaluator::evaluator(heap & storage)
           storage,
           storage.make<tag::pkg>({storage.newv08("KEYWORD"), nil, nil}))
 {
-    for (word i = 0; i < builtins.size(); ++i)
+    const auto jets = builtins();
+    for (word i = 0; i < jets.size(); ++i)
         heap_.set<tag::sym, field::fun>(
-            intern(builtins[i].name), immediate(tag::jet, i));
+            intern(jets[i].name), immediate(tag::jet, i));
 }
 
 word evaluator::intern(std::string_view name, word package)
@@ -314,8 +314,8 @@ struct eval_step
             push(vm.intern("EVAL"), nil, nil);
             call(fun, args);
         } else if (
-            tag_of(fun) == tag::jet && payload_of(fun) < builtins.size()
-            && builtins[payload_of(fun)].control) {
+            tag_of(fun) == tag::jet && payload_of(fun) < builtins().size()
+            && builtins()[payload_of(fun)].control) {
             call(fun, args);
         } else if (tag_of(fun) != tag::fun && tag_of(fun) != tag::jet) {
             fail("INVALID-FUNCTION", {fun});
@@ -399,15 +399,15 @@ struct eval_step
     void operate(word jet, std::span<const word> args)
     {
         const auto id = payload_of(jet);
-        if (id >= builtins.size())
+        if (id >= builtins().size())
             fail("INVALID-FUNCTION", {jet});
         try {
-            const auto & def = builtins[id];
+            const auto & def = builtins()[id];
             if (args.size() < def.minimum || args.size() > def.maximum)
                 fail(
                     "PROGRAM-ERROR",
                     {vm.intern("INVALID-ARGUMENT-COUNT"), jet});
-            invoke(op(id), args);
+            def.invoke(*this, args);
         } catch (const condition & c) {
             fail("BUILTIN-FAILURE", {jet, c.value});
         }
@@ -419,136 +419,160 @@ struct eval_step
         return integer(x);
     }
 
-    void invoke(op code, std::span<const word> a)
+    void quote(word x)
     {
-        switch (code) {
-        case op::quote:
-            give(a[0]);
-            break;
-        case op::function:
-            require(a[0], tag::sym, "SYMBOL");
-            give(h.get<tag::sym, field::fun>(a[0]));
-            break;
-        case op::fn:
-            give(h.make<tag::fun>({env, a[1], a[2], a[0], 0}));
-            break;
-        case op::macro_fn:
-            give(h.make<tag::mac>({env, a[0], a[1], nil, 0}));
-            break;
-        case op::if_:
-            push(vm.intern("IF"), nil, h.cons(a[1], a[2]));
-            enter(a[0]);
-            break;
-        case op::do_:
-            sequence(list(h, a));
-            break;
-        case op::let: {
-            // All initializers use the caller's environment, left to right.
-            const auto bindings = scan(a[0]);
-            for (auto binding : bindings) {
-                const auto pair = scan(binding);
-                if (pair.size() != 2)
-                    fail("INVALID-BINDING", {binding});
-                require(pair[0], tag::sym, "SYMBOL");
-            }
-            const auto body =
-                h.cons(vm.intern("DO"), list(h, a.subspan(1)));
-            if (bindings.empty()) {
-                enter(body);
-                break;
-            }
-            const auto first = scan(bindings[0]);
-            push(
-                vm.intern("LET"),
-                h.cons(first[0], h.cons(body, nil)),
-                h.get<tag::duo, field::cdr>(a[0]));
-            enter(first[1]);
-            break;
+        give(x);
+    }
+
+    void function(word sym)
+    {
+        require(sym, tag::sym, "SYMBOL");
+        give(h.get<tag::sym, field::fun>(sym));
+    }
+
+    void fn(word name, word parameters, word body)
+    {
+        give(h.make<tag::fun>({env, parameters, body, name, 0}));
+    }
+
+    void macro_fn(word parameters, word body)
+    {
+        give(h.make<tag::mac>({env, parameters, body, nil, 0}));
+    }
+
+    void if_(word test, word yes, word no)
+    {
+        push(vm.intern("IF"), nil, h.cons(yes, no));
+        enter(test);
+    }
+
+    void do_(values body)
+    {
+        sequence(list(h, body));
+    }
+
+    void let(word clauses, values forms)
+    {
+        // All initializers use the caller's environment, left to right.
+        const auto bindings = scan(clauses);
+        for (auto binding : bindings) {
+            const auto pair = scan(binding);
+            if (pair.size() != 2)
+                fail("INVALID-BINDING", {binding});
+            require(pair[0], tag::sym, "SYMBOL");
         }
-        case op::add:
-        case op::subtract:
-        case op::multiply: {
-            std::int64_t result = code == op::multiply ? 1 : 0;
-            std::size_t i = 0;
-            if (code == op::subtract)
-                result = number(a[i++]);
-            for (; i < a.size(); ++i) {
-                auto x = number(a[i]);
-                if (code == op::add)
-                    result += x;
-                else if (code == op::subtract)
-                    result -= x;
-                else
-                    result *= x;
-                if (result < min_fixnum || result > max_fixnum)
-                    fail("FIXNUM-OVERFLOW");
-            }
-            // Like Zig Wisp, unary subtraction is the identity, not
-            // negation.
-            give(fixnum(static_cast<std::int32_t>(result)));
-            break;
+        const auto body = h.cons(vm.intern("DO"), list(h, forms));
+        if (bindings.empty()) {
+            enter(body);
+            return;
         }
-        case op::less:
-            give(number(a[0]) < number(a[1]) ? t : nil);
-            break;
-        case op::greater:
-            give(number(a[0]) > number(a[1]) ? t : nil);
-            break;
-        case op::eq:
-            give(a[0] == a[1] ? t : nil);
-            break;
-        case op::cons:
-            give(h.cons(a[0], a[1]));
-            break;
-        case op::head:
-        case op::tail:
-            if (a[0] == nil)
-                give(nil);
-            else {
-                require(a[0], tag::duo, "CONS");
-                give(h.read<tag::duo>(a[0])[code == op::head ? 0 : 1]);
-            }
-            break;
-        case op::list:
-            give(list(h, a));
-            break;
-        case op::call:
-            call(a[0], a.subspan(1));
-            break;
-        case op::apply: {
-            const auto args = scan(a[1]);
-            call(a[0], args);
-            break;
+        const auto first = scan(bindings[0]);
+        push(
+            vm.intern("LET"),
+            h.cons(first[0], h.cons(body, nil)),
+            h.get<tag::duo, field::cdr>(clauses));
+        enter(first[1]);
+    }
+
+    template<typename Operation>
+    void arithmetic(std::int64_t result, values args)
+    {
+        for (auto x : args) {
+            result = Operation{}(result, number(x));
+            if (result < min_fixnum || result > max_fixnum)
+                fail("FIXNUM-OVERFLOW");
         }
-        case op::symbol_function:
-            if (tag_of(a[0]) == tag::sys)
-                give(nil);
-            else {
-                require(a[0], tag::sym, "SYMBOL");
-                give(h.get<tag::sym, field::fun>(a[0]));
-            }
-            break;
-        case op::set_function:
-            require(a[0], tag::sym, "SYMBOL");
-            h.set<tag::sym, field::fun>(a[0], a[1]);
-            if (tag_of(a[1]) == tag::fun)
-                h.set<tag::fun, field::sym>(a[1], a[0]);
-            if (tag_of(a[1]) == tag::mac)
-                h.set<tag::mac, field::sym>(a[1], a[0]);
-            give(a[1]);
-            break;
-        case op::set_value:
-            require(a[0], tag::sym, "SYMBOL");
-            h.set<tag::sym, field::val>(a[0], a[1]);
-            give(a[1]);
-            break;
-        case op::set:
-            give(lookup(a[0], true, a[1]));
-            break;
-        case op::env:
-            give(env);
-            break;
+        give(fixnum(static_cast<std::int32_t>(result)));
+    }
+
+    void add(values args)
+    {
+        arithmetic<std::plus<>>(0, args);
+    }
+
+    void multiply(values args)
+    {
+        arithmetic<std::multiplies<>>(1, args);
+    }
+
+    void subtract(word first, values rest)
+    {
+        // Like Zig Wisp, unary subtraction is the identity, not negation.
+        arithmetic<std::minus<>>(number(first), rest);
+    }
+
+    void less(word x, word y)
+    {
+        give(number(x) < number(y) ? t : nil);
+    }
+
+    void greater(word x, word y)
+    {
+        give(number(x) > number(y) ? t : nil);
+    }
+
+    void eq(word x, word y)
+    {
+        give(x == y ? t : nil);
+    }
+
+    void cons(word car, word cdr)
+    {
+        give(h.cons(car, cdr));
+    }
+
+    template<field F>
+    void pair_part(word x)
+    {
+        if (x == nil)
+            give(nil);
+        else {
+            require(x, tag::duo, "CONS");
+            give(h.get<tag::duo, F>(x));
         }
+    }
+
+    void list_(values args)
+    {
+        give(list(h, args));
+    }
+
+    void apply(word fun, word arglist)
+    {
+        const auto args = scan(arglist);
+        call(fun, args);
+    }
+
+    void symbol_function(word sym)
+    {
+        if (tag_of(sym) == tag::sys)
+            give(nil);
+        else
+            function(sym);
+    }
+
+    template<field F>
+    void set_symbol(word sym, word value)
+    {
+        require(sym, tag::sym, "SYMBOL");
+        h.set<tag::sym, F>(sym, value);
+        if constexpr (F == field::fun) {
+            if (tag_of(value) == tag::fun)
+                h.set<tag::fun, field::sym>(value, sym);
+            if (tag_of(value) == tag::mac)
+                h.set<tag::mac, field::sym>(value, sym);
+        }
+        give(value);
+    }
+
+    void set(word sym, word value)
+    {
+        give(lookup(sym, true, value));
+    }
+
+    void environment()
+    {
+        give(env);
     }
 
     void once()
@@ -579,6 +603,44 @@ struct eval_step
         }
     }
 };
+
+namespace {
+
+std::span<const builtin> builtins()
+{
+    // Local identities, NOT Zig tape indices or a durable image ABI.
+    static constexpr std::array table{
+        builtin::bind<&eval_step::quote>("QUOTE", true),
+        builtin::bind<&eval_step::function>("FUNCTION", true),
+        builtin::bind<&eval_step::fn>("%FN", true),
+        builtin::bind<&eval_step::macro_fn>("%MACRO-FN", true),
+        builtin::bind<&eval_step::if_>("IF", true),
+        builtin::bind<&eval_step::do_>("DO", true),
+        builtin::bind<&eval_step::let>("LET", true),
+        builtin::bind<&eval_step::add>("+"),
+        builtin::bind<&eval_step::subtract>("-"),
+        builtin::bind<&eval_step::multiply>("*"),
+        builtin::bind<&eval_step::less>("<"),
+        builtin::bind<&eval_step::greater>(">"),
+        builtin::bind<&eval_step::eq>("EQ?"),
+        builtin::bind<&eval_step::cons>("CONS"),
+        builtin::bind<&eval_step::pair_part<field::car>>("HEAD"),
+        builtin::bind<&eval_step::pair_part<field::cdr>>("TAIL"),
+        builtin::bind<&eval_step::list_>("LIST"),
+        builtin::bind<&eval_step::call>("CALL"),
+        builtin::bind<&eval_step::apply>("APPLY"),
+        builtin::bind<&eval_step::symbol_function>("SYMBOL-FUNCTION"),
+        builtin::bind<&eval_step::set_symbol<field::fun>>(
+            "SET-SYMBOL-FUNCTION!"),
+        builtin::bind<&eval_step::set_symbol<field::val>>(
+            "SET-SYMBOL-VALUE!"),
+        builtin::bind<&eval_step::set>("%SET!"),
+        builtin::bind<&eval_step::environment>("ENV"),
+    };
+    return table;
+}
+
+} // namespace
 
 evaluation evaluator::step(word run)
 {
