@@ -1,5 +1,22 @@
 # Repository Notes
 
+## Delivery Workflow
+
+For completed work tasks, verification, committing, and pushing to the current
+branch's established upstream are the default. The user authorizes this normal
+delivery workflow without a separate pre-commit or pre-push review gate, unless
+they ask to keep a particular task local. Commits track ongoing work; they are
+not releases or promises of a finished version. Make later corrections or
+reverts as new commits rather than waiting for approval to record progress.
+
+Fetch and integrate upstream changes as needed. Rebase unpublished local
+commits or merge as appropriate, preserve concurrent work, and rerun affected
+checks after resolving conflicts. Do not include unrelated worktree changes.
+This authorization does not cover force-pushing or rewriting published history,
+publishing releases, deploying, or other destructive/shared-state operations.
+Report what was verified and whether the work was actually committed and pushed;
+do not call local-only work delivered if a push remains blocked.
+
 ## Coroutine Wisdom
 
 COROUTINE LAMBDAS THAT CAPTURE WILL CAUSE SEGFAULTS AND VERY ANNOYING
