@@ -176,12 +176,13 @@ executable. The OpenAI event/data types live under
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
-## Wisp — a portable Lisp job on NXT
+## Wisp — portable Lisp jobs and HTTP on NXT
 
 The `wisp` executable runs Wisp's guest evaluator on the same NXT deck, with
-console effects and `sleep-ms` timers. The guest heap holds closures, suspended
-control state, source position, and the pending request; native coroutines hold
-only the live host operation. See [RFC 0018](rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
+console effects, `sleep-ms` timers, `spawn`/`join`, and a loopback HTTP server.
+The guest heap holds closures, suspended control state, source position, job
+results, and pending requests; native coroutines own temporary waits and sockets.
+See [RFC 0018](rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
 for the language, GC, and portable tape contracts.
 
 ```sh
@@ -192,28 +193,66 @@ build/wisp inspect build/job.tape
 build/wisp restore build/job.tape --effects
 ```
 
-`--checkpoint` saves and exits at the next timer, before waiting. Restore uses
-the saved absolute deadline; an elapsed timer fires immediately. The source is
+`--checkpoint` freezes timers at the next newly issued timer, waits for all jobs
+to finish or park at replayable timers/joins, then saves and exits. In-flight
+console I/O must finish; failure to quiesce within five seconds aborts without
+writing an image. HTTP listeners are rejected in checkpoint mode. Restore uses
+saved absolute deadlines; elapsed timers fire immediately. The source is
 inside the tape, so restore needs no source file and does not repeat earlier
 forms. Checkpoints replace the selected file atomically, with file and directory
 fsync. Only load trusted tapes: validation is not a security sandbox.
 
 Restores have **effects disabled** unless given `--effects`. `inspect` executes
-no guest code. Add `--cancel` to restore to deliver a `:CANCELLED` host condition through the
-pending request's guest error handler instead of performing it. Restoring again
-is a fork, not an exactly-once guarantee: explicitly enabling both forks can
+no guest code. Add `--cancel` to restore to deliver a `:CANCELLED` host condition
+through each saved pending request's guest error handler instead of performing
+it. Restoring again is a fork, not an exactly-once guarantee: enabling both forks can
 repeat effects. The input tape is never updated implicitly.
 
 Host conditions have shape `[HOST-ERROR operation code message]`, with codes
 such as `:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, `:IO`, and `:CANCELLED`.
-`restore --effects --checkpoint OUT` consumes saved timers and stops at the
-next newly issued timer, allowing checkpoints to be chained forward.
+`restore --effects --checkpoint OUT` does not save merely because a timer was
+restored: only a newly issued timer requests another checkpoint.
 
-This first host runs one sequential job, with at most one pending request.
-The REPL accepts complete forms on one line and preserves definitions between
-lines. `write`, `print`, `write-error`, `read-line`, and `read-bytes` are hooked
-up; Lisp-form reads from stdin, concurrent guest jobs, files/HTTP, and effect
-result logging remain future work. Disable the tool with `-Dwisp_tool=false`.
+`(spawn (fn () ...))` returns a job handle; `(join job)` returns its result or
+raises `:JOB-FAILED`. There are 63 child slots, shared by spawned jobs, HTTP
+listeners, and HTTP handlers. Admission fails with `:CAPACITY`, rather than
+blocking; cyclic joins raise `:JOIN-CYCLE`. Jobs share the evaluator's packages
+and globals but begin with fresh dynamic contexts. Main-job failure stops the
+session; unjoined child failures are retained and reported when the session
+finishes. Successful main completion waits for its children. Console operations
+are serialized per stream.
+
+The REPL accepts complete forms on one line and preserves definitions. Console
+hooks include `write`, `print`, `write-error`, `read-line`, and `read-bytes`.
+The executable host uses **image schema `NXT-WISP-2`**; old `NXT-WISP-1` host
+images require the earlier executable. The underlying portable tape format is
+unchanged. Disable the tool with `-Dwisp_tool=false`.
+
+### Serve plain HTTP behind a reverse proxy
+
+```sh
+build/wisp run demo/wisp-http.wisp
+```
+
+The demo binds loopback port 8080. `serve-http` calls a zero-argument handler in
+a separate job with dynamic `*request*` and `*response*`. Use `request-method`,
+`request-path`, `request-query-string`, `request-header` (case-insensitive), and
+`request-text`; paths/query strings are raw, not URL-decoded. Set response state
+with `set-response-status!`, `add-header!`, and `set-response-body!`, or exit early
+with `(send! :respond (response 404 nil "Not Found"))`. Ordinary handler return
+values are ignored, matching the old Wisp web interface.
+
+The reusable C++ API is [`nxtrt::http::serve`](src/nxtrt/http-server.hpp), with a
+borrowed listener, `task<response>(request)` handler, and bounded server options.
+It supports HTTP/1.1 keep-alive, pipelining, fixed-length/chunked requests, and
+binary bodies. Defaults bound headers to 16 KiB, request bodies to 1 MiB,
+responses to 8 MiB, and connections to 64. Whole-phase deadlines cover headers
+(10s), bodies, handlers, and writes (30s each). Cancellation drains operations
+before socket close; timed-out guest handlers are cancelled, not abandoned.
+TLS, access logging, and public exposure belong to your proxy. Forwarded headers
+are untrusted; upgrades, CONNECT, and Expect are rejected. Streaming responses,
+WebSockets, files, effect-result logging, and external-resource restore remain
+future work.
 
 ## Repository map
 

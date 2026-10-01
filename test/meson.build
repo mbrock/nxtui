@@ -4,6 +4,7 @@ if get_option('tests')
     'json-test.cpp',
     'crypto-test.cpp',
     'include-test.cpp',
+    'http-server-test.cpp',
     'runtime-test.cpp',
     'terminal-test.cpp',
     'mtproto-test.cpp',
@@ -86,9 +87,9 @@ if get_option('tests')
     dependencies : nxt_test_deps,
     cpp_args : nxt_test_cpp_args,
   )
-  # Includes full Lisp bootstrap tests, run once for discovery and again
-  # for execution. Each leaf still has its own deadline in test.hpp.
-  test('nxt-tests', nxt_tests, timeout : 120)
+  # Includes full Lisp bootstraps and >4096 HTTP request/connection stress
+  # cases, run during discovery and execution. Each leaf keeps its deadline.
+  test('nxt-tests', nxt_tests, timeout : 180)
 
   # Fault injection replaces operator new only in this executable. Compile
   # the guest heap directly rather than linking nxt-core's allocation hooks.
@@ -100,8 +101,14 @@ if get_option('tests')
   test('wisp-alloc-tests', wisp_alloc_tests)
 
   if get_option('wisp_tool')
+    # Many independent interpreter bootstraps plus the 4100-job stress
+    # case (90s process deadline); keep each process's own timeout active.
     test('wisp-host-tests', find_program('python3'),
       args : [files('wisp-host-test.py'), wisp_tool],
+      timeout : 240,
+    )
+    test('wisp-http-tests', find_program('python3'),
+      args : [files('wisp-http-test.py'), wisp_tool],
       timeout : 120,
     )
   endif

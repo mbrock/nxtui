@@ -47,6 +47,7 @@ nxt_core_sources = files(
   'nxtrt/buffers.cpp',
   'nxtrt/compression.cpp',
   'nxtrt/crypto.cpp',
+  'nxtrt/http-server.cpp',
   'nxtrt/tls.cpp',
   'nxtui/ansi.cpp',
   'nxtui/compositor.cpp',
@@ -64,22 +65,6 @@ nxt_core_sources = files(
   'wisp/printer.cpp',
   'wisp/load.cpp',
   'wisp/tape.cpp',
-)
-
-nxt_core_lib = library('nxt-core',
-  nxt_core_sources,
-  include_directories : nxt_inc,
-  dependencies : nxt_core_deps,
-  link_whole : nxt_libvterm,
-  cpp_args : nxt_mdspan_args + nxt_compression_args,
-  install : true,
-)
-
-nxt_core_dep = declare_dependency(
-  link_with : nxt_core_lib,
-  include_directories : nxt_inc,
-  dependencies : nxt_core_deps,
-  compile_args : nxt_mdspan_args + nxt_compression_args,
 )
 
 nxt_stacktrace_deps = []
@@ -147,6 +132,25 @@ nxt_stacktrace_dep = declare_dependency(
   compile_args : nxt_stacktrace_cpp_args,
 )
 
+# Exception classes and inline task code depend on NXT_HAVE_CPPTRACE.
+# Compile the library and every consumer with the same public ABI.
+nxt_core_deps += nxt_stacktrace_dep
+nxt_core_lib = library('nxt-core',
+  nxt_core_sources,
+  include_directories : nxt_inc,
+  dependencies : nxt_core_deps,
+  link_whole : nxt_libvterm,
+  cpp_args : nxt_mdspan_args + nxt_compression_args,
+  install : true,
+)
+
+nxt_core_dep = declare_dependency(
+  link_with : nxt_core_lib,
+  include_directories : nxt_inc,
+  dependencies : nxt_core_deps,
+  compile_args : nxt_mdspan_args + nxt_compression_args,
+)
+
 if get_option('wisp_tool')
   wisp_host_config = configuration_data()
   wisp_host_config.set('WISP_HOST', import('fs').read('wisp/host.wisp'))
@@ -211,6 +215,7 @@ nxt_header_install_excludes = {
     'buffers.cpp',
     'compression.cpp',
     'crypto.cpp',
+    'http-server.cpp',
     'tls.cpp',
   ],
   'nxtui' : [
@@ -259,9 +264,9 @@ install_subdir('../vendor/hub/include/boost',
 )
 
 import('pkgconfig').generate(nxt_core_lib,
-  libraries : [nxt_stacktrace_lib],
+  libraries : [nxt_stacktrace_lib] + nxt_stacktrace_deps,
   name : 'nxt',
   description : 'nxt coroutine runtime and terminal toolkit',
   subdirs : ['.', 'nxt-vendor'],
-  extra_cflags : nxt_mdspan_args + nxt_compression_args,
+  extra_cflags : nxt_mdspan_args + nxt_compression_args + nxt_stacktrace_cpp_args,
 )

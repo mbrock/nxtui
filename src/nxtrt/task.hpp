@@ -4120,6 +4120,10 @@ template<typename T>
     auto deeds = co_await with_firm(
         [duration, body = std::move(body)]() mutable
             -> task<deeds_type> {
+            // Parent cancellation can reach the scope before this body
+            // gets its first turn. A stopped firm cannot accept forks.
+            if (current_firm()->stop_requested())
+                throw operation_cancelled{};
             auto body_deed =
                 fork(detail::stop_firm_on_completion(std::move(body)))
                     .cope();
@@ -4144,6 +4148,11 @@ template<typename T>
     }
 
     auto timeout_result = std::move(std::get<1>(deeds)).get();
+    // An ordinary body failure cancels the timer; do not replace that
+    // failure with the timer's cancellation. A real deadline wins over
+    // cancellation of the body, while external stop remains cancellation.
+    if (!is_operation_cancelled(body_result.error()))
+        rethrow(body_result.error());
     if (!timeout_result)
         rethrow(timeout_result.error());
     rethrow(body_result.error());

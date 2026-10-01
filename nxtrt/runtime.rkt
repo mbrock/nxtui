@@ -33,6 +33,13 @@ ontology nxt "https://swa.sh/nxt#"
 model runtime-model
   signature deck
     has-ready var set task
+  // Ownership here is a snapshot, not a model of admission or exception
+  // selection. A stopped C++ firm rejects new forks: timeout/server scope
+  // bodies must check stop before spawning if cancelled before their first
+  // turn. Once wishes exist, both timeout and external stop drain their
+  // execs under the same lifecycle below, before the owning scope returns.
+  // Wisp workers and HTTP workers use short-lived child firms per job or
+  // operation; guest continuations stay in the Wisp heap, not in this deck.
   signature firm
     spawned set task
     issued set deed

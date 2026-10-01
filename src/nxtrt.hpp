@@ -14,6 +14,7 @@
 #include "nxtrt/fs.hpp"
 #include "nxtrt/game.hpp"
 #include "nxtrt/http.hpp"
+#include "nxtrt/http-server.hpp"
 #include "nxtrt/sampling.hpp"
 #include "nxtrt/scoped_process.hpp"
 #include "nxtrt/task.hpp"
