@@ -254,6 +254,132 @@ are untrusted; upgrades, CONNECT, and Expect are rejected. Streaming responses,
 WebSockets, files, effect-result logging, and external-resource restore remain
 future work.
 
+### Make HTTP requests from Wisp
+
+`(fetch-http url &optional method headers body)` uses NXT's existing native
+client stack. The method defaults to `"GET"`, headers to `nil`, and body to
+empty. It returns `[status headers body]`: `vector-get` indices 0, 1, and 2.
+Headers are a list of `[name value]` vectors, preserving order and duplicates;
+the body is a binary-safe string, already de-chunked and decompressed. HTTP
+error statuses such as 404 are normal responses, not guest exceptions.
+
+With the demo running, save these forms as `client.wisp` and run
+`build/wisp run client.wisp`. In `build/wisp repl`, enter each complete form on
+one line instead:
+
+```lisp
+;; Read a page; PRINT shows metadata, WRITE emits the body bytes.
+(let ((r (fetch-http "http://127.0.0.1:8080/")))
+  (print (vector-get r 0))
+  (print (vector-get r 1))
+  (write (vector-get r 2)))
+
+;; Send a body with application headers.
+(fetch-http "http://127.0.0.1:8080/echo" "POST"
+  (list (vector "Content-Type" "text/plain")) "hello from the client")
+
+;; Both requests start independently. A slow peer need not stall other jobs.
+(let* ((slow (spawn (fn () (fetch-http "http://127.0.0.1:8080/slow"))))
+       (fast (spawn (fn () (fetch-http "http://127.0.0.1:8080/")))))
+  (print (vector-get (join fast) 0))
+  (write (vector-get (join slow) 2)))
+```
+
+The demo's `/relay` route also uses `fetch-http` *inside a server handler*,
+POSTing its body to `/echo` on the same listener and returning that response
+with `send! :respond`. This works because waiting for network I/O parks only
+the calling job; another job can accept and handle the nested request. Don't
+forward arbitrary client-selected URLs without an explicit access policy.
+
+The initial client interface buffers the whole response, opens one connection
+per call, and does not follow redirects, retry, pool connections, stream, or
+manage cookies. It uses the existing URL parser: DNS/IPv4 hosts, numeric ports,
+and escaped paths; include `/` before a query string. Userinfo, fragments and
+IPv6 URL literals are not supported by this binding. `Host`, `Content-Length`,
+`Connection`, transfer framing, upgrades and expectations are host-managed;
+attempts to set them or inject control characters are rejected. It advertises
+gzip/deflate and can also decode zstd/brotli when compiled in. Response headers
+remain the original wire metadata: their Content-Length/Content-Encoding may
+describe the compressed body, not the returned decoded string.
+
+Request bodies are limited to 1 MiB, request heads to 16 KiB, each response head
+to a 16 KiB reader buffer, and decoded response bodies to 8 MiB. A 30-second
+whole-request deadline raises `[HOST-ERROR :HTTP-FETCH :TIMEOUT message]`.
+Other transport/protocol errors raise `:IO`; argument validation raises
+`:INVALID-ARGUMENT`. Catch these with Wisp's `try` as with other host conditions.
+DNS uses c-ares when available (the libc fallback performs blocking resolution).
+Both `serve-http` and `fetch-http` reject `--checkpoint` with `:NOT-REPLAYABLE`:
+there is no effect-result log or restoration of live sockets.
+
+**HTTPS is experimental, not authenticated HTTPS.** It uses NXT's handmade
+TLS 1.3 client, which checks CertificateVerify and Finished but does **not**
+validate certificate-chain trust, validity dates, or hostname identity. Do not
+use it to send secrets to untrusted networks as if it provided browser/curl
+certificate verification. That limitation belongs to the existing TLS stack,
+not to Wisp, and exposing the client does not fix it.
+
+### How the web server fits into NXT
+
+This is not a second runtime or a separate web framework. The HTTP server is
+a reusable `nxtrt` service; Wisp supplies application handlers through the
+executable host. Native C++ applications can call `nxtrt::http::serve` without
+Wisp at all. The same scheduler and byte-stream abstractions also underpin
+terminal applications and the OpenAI/SSE client.
+
+```diagram
+┌───────────────────────────────────────────┐
+│ Wisp: serve-http / fetch-http              │
+│ Portable heap, evaluator and effects      │
+└─────────────────────┬─────────────────────┘
+                      │ :host effect
+┌─────────────────────▼─────────────────────┐
+│ Executable host: guest jobs ↔ native tasks │
+└─────────────────────┬─────────────────────┘
+                      │ awaits
+┌─────────────────────▼─────────────────────┐
+│ nxtrt: deck, firms, tasks, I/O operations  │
+│ HTTP server / DNS+TCP+TLS client / buffers │
+└─────────────────────┬─────────────────────┘
+                      │
+┌─────────────────────▼─────────────────────┐
+│ OS sockets and timers                     │
+│ epoll / io_uring / kqueue                  │
+└───────────────────────────────────────────┘
+```
+
+An incoming request is parsed and bounded by the native server, copied into
+the Wisp heap as `[method path query headers body]`, then given its own guest
+job. `%nxt-http-handle` dynamically binds `*request*` and `*response*` for that
+job and installs the `:respond` prompt. Ordinary handler returns are discarded;
+the mutated response is used unless `send! :respond` exits early. Dynamic
+bindings keep overlapping requests isolated, while packages/globals are shared.
+
+For outbound I/O, `fetch-http` sends a `:HTTP-FETCH` host effect. `%nxt-start`
+captures its resume/raise continuations in a heap record; the host copies the
+arguments into native storage and awaits DNS, connect, optional TLS, and body
+decoding. On completion it roots a heap response and resumes the guest; on
+failure it raises a host condition. Guest control state stays in the moving
+heap, while native coroutine frames temporarily own sockets and buffers. A
+server handler deadline cancels its guest job, including nested native waits;
+structured cancellation drains outstanding operations before socket teardown.
+
+Useful source entry points:
+
+- [`src/wisp/host.wisp`](src/wisp/host.wisp): the small Lisp-facing interface
+  and effect/dynamic-binding policy, evaluated into the executable's boot tape.
+- [`src/wisp/main.cpp`](src/wisp/main.cpp): host effects, job admission, rooting,
+  request conversion, native awaits and response/error delivery.
+- [`src/wisp/nxt.hpp`](src/wisp/nxt.hpp): `drive`, which runs bounded evaluator
+  quanta and yields back to the NXT deck.
+- [`src/nxtrt/http-server.hpp`](src/nxtrt/http-server.hpp): native server contract
+  and limits; its implementation uses Boost.Beast for request parsing.
+- [`src/nxtrt/http.hpp`](src/nxtrt/http.hpp),
+  [`net_dns.hpp`](src/nxtrt/net_dns.hpp), and [`tls.hpp`](src/nxtrt/tls.hpp): the
+  client serializer, response/body readers, connection and TLS layers also
+  composed by [`demo/http_client_demo.cpp`](demo/http_client_demo.cpp).
+- [`src/nxt`](src/nxt): scheduler-independent protocol/crypto utilities;
+  `nxtrt` adds asynchronous runtime integration, and `nxtui` builds UI on top.
+
 ## Repository map
 
 - `src/nxtrt` — the structured coroutine runtime.

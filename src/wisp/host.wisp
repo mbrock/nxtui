@@ -69,3 +69,9 @@
 ;; Plain HTTP on loopback only; TLS belongs to the reverse proxy.
 (defun serve-http (port handler)
   (spawn (fn () (send! :host (vector :http-serve (vector port handler))))))
+
+;; Waits in the calling job; spawn/join can make requests concurrent.
+;; Returns [status headers body], like RESPONSE. Headers are a list of
+;; [name value] vectors, and the decoded body is a binary-safe string.
+(defun fetch-http (url &optional method headers body)
+  (send! :host (vector :http-fetch (vector url (or method "GET") headers body))))

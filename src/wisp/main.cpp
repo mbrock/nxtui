@@ -8,6 +8,8 @@
 #include "nxtrt/buffers.hpp"
 #include "nxtrt/http-server.hpp"
 #include "nxtrt/net.hpp"
+#include "nxtrt/net_dns.hpp"
+#include "nxtrt/tls.hpp"
 
 #include <charconv>
 #include <csignal>
@@ -580,6 +582,162 @@ struct host
             });
     }
 
+    nxtrt::task<void> http_fetch(root & pending, root & result)
+    {
+        if (!save.empty())
+            throw effect_error{
+                "NOT-REPLAYABLE", "HTTP requests cannot be checkpointed"};
+        const auto args =
+            vector(h, vector(h, vector(h, pending.get(), 5)[1], 2)[1], 4);
+        effect_require(
+            tag_of(args[0]) == tag::v08 && tag_of(args[1]) == tag::v08
+                && (args[3] == nil || tag_of(args[3]) == tag::v08),
+            "fetch-http expects URL, method, headers and optional string body");
+        const auto url_text = text(h, args[0]);
+        effect_require(url_text.size() <= 16 * 1024, "HTTP URL too large");
+        const auto url = nxtrt::http::parse_url(url_text);
+        effect_require(
+            std::ranges::all_of(
+                url.host,
+                [](unsigned char c) {
+                    return c > 32 && c != 127
+                           && std::string_view{"/@\\?#[]"}.find(c)
+                                  == std::string_view::npos;
+                })
+                && !url.port.empty()
+                && std::ranges::all_of(
+                    url.port,
+                    [](unsigned char c) { return c >= '0' && c <= '9'; })
+                && std::ranges::all_of(
+                    url.target,
+                    [](unsigned char c) {
+                        return c > 32 && c != 127 && c != '#';
+                    }),
+            "invalid HTTP URL (use a DNS/IPv4 host and an escaped /path)");
+        const auto token = [](unsigned char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                   || (c >= '0' && c <= '9')
+                   || std::string_view{"!#$%&'*+-.^_`|~"}.find(c)
+                          != std::string_view::npos;
+        };
+        auto request = nxtrt::http::request{
+            .method = text(h, args[1]),
+            .target = url.target,
+            .host = nxtrt::http::host_header(url),
+            .headers = {},
+            .body = args[3] == nil ? "" : text(h, args[3]),
+        };
+        effect_require(
+            !request.method.empty()
+                && std::ranges::all_of(request.method, token)
+                && request.method != "CONNECT",
+            "invalid or unsupported HTTP method");
+        effect_require(
+            request.body.size() <= 1024 * 1024,
+            "HTTP request body too large");
+        std::set<word> seen;
+        auto header_bytes = request.method.size() + request.target.size()
+                            + request.host.size() + 128;
+        bool accept_encoding = false;
+        for (auto list = args[2]; list != nil;) {
+            effect_require(
+                tag_of(list) == tag::duo && seen.insert(list).second,
+                "HTTP headers must be a proper list");
+            const auto [pair, rest] = h.read<tag::duo>(list);
+            effect_require(
+                tag_of(pair) == tag::v32 && h.v32slice(pair).size() == 2,
+                "HTTP header must be a [name value] vector");
+            const auto header = vector(h, pair, 2);
+            effect_require(
+                tag_of(header[0]) == tag::v08
+                    && tag_of(header[1]) == tag::v08,
+                "HTTP header name and value must be strings");
+            const auto name = text(h, header[0]),
+                       value = text(h, header[1]);
+            effect_require(
+                !name.empty() && std::ranges::all_of(name, token)
+                    && std::ranges::all_of(
+                        value,
+                        [](unsigned char c) {
+                            return c == '\t' || (c >= 32 && c != 127);
+                        }),
+                "invalid HTTP header");
+            for (auto managed :
+                 {"Host",
+                  "Content-Length",
+                  "Connection",
+                  "Transfer-Encoding",
+                  "Trailer",
+                  "Upgrade",
+                  "Expect"})
+                effect_require(
+                    !nxtrt::http::iequals(name, managed),
+                    "HTTP transport headers are managed by fetch-http");
+            accept_encoding |=
+                nxtrt::http::iequals(name, "Accept-Encoding");
+            header_bytes += name.size() + value.size() + 4;
+            effect_require(
+                header_bytes <= 16 * 1024, "HTTP headers too large");
+            request.headers.push_back({name, value});
+            list = rest;
+        }
+        effect_require(header_bytes <= 16 * 1024, "HTTP headers too large");
+        if (!accept_encoding)
+            request.headers.push_back({"Accept-Encoding", "gzip, deflate"});
+        const auto wire = nxtrt::http::serialize(request);
+
+        // All guest arguments have been copied. Only rooted records, never
+        // heap views or words, are consulted after this first suspension.
+        auto socket = co_await nxtrt::net::connect_tcp(url.host, url.port);
+        auto sink =
+            nxtrt::socket_sink{socket.get(), 0, std::size_t{16 * 1024}};
+        auto source =
+            nxtrt::socket_source{socket.get(), 0, std::size_t{16 * 1024}};
+        std::optional<nxtrt::tls::tls13_client_session> tls;
+        auto * transport = static_cast<nxtrt::bytefeed *>(&source);
+        if (url.tls) {
+            tls.emplace(source, sink, std::size_t{16 * 1024});
+            co_await tls->handshake(url.host);
+            // TLS application records are limited to 16 KiB of plaintext.
+            for (std::size_t offset = 0; offset < wire.size();
+                 offset += 16 * 1024)
+                co_await tls->write_all(
+                    std::string_view{wire}.substr(offset, 16 * 1024));
+            transport = &*tls;
+        } else {
+            co_await nxtrt::write(sink, std::string_view{wire});
+            co_await sink.flush();
+        }
+        auto head = co_await nxtrt::http::read_response_head(*transport);
+        while (head.status >= 100 && head.status < 200) {
+            if (head.status == 101)
+                throw nxtrt::http::protocol_error{
+                    "HTTP upgrades are unsupported"};
+            head = co_await nxtrt::http::read_response_head(*transport);
+        }
+        std::string body;
+        if (request.method != "HEAD" && head.status != 204
+            && head.status != 205 && head.status != 304) {
+            auto reader = nxtrt::http::response_body_decoding_reader(
+                *transport, head);
+            while (const auto chunk = co_await reader.take_some()) {
+                if (body.size() + chunk->size() > 8 * 1024 * 1024)
+                    throw nxtrt::http::protocol_error{
+                        "HTTP response body too large"};
+                body.append(nxtrt::as_string_view(*chunk));
+            }
+        }
+        auto headers = nil;
+        for (const auto & header : head.headers | std::views::reverse)
+            headers = h.cons(
+                h.newv32(
+                    std::array{
+                        h.newv08(header.name), h.newv08(header.value)}),
+                headers);
+        result.set(h.newv32(
+            std::array{fixnum(head.status), headers, h.newv08(body)}));
+    }
+
     // Native registrations are temporary. The guest record remains rooted
     // throughout the await and is removed only when a resume/raise run has
     // been installed. Results also need roots: another worker can collect
@@ -640,6 +798,15 @@ struct host
         slot.state = phase::io;
         if (operation == vm.keyword("HTTP-SERVE")) {
             co_await http_serve(pending);
+            co_return;
+        }
+        if (operation == vm.keyword("HTTP-FETCH")) {
+            try {
+                co_await nxtrt::with_timeout(
+                    seconds{30}, http_fetch(pending, result));
+            } catch (const nxtrt::timeout_error &) {
+                throw effect_error{"TIMEOUT", "HTTP request timed out"};
+            }
             co_return;
         }
         if (operation == vm.keyword("REQUEST-HEADER")) {

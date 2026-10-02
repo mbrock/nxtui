@@ -171,12 +171,12 @@ if get_option('wisp_tool')
   )
   wisp_tool = executable('wisp', ['wisp/main.cpp', wisp_boot_tape],
     include_directories : nxt_inc,
-    dependencies : [nxt_core_dep, nxt_stacktrace_dep],
+    dependencies : [nxt_core_dep, nxt_stacktrace_dep] + nxt_dns_deps,
     # Unlike #include, GCC's #embed does not search -I directories.
     # Use a build-relative search path so the compiler depfile and Ninja agree
     # on the generated tape's build-relative identity.
     cpp_args : ['--embed-dir=' + import('fs').relative_to(
-      meson.current_build_dir(), meson.global_build_root())],
+      meson.current_build_dir(), meson.global_build_root())] + nxt_dns_args,
     install : true,
   )
 endif
