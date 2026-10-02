@@ -224,9 +224,10 @@ struct host
 
     void collect_if_needed()
     {
-        // Collect at committed host boundaries, proportional to allocation,
-        // not on every effect. Guest GC requests collect during evaluation.
-        if (heap_bytes() >= gc_threshold) {
+        // Only committed safepoints, with every host-held word rooted.
+        // Polling does not imply collection: allow growth proportional to
+        // the live heap, including after an explicit guest GC request.
+        if (vm.collection_requested() || heap_bytes() >= gc_threshold) {
             vm.collect();
             gc_threshold = heap_bytes() * 2 + 1024 * 1024;
         }
@@ -866,13 +867,13 @@ struct host
             if (run.get() != nil) {
                 require(tag_of(run.get()) == tag::run, "invalid host run");
                 // Run to return/effect, not to an evaluator scheduling
-                // quantum. Collection commits guest transitions but does
-                // not yield.
+                // quantum. Poll allocation growth every 4096 step calls,
+                // after scratch registers (including nested STEP!) commit.
+                // Collection moves run/state roots but never yields: a
+                // runnable result immediately continues this activation.
                 while (true) {
-                    const auto outcome = vm.advance(
-                        run.get(), std::numeric_limits<std::size_t>::max());
-                    if (vm.collection_requested())
-                        vm.collect();
+                    const auto outcome = vm.advance(run.get(), 4096);
+                    collect_if_needed();
                     if (outcome == evaluation::failed)
                         co_return false;
                     if (outcome == evaluation::done)

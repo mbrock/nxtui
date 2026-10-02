@@ -21,15 +21,17 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
       (defvar released nil)
       (defvar waiting nil)
       (defvar computing nil)
+      (defvar payload "GC_PAYLOAD")
       (defun spin (n)
-        (if (eq? n 0) nil (spin (- n 1))))
+        (if (eq? n 0) nil
+            (do (string-append payload payload) (spin (- n 1)))))
       (defun await-release ()
         (if released nil (do (sleep-ms 1) (await-release))))
       (defun handler ()
         (cond
           ((equal? (request-path) "/atomic")
            (do (set! computing (request-query-string))
-               (spin 1500) (gc)
+               (spin 1500)
                (set-response-body!
                  (if (equal? computing (request-query-string))
                      "atomic" "interleaved"))))
@@ -39,7 +41,8 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
           ((equal? (request-path) "/state")
            (set-response-body! (if waiting "waiting" "starting")))
           ((equal? (request-path) "/release")
-           (do (set! released t) (set-response-body! "released")))
+           (do (spin 1500) (set! released t)
+               (set-response-body! "released")))
           ((equal? (request-path) "/early")
            (do (send! :respond (response 201 nil "early"))
                (error "must not run")))
@@ -74,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
                    "|" (request-text)))))))
       (serve-http PORT #'handler)
     '''.replace("PORT", str(port)).replace("A_TEXT", "A" * 8192).replace(
-        "B_TEXT", "B" * 8192))
+        "B_TEXT", "B" * 8192).replace("GC_PAYLOAD", "x" * 2048))
     server = subprocess.Popen([binary, "run", str(source)],
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE)
@@ -101,6 +104,8 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
                 client.close()
 
         # This tests actual overlap, without relying on fast wall-clock timing.
+        # /release also forces automatic GC while /wait's request, pending
+        # record, and dynamic context must survive in their host roots.
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
             pending = pool.submit(request, "/wait")
             deadline = time.monotonic() + 10
@@ -110,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
             assert released[2] == b"released", released
             assert pending.result(timeout=10)[2] == b"/wait"
 
-        # Long evaluator runs (including GC) must not time-slice callbacks.
+        # Allocation-heavy runs (no explicit GC) must not time-slice callbacks.
         # With quantum scheduling, another callback overwrites COMPUTING
         # before the first finishes its synchronous segment.
         with concurrent.futures.ThreadPoolExecutor(8) as pool:

@@ -893,7 +893,28 @@ permanently retain consumed request identities in the KEY package. Language
 GENKEY semantics are unchanged. All live guest words, including results returned
 from native helper coroutines, are rooted across suspension and collection.
 Host-triggered collection follows allocation growth at committed boundaries;
-explicit guest GC requests are serviced at safe evaluator transitions.
+the executable checks after at most 4096 `step` calls even within a single
+synchronous computation. It collects when used row and payload bytes reach the
+threshold (initially 1 MiB), or when the guest requests GC, then sets the next
+threshold to twice the surviving used bytes plus 1 MiB. Explicit requests stop
+`advance` early and use the same safepoint and threshold update. These checks
+never yield to the NXT deck: a runnable activation immediately continues, with
+its run and host state rooted and no borrowed heap views held across collection.
+The portable evaluator and heap still never collect inside an allocation or
+transition; this policy belongs to the executable host, not to `step`, `advance`,
+or the optional yielding `drive` adapter.
+
+This is an allocation-growth policy, not a memory cap or a CPU timeout. One
+transition can allocate a large payload, scan a list, or dispatch nested `STEP!`
+calls before returning to a safepoint; reading a form is also not interrupted.
+Live data can grow without bound. Used bytes exclude spare capacity and native
+allocations, and the copying collector reserves destination storage before
+reclaiming the old heap, so the threshold is not an RSS limit. The host regression
+discards over 312 MiB of strings in one form without an await or explicit GC,
+checks retained lexical/argument/continuation values, and on Linux enforces a
+256 MiB process address-space cap to distinguish collection from boundary-only
+behavior. HTTP tests also collect automatically while another callback is
+suspended and check that synchronous callbacks do not interleave.
 
 Completion installs a callback run before removing the pending record. CLI
 `restore --effects --cancel` delivers `[HOST-ERROR operation :CANCELLED message]`

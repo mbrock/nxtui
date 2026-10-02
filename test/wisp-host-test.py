@@ -3,6 +3,7 @@
 import pathlib
 import os
 import re
+import resource
 import stat
 import struct
 import subprocess
@@ -30,6 +31,42 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     repl = command("repl", input=b"(+ 17 25)\nunbound\n(+ 19 4)\nnil\n")
     assert repl.stdout == b"42\n23\nNIL\n", repl.stdout
     assert b"UNBOUND-VARIABLE" in repl.stderr, repl.stderr
+
+    # One synchronous form discards over 312 MiB of strings. There is no
+    # await or guest GC until PRINT at the end: boundary-only collection
+    # cannot pass the Linux address-space cap. This is not an RSS target.
+    # Keep lexical data, partially evaluated arguments, and a multi-shot
+    # continuation alive across the automatic collections.
+    source.write_text('''
+      (defun churn (n payload)
+        (if (eq? n 0) 'finished
+            (do (string-append payload payload)
+                (churn (- n 1) payload))))
+      (let ((kept (vector (string-append "keep" "-me") 19))
+            (resume (call-with-prompt 'save
+                      (fn () (list 11 (send! 'save nil) 31))
+                      (fn (value k) k))))
+        (print (list (list 'before kept)
+                     (churn 20000 "PAYLOAD") kept
+                     (call resume 7) (call resume 23))))
+    '''.replace("PAYLOAD", "x" * 8192))
+
+    def limit_memory():
+        # RLIMIT_AS is enforced on Linux; elsewhere still check the roots
+        # and continuation results without imposing a nonportable limit.
+        if sys.platform.startswith("linux"):
+            limit = 256 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+    transient = subprocess.run([binary, "run", str(source)],
+                               capture_output=True, timeout=30,
+                               preexec_fn=limit_memory)
+    assert transient.returncode == 0, transient.stderr
+    assert transient.stderr == b"", transient.stderr
+    assert transient.stdout == (
+        b'((BEFORE #<"keep-me" 19>) FINISHED #<"keep-me" 19> '
+        b'(11 7 31) (11 23 31))\n'
+    ), transient.stdout
 
     source.write_text('(print (await (vector :timer 1)))')
     assert command("run", source).stdout == b"NIL\n"
