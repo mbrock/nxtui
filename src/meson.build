@@ -32,6 +32,7 @@ nxt_core_deps = [
   utf8proc_dep,
   boost_dep,
   declare_dependency(include_directories : nxt_libvterm_inc),
+  declare_dependency(compile_args : nxt_wand_args),
 ] + nxt_compression_deps
 
 wisp_base_config = configuration_data()
@@ -268,5 +269,5 @@ import('pkgconfig').generate(nxt_core_lib,
   name : 'nxt',
   description : 'nxt coroutine runtime and terminal toolkit',
   subdirs : ['.', 'nxt-vendor'],
-  extra_cflags : nxt_mdspan_args + nxt_compression_args + nxt_stacktrace_cpp_args,
+  extra_cflags : nxt_mdspan_args + nxt_compression_args + nxt_stacktrace_cpp_args + nxt_wand_args,
 )

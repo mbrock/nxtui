@@ -3,6 +3,13 @@
 
 #include "test.hpp"
 
+#include <concepts>
+
+#if defined(NXTRT_DEFAULT_WAND)
+// Each CI matrix leg must actually use its requested application backend.
+static_assert(std::same_as<nxtrt::arch::wand, nxtrt::NXTRT_DEFAULT_WAND>);
+#endif
+
 namespace nxt::test {
 
 using namespace boost::ut;

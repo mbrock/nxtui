@@ -24,6 +24,20 @@ endif
 
 cpp = meson.get_compiler('cpp')
 
+nxt_wand = get_option('default_wand')
+nxt_wand_args = []
+if nxt_wand != 'auto'
+  if nxt_wand in ['epoll', 'uring']
+    if host_machine.system() != 'linux'
+      error(nxt_wand + ' requires Linux')
+    endif
+  elif host_machine.system() not in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
+    error('kqueue requires BSD or macOS')
+  endif
+  nxt_wand_args = ['-DNXTRT_DEFAULT_WAND=' + nxt_wand + '_wand']
+endif
+message('Default Wand: ' + nxt_wand)
+
 utf8proc_dep = dependency(
   'libutf8proc',
   fallback : ['utf8proc', 'utf8proc_dep'],

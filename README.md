@@ -293,6 +293,35 @@ The tests that cross-check crypto against a reference `libcrypto` (RSA/ECDSA
 fixtures and ML-KEM-768) expect AWS-LC's headers; with OpenSSL or no
 `libcrypto` they are skipped at configure time.
 
+### Continuous integration
+
+[GitHub Actions](https://github.com/mbrock/nxtui/actions/workflows/tests.yml)
+runs on pushes and pull requests with the locked Nix development toolchain:
+
+| Runner | Application Wand |
+| --- | --- |
+| Ubuntu 24.04 | io_uring |
+| Ubuntu 24.04 | epoll |
+| macOS 15 (Apple Silicon) | kqueue |
+
+Each job runs the complete `nxt-tests` binary, Wisp allocation-failure tests,
+and Wisp host and HTTP integration tests. Linux also includes the direct
+epoll and io_uring suites; macOS includes the kqueue suite. Meson logs are
+uploaded even on failure. Backends are not silently skipped or substituted.
+
+To reproduce a matrix leg inside `nix develop`:
+
+```sh
+meson setup build/ci -Ddefault_wand=epoll -Ddemo=false -Ddev=false -Dllm_tool=false -Dcares=enabled
+meson compile -C build/ci -j 2 nxt-tests wisp-alloc-tests wisp-root-link
+meson test -C build/ci --print-errorlogs --timeout-multiplier 3
+```
+
+Use `uring` on Linux or `kqueue` on BSD/macOS instead of `epoll`. The default
+`auto` retains io_uring on Linux and kqueue on BSD/macOS. The selected default
+is propagated to library consumers through the Meson dependency and
+pkg-config flags, since the application runtime contains a concrete Wand.
+
 ### Wisp coverage (GCC)
 
 Use a separate instrumented build, inside `nix develop` or with a matching

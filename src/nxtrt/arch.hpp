@@ -8,7 +8,13 @@
 #endif
 
 namespace nxtrt::arch {
-#if defined(__linux__) && NXT_RT_HAS_URING
+#if defined(NXTRT_DEFAULT_WAND)
+// Meson validates platform support and exports this choice to consumers:
+// runtime's concrete Wand is part of its public layout.
+#  define NXTRT_ARCH_HAS_WAND 1
+using wand = NXTRT_DEFAULT_WAND;
+inline constexpr bool has_wand = true;
+#elif defined(__linux__) && NXT_RT_HAS_URING
 #define NXTRT_ARCH_HAS_WAND 1
 using wand = uring_wand;
 inline constexpr bool has_wand = true;

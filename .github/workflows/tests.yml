@@ -1,0 +1,54 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.wand }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            wand: uring
+          - os: ubuntu-24.04
+            wand: epoll
+          - os: macos-15
+            wand: kqueue
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure
+        run: >-
+          nix develop --no-write-lock-file -c meson setup build
+          -Ddefault_wand=${{ matrix.wand }} -Dtests=true -Dwisp_tool=true
+          -Ddemo=false -Ddev=false -Dllm_tool=false -Dcares=enabled
+      - name: Build NXT and Wisp tests
+        run: >-
+          nix develop --no-write-lock-file -c meson compile -C build -j 2
+          nxt-tests wisp-alloc-tests wisp-root-link
+      - name: Run all suites
+        run: >-
+          nix develop --no-write-lock-file -c meson test -C build
+          --print-errorlogs --timeout-multiplier 3
+      - name: Upload Meson logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: meson-logs-${{ matrix.wand }}
+          path: build/meson-logs/
+          if-no-files-found: ignore
+          retention-days: 7

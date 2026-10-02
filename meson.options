@@ -4,6 +4,10 @@ option('demo', type : 'boolean', value : true,
 option('tests', type : 'boolean', value : true,
   description : 'Build and register tests')
 
+option('default_wand', type : 'combo', value : 'auto',
+  choices : ['auto', 'epoll', 'uring', 'kqueue'],
+  description : 'Default application Wand backend (auto: io_uring on Linux, kqueue on BSD/macOS)')
+
 option('wisp_tool', type : 'boolean', value : true,
   description : 'Build the Wisp console and timer host')
 
