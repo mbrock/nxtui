@@ -7,10 +7,15 @@
 
 namespace nxtrt::alloc_trace {
 
+/// Read once: tracing is chosen at process start, and events fire on hot
+/// allocation paths where a getenv call per event dominated the cost.
 inline bool enabled() noexcept
 {
-    auto const * value = std::getenv("NXT_ALLOC_TRACE");
-    return value != nullptr && value[0] != '\0' && value[0] != '0';
+    static const bool on = [] {
+        auto const * value = std::getenv("NXT_ALLOC_TRACE");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return on;
 }
 
 inline void event(
