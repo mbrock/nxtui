@@ -64,6 +64,10 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
           ((equal? (request-path) "/console-b")
            (do (sleep-ms 5) (write "B_TEXT")
                (set-response-body! "b")))
+          ((equal? (request-path) "/command")
+           (set-response-body!
+             (process-result-output
+               (run-command "sh" "-c" "exec sleep 45.123"))))
           ((equal? (request-path) "/timeout")
            (do (sleep-ms 30500) (write "late side effect")
                (set-response-body! "too late")))
@@ -78,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
       (serve-http PORT #'handler)
     '''.replace("PORT", str(port)).replace("A_TEXT", "A" * 8192).replace(
         "B_TEXT", "B" * 8192).replace("GC_PAYLOAD", "x" * 2048))
-    server = subprocess.Popen([binary, "run", str(source)],
+    server = subprocess.Popen([binary, "run", str(source), "--run", "sh"],
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE)
     expected_console = b""
@@ -148,12 +152,18 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
 
         # The C++ server's 30s handler deadline must cancel both guest
         # timers and blocked console I/O, including a queued stream waiter.
-        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+        # The same deadline terminates and reaps a running command.
+        with concurrent.futures.ThreadPoolExecutor(3) as pool:
             blocked = pool.submit(request, "/read")
             queued = pool.submit(request, "/read")
+            command = pool.submit(request, "/command")
             assert request("/timeout")[0] == 504
             assert blocked.result(timeout=5)[0] == 504
             assert queued.result(timeout=5)[0] == 504
+            assert command.result(timeout=5)[0] == 504
+        leftover = subprocess.run(["pgrep", "-f", "sleep 45.123"],
+                                  capture_output=True)
+        assert leftover.stdout == b"", leftover.stdout
         time.sleep(.8)
         server.stdin.write(b"available\n")
         server.stdin.flush()

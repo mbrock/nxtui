@@ -9,12 +9,14 @@
 #include "nxtrt/http-server.hpp"
 #include "nxtrt/net.hpp"
 #include "nxtrt/net_dns.hpp"
+#include "nxtrt/subprocess.hpp"
 #include "nxtrt/tls.hpp"
 
 #include <cctype>
 #include <charconv>
 #include <csignal>
 #include <fcntl.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -221,6 +223,47 @@ void grant(directories & granted, std::string_view spec)
     granted.emplace(std::string{name}, nxt::unique_fd{fd});
 }
 
+// Programs granted with --run, by the name the guest uses. Like a --dir
+// grant this is explicit authority, but a coarse one: the program itself
+// runs with the host's full access.
+using programs = std::map<std::string, std::string, std::less<>>;
+
+// --run NAME finds NAME on PATH now; --run NAME=PATH names an executable.
+// Either way the guest gets this absolute path, never a PATH lookup.
+void grant_program(programs & granted, std::string_view spec)
+{
+    const auto equals = spec.find('=');
+    const auto name = std::string{spec.substr(0, equals)};
+    require(
+        !name.empty() && name.find('/') == name.npos,
+        "--run NAME must not contain '/' (use NAME=PATH)");
+    require(!granted.contains(name), "duplicate --run name");
+    const auto executable = [](const std::filesystem::path & path) {
+        std::error_code error;
+        return std::filesystem::is_regular_file(path, error)
+               && ::access(path.c_str(), X_OK) == 0;
+    };
+    auto path = std::filesystem::path{};
+    if (equals != spec.npos) {
+        path = spec.substr(equals + 1);
+    } else {
+        const auto * search = std::getenv("PATH");
+        for (auto dir : std::views::split(
+                 std::string_view{search ? search : ""}, ':')) {
+            auto candidate = std::filesystem::path{
+                std::string_view{dir.begin(), dir.end()}} / name;
+            if (candidate.is_absolute() && executable(candidate)) {
+                path = candidate;
+                break;
+            }
+        }
+    }
+    require(
+        !path.empty() && executable(path),
+        "--run " + std::string{spec} + ": no such executable");
+    granted.emplace(name, std::filesystem::absolute(path).string());
+}
+
 struct host
 {
     heap & h;
@@ -235,6 +278,7 @@ struct host
     std::string save;
     std::size_t gc_threshold = 1024 * 1024;
     directories granted;
+    programs runnable;
 
     host(heap & h, evaluator & vm, root & entry)
         : h(h)
@@ -604,6 +648,100 @@ struct host
         result.set(list);
     }
 
+    static constexpr std::size_t max_command_output = 8 * 1024 * 1024;
+
+    // Reads merged output until EOF, or until it exceeds the limit.
+    static nxtrt::task<bool>
+    read_command_output(int fd, std::string & output)
+    {
+        auto storage = std::array<std::byte, 16 * 1024>{};
+        auto source = nxtrt::fd_source{fd, std::span{storage}};
+        while (const auto chunk = co_await source.take_some()) {
+            if (output.size() + chunk->size() > max_command_output)
+                co_return false;
+            output.append(nxtrt::as_string_view(*chunk));
+        }
+        co_return true;
+    }
+
+    static nxtrt::task<nxtrt::child_result> collect_command(
+        nxtrt::subprocess::piped_child & child,
+        std::string & output,
+        bool & waited)
+    {
+        const auto complete =
+            co_await read_command_output(child.output_fd(), output);
+        child.output.reset();
+        if (!complete) {
+            (void) co_await nxtrt::subprocess::terminate_and_wait(child);
+            waited = true;
+            throw effect_error{"TOO-LARGE", "command output exceeds 8 MiB"};
+        }
+        auto status = co_await nxtrt::subprocess::wait_child(child);
+        waited = true;
+        co_return status;
+    }
+
+    // On cancellation (an HTTP handler timeout, say) the child is
+    // terminated and reaped before the effect settles.
+    static nxtrt::task<void>
+    settle_command(nxtrt::subprocess::piped_child & child, bool & waited)
+    {
+        if (!waited)
+            (void) co_await nxtrt::subprocess::terminate_and_wait(child);
+        waited = true;
+    }
+
+    // [name arguments] -> PROCESS-RESULT. Stdin is /dev/null; stdout and
+    // stderr arrive merged. A nonzero exit is a result, not an error.
+    nxtrt::task<void> run_command(root & pending, root & result)
+    {
+        if (!save.empty())
+            throw effect_error{
+                "NOT-REPLAYABLE", "commands cannot be checkpointed"};
+        const auto args =
+            vector(h, vector(h, vector(h, pending.get(), 5)[1], 2)[1], 2);
+        effect_require(
+            tag_of(args[0]) == tag::v08,
+            "run-command expects a program name and string arguments");
+        const auto found = runnable.find(text(h, args[0]));
+        if (found == runnable.end())
+            throw effect_error{
+                "NOT-CAPABLE", "program was not granted with --run"};
+        std::vector<std::string> argv{found->second};
+        std::set<word> seen;
+        for (auto list = args[1]; list != nil;) {
+            effect_require(
+                tag_of(list) == tag::duo && seen.insert(list).second,
+                "run-command arguments must be a proper list");
+            const auto [arg, rest] = h.read<tag::duo>(list);
+            effect_require(
+                tag_of(arg) == tag::v08
+                    && h.v08slice(arg).find('\0') == std::string_view::npos,
+                "run-command arguments must be strings without NUL");
+            argv.push_back(text(h, arg));
+            list = rest;
+        }
+        // Every guest value has been copied; only owned data from here.
+        auto child = nxtrt::subprocess::piped_child{};
+        try {
+            child = co_await nxtrt::subprocess::spawn_piped(std::move(argv));
+        } catch (const nxtrt::errno_error & error) {
+            throw effect_error{"IO", error.what()};
+        }
+        std::string output;
+        bool waited = false;
+        const auto status = co_await nxtrt::finally(
+            collect_command(child, output, waited),
+            [&child, &waited] { return settle_command(child, waited); });
+        const auto text = h.newv08(output);
+        result.set(make_struct(
+            "PROCESS-RESULT",
+            {{"EXIT-CODE", status.exited ? fixnum(status.exit_code) : nil},
+             {"SIGNAL", status.signaled ? fixnum(status.signal) : nil},
+             {"OUTPUT", text}}));
+    }
+
     nxtrt::task<nxtrt::http::response>
     http_request(root & pending, nxtrt::http::request request)
     {
@@ -921,6 +1059,10 @@ struct host
             }
             co_return;
         }
+        if (operation == vm.keyword("RUN-COMMAND")) {
+            co_await run_command(pending, result);
+            co_return;
+        }
         if (operation == vm.keyword("READ-FILE")) {
             co_await read_file(argument, result);
             co_return;
@@ -1198,10 +1340,13 @@ int main(int argc, char ** argv)
             std::cout
                 << "wisp run SOURCE [--checkpoint TAPE] [--dir NAME=PATH]...\n"
                    "wisp restore TAPE [--effects] [--cancel] [--checkpoint TAPE] [--dir NAME=PATH]...\n"
-                   "wisp inspect TAPE\nwisp repl [--dir NAME=PATH]...\n"
+                   "wisp inspect TAPE\nwisp repl [--dir NAME=PATH]... [--run NAME[=PATH]]...\n"
                    "Checkpoints stop at the next timer. Restores default to effects disabled.\n"
                    "--dir grants read access beneath PATH as guest paths NAME/...;\n"
-                   "--dir PATH grants a plain directory name as itself.\n";
+                   "--dir PATH grants a plain directory name as itself.\n"
+                   "--run NAME grants run-command NAME (found on PATH now);\n"
+                   "--run NAME=PATH grants a specific executable.\n"
+                   "run and restore accept --run like --dir.\n";
             return 0;
         }
         require(
@@ -1214,10 +1359,14 @@ int main(int argc, char ** argv)
         bool effects = false, cancel = false;
         std::string save;
         directories granted;
+        programs runnable;
         for (int i = command == "repl" ? 2 : 3; i < argc; ++i) {
             const std::string_view option{argv[i]};
             if (option == "--dir" && command != "inspect" && i + 1 < argc)
                 grant(granted, argv[++i]);
+            else if (
+                option == "--run" && command != "inspect" && i + 1 < argc)
+                grant_program(runnable, argv[++i]);
             else if (command == "repl")
                 throw std::runtime_error("invalid command option");
             else if (option == "--effects" && command == "restore")
@@ -1235,12 +1384,14 @@ int main(int argc, char ** argv)
             auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
             host app{image->storage, image->machine, image->entry};
             app.granted = std::move(granted);
+            app.runnable = std::move(runnable);
             nxtrt::runtime runtime;
             runtime.run([&] { return app.repl(); });
         } else if (command == "run") {
             auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
             host app{image->storage, image->machine, image->entry};
             app.granted = std::move(granted);
+            app.runnable = std::move(runnable);
             nxtrt::runtime runtime;
             const auto source = read_file(argv[2]);
             const bool done = runtime.run(
@@ -1254,6 +1405,7 @@ int main(int argc, char ** argv)
             auto image = tape::read(file);
             host app{image->storage, image->machine, image->entry};
             app.granted = std::move(granted);
+            app.runnable = std::move(runnable);
             if (command == "inspect") {
                 std::cout << "source-location: " << app.location()
                           << "\nsource-byte-offset: "

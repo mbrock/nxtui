@@ -347,6 +347,25 @@ path first and answers 404 for anything but a regular file. Each streamed chunk
 gets a fresh write deadline, so long downloads only need to keep making
 progress.
 
+### Run granted programs
+
+Programs are capabilities too. `--run NAME` finds NAME on `PATH` at startup
+and `--run NAME=PATH` names an executable; the guest can then run only those,
+by name, and never searches `PATH` itself:
+
+```lisp
+(run-command "git" "status" "--short")
+;; #S(PROCESS-RESULT :EXIT-CODE 0 :SIGNAL NIL :OUTPUT " M README.md\n")
+```
+
+Stdin is empty, stdout and stderr arrive merged, and a nonzero exit or a
+signal is a result rather than an error. Output beyond 8 MiB terminates the
+program and raises `:TOO-LARGE`. Cancelling the awaiting activation (such as
+an HTTP handler timeout) terminates and reaps the program; it signals only the
+program itself, not processes it started. Like HTTP, commands are rejected in
+checkpoint mode. A program grant is coarse: the program runs with the host's
+full authority, whatever its directory grants say.
+
 The reusable C++ API is [`nxtrt::http::serve`](src/nxtrt/http-server.hpp), with a
 borrowed listener, `task<response>(request)` handler, and bounded server options.
 It supports HTTP/1.1 keep-alive, pipelining, fixed-length/chunked requests, and

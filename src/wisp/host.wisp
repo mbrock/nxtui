@@ -299,6 +299,16 @@
 (defun serve-http (port handler)
   (await (vector :http-serve (vector port handler))))
 
+;; Programs granted on the command line with --run NAME[=PATH] run by NAME:
+;; (run-command "git" "status"). Stdin is empty, stdout and stderr arrive
+;; merged as OUTPUT, and EXIT-CODE or SIGNAL says how it ended; a nonzero
+;; exit is a result, not an error. Output over 8 MiB terminates the program
+;; and raises :TOO-LARGE; an ungranted name raises :NOT-CAPABLE.
+(defstruct process-result exit-code signal output)
+
+(defun run-command (name &rest arguments)
+  (await (vector :run-command (vector name arguments))))
+
 ;; Await the composite DNS/TCP/TLS/HTTP task in the calling activation.
 ;; Returns an HTTP-RESPONSE, so a handler can relay it with SEND! :RESPOND.
 ;; Headers are a list of [name value] vectors, and the decoded body is a
