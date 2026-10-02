@@ -6,6 +6,7 @@
 #include <nxt/crypto.hpp>
 
 #include "test.hpp"
+#include "wisp-base.hpp"
 #include <sstream>
 
 namespace wisp::test {
@@ -456,9 +457,9 @@ static suite tape_tests{
             bytes data;
             word uninterrupted = nil;
             {
-                heap h;
-                evaluator vm{h};
-                evaluate(h, vm, base_library());
+                auto base = base_image();
+                heap & h = base->storage;
+                evaluator & vm = base->machine;
                 root packet{h, evaluate(h, vm, R"(
                 (call-with-effect-handler 'host
                   (fn () (+ 7 (send! 'host 35)))

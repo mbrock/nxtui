@@ -9,19 +9,41 @@
 
 namespace wisp {
 
-/// A restored machine with stable addresses and a persistent entry root.
-/// Destruction unlinks roots before destroying their heap. A vector/list
-/// entry can retain several application roots. Native tasks are recreated
-/// by the caller, never restored from the tape.
+/// A machine with stable addresses and a persistent entry root: either
+/// fresh, or restored from a tape. Destruction unlinks roots before
+/// destroying their heap. A vector/list entry can retain several
+/// application roots. Native tasks are recreated by the caller, never
+/// restored from the tape.
+///
+/// Encoding one image and decoding the bytes gives an independent copy of
+/// the machine, which is how a host forks a booted machine without
+/// re-running its boot code.
 struct image
 {
     heap storage;
     evaluator machine;
     root entry;
 
+    /// A new machine with fresh WISP, KEYWORD, and KEY packages.
+    static std::unique_ptr<image> fresh()
+    {
+        return std::unique_ptr<image>(new image(fresh_tag{}));
+    }
+
 private:
     friend struct tape_codec;
 
+    struct fresh_tag
+    {};
+
+    explicit image(fresh_tag)
+        : machine(storage)
+        , entry(storage)
+    {
+    }
+
+    // Restore registers roots without installing packages; only a
+    // validated tape may fill them.
     image()
         : machine(storage, nullptr)
         , entry(storage)

@@ -263,7 +263,8 @@ future work.
 - `src/nxt` — shared protocol and utility code (crypto, TLS, JSON, PNG,
   stacktraces) not tied to one root namespace.
 - `demo` — small runtime, terminal, HTTP, SSE, and shell demos.
-- `test` — the nested `_test` suites.
+- `test` — the nested `_group`/`_test` suites (`build/nxt-tests --slow`
+  adds the slow integration tier).
 - `docs` — the API documentation source, including the conceptual pages above.
 
 ## Building
@@ -304,8 +305,9 @@ runs on pushes and pull requests with the locked Nix development toolchain:
 | Ubuntu 24.04 | epoll |
 | macOS 15 (Apple Silicon) | kqueue |
 
-Each job runs the complete `nxt-tests` binary, Wisp allocation-failure tests,
-and Wisp host and HTTP integration tests. Linux also includes the direct
+Each job runs `meson test`: the `nxt-tests` binary, its slow tier
+(`nxt-slow-tests`), Wisp allocation-failure tests, and the Wisp host and HTTP
+integration tests (also in the `slow` suite). Linux also includes the direct
 epoll and io_uring suites; macOS includes the kqueue suite. Meson logs are
 uploaded even on failure. Builds use `debugoptimized` (optimization plus
 debug symbols, with assertions still enabled); the test harness's per-test

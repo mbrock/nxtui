@@ -2,6 +2,7 @@
 #include <wisp/printer.hpp>
 
 #include "test.hpp"
+#include "wisp-base.hpp"
 
 namespace wisp::test {
 namespace {
@@ -11,8 +12,14 @@ using namespace std::chrono_literals;
 
 struct source_machine
 {
-    heap h;
-    evaluator vm{h};
+    explicit source_machine(std::unique_ptr<image> from = image::fresh())
+        : owner(std::move(from))
+    {
+    }
+
+    std::unique_ptr<image> owner;
+    heap & h = owner->storage;
+    evaluator & vm = owner->machine;
     root last{h};
 
     word load(std::string_view text, std::size_t quantum = 257)
@@ -39,11 +46,6 @@ struct source_machine
     void check(std::string_view source, std::string_view expected)
     {
         expect(print(h, load(source)) == expected);
-    }
-
-    void boot()
-    {
-        load(base_library(), 2048);
     }
 };
 
@@ -114,8 +116,7 @@ static suite source_tests{
 
         "the guest bootstrap supplies definitions, quasiquotation, and eager lambdas"_test
             .with_timeout(10s) = [] {
-            source_machine m;
-            m.boot();
+            source_machine m{base_image()};
             m.check(
                 R"(
             (defun gather (x &optional y &rest zs) (list x y zs))
@@ -174,8 +175,7 @@ static suite source_tests{
 
         "deep effects resume and raise through the guest library across collection"_test
             .with_timeout(10s) = [] {
-            source_machine m;
-            m.boot();
+            source_machine m{base_image()};
             m.check(
                 R"(
             (call-with-effect-handler 'ask
@@ -220,8 +220,7 @@ static suite source_tests{
 
         "strings, source streams, and stream effects compose without native I/O"_test
             .with_timeout(10s) = [] {
-            source_machine m;
-            m.boot();
+            source_machine m{base_image()};
             m.check(
                 R"(
             (let ((input (string-input-stream "nil 42 :ready"))

@@ -144,4 +144,20 @@ subtrees by number:
 build/nxt-tests 1 2.7 7
 ```
 
-Tests are nested with the local `_test` DSL in `test/test.hpp`.
+Tests are nested with the local DSL in `test/test.hpp`: `"name"_group = []
+{ ... }` holds child groups and tests, and `"name"_test = [] { ... }` is a
+leaf. The runner makes one pass: group bodies only declare children, test
+bodies run only when selected, and results print as each test finishes. Keep
+every test self-contained; siblings must not share state through their group.
+
+Slow integration and stress cases are marked `"name"_test.slow()` (or a whole
+`.slow()` group). Everyday runs skip them; `build/nxt-tests --slow` runs
+everything, `--only-slow` runs just them, and selecting a slow test by number
+runs it. `meson test` runs the slow suites too, as CI does;
+`meson test --no-suite slow` skips them. A test that needs more than one
+second is a candidate for `.slow()` before it is a candidate for a longer
+timeout.
+
+Wisp tests that need the base library start from `wisp::test::base_image()`
+in `test/wisp-base.hpp`: the base library is interpreted once per process
+and every caller decodes a private copy of that machine.

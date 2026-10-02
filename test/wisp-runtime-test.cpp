@@ -5,6 +5,7 @@
 #include <nxtrt/app.hpp>
 
 #include "test.hpp"
+#include "wisp-base.hpp"
 
 namespace wisp::test {
 namespace {
@@ -14,8 +15,14 @@ using namespace std::chrono_literals;
 
 struct runtime_machine
 {
-    heap h;
-    evaluator vm{h};
+    explicit runtime_machine(std::unique_ptr<image> from = image::fresh())
+        : owner(std::move(from))
+    {
+    }
+
+    std::unique_ptr<image> owner;
+    heap & h = owner->storage;
+    evaluator & vm = owner->machine;
     root run{h};
 
     word form(std::string_view text)
@@ -249,8 +256,7 @@ static suite runtime_tests{
 
         "loading changes reader package between forms, not within already read forms"_test
             .with_timeout(10s) = [] {
-            runtime_machine m;
-            m.load(base_library(), 2048);
+            runtime_machine m{base_image()};
             expect(
                 m.load(R"(
             (defpackage meadow (:use wisp))
