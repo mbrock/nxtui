@@ -54,18 +54,23 @@ model runtime-model
   // HTTP connection tasks use the bounded pool below; Wisp callbacks await
   // native tasks directly. Guest continuations stay in the Wisp heap, not
   // in this deck. Neither layer needs permanent evaluator/connection workers.
-  // Firms provide frame memory and ordinary ambient-fork ownership. The
-  // concurrent tuple combinator instead admits its finite input of N indexed
-  // void recipes into an N-slot ordinary pool: outcomes are written to their
-  // typed tuple positions, with no main-work firm child/deed records. An
-  // explicit nested ambient fork still belongs to its firm. This runtime
-  // model describes the existing pool ownership and close/drain lifecycle;
+  // Firms provide frame memory and cancellation context; core no longer
+  // offers ambient free fork/join. A firm may be an empty frame/cancel scope,
+  // or a callback may explicitly use its firm reference to own children.
+  // The concurrent tuple combinator admits its finite input of N indexed
+  // void recipes into an N-slot ordinary pool: main work stays pool-owned,
+  // with no firm child/deed records. Any additional fork needs an explicit
+  // owner reference. This model describes pool ownership and close/drain;
   // tuple value types and positional writes are intentionally not modeled.
   signature firm
+    // Optional explicit child ownership, not what makes the firm exist.
     spawned set task
     issued set deed
   // Admission ownership is separate from frame allocation: pool jobs use
   // the ambient firm's frame storage, but have no firm child/deed record.
+  // Frame-allocation provenance (a preconstructed task's allocation scope
+  // must outlive its target, while a factory runs in the target scope) is
+  // enforced by C++ and is outside this exec/ownership model.
   // slots is fixed capacity; consuming/discarding are events on this step.
   // admitted records job provenance, not current occupancy; slot.job is the
   // live/result identity. Frame bytes, result values, cancellation delivery,
@@ -113,6 +118,11 @@ model runtime-model
     // issued/observes are semantic relations, not separate C++ ledgers.
     observes one task
 
+  predicate explicitly-owned-child
+    all ([t task])
+      (=> (some (matching spawned t))
+          (== (count (matching spawned t)) 1))
+
   predicate structural-invariants
     all ([t task])
       (either
@@ -121,8 +131,6 @@ model runtime-model
     all ([p pool] [t (p admitted)])
       no (matching spawned t)
       one (matching admitted t)
-    all ([s pool-slot])
-      one (matching slots s)
     all ([z firm] [t (z spawned)])
       some ([d (z issued)])
         == (d observes) t
@@ -131,6 +139,11 @@ model runtime-model
         == (d observes) t
     all ([z firm] [d (z issued)])
       in (d observes) (z spawned)
+    all ([t task])
+      (=> (some (matching spawned t))
+          (== (count (matching spawned t)) 1))
+    all ([s pool-slot])
+      one (matching slots s)
     all ([a exec] [s (intersect (a has-lifecycle) prepared-state)])
       no (a has-parked-phase)
       no (a has-settled-phase)
@@ -238,6 +251,16 @@ model runtime-model
     always pool-transitions
     pool-reuse
 
+  // A scope is valid even when the callback retains no forked children.
+  predicate empty-firm-scope
+    some ([z firm])
+      no (z spawned)
+      no (z issued)
+
+  run empty-firm-scope-witness :for ([1 firm] [0 deck task deed wish exec pool pool-slot pool-close]) :trace-length 2
+    structural-invariants
+    empty-firm-scope
+
   // Two indexed tuple jobs occupy distinct ordinary-pool slots. At close
   // start one result is ready while the other job is still running; close
   // then discards both results as they become ready and returns both slots.
@@ -301,6 +324,12 @@ model runtime-model
     assume pools-start-free
     assume always pool-transitions
     show always pool-release-retires-result
+
+  // Removing explicitly-owned-child from structural-invariants makes this
+  // check fail: the remaining ownership facts allow two firms to own a task.
+  check explicit-child-has-one-firm-owner :for ([2 firm task deed] [0 deck wish exec pool pool-slot pool-close]) :trace-length 2
+    assume always structural-invariants
+    show always explicitly-owned-child
 
   predicate lifecycle-transitions
     all ([a exec] [s (intersect (a has-lifecycle) prepared-state)])

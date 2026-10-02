@@ -5,6 +5,15 @@ as history
 
 ## Current implementation note
 
+The earlier public-API examples and nursery descriptions in this RFC are
+historical. The consolidated contract defines a firm as a frame-memory and
+cancellation scope with optional explicit child ownership: `with_firm` accepts
+either a retained nullary factory or a factory taking `Policy&`, and nested
+forking uses that explicit scope reference. Free `nxtrt::fork` / `nxtrt::join`
+and ambient child admission are not part of the contract. See
+[RFC 0005](rfc-0005-firm-bookkeeping-without-heap-vectors.md) and
+[RFC 0014](../new/rfc-0014-idea-algebra.md).
+
 The frame pool remains in use: default firms grow lazy, nonmoving owned chunks;
 explicitly borrowed frame land is bounded. Frames are individually recycled
 using top retraction and size-class free lists, as described below.
@@ -20,10 +29,10 @@ firm's `completed(task_id, exception_ptr)` hook. This unifies their cancellation
 and drain policy without converting nested explicit forks into bounded work.
 See the [RFC 0005 supersession note](rfc-0005-firm-bookkeeping-without-heap-vectors.md).
 Pool jobs own their task handles directly while using ambient firm frame land.
-Allocation scope is not structured child ownership. The firm still supplies
-frames and stop policy, with a growable nursery for explicit nested ambient
-forks; those forks are outside the tuple's finite batch bound. This is not a
-strict transitive static team or an allocation-free guarantee. See
+Allocation scope is not structured child ownership. The firm supplies frames
+and cancellation; optional explicitly owned children are outside the tuple's
+finite batch bound. This is not a strict transitive static team or an
+allocation-free guarantee. See
 [Recipes, pools, and structured async](../../docs/rt-concurrency-direction.md)
 for the direction toward separating those responsibilities.
 
@@ -236,24 +245,26 @@ firm child record for every coroutine.
 Prefer task factories over preconstructed tasks when forking:
 
 ```cpp
-auto child = fork(fn, args...);
+auto child = scope.fork(fn, args...);
 ```
 
 instead of only:
 
 ```cpp
-auto child = fork(fn(args...));
+auto child = scope.fork(fn(args...));
 ```
 
-That postpones allocation until invocation in an ambient frame scope. The
-current member `firm::fork(fn, args...)` does not itself rebind the ambient
-firm or retain the callable. Merely passing a factory therefore does not cure
-the capturing-coroutine-lambda lifetime hazard.
+That postpones allocation until invocation in the explicitly selected owner's
+frame scope. `firm::fork(fn, args...)` temporarily binds the owner while
+invoking the factory; it does not retain the callable. Merely passing a factory
+therefore does not cure the capturing-coroutine-lambda lifetime hazard.
 
 Tuple helpers retain their factories, and pools put ideas in stable slots
 before invoking them. A preconstructed task retains its original allocation
-home regardless of which owner later admits it. Recipe-based APIs make this
-decision explicit without claiming that every callable lifetime is automatic.
+home; `scope.fork(task)` requires that home to be the owner or an enclosing
+ancestor, so the frame cannot outlive its allocation scope. Recipe-based APIs
+make this decision explicit without claiming that every callable lifetime is
+automatic.
 
 ## Relationship To Other RFCs
 

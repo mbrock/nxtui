@@ -938,8 +938,8 @@ struct frame_reuse_firm : nxtrt::firm
     nxtrt::task<void> operator()()
     {
         for (auto & total : *totals)
-            nxtrt::fork(frame_reuse_worker(iterations, total));
-        co_await nxtrt::join();
+            fork(frame_reuse_worker(iterations, total));
+        co_await join();
         *high_water = frame_high_water();
     }
 
@@ -1018,12 +1018,13 @@ nxtrt::task<void> record_current_task_id_after_yield(
 }
 
 nxtrt::task<void> probe_fork_deck_overflow_body(
+    nxtrt::firm & scope,
     std::vector<int> & events,
     bool & overflowed,
     std::size_t & child_count_after_failure)
 {
     try {
-        nxtrt::fork(record_after_yield(events, 7));
+        scope.fork(record_after_yield(events, 7));
     } catch (const nxtrt::runtime_error & e) {
         overflowed =
             std::string_view{e.what()}.contains("deck task table is full");
@@ -1041,10 +1042,10 @@ struct fork_deck_overflow_root
 
     nxtrt::task<void> operator()() const
     {
-        return probe_fork_deck_overflow_body(
-            *events,
-            *overflowed,
-            *child_count_after_failure);
+        return nxtrt::with_firm([&](nxtrt::firm & scope) {
+            return probe_fork_deck_overflow_body(
+                scope, *events, *overflowed, *child_count_after_failure);
+        });
     }
 };
 
@@ -1341,9 +1342,10 @@ nxtrt::task<int> tuple_wait_for_stop(
     throw nxtrt::operation_cancelled{};
 }
 
-nxtrt::task<int> tuple_ambient_fork(std::vector<int> & events)
+nxtrt::task<int> tuple_frame_context(std::vector<int> & events)
 {
-    nxtrt::fork(record_after_yield(events, 3));
+    events.push_back(
+        nxtrt::require_current_firm().child_count() == 0 ? 3 : -3);
     co_return 17;
 }
 
@@ -1502,18 +1504,19 @@ nxtrt::task<void> record_stop_state_after_yield(
     events.push_back(nxtrt::stop_requested() ? value : -value);
 }
 
-nxtrt::task<void> hosted_firm_stop_body(std::vector<int> & events)
+nxtrt::task<void>
+hosted_firm_stop_body(nxtrt::firm & scope, std::vector<int> & events)
 {
-    nxtrt::fork(record_stop_state_after_yield(events, 4));
+    scope.fork(record_stop_state_after_yield(events, 4));
     events.push_back(100);
     co_await nxtrt::yield();
-    co_await nxtrt::join();
+    co_await scope.join();
 }
 
 nxtrt::task<void> hosted_firm_stop_probe(std::vector<int> & events)
 {
-    co_await nxtrt::with_firm([&] {
-        return hosted_firm_stop_body(events);
+    co_await nxtrt::with_firm([&](nxtrt::firm & scope) {
+        return hosted_firm_stop_body(scope, events);
     });
 }
 
@@ -2450,23 +2453,23 @@ static suite runtime_tests{
 
             "forked tasks keep env after binder exits"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::catching_deed<int>> {
+                auto child = deck.sync_wait(
+                    []() -> nxtrt::task<nxtrt::catching_deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []()
-                                -> nxtrt::task<
-                                    nxtrt::catching_deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::catching_deed<int>> {
                                 co_return co_await nxtrt::with_env<
                                     ambient_int_key>(
-                                    99, []()
+                                    99,
+                                    [&scope]()
                                         -> nxtrt::task<
                                             nxtrt::catching_deed<int>> {
                                         auto child =
-                                            nxtrt::fork(
-                                                read_ambient_int_after_yield())
+                                            scope
+                                                .fork(
+                                                    read_ambient_int_after_yield())
                                                 .cope();
-                                        co_await nxtrt::join();
+                                        co_await scope.join();
                                         co_return std::move(child);
                                     });
                             });
@@ -2495,18 +2498,21 @@ static suite runtime_tests{
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     co_await nxtrt::with_env<nxtrt::trace_context_key>(
                         trace, [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::with_env<
-                            nxtrt::trace_current_span_key>(
-                            root.span_id(), [&]() -> nxtrt::task<void> {
-                            co_await nxtrt::with_firm(
-                                [&]() -> nxtrt::task<void> {
-                                nxtrt::fork(traced_child("child-a"));
-                                nxtrt::fork(traced_child("child-b"));
-                                co_await nxtrt::join();
-                                co_return;
-                            });
+                            co_await nxtrt::with_env<
+                                nxtrt::trace_current_span_key>(
+                                root.span_id(), [&]() -> nxtrt::task<void> {
+                                    co_await nxtrt::with_firm(
+                                        [&](nxtrt::firm & scope)
+                                            -> nxtrt::task<void> {
+                                            scope.fork(
+                                                traced_child("child-a"));
+                                            scope.fork(
+                                                traced_child("child-b"));
+                                            co_await scope.join();
+                                            co_return;
+                                        });
+                                });
                         });
-                    });
                 });
 
                 root.finish("ok");
@@ -2572,16 +2578,41 @@ static suite runtime_tests{
                 expect(seen);
             };
 
+            "game callback receives its enclosing frame scope"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto value = nxtrt::sync_wait_game<int>(
+                    deck, [](nxtrt::firm & scope) -> nxtrt::task<int> {
+                        expect(nxtrt::current_firm() == &scope);
+                        co_await nxtrt::yield();
+                        expect(nxtrt::current_firm() == &scope);
+                        expect(nxtrt::current_game<int>() != nullptr);
+                        co_return 23;
+                    });
+                expect(value == 23);
+            };
+
+            "with_game retains a temporary move only factory"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto value = deck.sync_wait([] {
+                    return nxtrt::with_game<int>(
+                        [value = std::make_unique<int>(37)] {
+                            return value_after_yield(*value);
+                        });
+                });
+                expect(value == 37);
+            };
+
             "forked tasks inherit the current game"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto games = std::vector<nxtrt::game<int> *>{};
                 auto expected = static_cast<nxtrt::game<int> *>(nullptr);
 
-                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
-                    expected = nxtrt::current_game<int>();
-                    nxtrt::fork(record_current_int_game(games));
-                    co_await nxtrt::join();
-                });
+                nxtrt::sync_wait_game<int>(
+                    deck, [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                        expected = nxtrt::current_game<int>();
+                        scope.fork(record_current_int_game(games));
+                        co_await scope.join();
+                    });
 
                 expect(expected != nullptr);
                 expect(games == std::vector<nxtrt::game<int> *>{expected});
@@ -2591,11 +2622,12 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto seen = std::vector<int>{};
 
-                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
-                    nxtrt::fork(post_game_event(7));
-                    nxtrt::fork(wait_for_game_event(7, seen));
-                    co_await nxtrt::join();
-                });
+                nxtrt::sync_wait_game<int>(
+                    deck, [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                        scope.fork(post_game_event(7));
+                        scope.fork(wait_for_game_event(7, seen));
+                        co_await scope.join();
+                    });
 
                 expect(seen == std::vector<int>{7});
             };
@@ -2604,12 +2636,13 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto seen = std::vector<int>{};
 
-                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
-                    nxtrt::fork(post_game_event(1));
-                    nxtrt::fork(halt_game_event_once(1, seen));
-                    nxtrt::fork(post_game_event(2));
-                    co_await nxtrt::join();
-                });
+                nxtrt::sync_wait_game<int>(
+                    deck, [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                        scope.fork(post_game_event(1));
+                        scope.fork(halt_game_event_once(1, seen));
+                        scope.fork(post_game_event(2));
+                        co_await scope.join();
+                    });
 
                 expect(seen == std::vector<int>{2});
             };
@@ -2618,12 +2651,13 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto cancelled = false;
 
-                nxtrt::sync_wait_game<int>(deck, [&]() -> nxtrt::task<void> {
-                    nxtrt::fork(wait_for_never_game_event(cancelled));
-                    co_await nxtrt::yield();
-                    nxtrt::require_current_firm().stop();
-                    co_await nxtrt::join();
-                });
+                nxtrt::sync_wait_game<int>(
+                    deck, [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                        scope.fork(wait_for_never_game_event(cancelled));
+                        co_await nxtrt::yield();
+                        scope.stop();
+                        co_await scope.join();
+                    });
 
                 expect(cancelled);
             };
@@ -2655,18 +2689,17 @@ static suite runtime_tests{
                 auto events = std::vector<ttt_event>{};
 
                 nxtrt::sync_wait_game<ttt_event>(
-                    deck,
-                    [&]() -> nxtrt::task<void> {
-                        nxtrt::fork(ttt_enforce_turns());
+                    deck, [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                        scope.fork(ttt_enforce_turns());
                         for (auto row = 0; row != 3; ++row) {
                             for (auto col = 0; col != 3; ++col)
-                                nxtrt::fork(ttt_square_taken(row, col));
+                                scope.fork(ttt_square_taken(row, col));
                         }
-                        nxtrt::fork(ttt_detect_end(board, events));
-                        nxtrt::fork(ttt_x_script());
-                        nxtrt::fork(ttt_o_ai());
-                        co_await nxtrt::join();
-                });
+                        scope.fork(ttt_detect_end(board, events));
+                        scope.fork(ttt_x_script());
+                        scope.fork(ttt_o_ai());
+                        co_await scope.join();
+                    });
 
                 expect(events == std::vector<ttt_event>{
                     ttt_move('X', 1, 1),
@@ -2817,8 +2850,8 @@ static suite runtime_tests{
                             co_return;
                         }();
                         *child_high_water = frame_high_water();
-                        nxtrt::fork(std::move(child));
-                        co_await nxtrt::join();
+                        fork(std::move(child));
+                        co_await join();
                     }
 
                     std::size_t * initial_high_water = nullptr;
@@ -3026,19 +3059,22 @@ static suite runtime_tests{
             "nursery grows beyond the former child limit with stable deeds"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto deeds = deck.sync_wait([] {
-                    return nxtrt::with_firm([]() -> nxtrt::task<
-                        std::vector<nxtrt::deed<int>>> {
-                        auto deeds = std::vector<nxtrt::deed<int>>{};
-                        for (auto i = 0; i < 4100; ++i) {
-                            deeds.push_back(nxtrt::fork(value_after_yield(i)));
-                            // Reuse frames while retaining linked results.
-                            if (i % 64 == 63)
-                                co_await nxtrt::join();
-                        }
-                        co_await nxtrt::join();
-                        expect(nxtrt::current_firm()->child_count() == 4100);
-                        co_return deeds;
-                    });
+                    return nxtrt::with_firm(
+                        [](nxtrt::firm & scope)
+                            -> nxtrt::task<std::vector<nxtrt::deed<int>>> {
+                            auto deeds = std::vector<nxtrt::deed<int>>{};
+                            for (auto i = 0; i < 4100; ++i) {
+                                deeds.push_back(
+                                    scope.fork(value_after_yield(i)));
+                                // Reuse frames while retaining linked
+                                // results.
+                                if (i % 64 == 63)
+                                    co_await scope.join();
+                            }
+                            co_await scope.join();
+                            expect(scope.child_count() == 4100);
+                            co_return deeds;
+                        });
                 });
                 for (auto i = 0; i < 4100; ++i)
                     expect(std::move(deeds[i]).get() == i);
@@ -3049,12 +3085,13 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::fork(record_after_yield(events, 1));
-                        events.push_back(2);
-                        co_await nxtrt::join();
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(record_after_yield(events, 1));
+                            events.push_back(2);
+                            co_await scope.join();
+                            co_return;
+                        });
                     events.push_back(3);
                     co_return;
                 });
@@ -3069,8 +3106,8 @@ static suite runtime_tests{
                 try {
                     deck.sync_wait([]() -> nxtrt::task<void> {
                         co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<void> {
-                                nxtrt::fork(value_after_yield(1));
+                            [](nxtrt::firm & scope) -> nxtrt::task<void> {
+                                scope.fork(value_after_yield(1));
                                 co_return;
                             });
                     });
@@ -3079,7 +3116,7 @@ static suite runtime_tests{
                 }
 
                 expect(message.contains("unjoined children"));
-                expect(message.contains("co_await nxtrt::join()"));
+                expect(message.contains("co_await scope.join()"));
             };
 
             "firm subclasses are directly awaitable"_test = [] {
@@ -3148,17 +3185,125 @@ static suite runtime_tests{
                 auto expected = static_cast<nxtrt::firm *>(nullptr);
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        expected = nxtrt::current_firm();
-                        nxtrt::fork(record_current_firm(firms));
-                        co_await nxtrt::join();
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            expected = &scope;
+                            scope.fork(record_current_firm(firms));
+                            co_await scope.join();
+                            co_return;
+                        });
                     co_return;
                 });
 
                 expect(expected != nullptr);
                 expect(firms == std::vector<nxtrt::firm *>{expected});
+            };
+
+            "explicit owner overrides inner scope but inherits caller values"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto seen = std::vector<nxtrt::firm *>{};
+                auto calls = 0;
+                deck.sync_wait([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & outer) -> nxtrt::task<void> {
+                            auto prepared = record_current_firm(seen);
+                            auto result = nxtrt::deed<int>{};
+                            co_await nxtrt::with_firm(
+                                [&](nxtrt::firm & inner)
+                                    -> nxtrt::task<void> {
+                                    expect(nxtrt::current_firm() == &inner);
+                                    co_await nxtrt::with_env<
+                                        ambient_int_key>(
+                                        29, [&]() -> nxtrt::task<void> {
+                                            outer.fork(std::move(prepared));
+                                            result = outer.fork([&] {
+                                                ++calls;
+                                                expect(
+                                                    nxtrt::current_firm()
+                                                    == &outer);
+                                                auto task =
+                                                    read_ambient_int_after_yield();
+                                                expect(
+                                                    &nxtrt::firm_frame_arena::
+                                                        owner_of(
+                                                            task.handle()
+                                                                .address())
+                                                    == &outer
+                                                            .frame_arena());
+                                                return task;
+                                            });
+                                            expect(
+                                                nxtrt::current_firm()
+                                                == &inner);
+                                            expect(
+                                                inner.child_count() == 0);
+                                            co_return;
+                                        });
+                                });
+                            // The inner scope is gone before the outer
+                            // joins.
+                            co_await outer.join();
+                            expect(calls == 1);
+                            expect(std::move(result).get() == 29);
+                            expect(
+                                seen == std::vector<nxtrt::firm *>{&outer});
+                        });
+                });
+            };
+
+            "inner owner may adopt a frame from an enclosing scope"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto seen = std::vector<nxtrt::firm *>{};
+                    deck.sync_wait([&] {
+                        return nxtrt::with_firm(
+                            [&](nxtrt::firm & outer) -> nxtrt::task<void> {
+                                auto task = record_current_firm(seen);
+                                expect(
+                                    &nxtrt::firm_frame_arena::owner_of(
+                                        task.handle().address())
+                                    == &outer.frame_arena());
+                                co_await nxtrt::with_firm(
+                                    [&](nxtrt::firm & inner)
+                                        -> nxtrt::task<void> {
+                                        inner.fork(std::move(task));
+                                        co_await inner.join();
+                                        expect(
+                                            seen
+                                            == std::vector<nxtrt::firm *>{
+                                                &inner});
+                                    });
+                                expect(outer.child_count() == 0);
+                            });
+                    });
+                };
+
+            "outer owner rejects a shorter lived inner frame"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto rejected = false;
+                deck.sync_wait([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & outer) -> nxtrt::task<void> {
+                            co_await nxtrt::with_firm(
+                                [&]() -> nxtrt::task<void> {
+                                    try {
+                                        outer.fork(
+                                            record_after_yield(events, 7));
+                                    } catch (const nxtrt::runtime_error &
+                                                 error) {
+                                        rejected =
+                                            std::string_view{error.what()}
+                                                .contains(
+                                                    "non-enclosing scope");
+                                    }
+                                    co_return;
+                                });
+                            expect(outer.child_count() == 0);
+                        });
+                });
+                expect(rejected);
+                expect(events.empty());
             };
 
             "firm child records remember deck task ids"_test = [] {
@@ -3180,11 +3325,11 @@ static suite runtime_tests{
 
                     nxtrt::task<void> operator()()
                     {
-                        auto child = nxtrt::fork(
-                            record_current_task_id_after_yield(
+                        auto child =
+                            fork(record_current_task_id_after_yield(
                                 *running_ids));
                         deed_ids->push_back(child.child_task_id());
-                        co_await nxtrt::join();
+                        co_await join();
                     }
 
                     void completed(
@@ -3223,9 +3368,9 @@ static suite runtime_tests{
 
             "firm fork unwinds child record after deck registry overflow"_test =
                 [] {
-                    // The sync_wait/firm scaffolding occupies three live task
-                    // IDs before this body tries to fork its child.
-                    auto storage = nxtrt::static_deck_task_storage<4>{};
+                    // Two scope scaffolds occupy six task IDs; this probe
+                    // occupies the seventh. Only the fork must overflow.
+                    auto storage = nxtrt::static_deck_task_storage<7>{};
                     auto deck = nxtrt::deck{storage};
                     auto events = std::vector<int>{};
                     auto overflowed = false;
@@ -3246,20 +3391,22 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
 
-                auto parent = [&events]() -> nxtrt::task<void> {
+                auto parent =
+                    [&events](nxtrt::firm & scope) -> nxtrt::task<void> {
                     events.push_back(1);
                     co_await nxtrt::yield();
-                    nxtrt::fork(record_after_yield(events, 2));
+                    scope.fork(record_after_yield(events, 2));
                     events.push_back(3);
                     co_return;
                 };
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::fork(parent());
-                        co_await nxtrt::join();
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(parent(scope));
+                            co_await scope.join();
+                            co_return;
+                        });
                     events.push_back(4);
                     co_return;
                 });
@@ -3288,10 +3435,10 @@ static suite runtime_tests{
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
                         co_await nxtrt::with_firm(
-                            [&]() -> nxtrt::task<void> {
-                                nxtrt::fork(throw_after_yield(events, 0));
-                                nxtrt::fork(record_after_yield(events, 2));
-                                co_await nxtrt::join();
+                            [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                                scope.fork(throw_after_yield(events, 0));
+                                scope.fork(record_after_yield(events, 2));
+                                co_await scope.join();
                                 co_return;
                             });
                         co_return;
@@ -3312,11 +3459,11 @@ static suite runtime_tests{
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
                         co_await nxtrt::with_firm(
-                            [&]() -> nxtrt::task<void> {
-                                nxtrt::fork(throw_after_yield(events, 1));
-                                nxtrt::fork(throw_after_yield(events, 2));
-                                nxtrt::fork(record_after_yield(events, 3));
-                                co_await nxtrt::join();
+                            [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                                scope.fork(throw_after_yield(events, 1));
+                                scope.fork(throw_after_yield(events, 2));
+                                scope.fork(record_after_yield(events, 3));
+                                co_await scope.join();
                                 co_return;
                             });
                         co_return;
@@ -3334,13 +3481,13 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
 
                 auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::deed<int>> {
+                    deck.sync_wait([]() -> nxtrt::task<nxtrt::deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<nxtrt::deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
-                                    nxtrt::fork(value_after_yield(42));
-                                co_await nxtrt::join();
+                                    scope.fork(value_after_yield(42));
+                                co_await scope.join();
                                 co_return std::move(child);
                             });
                     });
@@ -3426,16 +3573,16 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
 
                 auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::deed<int>> {
+                    deck.sync_wait([]() -> nxtrt::task<nxtrt::deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<nxtrt::deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::deed<int>> {
                                 auto first =
-                                    nxtrt::fork(value_after_yield(77));
+                                    scope.fork(value_after_yield(77));
                                 auto id = first.child_task_id();
                                 auto second = std::move(first);
                                 expect(second.child_task_id() == id);
-                                co_await nxtrt::join();
+                                co_await scope.join();
                                 co_return std::move(second);
                             });
                     });
@@ -3448,13 +3595,13 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
 
                 auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::deed<int>> {
+                    deck.sync_wait([]() -> nxtrt::task<nxtrt::deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<nxtrt::deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
-                                    nxtrt::fork(value_after_yield, 88);
-                                co_await nxtrt::join();
+                                    scope.fork(value_after_yield, 88);
+                                co_await scope.join();
                                 co_return std::move(child);
                             });
                     });
@@ -3471,12 +3618,13 @@ static suite runtime_tests{
                 auto children =
                     deck.sync_wait([]() -> nxtrt::task<children_type> {
                         co_return co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<children_type> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<children_type> {
                                 auto first =
-                                    nxtrt::fork(value_after_yield(10));
+                                    scope.fork(value_after_yield(10));
                                 auto second =
-                                    nxtrt::fork(value_after_yield(20));
-                                co_await nxtrt::join();
+                                    scope.fork(value_after_yield(20));
+                                co_await scope.join();
                                 co_return children_type{
                                     std::move(first),
                                     std::move(second)};
@@ -3492,13 +3640,13 @@ static suite runtime_tests{
                 auto deck = nxtrt::deck{};
 
                 auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::deed<int>> {
+                    deck.sync_wait([]() -> nxtrt::task<nxtrt::deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<nxtrt::deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::deed<int>> {
                                 auto child =
-                                    nxtrt::fork(throw_int_after_yield());
-                                co_await nxtrt::join();
+                                    scope.fork(throw_int_after_yield());
+                                co_await scope.join();
                                 co_return std::move(child);
                             });
                     });
@@ -3518,15 +3666,16 @@ static suite runtime_tests{
                 auto observed = false;
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        auto child =
-                            nxtrt::fork(throw_int_after_yield());
-                        co_await nxtrt::yield();
-                        co_await nxtrt::yield();
-                        observed = child.exception() != nullptr;
-                        co_await nxtrt::join();
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            auto child =
+                                scope.fork(throw_int_after_yield());
+                            co_await nxtrt::yield();
+                            co_await nxtrt::yield();
+                            observed = child.exception() != nullptr;
+                            co_await scope.join();
+                            co_return;
+                        });
                 });
 
                 expect(observed);
@@ -3539,12 +3688,12 @@ static suite runtime_tests{
                 try {
                     deck.sync_wait([]() -> nxtrt::task<void> {
                         co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<void> {
+                            [](nxtrt::firm & scope) -> nxtrt::task<void> {
                                 {
                                     auto child =
-                                        nxtrt::fork(throw_int_after_yield());
+                                        scope.fork(throw_int_after_yield());
                                 }
-                                co_await nxtrt::join();
+                                co_await scope.join();
                             });
                     });
                 } catch (const std::exception &) {
@@ -3557,17 +3706,15 @@ static suite runtime_tests{
             "let coped deeds report failure as expected"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::catching_deed<int>> {
+                auto child = deck.sync_wait(
+                    []() -> nxtrt::task<nxtrt::catching_deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []()
-                                -> nxtrt::task<
-                                    nxtrt::catching_deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::catching_deed<int>> {
                                 auto child =
-                                    nxtrt::fork(throw_int_after_yield())
+                                    scope.fork(throw_int_after_yield())
                                         .cope();
-                                co_await nxtrt::join();
+                                co_await scope.join();
                                 co_return std::move(child);
                             });
                     });
@@ -3580,17 +3727,15 @@ static suite runtime_tests{
             "let coped deeds report success as expected"_test = [] {
                 auto deck = nxtrt::deck{};
 
-                auto child =
-                    deck.sync_wait([]()
-                        -> nxtrt::task<nxtrt::catching_deed<int>> {
+                auto child = deck.sync_wait(
+                    []() -> nxtrt::task<nxtrt::catching_deed<int>> {
                         co_return co_await nxtrt::with_firm(
-                            []()
-                                -> nxtrt::task<
-                                    nxtrt::catching_deed<int>> {
+                            [](nxtrt::firm & scope)
+                                -> nxtrt::task<nxtrt::catching_deed<int>> {
                                 auto child =
-                                    nxtrt::fork(value_after_yield(99))
+                                    scope.fork(value_after_yield(99))
                                         .cope();
-                                co_await nxtrt::join();
+                                co_await scope.join();
                                 co_return std::move(child);
                             });
                     });
@@ -3606,13 +3751,14 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::fork(
-                            record_stop_state_after_yield(events, 1));
-                        nxtrt::require_current_firm().stop();
-                        co_await nxtrt::join();
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(
+                                record_stop_state_after_yield(events, 1));
+                            scope.stop();
+                            co_await scope.join();
+                            co_return;
+                        });
                 });
 
                 expect(events == std::vector<int>{1});
@@ -3623,15 +3769,16 @@ static suite runtime_tests{
                 auto rejected = false;
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::require_current_firm().stop();
-                        try {
-                            nxtrt::fork(value_after_yield(1));
-                        } catch (const std::exception &) {
-                            rejected = true;
-                        }
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.stop();
+                            try {
+                                scope.fork(value_after_yield(1));
+                            } catch (const std::exception &) {
+                                rejected = true;
+                            }
+                            co_return;
+                        });
                 });
 
                 expect(rejected);
@@ -3645,9 +3792,9 @@ static suite runtime_tests{
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
                         co_await nxtrt::with_firm(
-                            [&]() -> nxtrt::task<void> {
-                                nxtrt::fork(
-                                    record_stop_state_after_yield(events, 2));
+                            [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                                scope.fork(record_stop_state_after_yield(
+                                    events, 2));
                                 throw nxtrt::runtime_error{
                                     "firm body boom"};
                             });
@@ -3665,13 +3812,14 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::fork(
-                            record_task_stop_state_after_yield(events, 3));
-                        nxtrt::require_current_firm().stop();
-                        co_await nxtrt::join();
-                        co_return;
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(record_task_stop_state_after_yield(
+                                events, 3));
+                            scope.stop();
+                            co_await scope.join();
+                            co_return;
+                        });
                 });
 
                 expect(events == std::vector<int>{3});
@@ -3682,13 +3830,14 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                        nxtrt::fork(
-                            value_after_two_yields_or_stop(events, 4));
-                        co_await nxtrt::yield();
-                        nxtrt::require_current_firm().stop();
-                        co_await nxtrt::join();
-                    });
+                    co_await nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(
+                                value_after_two_yields_or_stop(events, 4));
+                            co_await nxtrt::yield();
+                            scope.stop();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(events == std::vector<int>{4});
@@ -3701,12 +3850,11 @@ static suite runtime_tests{
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
                         co_await nxtrt::with_firm(
-                            []() -> nxtrt::task<void> {
-                                nxtrt::fork(
-                                    []() -> nxtrt::task<void> {
-                                        throw nxtrt::operation_cancelled{};
-                                    }());
-                                co_await nxtrt::join();
+                            [](nxtrt::firm & scope) -> nxtrt::task<void> {
+                                scope.fork([]() -> nxtrt::task<void> {
+                                    throw nxtrt::operation_cancelled{};
+                                }());
+                                co_await scope.join();
                                 co_return;
                             });
                     });
@@ -3788,8 +3936,7 @@ static suite runtime_tests{
 
                 try {
                     deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::detail::make_firm_body<
-                            nxtrt::stop_on_failure>(
+                        co_await nxtrt::with_firm<nxtrt::stop_on_failure>(
                             [&](auto & policy) -> nxtrt::task<void> {
                                 policy.fork(throw_after_yield(events, 1));
                                 policy.fork(
@@ -3813,9 +3960,8 @@ static suite runtime_tests{
                 auto events = std::vector<int>{};
 
                 auto child =
-                    deck.sync_wait([&]()
-                        -> nxtrt::task<nxtrt::deed<int>> {
-                        co_return co_await nxtrt::detail::make_firm_body<
+                    deck.sync_wait([&]() -> nxtrt::task<nxtrt::deed<int>> {
+                        co_return co_await nxtrt::with_firm<
                             nxtrt::stop_on_success>(
                             [&](auto & policy)
                                 -> nxtrt::task<nxtrt::deed<int>> {
@@ -3922,20 +4068,23 @@ static suite runtime_tests{
                     auto deck = nxtrt::deck{};
                     auto events = std::vector<int>{};
                     deck.sync_wait([&] {
-                        return nxtrt::with_firm([&]() -> nxtrt::task<void> {
-                            {
-                                auto first =
-                                    nxtrt::fork(throw_int_after_yield())
-                                        .cope();
-                                auto second = nxtrt::fork(throw_after_yield(
-                                                              events, 13))
-                                                  .cope();
-                                co_await nxtrt::join();
-                                expect(!std::move(first).get());
-                                expect(!std::move(second).get());
-                            }
-                            co_await nxtrt::join();
-                        });
+                        return nxtrt::with_firm(
+                            [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                                {
+                                    auto first =
+                                        scope.fork(throw_int_after_yield())
+                                            .cope();
+                                    auto second =
+                                        scope
+                                            .fork(throw_after_yield(
+                                                events, 13))
+                                            .cope();
+                                    co_await scope.join();
+                                    expect(!std::move(first).get());
+                                    expect(!std::move(second).get());
+                                }
+                                co_await scope.join();
+                            });
                     });
                     expect(events == std::vector<int>{131});
                 };
@@ -4111,30 +4260,30 @@ static suite runtime_tests{
                     expect(events == std::vector<int>{43});
                 };
 
-            "tuple and variadic combinators both allow ambient forks"_test =
+            "tuple and variadic frames retain firm context without spawning"_test =
                 [] {
                     auto deck = nxtrt::deck{};
                     auto events = std::vector<int>{};
                     auto result = deck.sync_wait([&] {
                         return nxtrt::when_all(
-                            tuple_ambient_fork(events),
+                            tuple_frame_context(events),
                             value_after_yield(7));
                     });
                     expect(
                         std::get<0>(result) == 17
                         && std::get<1>(result) == 7);
-                    expect(events == std::vector<int>{31, 32});
+                    expect(events == std::vector<int>{3});
                     events.clear();
                     result = deck.sync_wait([&] {
                         return nxtrt::when_all(
                             std::tuple{
-                                [&] { return tuple_ambient_fork(events); },
+                                [&] { return tuple_frame_context(events); },
                                 [] { return value_after_yield(7); },
                             });
                     });
                     expect(std::get<0>(result) == 17);
                     expect(std::get<1>(result) == 7);
-                    expect(events == std::vector<int>{31, 32});
+                    expect(events == std::vector<int>{3});
                 };
 
             "tuple outcomes retain positions and individual failures"_test =
@@ -5929,12 +6078,16 @@ static suite runtime_tests{
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    nxtrt::fork(record_next_wire_value(events, seen));
-                    co_await nxtrt::yield();
-                    expect(seen.empty());
-                    expect(co_await events.send(7));
-                    co_await nxtrt::join();
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(
+                                record_next_wire_value(events, seen));
+                            co_await nxtrt::yield();
+                            expect(seen.empty());
+                            expect(co_await events.send(7));
+                            co_await scope.join();
+                        });
                 });
 
                 expect(seen == std::vector<int>{7});
@@ -5968,11 +6121,15 @@ static suite runtime_tests{
                 auto events = nxtrt::wire<int>{storage};
                 auto finished = false;
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    nxtrt::fork(record_closed_wire(events, finished));
-                    co_await nxtrt::yield();
-                    events.close();
-                    co_await nxtrt::join();
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(
+                                record_closed_wire(events, finished));
+                            co_await nxtrt::yield();
+                            events.close();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(events.closed());
@@ -6055,17 +6212,22 @@ static suite runtime_tests{
                 auto events = nxtrt::wire<int>{storage};
                 auto seen = std::vector<int>{};
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    auto & tx = events.tx();
-                    co_await tx.write(12);
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            auto & tx = events.tx();
+                            co_await tx.write(12);
 
-                    nxtrt::fork(record_next_wire_value(events, seen));
-                    co_await tx.write(13);
+                            scope.fork(
+                                record_next_wire_value(events, seen));
+                            co_await tx.write(13);
 
-                    nxtrt::fork(record_next_wire_value(events, seen));
-                    while (seen.size() != 2)
-                        co_await nxtrt::yield();
-                    co_await nxtrt::join();
+                            scope.fork(
+                                record_next_wire_value(events, seen));
+                            while (seen.size() != 2)
+                                co_await nxtrt::yield();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(seen == std::vector<int>{12, 13});
@@ -6089,16 +6251,20 @@ static suite runtime_tests{
                 expect(events.capacity() == std::size_t{0});
                 expect(!events.try_send(1));
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    nxtrt::fork(send_wire_value(events, 42, sent));
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(send_wire_value(events, 42, sent));
 
-                    co_await nxtrt::yield();
-                    expect(!sent);
+                            co_await nxtrt::yield();
+                            expect(!sent);
 
-                    nxtrt::fork(record_next_wire_value(events, seen));
-                    while (!sent)
-                        co_await nxtrt::yield();
-                    co_await nxtrt::join();
+                            scope.fork(
+                                record_next_wire_value(events, seen));
+                            while (!sent)
+                                co_await nxtrt::yield();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(sent);
@@ -6114,15 +6280,19 @@ static suite runtime_tests{
 
                 expect(events.try_send(3));
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    nxtrt::fork(flush_wire(events, flushed));
-                    co_await nxtrt::yield();
-                    expect(!flushed);
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(flush_wire(events, flushed));
+                            co_await nxtrt::yield();
+                            expect(!flushed);
 
-                    nxtrt::fork(record_next_wire_value(events, seen));
-                    while (!flushed)
-                        co_await nxtrt::yield();
-                    co_await nxtrt::join();
+                            scope.fork(
+                                record_next_wire_value(events, seen));
+                            while (!flushed)
+                                co_await nxtrt::yield();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(flushed);
@@ -6136,16 +6306,20 @@ static suite runtime_tests{
                 auto seen = std::vector<int>{};
                 auto flushed = false;
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    expect(co_await events.send(4));
-                    nxtrt::fork(flush_wire(events, flushed));
-                    co_await nxtrt::yield();
-                    expect(!flushed);
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            expect(co_await events.send(4));
+                            scope.fork(flush_wire(events, flushed));
+                            co_await nxtrt::yield();
+                            expect(!flushed);
 
-                    nxtrt::fork(record_next_wire_value(events, seen));
-                    while (!flushed)
-                        co_await nxtrt::yield();
-                    co_await nxtrt::join();
+                            scope.fork(
+                                record_next_wire_value(events, seen));
+                            while (!flushed)
+                                co_await nxtrt::yield();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(flushed);
@@ -6159,13 +6333,16 @@ static suite runtime_tests{
                 auto ready = nxtrt::bell{};
                 auto values = std::vector<int>{};
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    nxtrt::fork(record_after_bell(ready, values, 1));
-                    nxtrt::fork(record_after_bell(ready, values, 2));
-                    co_await nxtrt::yield();
-                    expect(values.empty());
-                    ready.ring();
-                    co_await nxtrt::join();
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(record_after_bell(ready, values, 1));
+                            scope.fork(record_after_bell(ready, values, 2));
+                            co_await nxtrt::yield();
+                            expect(values.empty());
+                            ready.ring();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(values == std::vector<int>{1, 2});
@@ -6184,12 +6361,15 @@ static suite runtime_tests{
 
                 ready.reset();
 
-                rt.run([&]() -> nxtrt::task<void> {
-                    nxtrt::fork(record_after_bell(ready, values, 2));
-                    co_await nxtrt::yield();
-                    expect(values == std::vector<int>{1});
-                    ready.ring();
-                    co_await nxtrt::join();
+                rt.run([&] {
+                    return nxtrt::with_firm(
+                        [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                            scope.fork(record_after_bell(ready, values, 2));
+                            co_await nxtrt::yield();
+                            expect(values == std::vector<int>{1});
+                            ready.ring();
+                            co_await scope.join();
+                        });
                 });
 
                 expect(values == std::vector<int>{1, 2});

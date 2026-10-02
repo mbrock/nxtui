@@ -1,8 +1,8 @@
 # nxtrt runtime overview {#rt_overview}
 
 `nxtrt` is the experimental async runtime used by `src`. It is a small
-coroutine runtime with explicit scheduling, structured child tasks, and a
-backend boundary for platform I/O.
+coroutine runtime with explicit scheduling, lifetime scopes, and a backend
+boundary for platform I/O.
 
 The public namespace currently contains several abstraction levels at once:
 high-level task composition, the scheduler that drives tasks, structured
@@ -57,13 +57,24 @@ Concrete API:
 
 ## Firms {#rt_firm}
 
-Firms provide structured concurrency. A firm is an extent in which tasks can
-be forked, joined, stopped together, and observed after the firm has reached a
-join point.
+Firms are lifetime scopes: they provide coroutine-frame memory and cancellation
+context, and may optionally own explicitly forked children. A firm is not
+synonymous with a nursery; scope-only work needs no child records or join.
 
-Forking a task into a firm starts child work without immediately awaiting it.
-The firm keeps enough shared state to stop children, join them, and surface
-their results or exceptions in a controlled order.
+`with_firm<Policy = firm>(fn)` retains a nullary factory for scope-only work,
+or accepts a factory taking `Policy&` when explicit child ownership is needed.
+That scope reference provides `fork`, `join`, and `stop`. There are no free
+`nxtrt::fork` or `nxtrt::join` functions, and tasks do not spawn ambiently into
+the current firm. Pass the scope reference explicitly to nested work that
+needs to fork. Call `scope.join()` before borrowed locals go out of scope;
+leaving the body does not make it safe for children to keep using those locals.
+
+Use `scope.fork(factory, args...)` to invoke work in the owner's frame context.
+Preconstructed task frames must already be allocated by that owner or an
+enclosing ancestor; a shorter-lived inner allocation scope is unsafe. The
+ambient `current_firm` / `require_current_firm()` context remains available
+for frame, cancellation, and debugging context, not implicit child admission.
+Firm subclasses remain awaitable.
 
 Higher-level helpers such as `when_all`, `wait_any`, and `with_timeout` are
 written in terms of firms. They are not separate schedulers; they are
@@ -72,12 +83,12 @@ composition patterns over the same task and deck machinery.
 For a fixed heterogeneous batch, pass a tuple of tasks or nullary task
 factories:
 `when_all(std::tuple{f, g})`, `wait_any(std::tuple{f, g})`, or
-`with_firm<Policy>(std::tuple{f, g})`. The firm around this work is not an
-exact-size nursery: the fixed main-work batch is lowered to finite indexed
+`with_firm<Policy>(std::tuple{f, g})`. This does not make the firm a fixed
+child-ownership container: tuple main work is lowered to finite indexed
 `task<void>` recipes in the existing pool, with typed settled outcomes stored
-at their tuple positions and no child records or deeds for that main work.
-Explicit nested ambient forks still use the firm's growable nursery and are
-outside the tuple's fixed bound. The firm supplies frames and stop policy.
+at their tuple positions and no child records or deeds.
+The firm supplies frames and stop policy; separately forked children require
+an explicit scope reference and are outside the tuple's fixed bound.
 `with_firm<Policy>(tuple)` returns `expected<T, exception_ptr>` outcomes
 (including `expected<void, ...>`), not `catching_deed` handles. `when_all` and
 `wait_any` preserve their value, cancellation/drain, and input-order selection

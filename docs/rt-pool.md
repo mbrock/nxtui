@@ -52,7 +52,9 @@ This bounds admitted jobs, not every byte in the pipeline. Upstream recipe
 buffers, response-body storage, the deck registry, and coroutine frames have
 their own budgets. Frames currently use the ambient firm's frame provider,
 which must outlive the pool's drain. Recipes may themselves allocate or create
-further work; the pool does not claim a transitive bound on that work.
+further work; they do not spawn ambiently into the frame-provider firm. Any
+child ownership must use an explicitly passed firm scope, and is outside the
+pool's transitive bound.
 
 ## A small pipeline
 
@@ -154,21 +156,22 @@ storage. Reading after close is not supported.
 
 ## Relation to firms and future work
 
-Firms retain a growable nursery for explicit forks, while the pool is also the
-execution owner for fixed heterogeneous tuple batches. Tuple composition
+Firms provide frame memory and cancellation, and optionally own explicitly
+forked children. The pool is also the execution owner for fixed heterogeneous
+tuple batches. Tuple composition
 lowers each indexed position to a finite `task<void>` recipe in this existing
 pool; that recipe stores its typed `expected<T, exception_ptr>` outcome at the
-matching tuple position. No main-work child records or deeds are allocated.
+matching tuple position. No main-work child records or deeds are allocated;
+the tuple's main work stays pool-owned.
 The same `firm::completed(task_id, exception_ptr)` hook is used for pool-owned
-work and dynamically forked children, allowing policies to stop and drain the
+work and explicitly forked children, allowing policies to stop and drain the
 fixed batch through shared cancellation machinery.
 
 This is a real unification of ownership and drain, not a strict transitive
-static team or an allocation-free guarantee. The firm still provides frames,
-stop policy, and its growable nursery for explicit nested ambient forks; those
-forks are outside the tuple batch's finite bound. The homogeneous stream pool
-remains a distinct API shape with slots, completion-order output, and borrowed
-feed/land contracts described above.
+static team or an allocation-free guarantee. Explicit children require a
+passed scope reference and remain outside the tuple batch's finite bound. The
+homogeneous stream pool remains a distinct API shape with slots,
+completion-order output, and borrowed feed/land contracts described above.
 
 The slot lifecycle is modeled in `nxtrt/runtime.rkt`, including consumption,
 close/discard, and reuse. The model abstracts frame bytes and cancellation

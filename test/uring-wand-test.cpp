@@ -93,8 +93,7 @@ nxtrt::task<int> timeout_value(int value)
 
 nxtrt::task<std::vector<int>> many_short_timeouts()
 {
-    auto deeds = co_await nxtrt::detail::make_firm_body<
-        nxtrt::stop_on_failure>(
+    auto deeds = co_await nxtrt::with_firm<nxtrt::stop_on_failure>(
         [](auto & policy)
             -> nxtrt::task<std::vector<nxtrt::catching_deed<int>>> {
             auto out = std::vector<nxtrt::catching_deed<int>>{};
@@ -386,8 +385,13 @@ static suite uring_wand_tests{
 
                 auto child = rt.run([]() -> nxtrt::task<nxtrt::deed<int>> {
                     expect(nxtrt::current_firm() != nullptr);
-                    auto child = nxtrt::fork(app_child_value(41));
-                    co_await nxtrt::join();
+                    auto child = co_await nxtrt::with_firm(
+                        [](nxtrt::firm & scope)
+                            -> nxtrt::task<nxtrt::deed<int>> {
+                            auto child = scope.fork(app_child_value(41));
+                            co_await scope.join();
+                            co_return std::move(child);
+                        });
                     co_return std::move(child);
                 });
 

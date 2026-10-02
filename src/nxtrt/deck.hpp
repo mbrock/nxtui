@@ -49,13 +49,12 @@ struct task_result<task<T>>
 template<typename T>
 using task_result_t = typename task_result<std::remove_cvref_t<T>>::type;
 
-template<typename Fn>
-concept task_factory =
-    std::invocable<Fn> && is_task_v<std::invoke_result_t<Fn>>;
+template<typename Fn, typename... Args>
+concept task_factory = std::invocable<Fn, Args...>
+                       && is_task_v<std::invoke_result_t<Fn, Args...>>;
 
-template<typename Fn>
-concept stored_task_factory =
-    std::invocable<Fn &> && is_task_v<std::invoke_result_t<Fn &>>;
+template<typename Fn, typename... Args>
+concept stored_task_factory = task_factory<Fn &, Args...>;
 
 template<typename Fn>
 using stored_task_result_t = task_result_t<std::invoke_result_t<Fn &>>;

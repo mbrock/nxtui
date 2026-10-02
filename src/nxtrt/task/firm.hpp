@@ -1,12 +1,18 @@
 #pragma once
 
-// Structured child ownership, forking, stopping, and joining.
-// Include nxtrt/task.hpp for the complete runtime API.
+// Lifetime scope: frame provision, cancellation, and explicit child
+// ownership. Include nxtrt/task.hpp for the complete runtime API.
 
 #include "nxtrt/task/deed.hpp"
 #include "nxtrt/task/frame_arena.hpp"
 
 namespace nxtrt {
+
+struct firm_key
+{
+    using value_type = firm *;
+    static constexpr auto name = "firm";
+};
 
 class firm
 {
@@ -29,7 +35,7 @@ private:
         debug::register_firm(
             debug::firm_snapshot{
                 .id = debug_id_,
-                .parent = debug_parent_,
+                .parent = parent_ == nullptr ? 0 : parent_->debug_id(),
                 .children = children_.size(),
                 .stopping = stopping_,
             });
@@ -44,12 +50,13 @@ public:
 
     firm(const firm &) = delete;
     firm & operator=(const firm &) = delete;
+
     firm(firm && other) noexcept
         : frames_(std::move(other.frames_))
         , children_(std::move(other.children_))
         , stop_(std::move(other.stop_))
         , debug_id_(std::exchange(other.debug_id_, 0))
-        , debug_parent_(std::exchange(other.debug_parent_, 0))
+        , parent_(std::exchange(other.parent_, nullptr))
         , stopping_(std::exchange(other.stopping_, false))
     {
         for_each_child([this](auto & child) {
@@ -127,17 +134,30 @@ public:
                 "nxtrt firm fork used without a running deck"};
         if (stopping_)
             throw runtime_error{"nxtrt firm fork used after stop"};
-        auto handle = child.release();
+        auto handle = child.handle();
         if (!handle || handle.done())
             throw runtime_error{"nxtrt firm fork used with empty task"};
 
+        // A frame must outlive its execution owner. Explicit targeting can
+        // cross dynamic scopes, but cannot export an inner scope's frame.
+        auto & arena = firm_frame_arena::owner_of(handle.address());
+        auto * source = this;
+        while (source != nullptr && &source->frames_ != &arena)
+            source = source->parent_;
+        if (source == nullptr)
+            throw runtime_error{
+                "nxtrt firm fork frame belongs to a non-enclosing scope"};
+
         auto result = deed<T>{std::in_place};
         auto record = std::unique_ptr<detail::child_record<T>>{};
+        (void) child.release();
         try {
             auto & promise = handle.promise();
-            // Forked children outlive the call site, so they inherit the
-            // current immutable environment snapshot.
+            // General context comes from the caller, but the child's scope
+            // is its explicitly selected owner, not the caller's scope.
             promise.env.copy_entries_from(*current);
+            [[maybe_unused]] auto previous =
+                promise.env.template replace<firm_key>(this);
             record = std::make_unique<detail::child_record<T>>(
                 handle,
                 *this,
@@ -172,6 +192,16 @@ public:
     auto fork(Fn && fn, Args &&... args)
         -> deed<task_result_t<std::invoke_result_t<Fn, Args...>>>
     {
+        auto * current = detail::current_env;
+        if (current == nullptr || current->current_deck == nullptr)
+            throw runtime_error{
+                "nxtrt firm fork used without a running deck"};
+        if (stopping_)
+            throw runtime_error{"nxtrt firm fork used after stop"};
+        auto bound = runtime_env{*current};
+        [[maybe_unused]] auto previous = bound.replace<firm_key>(this);
+        auto guard = detail::env_guard{
+            bound, current->current_deck, current->current_promise};
         return fork(std::invoke(
             std::forward<Fn>(fn),
             std::forward<Args>(args)...));
@@ -193,18 +223,15 @@ public:
         return debug_id_;
     }
 
-    void debug_parent(debug::firm_id parent) noexcept
-    {
-        debug_parent_ = parent;
-        debug_update();
-    }
-
     // Shared policy boundary for nursery children and pool-owned work.
     // Notification neither transfers ownership nor retains a child record.
     virtual void completed(task_id, std::exception_ptr) noexcept {}
 
 private:
     friend struct detail::child_record_base;
+    template<typename Firm>
+        requires std::derived_from<Firm, firm> && stored_task_factory<Firm>
+    friend task<stored_task_result_t<Firm>> run_firm(Firm);
 
     void report_child_finished(
         detail::child_record_base & child,
@@ -223,7 +250,7 @@ private:
         debug::update_firm(
             debug::firm_snapshot{
                 .id = debug_id_,
-                .parent = debug_parent_,
+                .parent = parent_ == nullptr ? 0 : parent_->debug_id(),
                 .children = children_.size(),
                 .stopping = stopping_,
             });
@@ -245,14 +272,8 @@ private:
     std::vector<std::unique_ptr<detail::child_record_base>> children_;
     std::stop_source stop_;
     debug::firm_id debug_id_ = 0;
-    debug::firm_id debug_parent_ = 0;
+    firm * parent_ = nullptr;
     bool stopping_ = false;
-};
-
-struct firm_key
-{
-    using value_type = firm *;
-    static constexpr auto name = "firm";
 };
 
 inline firm * current_firm() noexcept
@@ -307,11 +328,6 @@ inline void firm::throw_frame_arena_full(std::size_t frame_size) const
     throw runtime_error{std::move(message)};
 }
 
-[[nodiscard]] inline task<void> join()
-{
-    co_await require_current_firm().join();
-}
-
 inline deck * current_deck() noexcept
 {
     auto * env = current_env();
@@ -355,22 +371,6 @@ inline void throw_if_stop_requested()
         throw operation_cancelled{};
 }
 
-template<typename T>
-deed<T> fork(task<T> child)
-{
-    return require_current_firm().fork(std::move(child));
-}
-
-template<typename Fn, typename... Args>
-    requires std::invocable<Fn, Args...>
-        && is_task_v<std::invoke_result_t<Fn, Args...>>
-auto fork(Fn && fn, Args &&... args)
-    -> deed<task_result_t<std::invoke_result_t<Fn, Args...>>>
-{
-    return require_current_firm().fork(
-        std::forward<Fn>(fn),
-        std::forward<Args>(args)...);
-}
 inline task<void> firm::join()
 {
     auto failures = std::vector<std::exception_ptr>{};

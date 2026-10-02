@@ -13,7 +13,8 @@ firms, and explicit UI/runtime capabilities.
 - `nxtrt::task<T>` for lazy coroutine tasks.
 - `nxtrt::deck` for pumpable execution.
 - `nxtrt::wand` implementations for platform waiting.
-- `nxtrt::with_firm`, `fork`, `deed`, `when_all`, and timeout helpers.
+- `nxtrt::with_firm`, explicit `scope.fork` / `scope.join` / `scope.stop`,
+  deeds, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments.
 - Linux subprocess wishes for piped children, pty children, pidfd waits, and
   pidfd signals.
@@ -36,12 +37,24 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::queue<T>` | `nxtrt::wire<T>` | Done. Used for UI input, resize, and tool streams. |
 | `nxt::event` | `nxtrt::bell` | Done. Used for damage notifications and small UI coordination points. |
 | `nxtio/input.hpp` | `nxtui/input.hpp` | Done. The compatibility include has been removed. |
-| `nxt::latch` | firm join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
-| `spawn_detached` | `nxtrt::fork` in a firm | Detached work should still be owned by a root firm. |
-| `nxt::scope` | `nxtrt::firm` + UI capabilities | The runtime side is split out; the richer yard-style UI facade is still being rebuilt on top. |
+| `nxt::latch` | explicit firm scope join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
+| `spawn_detached` | `scope.fork` inside `with_firm` | Child ownership is explicit; there is no free `nxtrt::fork` or ambient spawning. |
+| `nxt::scope` | `nxtrt::with_firm` + UI capabilities | Firm supplies frame/cancellation context and may own explicitly forked children; it is not inherently a nursery. The richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
 | old LLM entry point | `src/nxtai/nxtllm.cpp` | Simplified. The executable is now a small one-shot SSE client without the old HUD/tool UI runtime path. |
+
+## Firm API migration
+
+Use `with_firm<Policy = firm>(fn)` with a nullary factory when work only needs
+the firm lifetime/frame/cancellation context. When work owns children, take
+`Policy&` in the factory and use `scope.fork`, `scope.join`, and `scope.stop`;
+pass that reference explicitly to nested helpers. Replace free `fork` / `join`
+calls with those scope methods, and join before child-borrowed locals leave
+scope. `current_firm()` remains context for frame allocation, cancellation,
+and debugging, not an implicit spawning API. A task passed preconstructed to
+`scope.fork` must use frame storage owned by that scope or an enclosing
+ancestor.
 
 ## Completed Slices
 

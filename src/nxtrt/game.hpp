@@ -297,19 +297,14 @@ decltype(auto) promise_base::yield_value(Yielded && yielded)
 
 } // namespace detail
 
-template<typename Event, typename Fn>
-    requires stored_task_factory<std::decay_t<Fn>>
-[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
-with_game(Fn && fn)
+template<typename Event, stored_task_factory Fn>
+[[nodiscard]] task<stored_task_result_t<Fn>> with_game(Fn fn)
 {
-    using factory_type = std::decay_t<Fn>;
     auto game_scope = game<Event>{};
     auto bound = with_env<game_key<Event>>(
         &game_scope,
-        [fn = factory_type{std::forward<Fn>(fn)}]() mutable {
-            return std::invoke(fn);
-        });
-    if constexpr (std::is_void_v<stored_task_result_t<factory_type>>) {
+        [fn = std::move(fn)]() mutable { return std::invoke(fn); });
+    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
         co_await bound;
     } else {
         co_return co_await bound;
@@ -347,22 +342,16 @@ template<typename Fn>
 }
 
 template<typename Event, typename Fn>
-[[nodiscard]] task<stored_task_result_t<Fn>> run_game_root(Fn fn)
+[[nodiscard]] auto run_game_root(Fn fn)
 {
-    auto game_body = [fn = std::move(fn)]() mutable {
-        return std::invoke(fn);
-    };
-
-    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
-        co_await with_firm([game_body = std::move(game_body)]() mutable {
-            return with_game<Event>(std::move(game_body));
+    return with_firm([fn = std::move(fn)](firm & scope) mutable {
+        return with_game<Event>([&fn, &scope] {
+            if constexpr (stored_task_factory<Fn, firm &>)
+                return std::invoke(fn, scope);
+            else
+                return std::invoke(fn);
         });
-    } else {
-        co_return co_await with_firm(
-            [game_body = std::move(game_body)]() mutable {
-                return with_game<Event>(std::move(game_body));
-            });
-    }
+    });
 }
 
 } // namespace detail
@@ -380,9 +369,10 @@ sync_wait_firm(deck & d, Fn && fn)
 }
 
 template<typename Event, typename Fn>
-    requires stored_task_factory<std::decay_t<Fn>>
-[[nodiscard]] stored_task_result_t<std::decay_t<Fn>>
-sync_wait_game(deck & d, Fn && fn)
+    requires(
+        stored_task_factory<std::decay_t<Fn>, firm &>
+        || stored_task_factory<std::decay_t<Fn>>)
+[[nodiscard]] auto sync_wait_game(deck & d, Fn && fn)
 {
     using factory_type = std::decay_t<Fn>;
     return d.sync_wait(

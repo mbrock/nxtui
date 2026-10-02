@@ -75,29 +75,6 @@ public:
 
 namespace detail {
 
-template<typename Base, typename Fn>
-class firm_body : public Base
-{
-public:
-    explicit firm_body(Fn fn)
-        : fn_(std::move(fn))
-    {}
-
-    auto operator()()
-    {
-        return std::invoke(fn_, static_cast<Base &>(*this));
-    }
-
-private:
-    Fn fn_;
-};
-
-template<typename Base, typename Fn>
-[[nodiscard]] firm_body<Base, std::decay_t<Fn>> make_firm_body(Fn && fn)
-{
-    return firm_body<Base, std::decay_t<Fn>>{std::forward<Fn>(fn)};
-}
-
 template<typename Work>
     requires(is_task_v<Work> || stored_task_factory<Work>)
 [[nodiscard]] auto start_firm_work(Work & work)
@@ -208,7 +185,7 @@ run_firm_work(Policy & policy, std::tuple<Work...> & work)
                 throw;
         }
     }
-    // Nested ambient forks remain nursery work, outside the fixed batch.
+    // Explicitly owned nested forks remain outside the fixed batch.
     co_await policy.join();
     if (task_stop_requested())
         throw operation_cancelled{};
@@ -331,7 +308,8 @@ take_all_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
 /// Elements are tasks or owned nullary task factories. Factories run once,
 /// under the new firm, and survive all child settlement (including
 /// failure). Preconstructed tasks retain their original frame allocation;
-/// both forms run under this firm's environment and may fork more children.
+/// both forms run under this firm's environment. Additional children
+/// require an explicitly supplied owner, not an ambient spawn operation.
 /// Main work is pool-owned, without child records/deeds. Returns a tuple of
 /// settled expected outcomes; the policy controls sibling cancellation.
 template<typename Policy = firm, typename... Work>
@@ -342,10 +320,9 @@ template<typename Policy = firm, typename... Work>
     std::tuple<detail::outcome<detail::firm_work_result_t<Work>>...>>
 with_firm(std::tuple<Work...> work)
 {
-    co_return co_await detail::make_firm_body<Policy>(
-        [&work](Policy & policy) {
-            return detail::run_firm_work(policy, work);
-        });
+    co_return co_await with_firm<Policy>([&work](Policy & policy) {
+        return detail::run_firm_work(policy, work);
+    });
 }
 
 /// Tuple all: results retain tuple order; void positions are monostate.
@@ -402,9 +379,9 @@ when_all_range(Range tasks)
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
     using deed_type = catching_deed<result_type>;
 
-    auto deeds = co_await detail::make_firm_body<stop_on_failure>(
-        [tasks = std::move(tasks)](auto & policy) mutable
-            -> task<std::vector<deed_type>> {
+    auto deeds = co_await with_firm<stop_on_failure>(
+        [tasks = std::move(tasks)](
+            auto & policy) mutable -> task<std::vector<deed_type>> {
             auto out = std::vector<deed_type>{};
             for (auto child : tasks)
                 out.push_back(policy.fork(std::move(child)).cope());
@@ -442,9 +419,9 @@ wait_any_range(Range tasks)
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
     using deed_type = catching_deed<result_type>;
 
-    auto deeds = co_await detail::make_firm_body<stop_on_success>(
-        [tasks = std::move(tasks)](auto & policy) mutable
-            -> task<std::vector<deed_type>> {
+    auto deeds = co_await with_firm<stop_on_success>(
+        [tasks = std::move(tasks)](
+            auto & policy) mutable -> task<std::vector<deed_type>> {
             auto out = std::vector<deed_type>{};
             for (auto child : tasks)
                 out.push_back(policy.fork(std::move(child)).cope());

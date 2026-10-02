@@ -45,7 +45,7 @@ private:
     try {
         throw runtime_error{
             "nxtrt firm body returned with unjoined children; "
-            "co_await nxtrt::join() inside the firm body "
+            "co_await scope.join() inside the firm body "
             "before locals captured by forked children go out of scope"};
     } catch (...) {
         return std::current_exception();
@@ -102,6 +102,27 @@ run_firm_body(firm & firm, Fn fn)
     }
 }
 
+template<typename Base, typename Fn>
+class firm_body : public Base
+{
+public:
+    explicit firm_body(Fn fn)
+        : fn_(std::move(fn))
+    {
+    }
+
+    auto operator()()
+    {
+        if constexpr (stored_task_factory<Fn, Base &>)
+            return std::invoke(fn_, static_cast<Base &>(*this));
+        else
+            return std::invoke(fn_);
+    }
+
+private:
+    Fn fn_;
+};
+
 template<typename Firm>
 struct firm_invoker
 {
@@ -121,8 +142,8 @@ template<typename Firm>
 [[nodiscard]] task<stored_task_result_t<Firm>>
 run_firm(Firm firm_scope)
 {
-    if (auto * parent = current_firm())
-        firm_scope.debug_parent(parent->debug_id());
+    firm_scope.parent_ = current_firm();
+    firm_scope.debug_update();
     auto body = detail::run_firm_body(
         firm_scope,
         detail::firm_invoker<Firm>{&firm_scope});
@@ -154,47 +175,21 @@ template<typename Firm>
     return detail::owning_task_awaiter<result_type>{
         run_firm(std::move(firm_scope))};
 }
-namespace detail {
 
-template<stored_task_factory Fn>
-[[nodiscard]] task<stored_task_result_t<Fn>>
-with_firm_bound(Fn fn)
-{
-    auto firm_scope = firm{};
-    if (auto * parent = current_firm())
-        firm_scope.debug_parent(parent->debug_id());
-    auto body = detail::run_firm_body(
-        firm_scope,
-        std::move(fn));
-    auto stop_firm = [&firm_scope] {
-        firm_scope.stop();
-    };
-    auto stop_firm_callback =
-        std::stop_callback{current_task_stop_token(), stop_firm};
-
-    auto run_bound = [body = std::move(body)]() mutable {
-        return std::move(body);
-    };
-
-    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
-        co_await with_env<firm_key>(&firm_scope, std::move(run_bound));
-    } else {
-        co_return co_await with_env<firm_key>(
-            &firm_scope,
-            std::move(run_bound));
-    }
-}
-
-} // namespace detail
-
-template<typename Fn>
-    requires stored_task_factory<std::decay_t<Fn>>
-[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
-with_firm(Fn && fn)
+/// Establish frame/cancellation context. A body that needs child ownership
+/// receives the scope explicitly; nullary bodies need no spawning
+/// capability.
+template<typename Policy = firm, typename Fn>
+    requires std::derived_from<Policy, firm>
+             && std::default_initializable<Policy>
+             && (stored_task_factory<std::decay_t<Fn>, Policy &>
+                 || stored_task_factory<std::decay_t<Fn>>)
+[[nodiscard]] auto with_firm(Fn && fn)
 {
     using factory_type = std::decay_t<Fn>;
-    return detail::with_firm_bound(
-        factory_type{std::forward<Fn>(fn)});
+    return run_firm(
+        detail::firm_body<Policy, factory_type>{
+            factory_type{std::forward<Fn>(fn)}});
 }
 
 } // namespace nxtrt

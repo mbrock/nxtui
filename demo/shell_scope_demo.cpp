@@ -346,17 +346,20 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
     auto sampler = nxtrt::catching_deed<void>{};
     auto renderer = nxtrt::catching_deed<void>{};
     try {
-        co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-            reader = nxtrt::fork(read_pty_until_done(pty, state)).cope();
-            input = nxtrt::fork(pump_stdin_to_pty(pty, state)).cope();
-            sampler = nxtrt::fork(sample_cgroup_until_done(state)).cope();
-            renderer =
-                nxtrt::fork(render_until_done(terminal, state, pty)).cope();
+        co_await nxtrt::with_firm(
+            [&](nxtrt::firm & scope) -> nxtrt::task<void> {
+                reader = scope.fork(read_pty_until_done(pty, state)).cope();
+                input = scope.fork(pump_stdin_to_pty(pty, state)).cope();
+                sampler =
+                    scope.fork(sample_cgroup_until_done(state)).cope();
+                renderer =
+                    scope.fork(render_until_done(terminal, state, pty))
+                        .cope();
 
-            while (!state.process_done)
-                co_await nxtrt::op::timeout::after(frame_interval);
-            co_await nxtrt::join();
-        });
+                while (!state.process_done)
+                    co_await nxtrt::op::timeout::after(frame_interval);
+                co_await scope.join();
+            });
     } catch (...) {
         failure = std::current_exception();
     }

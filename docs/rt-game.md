@@ -218,20 +218,36 @@ the task environment so `current_game<Event>()` can find it, and
 game **and** a firm:
 
 ```cpp
-sync_wait_game<ttt_event>(deck, [&]() -> task<void> {
-    fork(ttt_enforce_turns());
+task<void> ttt_body(firm& scope, auto& board, auto& events) {
+    scope.fork(ttt_enforce_turns);
     for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c) fork(ttt_square_taken(r, c));
-    fork(ttt_detect_end(board, events));
-    fork(ttt_x_script());
-    fork(ttt_o_ai());
-    co_await join();
+        for (int c = 0; c < 3; ++c)
+            scope.fork(ttt_square_taken, r, c);
+    scope.fork(ttt_detect_end, board, events);
+    scope.fork(ttt_x_script);
+    scope.fork(ttt_o_ai);
+    co_await scope.join();
+}
+
+sync_wait_game<ttt_event>(deck, [&](firm& scope) {
+    return ttt_body(scope, board, events);
 });
 ```
 
-The firm is not incidental. It makes the b-threads structured children: they
-can be stopped together, and `require_current_firm().stop()` is how a watcher
-ends the whole game cleanly. A stopped b-thread does not vanish silently — it
+`sync_wait_game` accepts a nullary factory for scope-only work, or passes its
+enclosing firm reference to a factory that needs to fork. The callback above
+is an ordinary factory, while `ttt_body` is a named coroutine with explicit
+parameters. Keep game work in this enclosing scope: the game retains its
+coordinator task until destruction, so allocating it inside a shorter-lived
+nested firm would leave it referring to released frame memory.
+Avoid capturing coroutine lambdas
+whose returned task can outlive their closure. Join before any
+locals borrowed by children leave scope; scope exit does not imply that their
+borrowed state remains valid. The firm is not incidental: it gives the
+b-threads frame and cancellation context, while the passed scope explicitly
+owns these children. `require_current_firm().stop()` remains a way for a
+watcher to stop the current context; it does not perform implicit child
+admission. A stopped b-thread does not vanish silently — it
 resumes from its sync with an @ref nxtrt::operation_cancelled
 "operation_cancelled", via the `std::stop_callback` the game wired up when it
 parked, so cancellation unwinds the same way every other awaited operation in

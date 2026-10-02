@@ -125,9 +125,9 @@ Each tuple element can be a task or an owned nullary task factory. Factories
 are invoked once from finite indexed recipes in the existing pool. Their
 storage stays alive through settlement, including cancellation or an exception
 while invoking a later factory. This also keeps a capturing coroutine
-factory's closure alive; ordinary `fork(temporary_coroutine_lambda)` does
-**not** gain that guarantee. Preconstructed tasks retain their original frame
-allocation.
+factory's closure alive; directly invoking a temporary capturing coroutine
+lambda to produce a task does **not** retain that closure. Preconstructed tasks
+retain their original frame allocation.
 
 The lowering produces `task<void>` pool jobs; each writes its typed
 `expected<T, exception_ptr>` outcome to its matching tuple position. The main
@@ -149,18 +149,26 @@ succeeds. Failure alone does not win this race. `stop_on_completion` instead
 stops siblings on either success or failure; `with_timeout` and
 `poll_until_after` use this tuple path. Variadic forms delegate to tuples.
 
+The public `with_firm<Policy = firm>(fn)` name also provides the scope entry
+point: a retained nullary factory is suitable for scope-only work, while a
+factory accepting `Policy&` may explicitly use `scope.fork`, `scope.join`, and
+`scope.stop`. Callable and fixed-tuple paths share the `run_firm` entry point;
+tuple main work remains pool-owned and creates no child/deed records. There
+are no free `nxtrt::fork` or `nxtrt::join` functions.
+
 The finite indexed pool batch does not make the firm an exact-size nursery or
 promise exactly N records, a fixed frame-byte budget, or allocation-free
-execution. The firm still supplies frames and stop policy, and its growable
-nursery accepts explicit nested ambient forks; those forks remain outside the
-fixed pool bound. This is a real unification of ownership and drain machinery,
-not a strict transitive static team.
+execution. The firm supplies frame memory and cancellation; its optional child
+ownership is explicit through a passed firm reference. The tuple's main work
+stays pool-owned, with zero child/deed records. This shares execution and drain
+machinery, but is not a strict transitive static team.
 
-Admission remains open: a child can fork into its ambient firm without opening
-a nested firm. Readiness/deadline races and the cgroup sampling batch use the
-tuple syntax for composition, not as a transitive capacity boundary. The tuple
-helpers currently accept task values and task factories; the broader `idea`
-concept does not by itself add hope-producing factories to those helpers.
+Nested spawning requires explicitly passing the scope reference; ambient
+`current_firm` remains frame/cancel/debug context, not an implicit child
+admission target. Readiness/deadline races and the cgroup sampling batch use
+the tuple syntax for composition, not as a transitive capacity boundary. The
+tuple helpers currently accept task values and task factories; the broader
+`idea` concept does not by itself add hope-producing factories to those helpers.
 
 Settlement records retain their bidirectional deed link after evacuating a task
 frame. Moving a joined deed retargets the record; destroying either side detaches
@@ -201,8 +209,8 @@ The proposed distinction is a heterogeneous static **team** versus a
 homogeneous **pool** with circulating capacity. Fixed tuple helpers now lower
 to finite indexed jobs in the existing pool and return typed settled outcomes;
 they do not allocate main-work child records. They are not strict transitive
-static teams: nested explicit ambient forks remain in the firm's growable
-nursery and are outside the tuple batch bound. Nor is this an allocation-free
+static teams: separately scope-owned children remain outside the tuple batch
+bound. Nor is this an allocation-free
 or frame-budget contract. The `idea` concept is shared recipe vocabulary, not
 an owning wrapper or an admission policy.
 

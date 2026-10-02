@@ -5,9 +5,9 @@ Status: new
 ## Implementation status
 
 This is a resource-lifetime design, not an implemented generic resource handle.
-The readiness and buffer-group APIs below are sketches. A firm remains a
-growable nursery for scoped children; it is not the required owner of every
-concurrent stream stage.
+The readiness and buffer-group APIs below are sketches. A firm is a lifetime
+scope providing frame memory and cancellation, with optional explicit child
+ownership; it is not the required owner of every concurrent stream stage.
 
 The implemented [bounded pool](../../docs/rt-pool.md) owns pending tasks
 directly and requires drain to EOF or asynchronous `close()` before destruction.
@@ -18,7 +18,8 @@ See the [concurrency direction](../../docs/rt-concurrency-direction.md).
 
 ## Summary
 
-A task forked into a firm can represent an async RAII resource.
+A task explicitly forked through a firm scope can represent an async RAII
+resource.
 
 The resource is owned by the firm. It may perform asynchronous construction,
 publish readiness, emit a feed or capability while alive, and perform
@@ -44,8 +45,9 @@ Examples:
 - a file watcher;
 - a protocol session that emits frames until stopped.
 
-These are not detached tasks. They are resources located inside a firm. The
-firm owns their lifetime and cancellation.
+These are not detached tasks. They are resources explicitly owned through a
+firm scope. The firm supplies their frame and cancellation context; the scope
+reference expresses child ownership.
 
 ## Phases
 
@@ -67,7 +69,7 @@ time, and only later return or throw during teardown.
 One possible shape:
 
 ```cpp
-auto bg = fork(buffer_group_resource, storage);
+auto bg = scope.fork(buffer_group_resource, storage);
 auto ready = co_await bg.ready();
 auto loan = co_await ready.recv_some(fd, max);
 ```

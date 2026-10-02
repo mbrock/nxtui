@@ -2,17 +2,25 @@
 
 Status: superseded; bounded bookkeeping is a deferred optimization
 
-## Current decision: ordinary nurseries
+## Current decision: optional explicit ownership
 
-Firms are ordinary structured-concurrency nurseries, not fixed-shape storage
-bundles. Child records have stable addresses and grow with admission. They
-remain until nursery destruction so that surviving deeds can retain their
-observation links; joining evacuates results and releases task frames, not
-child-record slots.
+This RFC's historical implementation notes below describe nursery behavior,
+not the consolidated public contract. A firm is a lifetime scope providing
+frame memory and cancellation, with optional explicit child ownership through
+a passed scope reference; it is not synonymous with a nursery. Tasks do not
+spawn ambiently, and there are no free `nxtrt::fork` or `nxtrt::join` APIs.
+Scope-owned children are explicitly joined before borrowed locals go out of
+scope; scope exit is not a promise of automatic join after those locals vanish.
+
+Child bookkeeping remains dynamic when explicit child ownership is used; this
+RFC does not remove it or redesign bounded pools. The callable and fixed-tuple
+`with_firm` paths share `run_firm`, while tuple main work is pool-owned with
+zero child/deed records. See [RFC 0014](../new/rfc-0014-idea-algebra.md) for
+that tuple contract.
 
 The bounded child/deed/completion/join storage APIs and exact-N tuple-firm
-specialization have been removed. Tuple combinators remain convenience APIs
-over ordinary nurseries; tuple arity does not constrain further forks.
+specialization have been removed. Tuple combinators use the pool for their
+main work; tuple arity does not bound separately owned children.
 Separate issued-deed and completion ledgers have also been removed: the
 child record already supplies the identity and settlement state used by join
 and cancellation policy. Join failures are collected dynamically.

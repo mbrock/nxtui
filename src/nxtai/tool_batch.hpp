@@ -364,17 +364,18 @@ inline nxtrt::task<std::vector<function_call_result>> run_function_tool_batch(
     std::vector<function_call> calls)
 {
     auto deeds = co_await nxtrt::with_firm(
-        [&]() -> nxtrt::task<
-            std::vector<nxtrt::catching_deed<function_call_result>>> {
+        [&](nxtrt::firm & scope)
+            -> nxtrt::task<
+                std::vector<nxtrt::catching_deed<function_call_result>>> {
             auto out =
                 std::vector<nxtrt::catching_deed<function_call_result>>{};
             out.reserve(calls.size());
             for (auto & call : calls)
-                out.push_back(
-                    nxtrt::fork(
-                        run_one_call_for_batch(tools, std::move(call)))
-                        .cope());
-            co_await nxtrt::join();
+                out.push_back(scope
+                                  .fork(run_one_call_for_batch(
+                                      tools, std::move(call)))
+                                  .cope());
+            co_await scope.join();
             co_return out;
         });
 

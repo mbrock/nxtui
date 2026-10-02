@@ -114,6 +114,7 @@ nxtrt::task<void> echo_connection(
 }
 
 nxtrt::task<void> echo_server(
+    nxtrt::firm & scope,
     int listener,
     std::size_t clients,
     std::size_t payload_size,
@@ -124,10 +125,7 @@ nxtrt::task<void> echo_server(
         auto client = co_await nxtrt::net::accept(listener);
         ++accepted;
         stats->accepted += 1;
-        nxtrt::fork(echo_connection(
-            std::move(client),
-            payload_size,
-            stats));
+        scope.fork(echo_connection(std::move(client), payload_size, stats));
     }
 }
 
@@ -186,6 +184,7 @@ nxtrt::task<void> timeout_load(
 }
 
 nxtrt::task<void> run_echo_load(
+    nxtrt::firm & scope,
     bench_options options,
     sockaddr_in address,
     int listener,
@@ -194,14 +193,11 @@ nxtrt::task<void> run_echo_load(
 {
     auto state = std::make_shared<bench_state>();
 
-    nxtrt::fork(echo_server(
-        listener,
-        options.clients,
-        options.payload_size,
-        stats));
+    scope.fork(echo_server(
+        scope, listener, options.clients, options.payload_size, stats));
 
     for (auto i = std::size_t{0}; i < options.clients; ++i)
-        nxtrt::fork(echo_client_tracked(
+        scope.fork(echo_client_tracked(
             address,
             options.messages,
             payload,
@@ -209,14 +205,13 @@ nxtrt::task<void> run_echo_load(
             state,
             options.clients));
 
-    nxtrt::fork(timeout_load(options.timeout, state));
+    scope.fork(timeout_load(options.timeout, state));
 
     co_await state->done;
     if (state->timed_out)
         throw nxtrt::timeout_error{};
-    if (auto * firm = nxtrt::current_firm())
-        firm->stop();
-    co_await nxtrt::join();
+    scope.stop();
+    co_await scope.join();
 }
 
 struct echo_load_factory
@@ -229,7 +224,10 @@ struct echo_load_factory
 
     nxtrt::task<void> operator()()
     {
-        return run_echo_load(options, address, listener, payload, stats);
+        return nxtrt::with_firm([&](nxtrt::firm & scope) {
+            return run_echo_load(
+                scope, options, address, listener, payload, stats);
+        });
     }
 };
 

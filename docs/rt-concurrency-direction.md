@@ -17,11 +17,11 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Firm bookkeeping | Growable nursery records for explicit forks; bounded ledgers and exact-N nursery admission were removed |
-| Tuple concurrency helpers | Fixed heterogeneous work lowers to finite indexed `task<void>` recipes in the ordinary pool; nested ambient forks still use the growable nursery |
-| Frame provision | Still supplied by the ambient firm, including for pool jobs |
+| Firm | Lifetime scope providing frame memory and cancellation, with optional explicit child ownership through a passed scope reference |
+| Tuple concurrency helpers | Fixed heterogeneous work lowers to finite indexed `task<void>` recipes in the ordinary pool; main work has zero child/deed records |
+| Frame provision | Supplied by the ambient firm context, including for pool jobs; ambient context does not admit children |
 | Idea-level `cope`, generic feed mapping, lifetime-aware terminal consumers | Design direction; no APIs are specified here as already available |
-| Strict transitive static teams | Design direction; tuple lowering bounds only its own fixed batch, not nested ambient forks |
+| Strict transitive static teams | Design direction; tuple lowering bounds only its own fixed batch, not separately owned child work |
 | Wisp without permanent evaluation workers | Implemented explicit-await bridge and pool-based HTTP; guest structured-concurrency semantics remain open |
 
 See @ref rt_pool "the pool guide" for the current API and executable example.
@@ -46,8 +46,9 @@ one task and writes its typed `expected<T, exception_ptr>` into the matching
 tuple position. It allocates no main-work child records or deeds. The policy's
 `firm::completed(task_id, exception_ptr)` hook is shared with dynamically forked
 children, so cancellation policy does not require a second ownership system.
-The firm still provides frames, stop policy, and a growable nursery for
-explicit nested ambient forks; those forks are outside the fixed batch bound.
+The firm provides frames and stop policy. Explicit child ownership is opt-in
+through a passed firm reference; those children are outside the fixed batch
+bound. Work does not implicitly spawn into whichever firm is ambient.
 
 The goal is shared lifetime rules, not one universal container or a configurable
 holder with a policy parameter for every difference. The useful questions from
@@ -133,7 +134,7 @@ An N-slot pool is not a proof that the entire computation uses bounded memory:
 - recipes and output values may own allocations;
 - response bodies and upstream queues need their own budgets;
 - nested awaits consume additional frame memory;
-- work explicitly forked into an ambient firm is outside the pool's slot bound;
+- work explicitly forked through a scope is outside the pool's slot bound;
 - a crawler's discovered-URL frontier and visited set are separate resources.
 
 The appropriate principle is visible ownership and explicit capacity where
@@ -163,9 +164,9 @@ borrowed land; a ring with prefix retirement was rejected because long-lived
 frames pin the prefix.
 
 The tuple helpers now use a finite batch in the pool, rather than allocating
-firm child records for the main work. This unifies ownership and drain
-machinery with pool jobs, but is not a strict transitive static team: recipes
-can explicitly fork into the ambient firm's growable nursery. Nor is it an
+firm child records for the main work. This shares execution machinery with pool
+jobs, but is not a strict transitive static team: recipes may explicitly fork
+through a passed scope reference. Nor is it an
 allocation-free claim; task frames and result values retain their ordinary
 allocation behavior. A stronger static-team guarantee would have to account
 for nested work and sound lifetimes, not merely the fixed tuple shape.
@@ -306,10 +307,10 @@ comparison remains intelligible after those applications change.
 [shell-supervision]: https://github.com/mbrock/nxtui/blob/8946acc004295d4699a69fb3c6f79f5f15d5c69b/demo/shell_scope_demo.cpp#L344-L380
 [wisp-host]: https://github.com/mbrock/nxtui/blob/8946acc004295d4699a69fb3c6f79f5f15d5c69b/src/wisp/main.cpp#L1029-L1128
 
-Some existing firms are only frame/resource scopes, with no explicit child
-team. Root task construction also requires an ambient firm. Replacing those
-with empty pools would obscure rather than simplify the system. Separate frame
-provision from child ownership before trying to delete firm wholesale.
+Some existing firms are only frame/resource scopes, with no explicitly owned
+children. Root task construction also requires an ambient firm context.
+Replacing those scopes with empty pools would obscure rather than simplify the
+system. Keep frame provision distinct from optional child ownership.
 
 ## Next decisions and verification
 
@@ -320,7 +321,7 @@ Use actual pipelines to settle:
 3. Generic mapping and bounded in-memory admission/feedback, without a second
    scheduler or a mandatory channel around every source.
 4. Static team representation and companion-resource lifetimes.
-5. Frame provision independent of the nursery API.
+5. Further frame-provision and child-ownership simplification, without conflating the two.
 6. The native task/guest continuation cancellation and root-release boundary.
 
 Preserve evidence alongside the design: many more jobs than slots; a paused
