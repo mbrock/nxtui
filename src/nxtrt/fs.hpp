@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/blocking.hpp"
 #include "nxtrt/buffers.hpp"
 #include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
@@ -47,6 +48,7 @@ struct file_status
     file_kind kind = file_kind::other;
     std::uint64_t size = 0;
     mode_t mode = 0;
+    std::int64_t modified_ms = 0; // Unix epoch milliseconds
 };
 
 struct directory_entry
@@ -78,10 +80,17 @@ inline file_kind kind_from_mode(mode_t mode) noexcept
 
 inline file_status status_from_stat(struct stat const & stat) noexcept
 {
+#if defined(__APPLE__)
+    auto const & modified = stat.st_mtimespec;
+#else
+    auto const & modified = stat.st_mtim;
+#endif
     return file_status{
         .kind = kind_from_mode(stat.st_mode),
         .size = static_cast<std::uint64_t>(stat.st_size),
         .mode = stat.st_mode,
+        .modified_ms = std::int64_t(modified.tv_sec) * 1000
+            + modified.tv_nsec / 1000000,
     };
 }
 
@@ -111,6 +120,8 @@ inline file_status status_from_statx(statx_result const & stat) noexcept
         .kind = kind_from_mode(stat.stx_mode),
         .size = stat.stx_size,
         .mode = stat.stx_mode,
+        .modified_ms = std::int64_t(stat.stx_mtime.tv_sec) * 1000
+            + stat.stx_mtime.tv_nsec / 1000000,
     };
 }
 
@@ -120,7 +131,7 @@ inline task<file_status> stat_path(int dirfd, std::string path)
         dirfd,
         std::move(path),
         AT_SYMLINK_NOFOLLOW,
-        STATX_TYPE | STATX_MODE | STATX_SIZE};
+        STATX_TYPE | STATX_MODE | STATX_SIZE | STATX_MTIME};
     co_return status_from_statx(stat);
 }
 
@@ -323,6 +334,11 @@ inline void append_bulk_entries(
         if ((returned.commonattr & ATTR_CMN_OBJTYPE) != 0)
             status.kind =
                 kind_from_vnode_type(read_packed<fsobj_type_t>(entry, record_end));
+        if ((returned.commonattr & ATTR_CMN_MODTIME) != 0) {
+            auto modified = read_packed<timespec>(entry, record_end);
+            status.modified_ms = std::int64_t(modified.tv_sec) * 1000
+                + modified.tv_nsec / 1000000;
+        }
         if ((returned.commonattr & ATTR_CMN_ACCESSMASK) != 0)
             status.mode =
                 read_packed<std::uint32_t>(entry, record_end)
@@ -342,6 +358,42 @@ inline void append_bulk_entries(
     }
 }
 
+// Every entry of an open directory except "." and "..", with names,
+// kinds, sizes and times from one getattrlistbulk call per batch.
+inline void append_bulk_directory(
+    std::vector<directory_entry> & entries,
+    int dir)
+{
+    auto attrs = attrlist{
+        .bitmapcount = ATTR_BIT_MAP_COUNT,
+        .reserved = 0,
+        .commonattr = ATTR_CMN_RETURNED_ATTRS
+            | ATTR_CMN_NAME
+            | ATTR_CMN_ERROR
+            | ATTR_CMN_OBJTYPE
+            | ATTR_CMN_MODTIME
+            | ATTR_CMN_ACCESSMASK,
+        .volattr = 0,
+        .dirattr = ATTR_DIR_DATALENGTH,
+        .fileattr = ATTR_FILE_TOTALSIZE,
+        .forkattr = 0,
+    };
+    auto buffer = std::array<std::byte, 16 * 1024>{};
+    while (true) {
+        auto count = ::getattrlistbulk(
+            dir,
+            &attrs,
+            buffer.data(),
+            buffer.size(),
+            FSOPT_NOFOLLOW | FSOPT_REPORT_FULLSIZE);
+        if (count < 0)
+            throw syscall_error("getattrlistbulk");
+        if (count == 0)
+            break;
+        append_bulk_entries(entries, std::span{buffer}, count);
+    }
+}
+
 } // namespace detail
 
 inline task<std::vector<directory_entry>> list_directory(std::string path)
@@ -350,21 +402,6 @@ inline task<std::vector<directory_entry>> list_directory(std::string path)
     if (fd < 0)
         throw detail::syscall_error("open");
     auto dir = nxt::unique_fd{fd};
-
-    auto attrs = attrlist{
-        .bitmapcount = ATTR_BIT_MAP_COUNT,
-        .reserved = 0,
-        .commonattr = ATTR_CMN_RETURNED_ATTRS
-            | ATTR_CMN_NAME
-            | ATTR_CMN_ERROR
-            | ATTR_CMN_OBJTYPE
-            | ATTR_CMN_ACCESSMASK,
-        .volattr = 0,
-        .dirattr = ATTR_DIR_DATALENGTH,
-        .fileattr = ATTR_FILE_TOTALSIZE,
-        .forkattr = 0,
-    };
-    auto buffer = std::array<std::byte, 16 * 1024>{};
 
     auto entries = std::vector<directory_entry>{};
     entries.push_back(directory_entry{
@@ -375,21 +412,7 @@ inline task<std::vector<directory_entry>> list_directory(std::string path)
         .name = "..",
         .status = detail::stat_at(dir.get(), ".."),
     });
-
-    while (true) {
-        auto count = ::getattrlistbulk(
-            dir.get(),
-            &attrs,
-            buffer.data(),
-            buffer.size(),
-            FSOPT_NOFOLLOW | FSOPT_REPORT_FULLSIZE);
-        if (count < 0)
-            throw detail::syscall_error("getattrlistbulk");
-        if (count == 0)
-            break;
-
-        detail::append_bulk_entries(entries, std::span{buffer}, count);
-    }
+    detail::append_bulk_directory(entries, dir.get());
 
     std::ranges::sort(entries, {}, &directory_entry::name);
     co_return entries;
@@ -421,9 +444,9 @@ inline task<std::vector<directory_entry>> list_path(std::string path)
 // even when the tree contains links. That is stricter than WASI, which
 // follows links that stay beneath. An empty path names the directory.
 //
-// These use direct, synchronous *at syscalls rather than wishes so callers
-// see the real errno: std::system_error for the OS, std::invalid_argument
-// for a malformed path.
+// These are direct, synchronous *at syscalls; `files` below runs them off
+// the deck or replaces them with io_uring operations. Failures are
+// errno_error for the OS and std::invalid_argument for a malformed path.
 
 inline std::vector<std::string_view> beneath_segments(std::string_view path)
 {
@@ -451,7 +474,9 @@ namespace detail {
 
 [[noreturn]] inline void throw_errno(char const * operation)
 {
-    throw std::system_error{errno, std::generic_category(), operation};
+    auto code = errno;
+    throw errno_error{
+        code, std::string{operation} + " failed: " + std::strerror(code)};
 }
 
 } // namespace detail
@@ -483,7 +508,8 @@ inline beneath_entry resolve_beneath(int dirfd, std::string_view path)
                        == 0
                 && S_ISLNK(info.st_mode))
                 error = ELOOP;
-            throw std::system_error{error, std::generic_category(), "openat"};
+            errno = error;
+            detail::throw_errno("openat");
         }
         parent.reset(next);
     }
@@ -525,27 +551,165 @@ open_beneath(int dirfd, std::string_view path, int flags = O_RDONLY)
     return nxt::unique_fd{fd};
 }
 
-/// Sorted entry names of an open directory, without "." and "..".
-inline std::vector<std::string> directory_names(nxt::unique_fd dir)
+/// Entries of an open directory sorted by name, without "." and "..",
+/// statted without following symlinks. Synchronous: macOS reads names and
+/// attributes in getattrlistbulk batches, elsewhere readdir plus fstatat.
+inline std::vector<directory_entry> list_entries(nxt::unique_fd dir)
 {
+    auto entries = std::vector<directory_entry>{};
+#if defined(__APPLE__)
+    detail::append_bulk_directory(entries, dir.get());
+#else
     auto * stream = ::fdopendir(dir.get());
     if (!stream)
         detail::throw_errno("fdopendir");
     (void) dir.release(); // closedir owns it now
-    auto names = std::vector<std::string>{};
+    struct closer
+    {
+        DIR * stream;
+        ~closer()
+        {
+            ::closedir(stream);
+        }
+    } guard{stream};
     errno = 0;
     while (auto * entry = ::readdir(stream)) {
         auto name = std::string_view{entry->d_name};
-        if (name != "." && name != "..")
-            names.emplace_back(name);
+        if (name != "." && name != "..") {
+            struct stat info {};
+            if (::fstatat(::dirfd(stream), entry->d_name, &info,
+                          AT_SYMLINK_NOFOLLOW) != 0)
+                detail::throw_errno("fstatat");
+            entries.push_back(directory_entry{
+                .name = std::string{name},
+                .status = detail::status_from_stat(info),
+            });
+        }
         errno = 0;
     }
-    auto error = errno;
-    ::closedir(stream);
-    if (error)
-        throw std::system_error{error, std::generic_category(), "readdir"};
-    std::ranges::sort(names);
-    return names;
+    if (errno)
+        detail::throw_errno("readdir");
+#endif
+    std::ranges::sort(entries, {}, &directory_entry::name);
+    return entries;
+}
+
+/// Filesystem calls that keep the deck responsive. On a wand whose
+/// asynchronous_files() holds (io_uring), opens and stats are kernel
+/// operations, and openat2 with RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS
+/// enforces the same confinement in the kernel. Otherwise the synchronous
+/// functions above run on WORKERS, as does listing everywhere (io_uring has
+/// no getdents). Failures are errno_error; malformed paths are rejected on
+/// the deck with std::invalid_argument. DIRFD is borrowed until the call
+/// settles, and the files object must outlive its calls. One difference
+/// remains: io_uring opens a FIFO without waiting for its peer, as if
+/// O_NONBLOCK were given, where the pool's open(2) waits.
+class files
+{
+public:
+    explicit files(blocking_pool & workers)
+        : workers_(workers)
+    {}
+
+    task<nxt::unique_fd>
+    open_beneath(int dirfd, std::string path, int flags = O_RDONLY);
+    task<file_status> stat_beneath(int dirfd, std::string path);
+    task<std::vector<directory_entry>>
+    list_beneath(int dirfd, std::string path);
+    /// pread into BUFFER, which must stay alive until the call settles.
+    task<std::size_t>
+    read_at(int fd, std::span<std::byte> buffer, std::uint64_t offset);
+
+private:
+    static bool asynchronous() noexcept
+    {
+        auto * d = current_deck();
+        return d && d->current_wand() && d->current_wand()->asynchronous_files();
+    }
+
+    blocking_pool & workers_;
+};
+
+#if defined(__linux__)
+namespace detail {
+
+inline constexpr std::uint64_t confined =
+    RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS;
+
+} // namespace detail
+#endif
+
+inline task<nxt::unique_fd>
+files::open_beneath(int dirfd, std::string path, int flags)
+{
+    (void) beneath_segments(path);
+#if defined(__linux__)
+    if (asynchronous() && !path.empty()) {
+        auto fd = co_await op::openat2{
+            dirfd,
+            std::move(path),
+            std::uint64_t(flags | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC),
+            detail::confined};
+        co_return nxt::unique_fd{fd};
+    }
+#endif
+    co_return co_await workers_.run(
+        [dirfd, path = std::move(path), flags] {
+            return fs::open_beneath(dirfd, path, flags);
+        });
+}
+
+inline task<file_status> files::stat_beneath(int dirfd, std::string path)
+{
+    (void) beneath_segments(path);
+#if defined(__linux__)
+    if (asynchronous()) {
+        // An O_PATH | O_NOFOLLOW open yields the final symlink itself even
+        // under RESOLVE_NO_SYMLINKS, so it can be reported, not followed.
+        auto opened = nxt::unique_fd{};
+        if (!path.empty())
+            opened = nxt::unique_fd{co_await op::openat2{
+                dirfd,
+                std::move(path),
+                std::uint64_t(O_PATH | O_NOFOLLOW | O_CLOEXEC),
+                detail::confined}};
+        auto info = co_await op::statx{
+            opened.get() < 0 ? dirfd : opened.get(),
+            "",
+            AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW,
+            STATX_TYPE | STATX_MODE | STATX_SIZE | STATX_MTIME};
+        co_return detail::status_from_statx(info);
+    }
+#endif
+    co_return co_await workers_.run([dirfd, path = std::move(path)] {
+        return detail::status_from_stat(fs::stat_beneath(dirfd, path));
+    });
+}
+
+inline task<std::size_t>
+files::read_at(int fd, std::span<std::byte> buffer, std::uint64_t offset)
+{
+    if (asynchronous())
+        co_return co_await op::read_some{fd, buffer, off_t(offset)};
+    co_return co_await workers_.run([fd, buffer, offset] {
+        while (true) {
+            auto count = ::pread(fd, buffer.data(), buffer.size(), off_t(offset));
+            if (count >= 0)
+                return std::size_t(count);
+            if (errno != EINTR)
+                detail::throw_errno("pread");
+        }
+    });
+}
+
+inline task<std::vector<directory_entry>>
+files::list_beneath(int dirfd, std::string path)
+{
+    (void) beneath_segments(path);
+    co_return co_await workers_.run([dirfd, path = std::move(path)] {
+        return list_entries(
+            fs::open_beneath(dirfd, path, O_RDONLY | O_DIRECTORY | O_NONBLOCK));
+    });
 }
 
 } // namespace nxtrt::fs

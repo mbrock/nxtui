@@ -216,6 +216,14 @@ public:
     virtual void cancel(coin_t token) = 0;
     virtual void wave(deck & d) = 0;
 
+    /// Whether file opens and stats complete without blocking the deck's
+    /// thread. Wands that perform them as synchronous syscalls say no, so
+    /// callers can move slow-disk work to a blocking pool instead.
+    [[nodiscard]] virtual bool asynchronous_files() const noexcept
+    {
+        return false;
+    }
+
 protected:
     virtual coin_t prep(
         deck & d,

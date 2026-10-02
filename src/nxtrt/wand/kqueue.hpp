@@ -14,6 +14,7 @@
 #endif
 
 #include <cerrno>
+#include <cstring>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -996,11 +997,18 @@ private:
         void finish_error(int err)
         {
             this->finished_ = true;
+            if (err == EINTR) {
+                state_->set_exception(
+                    std::make_exception_ptr(interrupted_system_call{}));
+                return;
+            }
             state_->set_exception(
                 std::make_exception_ptr(
-                    runtime_error{
-                        "kqueue operation failed: "
-                        + std::to_string(err)}));
+                    errno_error{
+                        err,
+                        std::string{"kqueue operation failed: "}
+                        + std::strerror(err)
+                        + " (" + std::to_string(err) + ")"}));
         }
 
         std::shared_ptr<urge_state<T>> state_;

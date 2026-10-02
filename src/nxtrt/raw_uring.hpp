@@ -1,6 +1,7 @@
 #pragma once
 
 #include <linux/io_uring.h>
+#include <linux/openat2.h>
 
 #include <algorithm>
 #include <atomic>
@@ -312,6 +313,21 @@ inline void io_uring_prep_openat(
     nxtrt::raw_uring_detail::prep_rw(
         IORING_OP_OPENAT, sqe, dfd, path, mode, 0);
     sqe->open_flags = static_cast<std::uint32_t>(flags);
+}
+
+inline void io_uring_prep_openat2(
+    io_uring_sqe * sqe,
+    int dfd,
+    const char * path,
+    open_how * how) noexcept
+{
+    nxtrt::raw_uring_detail::prep_rw(
+        IORING_OP_OPENAT2,
+        sqe,
+        dfd,
+        path,
+        sizeof(*how),
+        nxtrt::raw_uring_detail::ptr_to_u64(how));
 }
 
 inline void io_uring_prep_statx(

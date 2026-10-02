@@ -40,6 +40,25 @@ public:
     {}
 };
 
+/// An operation that failed with an OS error. Wands raise this for failed
+/// wishes so callers can distinguish errno values, not just messages.
+class errno_error : public runtime_error
+{
+public:
+    errno_error(int code, std::string const & message)
+        : runtime_error{message}
+        , code_(code)
+    {}
+
+    [[nodiscard]] int code() const noexcept
+    {
+        return code_;
+    }
+
+private:
+    int code_;
+};
+
 class exception_group : public runtime_error
 {
 public:

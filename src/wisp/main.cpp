@@ -367,16 +367,29 @@ struct host
             slash == path.npos ? std::string_view{} : path.substr(slash + 1)};
     }
 
+    // Filesystem calls run as io_uring operations or on these workers, so a
+    // slow disk never stalls other callbacks. Started on first use.
+    std::optional<nxtrt::blocking_pool> workers;
+    std::optional<nxtrt::fs::files> file_io;
+
+    nxtrt::fs::files & files()
+    {
+        if (!file_io) {
+            workers.emplace(4, 64);
+            file_io.emplace(*workers);
+        }
+        return *file_io;
+    }
+
     // Symlinks are never followed (ELOOP), so they are not capabilities.
-    template<typename F>
-    static auto filesystem(F && operation) -> decltype(operation())
+    [[noreturn]] static void filesystem_failure(std::exception_ptr failure)
     {
         try {
-            return operation();
+            std::rethrow_exception(failure);
         } catch (const std::invalid_argument & error) {
             throw effect_error{"INVALID-ARGUMENT", error.what()};
-        } catch (const std::system_error & error) {
-            const auto code = error.code().value();
+        } catch (const nxtrt::errno_error & error) {
+            const auto code = error.code();
             throw effect_error{
                 code == ENOENT || code == ENOTDIR ? "NOT-FOUND"
                 : code == ELOOP                   ? "NOT-CAPABLE"
@@ -395,33 +408,41 @@ struct host
     }
 
     // Opens a regular file with its size, without blocking on FIFOs.
-    std::pair<nxt::unique_fd, std::uint64_t>
-    open_regular(std::string_view path)
+    nxtrt::task<std::pair<nxt::unique_fd, std::uint64_t>>
+    open_regular(std::string path)
     {
         const auto [dir, relative] = beneath(path);
-        auto fd = filesystem([&] {
-            return nxtrt::fs::open_beneath(
-                dir, relative, O_RDONLY | O_NONBLOCK);
-        });
+        auto fd = nxt::unique_fd{};
+        try {
+            fd = co_await files().open_beneath(
+                dir, std::string{relative}, O_RDONLY | O_NONBLOCK);
+        } catch (...) {
+            filesystem_failure(std::current_exception());
+        }
         struct stat info {};
         if (::fstat(fd.get(), &info) != 0)
             throw effect_error{"IO", "fstat failed"};
         effect_require(S_ISREG(info.st_mode), "not a regular file");
-        return {std::move(fd), std::uint64_t(info.st_size)};
+        co_return std::pair{std::move(fd), std::uint64_t(info.st_size)};
     }
 
     nxtrt::task<void> read_file(word argument, root & result)
     {
-        const auto path = guest_path(argument, "read-file");
-        auto [fd, size] = open_regular(path);
+        auto [fd, size] =
+            co_await open_regular(guest_path(argument, "read-file"));
         effect_require(size <= tape::default_limit, "file exceeds 64 MiB");
         std::string bytes(size, '\0');
         std::size_t offset = 0;
         while (offset < bytes.size()) {
-            const auto count = co_await nxtrt::op::read_some{
-                fd.get(),
-                std::as_writable_bytes(std::span{bytes}).subspan(offset),
-                off_t(offset)};
+            std::size_t count = 0;
+            try {
+                count = co_await files().read_at(
+                    fd.get(),
+                    std::as_writable_bytes(std::span{bytes}).subspan(offset),
+                    offset);
+            } catch (...) {
+                filesystem_failure(std::current_exception());
+            }
             if (count == 0)
                 break; // truncated meanwhile
             offset += count;
@@ -432,48 +453,47 @@ struct host
 
     // [kind size modified-unix-ms], or NIL when nothing is there. Numbers
     // are decimal strings, like timer deadlines: fixnums are only 31 bits.
-    void file_status(word argument, root & result)
+    nxtrt::task<void> file_status(word argument, root & result)
     {
         const auto path = guest_path(argument, "file-status");
         const auto [dir, relative] = beneath(path);
-        struct stat info {};
+        auto status = nxtrt::fs::file_status{};
         try {
-            info = filesystem(
-                [&] { return nxtrt::fs::stat_beneath(dir, relative); });
-        } catch (const effect_error & error) {
-            if (error.code == "NOT-FOUND")
-                return;
-            throw;
+            status =
+                co_await files().stat_beneath(dir, std::string{relative});
+        } catch (const nxtrt::errno_error & error) {
+            if (error.code() == ENOENT || error.code() == ENOTDIR)
+                co_return;
+            filesystem_failure(std::current_exception());
+        } catch (...) {
+            filesystem_failure(std::current_exception());
         }
-#if defined(__APPLE__)
-        const auto & modified = info.st_mtimespec;
-#else
-        const auto & modified = info.st_mtim;
-#endif
-        const auto kind = S_ISREG(info.st_mode)   ? "FILE"
-                          : S_ISDIR(info.st_mode) ? "DIRECTORY"
-                          : S_ISLNK(info.st_mode) ? "SYMLINK"
-                                                  : "OTHER";
+        using kind = nxtrt::fs::file_kind;
         result.set(h.newv32(
             std::array{
-                vm.keyword(kind),
-                h.newv08(std::to_string(info.st_size)),
-                h.newv08(std::to_string(
-                    std::int64_t(modified.tv_sec) * 1000
-                    + modified.tv_nsec / 1000000))}));
+                vm.keyword(
+                    status.kind == kind::regular     ? "FILE"
+                    : status.kind == kind::directory ? "DIRECTORY"
+                    : status.kind == kind::symlink   ? "SYMLINK"
+                                                     : "OTHER"),
+                h.newv08(std::to_string(status.size)),
+                h.newv08(std::to_string(status.modified_ms))}));
     }
 
-    void list_directory(word argument, root & result)
+    nxtrt::task<void> list_directory(word argument, root & result)
     {
         const auto path = guest_path(argument, "list-directory");
         const auto [dir, relative] = beneath(path);
-        const auto names = filesystem([&] {
-            return nxtrt::fs::directory_names(nxtrt::fs::open_beneath(
-                dir, relative, O_RDONLY | O_DIRECTORY | O_NONBLOCK));
-        });
+        auto entries = std::vector<nxtrt::fs::directory_entry>{};
+        try {
+            entries =
+                co_await files().list_beneath(dir, std::string{relative});
+        } catch (...) {
+            filesystem_failure(std::current_exception());
+        }
         auto list = nil;
-        for (const auto & name : names | std::views::reverse)
-            list = h.cons(h.newv08(name), list);
+        for (const auto & entry : entries | std::views::reverse)
+            list = h.cons(h.newv08(entry.name), list);
         result.set(list);
     }
 
@@ -516,14 +536,16 @@ struct host
             tag_of(result[0]) == tag::integer, "invalid HTTP status");
         nxtrt::http::response response;
         response.status = integer(result[0]);
+        // Opened only after every heap value is copied: awaiting lets other
+        // callbacks run and collect, which invalidates RESULT.
+        std::optional<std::string> file;
         if (tag_of(result[2]) == tag::v32) {
             const auto body = h.v32slice(result[2]);
             effect_require(
                 body.size() == 2 && body[0] == vm.keyword("FILE")
                     && tag_of(body[1]) == tag::v08,
                 "HTTP body must be a string or [:file path]");
-            auto [fd, size] = open_regular(text(h, body[1]));
-            response.file = nxtrt::http::file_body{std::move(fd), 0, size};
+            file = text(h, body[1]);
         } else if (result[2] != nil) {
             effect_require(
                 tag_of(result[2]) == tag::v08,
@@ -553,6 +575,10 @@ struct host
             response.headers.push_back({name, value});
             list = rest;
         }
+        if (file) {
+            auto [fd, size] = co_await open_regular(std::move(*file));
+            response.file = nxtrt::http::file_body{std::move(fd), 0, size};
+        }
         co_return response;
     }
 
@@ -571,10 +597,14 @@ struct host
             nxtrt::net::listen_tcp_loopback(integer(args[0]));
         // This lambda returns a named coroutine; its closure is not itself
         // a coroutine frame. The server drains callbacks before returning.
+        auto options = nxtrt::http::server_options{};
+        options.files = &files();
         co_await nxtrt::http::serve(
-            listener.get(), [&](nxtrt::http::request request) {
+            listener.get(),
+            [&](nxtrt::http::request request) {
                 return http_request(pending, std::move(request));
-            });
+            },
+            options);
     }
 
     nxtrt::task<void> http_fetch(root & pending, root & result)
@@ -788,11 +818,11 @@ struct host
             co_return;
         }
         if (operation == vm.keyword("FILE-STATUS")) {
-            file_status(argument, result);
+            co_await file_status(argument, result);
             co_return;
         }
         if (operation == vm.keyword("LIST-DIRECTORY")) {
-            list_directory(argument, result);
+            co_await list_directory(argument, result);
             co_return;
         }
         if (operation == vm.keyword("STDOUT")

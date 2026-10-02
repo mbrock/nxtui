@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nxtrt/fs.hpp"
 #include "nxtrt/http.hpp"
 #include <nxt/unique-fd.hpp>
 
@@ -44,6 +45,9 @@ struct server_options
     std::chrono::nanoseconds body_timeout = std::chrono::seconds{30};
     std::chrono::nanoseconds handler_timeout = std::chrono::seconds{30};
     std::chrono::nanoseconds write_timeout = std::chrono::seconds{30};
+    /// Reads file bodies off the deck where the wand would block; null
+    /// reads them with plain read wishes.
+    fs::files * files = nullptr;
 };
 
 using request_handler = std::function<task<response>(request)>;

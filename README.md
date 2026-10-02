@@ -288,6 +288,13 @@ raise `:NOT-CAPABLE` (ungranted or symlinked), `:NOT-FOUND`,
 `:PERMISSION-DENIED`, `:INVALID-ARGUMENT` or `:IO`. `file-status` gives size and
 modification time (Unix ms) as decimal strings, since fixnums are 31 bits.
 
+File operations never stall other callbacks. On io_uring, opens and stats are
+kernel operations, with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`
+enforcing the same confinement in the kernel. Elsewhere (epoll, kqueue), and
+for listing and reads where the wand would block, they run on a small
+`blocking_pool` started on first use ([`nxtrt::fs::files`](src/nxtrt/fs.hpp)).
+On macOS, listing reads names and attributes in `getattrlistbulk` batches.
+
 A response body may be `[:file path]` instead of a string. The native server
 opens it when the handler finishes and streams it with `Content-Length`,
 outside the heap and past the 8 MiB string-body limit. `serve-file` checks the

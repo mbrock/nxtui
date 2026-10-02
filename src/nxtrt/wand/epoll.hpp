@@ -328,6 +328,19 @@ private:
             deck &,
             wait_token,
             exec &,
+            op::openat2 & op)
+        {
+            auto fd = ::syscall(
+                SYS_openat2, op.dirfd, op.path.c_str(), &op.how, sizeof op.how);
+            finish_result(fd < 0 ? -errno : static_cast<int>(fd));
+            return false;
+        }
+
+        bool submit_op(
+            epoll_wand &,
+            deck &,
+            wait_token,
+            exec &,
             op::statx & op)
         {
             auto rc = ::syscall(
@@ -809,7 +822,8 @@ private:
             }
             state_->set_exception(
                 std::make_exception_ptr(
-                    runtime_error{
+                    errno_error{
+                        err,
                         std::string{"epoll operation failed: "}
                         + std::strerror(err)
                         + " (" + std::to_string(err) + ")"}));

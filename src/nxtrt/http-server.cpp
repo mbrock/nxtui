@@ -284,8 +284,10 @@ task<void> write_file(
         auto chunk = std::span{buffer}.first(
             static_cast<std::size_t>(
                 std::min<std::uint64_t>(remaining, buffer.size())));
-        auto count = co_await op::read_some{
-            file.fd.get(), chunk, static_cast<off_t>(offset)};
+        auto count = options.files
+            ? co_await options.files->read_at(file.fd.get(), chunk, offset)
+            : co_await op::read_some{
+                  file.fd.get(), chunk, static_cast<off_t>(offset)};
         if (count == 0)
             throw protocol_error{"file body ended early"};
         co_await with_timeout(

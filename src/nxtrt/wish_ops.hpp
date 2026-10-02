@@ -19,6 +19,7 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <linux/openat2.h>
 #include <linux/stat.h>
 #include <linux/time_types.h>
 #else
@@ -153,6 +154,31 @@ struct openat : wish<int, "openat">
 };
 
 #if defined(__linux__)
+/// openat2(2). RESOLVE_* flags make the kernel confine resolution, e.g.
+/// RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS for paths that must stay inside
+/// DIRFD. The wish owns HOW for the lifetime of the operation.
+struct openat2 : wish<int, "openat2">
+{
+    int dirfd = AT_FDCWD;
+    std::string path;
+    open_how how{};
+
+    explicit openat2(
+        int dirfd = AT_FDCWD,
+        std::string path = {},
+        std::uint64_t flags = O_RDONLY,
+        std::uint64_t resolve = 0)
+        : dirfd(dirfd)
+        , path(std::move(path))
+        , how{.flags = flags, .mode = 0, .resolve = resolve}
+    {}
+
+    auto args() const
+    {
+        return path_args(path);
+    }
+};
+
 struct statx : wish<statx_result, "statx">
 {
     int dirfd = AT_FDCWD;
@@ -490,6 +516,7 @@ using wish_variant = std::variant<
     op::manual,
     op::openat,
 #if defined(__linux__)
+    op::openat2,
     op::statx,
     op::getdents64,
     op::spawn_piped,

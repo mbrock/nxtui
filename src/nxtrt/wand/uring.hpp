@@ -75,6 +75,7 @@ private:
 
 inline bool stage_uring(uring_submission &, op::manual &);
 inline bool stage_uring(uring_submission &, op::openat &);
+inline bool stage_uring(uring_submission &, op::openat2 &);
 #if defined(__linux__)
 inline bool stage_uring(uring_submission &, op::statx &);
 inline bool stage_uring(uring_submission &, op::getdents64 &);
@@ -202,6 +203,11 @@ public:
         }
 
         trace("uring request cancel token={}", token);
+    }
+
+    [[nodiscard]] bool asynchronous_files() const noexcept override
+    {
+        return true;
     }
 
     void wave(deck & d) override
@@ -431,7 +437,8 @@ private:
                     }
                     state_->set_exception(
                         std::make_exception_ptr(
-                            runtime_error{
+                            errno_error{
+                                -result,
                                 failure_message(request, result)}));
                     return;
                 }
@@ -1054,6 +1061,14 @@ inline bool stage_uring(uring_submission & submission, op::openat & wish)
         wish.path.c_str(),
         wish.flags,
         wish.mode);
+    submission.attach(sqe);
+    return true;
+}
+
+inline bool stage_uring(uring_submission & submission, op::openat2 & wish)
+{
+    auto * sqe = submission.get_sqe();
+    io_uring_prep_openat2(sqe, wish.dirfd, wish.path.c_str(), &wish.how);
     submission.attach(sqe);
     return true;
 }
