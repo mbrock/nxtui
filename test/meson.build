@@ -106,9 +106,10 @@ if get_option('tests')
   )
 
   # Fault injection replaces operator new only in this executable. Compile
-  # the guest heap directly rather than linking nxt-core's allocation hooks.
+  # the guest runtime directly rather than linking nxt-core's allocation hooks.
   wisp_alloc_tests = executable('wisp-alloc-tests',
     'wisp-alloc-test.cpp', 'test-main.cpp', '../src/wisp/heap.cpp',
+    '../src/wisp/eval.cpp', '../src/wisp/reader.cpp', '../src/wisp/printer.cpp',
     include_directories : [nxt_inc, include_directories('.')],
     dependencies : [nxt_stacktrace_dep],
   )

@@ -1,6 +1,6 @@
 // Kept in its own executable: allocation failure must not affect unrelated
 // tests or replace nxt-core's process-wide allocation tracing.
-#include <wisp/heap.hpp>
+#include <wisp/reader.hpp>
 
 #include "test.hpp"
 
@@ -55,6 +55,53 @@ using namespace boost::ut;
 
 static suite allocation_tests{
     "WISP ALLOCATION", [] {
+        "small evaluator operations need only existing guest capacity"_test =
+            [] {
+                for (
+                    auto [source, expected] :
+                    {std::pair{"17", 17},
+                     std::pair{"(+ 3 5 11)", 19},
+                     std::pair{"(let ((a 11) (b 19) (c 37)) (- c b a))", 7},
+                     std::pair{
+                         "(apply (%fn nil (a b c) (- c a b)) '(7 13 31))",
+                         11},
+                     std::pair{
+                         "(call (%fn nil (a b &optional c &rest d) (head d)) 2 3 5 11 17)",
+                         11}}) {
+                    heap h;
+                    evaluator vm{h};
+                    const auto form = *reader{h, vm, source}.next();
+                    const auto run = vm.start(form);
+                    // Cross each table's growth boundary now, so its next
+                    // operations have room. This does not allow native
+                    // temporary allocations during evaluation.
+                    const auto prepare = [&]<tag T>() {
+                        const auto capacity = h.table<T>().capacity();
+                        while (h.table<T>().capacity() == capacity)
+                            h.make<T>({});
+                    };
+                    prepare.template operator()<tag::duo>();
+                    prepare.template operator()<tag::ktx>();
+                    prepare.template operator()<tag::fun>();
+                    prepare.template operator()<tag::v32>();
+                    // Force word-pool growth, then leave most of the new
+                    // capacity unused. The dummy descriptors need not be
+                    // read.
+                    h.filledv32(1024, nil);
+                    h.filledv32(1, nil);
+                    evaluation state;
+                    {
+                        fail_after fault{0};
+                        state = vm.advance(run, 1000);
+                    }
+                    expect(state == evaluation::done) << source;
+                    expect(
+                        (h.get<tag::run, field::val>(run)
+                         == fixnum(expected)))
+                        << source;
+                }
+            };
+
         "every partial column allocation leaves old rows intact"_test = [] {
             tab<tag::sym> table;
             table.push({3, 5, 7, 11, 13});

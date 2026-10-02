@@ -110,6 +110,53 @@ nxtrt::task<word> host_effect(runtime_machine & m)
 
 static suite runtime_tests{
     "WISP RUNTIME", [] {
+        "argument snapshots and bindings survive scratch boundaries and GC"_test =
+            [] {
+                // Binding pairs cross the inline boundary at 17 parameters;
+                // argument snapshots cross it at 33 words. Values differ at
+                // every position so reversal or truncation cannot pass.
+                for (unsigned n : {16, 17, 31, 32, 33, 65}) {
+                    runtime_machine m;
+                    std::string parameters, arguments;
+                    for (unsigned i = 0; i < n; ++i) {
+                        parameters += " p" + std::to_string(i);
+                        arguments += " " + std::to_string(7 + 3 * i);
+                    }
+                    const auto function = "(%fn nil (" + parameters
+                                          + ") (vector p"
+                                          + std::to_string(n - 1) + " p0 p"
+                                          + std::to_string(n / 2) + "))";
+                    for (const auto & source :
+                         {"(call " + function + arguments + ")",
+                          "(apply " + function + " '(" + arguments
+                              + "))"}) {
+                        const auto result = m.load(source, 1);
+                        expect(
+                            std::ranges::equal(
+                                m.h.v32slice(result),
+                                std::array{
+                                    word{7 + 3 * (n - 1)},
+                                    word{7},
+                                    word{7 + 3 * (n / 2)}}));
+                    }
+                }
+            };
+
+        "ordinary calls observe same-length syntax edits between arguments"_test =
+            [] {
+                runtime_machine m;
+                expect(
+                    print(
+                        m.h,
+                        m.load(
+                            R"(
+                (set-symbol-value! 'args
+                  '((do (set-head! (tail args) 41) 7) 19))
+                (eval (cons 'list args)))",
+                            1))
+                    == "(7 41)");
+            };
+
         "mutable LET bindings and environments fail as language conditions"_test =
             [] {
                 runtime_machine m;
@@ -347,6 +394,26 @@ static suite runtime_tests{
                 expect(m.vm.step(target.get()) == evaluation::done);
                 expect(m.vm.status(other.get()) == evaluation::failed);
                 m.fails("(step! 1)", "TYPE-MISMATCH");
+            };
+
+        "nested STEP! retains active ancestors across scratch growth"_test =
+            [] {
+                for (unsigned n : {15, 16, 17, 32, 33, 65}) {
+                    runtime_machine m;
+                    root leaf{m.h, m.stepping(nil)};
+                    auto outer = leaf.get();
+                    for (unsigned i = 1; i < n; ++i)
+                        outer = m.stepping(outer);
+                    m.run.set(outer);
+                    m.h.set<tag::run, field::val>(leaf.get(), outer);
+                    expect(m.vm.step(outer) == evaluation::done);
+                    expect(m.vm.status(leaf.get()) == evaluation::failed);
+                    m.vm.collect();
+                    expect(
+                        print(
+                            m.h, m.h.get<tag::run, field::err>(leaf.get()))
+                            .contains("ACTIVE-EVALUATOR"));
+                }
             };
 
         "nested STEP! chains commit before servicing a GC request"_test =

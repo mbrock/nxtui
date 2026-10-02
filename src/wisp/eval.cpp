@@ -7,6 +7,7 @@
 #include <concepts>
 #include <functional>
 #include <initializer_list>
+#include <optional>
 #include <string>
 
 namespace wisp {
@@ -15,6 +16,23 @@ struct eval_step;
 namespace {
 
 using values = std::span<const word>;
+
+// Native scratch for one synchronous operation, never suspended guest
+// state. Borrowing a guest payload across call() is unsafe: binding or a
+// builtin may grow its pool. Small snapshots need no native allocation;
+// unusually wide calls get one exact-sized rack, not geometric growth.
+template<typename Use>
+void with_words(std::size_t count, Use && use)
+{
+    std::array<word, 32> local;
+    if (count <= local.size()) {
+        use(std::span{local}.first(count));
+    } else {
+        nxtrt::rack<word> storage{count};
+        std::uninitialized_default_construct_n(storage.data(), count);
+        use(std::span{storage.data(), count});
+    }
+}
 
 struct builtin
 {
@@ -318,26 +336,44 @@ struct eval_step
             fail("TYPE-MISMATCH", {type_symbol(type), x});
     }
 
-    // Reject dotted and cyclic syntax instead of hanging in one host turn.
-    std::vector<word> scan(word x)
+    // Validate the whole spine before using any element, even if a lookup
+    // will stop early. Guest code may have mutated it since the last step.
+    std::size_t scan_count(word x)
     {
-        std::vector<word> xs;
+        std::size_t count = 0;
         auto slow = x;
         while (x != nil) {
             require(x, tag::duo);
-            auto [car, cdr] = h.read<tag::duo>(x);
-            xs.push_back(car);
-            x = cdr;
-            if (xs.size() % 2 == 0)
+            x = h.get<tag::duo, field::cdr>(x);
+            if (++count % 2 == 0)
                 slow = h.get<tag::duo, field::cdr>(slow);
             if (x != nil && x == slow)
                 fail("CYCLIC-LIST");
         }
         if (auto * p = h.profiling()) {
             ++p->lists_scanned;
-            p->list_cells_scanned += xs.size();
+            p->list_cells_scanned += count;
         }
-        return xs;
+        return count;
+    }
+
+    // Only after scan_count, with no intervening guest execution.
+    void copy_list(word x, std::span<word> into)
+    {
+        for (auto & value : into) {
+            const auto [car, cdr] = h.read<tag::duo>(x);
+            value = car;
+            x = cdr;
+        }
+    }
+
+    template<typename Use>
+    void with_list(word x, Use && use)
+    {
+        with_words(scan_count(x), [&](std::span<word> xs) {
+            copy_list(x, xs);
+            use(xs);
+        });
     }
 
     void give(word x)
@@ -380,7 +416,10 @@ struct eval_step
             ++p->lexical_lookups;
         // Explicit lexical binders stay lexical even when the symbol's
         // dynamic declaration changes after a closure captures them.
-        for (auto scope : scan(env)) {
+        (void) scan_count(env);
+        for (auto cur = env; cur != nil;) {
+            const auto [scope, rest] = h.read<tag::duo>(cur);
+            cur = rest;
             if (p) {
                 ++p->lexical_frames;
                 ++depth;
@@ -443,7 +482,7 @@ struct eval_step
     {
         // Body spines are guest data: an earlier form may have changed
         // the rest since the application first checked it.
-        (void) scan(body);
+        (void) scan_count(body);
         if (body == nil) {
             give(nil);
             return;
@@ -459,38 +498,42 @@ struct eval_step
         word fun, const row<tag::fun> & closure, std::span<const word> args)
     {
         const auto [captured, parameters, body, name, count] = closure;
-        const auto pars = scan(parameters);
-        std::vector<word> scope;
-        bool optional = false;
-        std::size_t used = 0;
-        for (std::size_t i = 0; i < pars.size(); ++i) {
-            auto p = pars[i];
-            if (p == vm.known("&OPTIONAL")) {
-                optional = true;
-                continue;
+        const auto size = scan_count(parameters);
+        with_words(2 * size, [&](std::span<word> scope) {
+            bool optional = false;
+            std::size_t used = 0, bound = 0;
+            auto cur = parameters;
+            for (std::size_t i = 0; i < size; ++i) {
+                const auto [p, rest] = h.read<tag::duo>(cur);
+                cur = rest;
+                if (p == vm.known("&OPTIONAL")) {
+                    optional = true;
+                    continue;
+                }
+                if (p == vm.known("&REST") || p == vm.known("&BODY")) {
+                    if (i + 2 != size)
+                        fail("INVALID-PARAMETERS", {parameters});
+                    const auto tail = h.get<tag::duo, field::car>(cur);
+                    require(tail, tag::sym);
+                    scope[bound++] = tail;
+                    scope[bound++] = list(h, args.subspan(used));
+                    used = args.size();
+                    break;
+                }
+                require(p, tag::sym);
+                if (used == args.size() && !optional)
+                    fail(
+                        "PROGRAM-ERROR",
+                        {vm.known("INVALID-ARGUMENT-COUNT"), fun});
+                scope[bound++] = p;
+                scope[bound++] = used < args.size() ? args[used++] : nil;
             }
-            if (p == vm.known("&REST") || p == vm.known("&BODY")) {
-                if (i + 2 != pars.size())
-                    fail("INVALID-PARAMETERS", {parameters});
-                require(pars[i + 1], tag::sym);
-                scope.push_back(pars[i + 1]);
-                scope.push_back(list(h, args.subspan(used)));
-                used = args.size();
-                break;
-            }
-            require(p, tag::sym);
-            if (used == args.size() && !optional)
+            if (used != args.size())
                 fail(
                     "PROGRAM-ERROR",
                     {vm.known("INVALID-ARGUMENT-COUNT"), fun});
-            scope.push_back(p);
-            scope.push_back(used < args.size() ? args[used++] : nil);
-        }
-        if (used != args.size())
-            fail(
-                "PROGRAM-ERROR",
-                {vm.known("INVALID-ARGUMENT-COUNT"), fun});
-        env = h.cons(h.newv32(scope), captured);
+            env = h.cons(h.newv32(scope.first(bound)), captured);
+        });
         if (tag_of(fun) == tag::fun)
             h.set<tag::fun, field::cnt>(fun, count + 1);
         else
@@ -543,14 +586,17 @@ struct eval_step
         const auto fun = h.get<tag::sym, field::fun>(callee);
         if (fun == nil)
             fail("UNDEFINED-FUNCTION", {callee});
-        const auto args = scan(arguments);
-        if (tag_of(fun) == tag::mac) {
-            push(vm.known("EVAL"), nil, nil);
-            call(fun, args);
-        } else if (
-            tag_of(fun) == tag::jet && payload_of(fun) < builtins().size()
-            && builtins()[payload_of(fun)].control) {
-            call(fun, args);
+        const auto size = scan_count(arguments);
+        if (tag_of(fun) == tag::mac
+            || (tag_of(fun) == tag::jet
+                && payload_of(fun) < builtins().size()
+                && builtins()[payload_of(fun)].control)) {
+            with_words(size, [&](std::span<word> args) {
+                copy_list(arguments, args);
+                if (tag_of(fun) == tag::mac)
+                    push(vm.known("EVAL"), nil, nil);
+                call(fun, args);
+            });
         } else if (tag_of(fun) != tag::fun && tag_of(fun) != tag::jet) {
             fail("INVALID-FUNCTION", {fun});
         } else if (arguments == nil) {
@@ -585,35 +631,33 @@ struct eval_step
             enter(val);
         } else if (fun == vm.known("LET")) {
             // Reverse accumulator: name, value, name, ..., body.
-            auto xs = scan(acc);
-            if (xs.empty() || xs.size() % 2 != 0)
-                fail("INVALID-CONTINUATION", {way});
-            for (std::size_t i = 0; i + 1 < xs.size(); i += 2)
-                require(xs[i], tag::sym);
-            (void) scan(arg);
-            if (arg == nil) {
-                const auto body = xs.back();
-                xs.pop_back();
-                // The newest name takes val; earlier entries are stored
-                // value/name, so rotate into name/value pairs.
-                xs.insert(xs.begin(), val);
-                for (std::size_t i = 0; i < xs.size(); i += 2)
-                    std::swap(xs[i], xs[i + 1]);
-                env = h.cons(h.newv32(xs), saved_env);
-                way = hop;
-                enter(body);
-            } else {
-                const auto [binding, rest] = h.read<tag::duo>(arg);
-                const auto pair = scan(binding);
-                if (pair.size() != 2)
-                    fail("INVALID-BINDING", {binding});
-                require(pair[0], tag::sym);
-                auto next_acc = h.cons(pair[0], h.cons(val, acc));
-                writable_frame();
-                h.set<tag::ktx, field::acc>(way, next_acc);
-                h.set<tag::ktx, field::arg>(way, rest);
-                enter(pair[1]);
-            }
+            with_list(acc, [&](std::span<word> xs) {
+                if (xs.empty() || xs.size() % 2 != 0)
+                    fail("INVALID-CONTINUATION", {way});
+                for (std::size_t i = 0; i + 1 < xs.size(); i += 2)
+                    require(xs[i], tag::sym);
+                (void) scan_count(arg);
+                if (arg == nil) {
+                    const auto body = xs.back();
+                    // Replace the body with val at the front, then rotate
+                    // value/name pairs into name/value bindings.
+                    std::move_backward(xs.begin(), xs.end() - 1, xs.end());
+                    xs[0] = val;
+                    for (std::size_t i = 0; i < xs.size(); i += 2)
+                        std::swap(xs[i], xs[i + 1]);
+                    env = h.cons(h.newv32(xs), saved_env);
+                    way = hop;
+                    enter(body);
+                } else {
+                    const auto [clause, rest] = h.read<tag::duo>(arg);
+                    const auto [name, value] = binding(clause);
+                    auto next_acc = h.cons(name, h.cons(val, acc));
+                    writable_frame();
+                    h.set<tag::ktx, field::acc>(way, next_acc);
+                    h.set<tag::ktx, field::arg>(way, rest);
+                    enter(value);
+                }
+            });
         } else if (tag_of(fun) == tag::fun || tag_of(fun) == tag::jet) {
             if (auto * p = h.profiling())
                 ++p->arguments_accumulated;
@@ -623,18 +667,18 @@ struct eval_step
                 call(fun, args);
                 return;
             }
-            const auto remaining = scan(arg);
+            const auto remaining = scan_count(arg);
             writable_frame();
             auto vector = h.get<tag::ktx, field::acc>(way);
             if (vector == nil) {
-                vector = h.filledv32(2 + remaining.size(), nil);
+                vector = h.filledv32(2 + remaining, nil);
                 h.v32set(vector, 0, 0);
                 h.set<tag::ktx, field::acc>(way, vector);
             }
             require(vector, tag::v32);
             const auto xs = h.v32slice(vector);
             if (xs.size() < 2 || xs[0] >= xs.size() - 1
-                || remaining.size() != xs.size() - xs[0] - 2)
+                || remaining != xs.size() - xs[0] - 2)
                 fail("INVALID-CONTINUATION", {way});
             const auto pos = xs[0];
             h.v32set(vector, pos + 1, val);
@@ -642,9 +686,11 @@ struct eval_step
             if (arg == nil) {
                 // Binding and slice-taking builtins can grow the word pool.
                 const auto slice = h.v32slice(vector).subspan(1);
-                const std::vector<word> args(slice.begin(), slice.end());
-                way = hop;
-                call(fun, args);
+                with_words(slice.size(), [&](std::span<word> args) {
+                    std::ranges::copy(slice, args.begin());
+                    way = hop;
+                    call(fun, args);
+                });
             } else {
                 const auto [first, rest] = h.read<tag::duo>(arg);
                 h.set<tag::ktx, field::arg>(way, rest);
@@ -712,22 +758,31 @@ struct eval_step
         sequence(list(h, body));
     }
 
+    std::array<word, 2> binding(word clause)
+    {
+        if (scan_count(clause) != 2)
+            fail("INVALID-BINDING", {clause});
+        std::array<word, 2> pair;
+        copy_list(clause, pair);
+        require(pair[0], tag::sym);
+        return pair;
+    }
+
     void let(word clauses, values forms)
     {
         // All initializers use the caller's environment, left to right.
-        const auto bindings = scan(clauses);
-        for (auto binding : bindings) {
-            const auto pair = scan(binding);
-            if (pair.size() != 2)
-                fail("INVALID-BINDING", {binding});
-            require(pair[0], tag::sym);
+        (void) scan_count(clauses);
+        for (auto cur = clauses; cur != nil;) {
+            const auto [clause, rest] = h.read<tag::duo>(cur);
+            (void) binding(clause);
+            cur = rest;
         }
         const auto body = h.cons(vm.known("DO"), list(h, forms));
-        if (bindings.empty()) {
+        if (clauses == nil) {
             enter(body);
             return;
         }
-        const auto first = scan(bindings[0]);
+        const auto first = binding(h.get<tag::duo, field::car>(clauses));
         push(
             vm.known("LET"),
             h.cons(first[0], h.cons(body, nil)),
@@ -828,8 +883,7 @@ struct eval_step
 
     void apply(word fun, word arglist)
     {
-        const auto args = scan(arglist);
-        call(fun, args);
+        with_list(arglist, [&](values args) { call(fun, args); });
     }
 
     void symbol_function(word sym)
@@ -879,11 +933,11 @@ struct eval_step
 
     void prognify(word forms)
     {
-        const auto xs = scan(forms);
+        const auto size = scan_count(forms);
         give(
-            xs.empty()       ? nil
-            : xs.size() == 1 ? xs[0]
-                             : h.cons(vm.known("DO"), forms));
+            size == 0   ? nil
+            : size == 1 ? h.get<tag::duo, field::car>(forms)
+                        : h.cons(vm.known("DO"), forms));
     }
 
     void macroexpand_1(word form)
@@ -893,8 +947,7 @@ struct eval_step
             if (tag_of(head) == tag::sym) {
                 const auto fun = h.get<tag::sym, field::fun>(head);
                 if (tag_of(fun) == tag::mac) {
-                    const auto args = scan(tail);
-                    call(fun, args);
+                    with_list(tail, [&](values args) { call(fun, args); });
                     return;
                 }
             }
@@ -909,7 +962,8 @@ struct eval_step
         if constexpr (T == tag::pkg && F == field::sym)
             // As with PACKAGES, expose a snapshot, not the private index
             // that interning (including condition creation) must trust.
-            give(list(h, scan(h.get<T, F>(x))));
+            with_list(
+                h.get<T, F>(x), [&](values xs) { give(list(h, xs)); });
         else
             give(h.get<T, F>(x));
     }
@@ -1108,8 +1162,7 @@ struct eval_step
 
     void vector_from_list(word xs)
     {
-        const auto items = scan(xs);
-        give(h.newv32(items));
+        with_list(xs, [&](values items) { give(h.newv32(items)); });
     }
 
     std::string_view string(word x)
@@ -1244,7 +1297,8 @@ struct eval_step
     {
         // Return a fresh spine; guest pair mutation cannot damage the
         // evaluator's package registry.
-        give(list(h, scan(vm.packages_.get())));
+        with_list(
+            vm.packages_.get(), [&](values xs) { give(list(h, xs)); });
     }
 
     void define_package(word name)
@@ -1258,8 +1312,10 @@ struct eval_step
     void package_uses(word pkg, word uses)
     {
         require(pkg, tag::pkg);
-        for (auto used : scan(uses))
-            require(used, tag::pkg);
+        with_list(uses, [&](values xs) {
+            for (auto used : xs)
+                require(used, tag::pkg);
+        });
         h.set<tag::pkg, field::use>(pkg, uses);
         give(pkg);
     }
@@ -1267,8 +1323,10 @@ struct eval_step
     void defpackage(word name, word uses)
     {
         require(name, tag::sym);
-        for (auto used : scan(uses))
-            require(used, tag::pkg);
+        with_list(uses, [&](values xs) {
+            for (auto used : xs)
+                require(used, tag::pkg);
+        });
         define_package(h.get<tag::sym, field::str>(name));
         h.set<tag::pkg, field::use>(val, uses);
     }
@@ -1308,8 +1366,11 @@ struct eval_step
             for (unsigned i = 0; i < 10; ++i)
                 name[10 + i] = alphabet[(serial >> (5 * i)) & 31];
             auto found = false;
-            for (auto x :
-                 scan(h.get<tag::pkg, field::sym>(vm.keys_.get()))) {
+            auto cur = h.get<tag::pkg, field::sym>(vm.keys_.get());
+            (void) scan_count(cur);
+            while (cur != nil) {
+                const auto [x, rest] = h.read<tag::duo>(cur);
+                cur = rest;
                 require(x, tag::sym);
                 if (string(h.get<tag::sym, field::str>(x)) == name) {
                     found = true;
@@ -1775,14 +1836,33 @@ evaluation evaluator::step(word run)
 {
     // STEP! can itself step another run. Commit each row before dispatching
     // the next, without growing the native stack or collecting scratch
-    // words.
-    std::vector<word> active;
+    // words. Ordinary transitions fit on the stack; only unusually deep
+    // STEP! chains need to grow native scratch storage.
+    std::array<word, 16> local;
+    std::optional<nxtrt::rack<word>> overflow;
+    std::span<word> active = local;
+    std::size_t depth = 0;
     auto current = run;
     while (status(current) == evaluation::runnable) {
-        active.push_back(current);
+        if (depth == active.size()) {
+            nxtrt::rack<word> grown{2 * depth};
+            std::uninitialized_copy_n(active.data(), depth, grown.data());
+            overflow = std::move(grown);
+            active = {overflow->data(), overflow->size()};
+        }
+        std::construct_at(active.data() + depth++, current);
         const auto [exp, val, err, env, way, meta] =
             heap_.read<tag::run>(current);
-        eval_step s{*this, heap_, exp, val, err, env, way, meta, active};
+        eval_step s{
+            *this,
+            heap_,
+            exp,
+            val,
+            err,
+            env,
+            way,
+            meta,
+            active.first(depth)};
         try {
             s.once();
         } catch (const condition & c) {
