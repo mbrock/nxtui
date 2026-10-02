@@ -13,6 +13,9 @@ license are retained here and in `COPYING`. The Gabriel programs were adapted
 upstream from [ecraven/r7rs-benchmarks](https://github.com/ecraven/r7rs-benchmarks).
 The intentionally incorrect, unexercised quotient derivative is preserved.
 
+The [2026-10-02 release baseline](RESULTS.md) includes all 20 cases, 300 checked
+samples across six runtimes, and a separate semantic-counter run.
+
 ## Build, check, and measure
 
 From the repository root, using the locked Nix compiler/dependencies:
@@ -120,10 +123,10 @@ build/wisp-profile/bench/wisp-bench all > build/wisp-profile/counters.jsonl
 
 `-Dwisp_profile=true` compiles the recording paths into the runtime; a host
 then attaches a caller-owned `wisp::profile` through `heap::profiling(&stats)`.
-The harness attaches only for the timed region. Disabled builds compile out
-counter updates, pointer tests, and GC clocks; a host-local pointer remains in
-the heap's layout. Enabled builds without attached counters only test that
-pointer. Counters are per heap, not global, and are never serialized.
+The harness attaches only for the timed region. Disabled optimized builds
+compile out counter updates, pointer tests, and GC clocks; a host-local pointer
+remains in the heap's layout. Enabled builds without attached counters only
+test that pointer. Counters are per heap, not global, and are never serialized.
 
 The fields intentionally resemble `core/profile.zig`, but count operations in
 this implementation; **step/call/allocation counts are not promised identical
