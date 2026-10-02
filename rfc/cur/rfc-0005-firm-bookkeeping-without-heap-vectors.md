@@ -50,11 +50,10 @@ Callers that also want to grant frame land in the same bundle can use
 That full-land aggregate does not introduce a new owner; it is just a named
 bundle of borrowed frame storage plus the borrowed bookkeeping-storage bundle.
 
-The convenience `firm{}` path still owns default frame backing, but it now uses
-an explicit owned block of frame cells (`owned_frame_storage`, which is
-`rack<frame_cell>`) instead of
-`std::vector<std::byte>`. That keeps the default path as a bounded byte region
-with a visible capacity, matching the borrowed frame-storage API more closely.
+The convenience `firm{}` path owns lazy, non-relocating chunks of frame cells
+(`owned_frame_storage`, which is `rack<frame_cell>`). Its frame capacity starts
+at zero and grows with demand; caller-provided frame views remain bounded.
+Chunks are reused while the firm lives and freed together when it is destroyed.
 Default child-record, child-completion, and join-failure backing have the same
 wrapper shape: `owned_firm_child_storage`,
 `owned_firm_completion_storage`, and `owned_firm_join_storage` own bounded

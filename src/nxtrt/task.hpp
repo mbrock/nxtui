@@ -2337,20 +2337,25 @@ struct alignas(std::max_align_t) task_frame_header
 {
     /// Arena that owns the block, so frame deletion can return it.
     firm_frame_arena * arena = nullptr;
+    /// Index of the non-relocating chunk holding the frame (zero if
+    /// borrowed).
+    std::size_t chunk = 0;
     /// Whole block size: header plus frame, rounded to the block alignment.
     std::size_t block = 0;
 };
 
 } // namespace detail
 
-/// Frame land for one firm: a bounded region of borrowed bytes.
+/// Frame land for one firm: lazy owned chunks, or bounded borrowed bytes.
 ///
-/// Frames are bump-allocated at the top. A freed frame on top retracts the
-/// top; any other freed frame goes onto a free list for its exact block size
-/// and is handed to the next frame of that size. Coroutine frames come in few
-/// sizes (one per coroutine function), so long-lived frames low in the arena,
-/// like a firm's worker loops, do not stop the frames they keep awaiting from
-/// being reused. When no frame is live the whole arena resets.
+/// Owned chunks grow without moving frames, and are reclaimed with the
+/// arena. Frames are bump-allocated at each chunk's top. A freed frame on
+/// top retracts the top; any other freed frame goes onto a free list for
+/// its exact block size and is handed to the next frame of that size.
+/// Coroutine frames come in few sizes (one per coroutine function), so
+/// long-lived frames low in the arena, like a firm's worker loops, do not
+/// stop the frames they keep awaiting from being reused. When no frame is
+/// live the whole arena resets.
 ///
 /// A ring with prefix retirement, the shape RFC 0002 first sketched, cannot
 /// reclaim anything behind such a long-lived frame.
@@ -2365,14 +2370,32 @@ public:
 
     explicit firm_frame_arena(frame_storage_ref land)
         : storage_(std::as_writable_bytes(std::span{land.data, land.size}))
+        , bounded_(true)
+        , capacity_(storage_.size())
     {}
 
     firm_frame_arena(const firm_frame_arena &) = delete;
     firm_frame_arena & operator=(const firm_frame_arena &) = delete;
 
+    firm_frame_arena(firm_frame_arena && other) noexcept
+    {
+        // Headers retain their arena pointer; only an empty arena may move.
+        if (other.live_frames_ != 0) {
+            std::fputs(
+                "nxtrt: moved a firm while task frames live in its land\n",
+                stderr);
+            std::abort();
+        }
+        storage_ = std::exchange(other.storage_, {});
+        bounded_ = other.bounded_;
+        chunks_ = std::move(other.chunks_);
+        capacity_ = std::exchange(other.capacity_, 0);
+        high_water_ = std::exchange(other.high_water_, 0);
+    }
+
     [[nodiscard]] std::size_t capacity() const noexcept
     {
-        return storage_.size();
+        return capacity_;
     }
 
     /// Bytes held by live frames, headers included.
@@ -2386,13 +2409,14 @@ public:
         return live_frames_;
     }
 
-    /// Bump offset: nothing above it is handed out.
+    /// Sum of chunk bump offsets (the borrowed region has just one).
     [[nodiscard]] std::size_t top() const noexcept
     {
         return top_;
     }
 
-    /// Highest top since construction: the arena's real footprint.
+    /// Highest sum of bump offsets since construction, excluding unused
+    /// tails.
     [[nodiscard]] std::size_t high_water() const noexcept
     {
         return high_water_;
@@ -2411,6 +2435,7 @@ public:
         return stranded_bytes_;
     }
 
+    /// The borrowed region, or an empty view for non-contiguous owned land.
     [[nodiscard]] frame_storage_ref storage() const noexcept
     {
         return {
@@ -2427,21 +2452,61 @@ public:
             block_alignment);
     }
 
-    /// Returns the frame address, or nullptr when the arena cannot fit it.
-    [[nodiscard]] void * allocate(std::size_t frame_size) noexcept
+    /// Returns the frame address, or nullptr when bounded land cannot fit
+    /// it. Owned growth may throw std::bad_alloc.
+    [[nodiscard]] void * allocate(std::size_t frame_size)
     {
         auto const block = block_size(frame_size);
-        auto * bytes = take_free_block(block);
-        if (bytes == nullptr) {
-            if (block > storage_.size() - top_)
-                return nullptr;
-            bytes = storage_.data() + top_;
+        auto * reused = take_free_block(block);
+        auto chunk_index = std::size_t{0};
+        auto * bytes = static_cast<std::byte *>(nullptr);
+        if (reused != nullptr) {
+            chunk_index = reused->chunk;
+            bytes = reinterpret_cast<std::byte *>(reused);
+        } else {
+            if (bounded_) {
+                if (block > storage_.size() - top_)
+                    return nullptr;
+                bytes = storage_.data() + top_;
+            } else {
+                chunk_index = chunks_.size();
+                for (auto i = chunks_.size(); i != 0; --i) {
+                    auto & chunk = chunks_[i - 1];
+                    if (block <= chunk.land.size() * sizeof(frame_cell)
+                                     - chunk.top) {
+                        chunk_index = i - 1;
+                        break;
+                    }
+                }
+                if (chunk_index == chunks_.size()) {
+                    // Double ordinary chunks from 4 KiB up to 64 KiB;
+                    // a larger frame gets a chunk large enough for itself.
+                    auto const growth =
+                        chunks_.empty() ? std::size_t{4096}
+                                        : std::min(
+                                              chunks_.back().land.size()
+                                                  * sizeof(frame_cell) * 2,
+                                              std::size_t{64 * 1024});
+                    auto const chunk_bytes = std::max(block, growth);
+                    chunks_.push_back(
+                        chunk{
+                            owned_frame_storage{
+                                chunk_bytes / sizeof(frame_cell)},
+                            0});
+                    capacity_ += chunk_bytes;
+                }
+                auto & chunk = chunks_[chunk_index];
+                bytes = reinterpret_cast<std::byte *>(chunk.land.data())
+                        + chunk.top;
+                chunk.top += block;
+            }
             top_ += block;
             high_water_ = std::max(high_water_, top_);
         }
 
-        auto * header = ::new (static_cast<void *>(bytes))
-            detail::task_frame_header{.arena = this, .block = block};
+        auto * header =
+            ::new (static_cast<void *>(bytes)) detail::task_frame_header{
+                .arena = this, .chunk = chunk_index, .block = block};
         live_bytes_ += block;
         ++live_frames_;
         return header + 1;
@@ -2457,6 +2522,7 @@ public:
     {
         auto * header = header_of(frame);
         auto const block = header->block;
+        auto const chunk_index = header->chunk;
         auto * bytes = reinterpret_cast<std::byte *>(header);
         live_bytes_ -= block;
         if (--live_frames_ == 0) {
@@ -2464,18 +2530,31 @@ public:
             return;
         }
 
-        auto const offset = static_cast<std::size_t>(bytes - storage_.data());
-        if (offset + block == top_) {
-            top_ = offset;
+        auto * start = bounded_ ? storage_.data()
+                                : reinterpret_cast<std::byte *>(
+                                      chunks_[chunk_index].land.data());
+        auto & chunk_top = bounded_ ? top_ : chunks_[chunk_index].top;
+        auto const offset = static_cast<std::size_t>(bytes - start);
+        if (offset + block == chunk_top) {
+            chunk_top = offset;
+            if (!bounded_)
+                top_ -= block;
             return;
         }
-        give_free_block(bytes, block);
+        give_free_block(bytes, block, chunk_index);
     }
 
 private:
+    struct chunk
+    {
+        owned_frame_storage land;
+        std::size_t top = 0;
+    };
+
     struct free_block
     {
         free_block * next = nullptr;
+        std::size_t chunk = 0;
     };
 
     struct size_class
@@ -2498,7 +2577,7 @@ private:
         return static_cast<detail::task_frame_header *>(frame) - 1;
     }
 
-    [[nodiscard]] std::byte * take_free_block(std::size_t block) noexcept
+    [[nodiscard]] free_block * take_free_block(std::size_t block) noexcept
     {
         for (auto & entry : size_classes_) {
             if (entry.block != block || entry.head == nullptr)
@@ -2506,14 +2585,17 @@ private:
             auto * taken = entry.head;
             entry.head = taken->next;
             free_listed_bytes_ -= block;
-            return reinterpret_cast<std::byte *>(taken);
+            return taken;
         }
         return nullptr;
     }
 
     /// Files a freed block under its size class, claiming an empty class
     /// when none matches.
-    void give_free_block(std::byte * bytes, std::size_t block) noexcept
+    void give_free_block(
+        std::byte * bytes,
+        std::size_t block,
+        std::size_t chunk_index) noexcept
     {
         auto * slot = static_cast<size_class *>(nullptr);
         for (auto & entry : size_classes_) {
@@ -2532,6 +2614,7 @@ private:
         slot->block = block;
         slot->head = ::new (static_cast<void *>(bytes)) free_block{
             .next = slot->head,
+            .chunk = chunk_index,
         };
         free_listed_bytes_ += block;
     }
@@ -2539,12 +2622,17 @@ private:
     void reset() noexcept
     {
         top_ = 0;
+        for (auto & chunk : chunks_)
+            chunk.top = 0;
         free_listed_bytes_ = 0;
         stranded_bytes_ = 0;
         size_classes_ = {};
     }
 
     std::span<std::byte> storage_;
+    bool bounded_ = false;
+    std::vector<chunk> chunks_;
+    std::size_t capacity_ = 0;
     std::size_t top_ = 0;
     std::size_t high_water_ = 0;
     std::size_t live_bytes_ = 0;
@@ -2697,14 +2785,10 @@ inline catching_deed<void> deed<void>::cope() &&
 class firm
 {
 public:
-    static constexpr std::size_t default_frame_capacity = 4 * 1024 * 1024;
     static constexpr std::size_t default_child_capacity = 4096;
 
     firm()
-        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
-        , frames_(owned_frame_storage_)
-        , uses_owned_frame_storage_(true)
-        , owned_child_storage_(default_child_capacity)
+        : owned_child_storage_(default_child_capacity)
         , child_slots_(owned_child_storage_.ref().slots)
         , uses_owned_child_storage_(true)
         , owned_deed_storage_(default_child_capacity)
@@ -2739,10 +2823,7 @@ public:
     }
 
     explicit firm(firm_child_storage_ref children)
-        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
-        , frames_(owned_frame_storage_)
-        , uses_owned_frame_storage_(true)
-        , child_slots_(children.slots)
+        : child_slots_(children.slots)
         , owned_deed_storage_(children.slots.size())
         , deed_records_(owned_deed_storage_.ref().records)
         , uses_owned_deed_storage_(true)
@@ -2759,10 +2840,7 @@ public:
     firm(
         firm_child_storage_ref children,
         firm_deed_storage_ref deeds)
-        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
-        , frames_(owned_frame_storage_)
-        , uses_owned_frame_storage_(true)
-        , child_slots_(children.slots)
+        : child_slots_(children.slots)
         , deed_records_(deeds.records)
         , owned_completion_storage_(children.slots.size())
         , completion_slots_(owned_completion_storage_.ref().completions)
@@ -2775,10 +2853,7 @@ public:
     }
 
     explicit firm(firm_bookkeeping_storage_ref storage)
-        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
-        , frames_(owned_frame_storage_)
-        , uses_owned_frame_storage_(true)
-        , child_slots_(storage.children.slots)
+        : child_slots_(storage.children.slots)
         , deed_records_(storage.deeds.records)
         , completion_slots_(storage.completions.completions)
         , join_failure_slots_(storage.joins.failures)
@@ -2832,10 +2907,7 @@ public:
     firm(
         firm_child_storage_ref children,
         firm_join_storage_ref join)
-        : owned_frame_storage_(default_frame_capacity / sizeof(frame_cell))
-        , frames_(owned_frame_storage_)
-        , uses_owned_frame_storage_(true)
-        , child_slots_(children.slots)
+        : child_slots_(children.slots)
         , owned_deed_storage_(children.slots.size())
         , deed_records_(owned_deed_storage_.ref().records)
         , uses_owned_deed_storage_(true)
@@ -2897,13 +2969,7 @@ public:
     firm(const firm &) = delete;
     firm & operator=(const firm &) = delete;
     firm(firm && other) noexcept
-        : owned_frame_storage_(std::move(other.owned_frame_storage_))
-        , frames_(
-            other.uses_owned_frame_storage_
-                ? owned_frame_storage_.ref()
-                : other.frames_.storage())
-        , uses_owned_frame_storage_(
-            std::exchange(other.uses_owned_frame_storage_, false))
+        : frames_(std::move(other.frames_))
         , owned_child_storage_(std::move(other.owned_child_storage_))
         , child_slots_(
             other.uses_owned_child_storage_
@@ -2953,14 +3019,6 @@ public:
         , debug_parent_(std::exchange(other.debug_parent_, 0))
         , stopping_(std::exchange(other.stopping_, false))
     {
-        // Frame headers point at the arena they came from, so a firm can
-        // only move before any task frame lives in its land.
-        if (other.frames_.live_frames() != 0) {
-            std::fputs(
-                "nxtrt: moved a firm while task frames live in its land\n",
-                stderr);
-            std::abort();
-        }
         other.child_slots_ = {};
         other.deed_records_ = {};
         other.completion_slots_ = {};
@@ -3256,9 +3314,7 @@ private:
         throw exception_group{"firm tasks failed", std::move(exceptions)};
     }
 
-    owned_frame_storage owned_frame_storage_;
     firm_frame_arena frames_;
-    bool uses_owned_frame_storage_ = false;
     owned_firm_child_storage owned_child_storage_;
     std::span<detail::firm_child_slot> child_slots_;
     bool uses_owned_child_storage_ = false;

@@ -1002,11 +1002,11 @@ nxtrt::task<void> frame_reuse_worker(int iterations, int & total)
 struct frame_reuse_firm : nxtrt::firm
 {
     frame_reuse_firm(
-        nxtrt::frame_storage_ref storage,
+        nxtrt::firm land,
         int iterations,
         std::array<int, 4> & totals,
         std::size_t & high_water)
-        : nxtrt::firm(storage)
+        : nxtrt::firm(std::move(land))
         , iterations(iterations)
         , totals(&totals)
         , high_water(&high_water)
@@ -2759,6 +2759,100 @@ static suite runtime_tests{
         };
 
         "firms"_group = [] {
+            "default firms acquire frame land only on demand"_test = [] {
+                auto firm = nxtrt::firm{};
+                expect(firm.frame_capacity() == std::size_t{0});
+                auto moved = nxtrt::firm{std::move(firm)};
+                auto * frame = moved.allocate_frame(64);
+                expect(moved.frame_capacity() == std::size_t{4096});
+                expect(
+                    &nxtrt::firm_frame_arena::owner_of(frame)
+                    == &moved.frame_arena());
+                nxtrt::firm_frame_arena::owner_of(frame).deallocate(frame);
+                expect(moved.frame_used() == std::size_t{0});
+            };
+
+            "owned frame chunks grow beyond 4 MiB without moving frames"_test =
+                [] {
+                    auto arena = nxtrt::firm_frame_arena{};
+                    auto frames = std::array<void *, 25>{};
+                    constexpr auto bytes = std::size_t{200000};
+                    for (auto i = std::size_t{0}; i < frames.size(); ++i) {
+                        frames[i] = arena.allocate(bytes);
+                        std::fill_n(
+                            static_cast<std::byte *>(frames[i]),
+                            bytes,
+                            static_cast<std::byte>(i + 1));
+                    }
+                    expect(arena.used() > std::size_t{4 * 1024 * 1024});
+                    for (auto i = std::size_t{0}; i < frames.size(); ++i) {
+                        expect(
+                            &nxtrt::firm_frame_arena::owner_of(frames[i])
+                            == &arena);
+                        auto payload = std::span{
+                            static_cast<std::byte *>(frames[i]), bytes};
+                        expect(
+                            std::ranges::all_of(payload, [i](std::byte b) {
+                                return b == static_cast<std::byte>(i + 1);
+                            }));
+                        arena.deallocate(frames[i]);
+                    }
+                    expect(arena.live_frames() == std::size_t{0});
+                    expect(arena.top() == std::size_t{0});
+                    auto const capacity = arena.capacity();
+                    // Empty chunks remain reusable, including after an
+                    // empty move.
+                    auto moved = nxtrt::firm_frame_arena{std::move(arena)};
+                    for (auto & frame : frames)
+                        frame = moved.allocate(bytes);
+                    expect(moved.capacity() == capacity);
+                    for (auto * frame : frames) {
+                        expect(
+                            &nxtrt::firm_frame_arena::owner_of(frame)
+                            == &moved);
+                        moved.deallocate(frame);
+                    }
+                };
+
+            "owned frames reuse free lists and retract earlier chunk tops"_test =
+                [] {
+                    auto arena = nxtrt::firm_frame_arena{};
+                    auto * first = arena.allocate(2000);
+                    auto * second = arena.allocate(2000);
+                    auto * third = arena.allocate(8000);
+                    auto const capacity = arena.capacity();
+                    auto const top = arena.top();
+                    arena.deallocate(first);
+                    expect(arena.free_listed_bytes() == std::size_t{2032});
+                    auto * reused = arena.allocate(2000);
+                    expect(reused == first);
+                    arena.deallocate(second);
+                    expect(arena.top() == top - std::size_t{2032});
+                    auto * tail = arena.allocate(2000);
+                    expect(tail == second);
+                    expect(arena.capacity() == capacity);
+                    arena.deallocate(reused);
+                    arena.deallocate(third);
+                    arena.deallocate(tail);
+                    expect(arena.used() == std::size_t{0});
+                    expect(arena.top() == std::size_t{0});
+                    expect(arena.free_listed_bytes() == std::size_t{0});
+                };
+
+            "explicit empty and preallocated frame land stays bounded"_test =
+                [] {
+                    auto empty =
+                        nxtrt::firm_frame_arena{nxtrt::frame_storage_ref{}};
+                    expect(empty.allocate(1) == nullptr);
+                    auto land = nxtrt::owned_frame_storage{16};
+                    auto arena = nxtrt::firm_frame_arena{land};
+                    auto * frame = arena.allocate(200);
+                    expect(frame != nullptr);
+                    expect(arena.allocate(1) == nullptr);
+                    expect(arena.capacity() == std::size_t{256});
+                    arena.deallocate(frame);
+                };
+
             "bind the current firm while the body runs"_test = [] {
                 auto deck = nxtrt::deck{};
 
@@ -2940,7 +3034,7 @@ static suite runtime_tests{
 
                 deck.sync_wait([&]() -> nxtrt::task<void> {
                     co_await frame_reuse_firm{
-                        storage,
+                        nxtrt::firm{storage},
                         iterations,
                         totals,
                         high_water,
@@ -2951,6 +3045,22 @@ static suite runtime_tests{
                     expect(total == iterations);
                 // 20000 step frames would need far more than 16 KiB without
                 // reuse; the footprint stays near the live set instead.
+                expect(high_water < std::size_t{16 * 1024});
+            };
+
+            "lazy frame chunks are reused by long-lived workers"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto totals = std::array<int, 4>{};
+                auto high_water = std::size_t{};
+                constexpr auto iterations = 5000;
+
+                deck.sync_wait([&]() -> nxtrt::task<void> {
+                    co_await frame_reuse_firm{
+                        nxtrt::firm{}, iterations, totals, high_water};
+                });
+
+                for (auto total : totals)
+                    expect(total == iterations);
                 expect(high_water < std::size_t{16 * 1024});
             };
 

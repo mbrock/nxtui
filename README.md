@@ -319,11 +319,13 @@ The tests that cross-check crypto against a reference `libcrypto` (RSA/ECDSA
 fixtures and ML-KEM-768) expect AWS-LC's headers; with OpenSSL or no
 `libcrypto` they are skipped at configure time.
 
-Meson keeps allocator poisoning enabled for everyday tests. The repeated HTTP
-stress tier opts out: poisoning each timeout scope's mostly unused 4 MiB firm
-arena dominates its timing. This avoids harness overhead, not the runtime's
-large per-scope reservations; reusing or lazily allocating that backing remains
-a runtime optimization. To run the stress cases with poisoning explicitly:
+Default firms acquire frame land lazily in non-relocating chunks rather than
+reserving 4 MiB per scope. Chunks are reused until the firm is destroyed;
+explicit static or borrowed frame land remains bounded. Callers can still
+preallocate an `owned_frame_storage` rack and lend its view to a firm.
+
+Meson keeps allocator poisoning enabled for everyday tests and the repeated
+HTTP stress tier. To run the stress cases with poisoning explicitly:
 
 ```sh
 MALLOC_PERTURB_=17 build/nxt-tests --only-slow

@@ -92,15 +92,9 @@ if get_option('tests')
   # runs both, as CI does; `meson test --no-suite slow` skips the slow tier.
   # Each test keeps its own deadline.
   test('nxt-tests', nxt_tests, timeout : 180)
-  # Meson's malloc poisoning fills each timeout's mostly unused 4 MiB
-  # firm arena thousands of times. Keep poisoning in the everyday lifetime
-  # tests, but not this capacity/recycling stress tier. Remove the override
-  # when firm backing is reused or allocated lazily. To stress with poison:
-  # MALLOC_PERTURB_=17 build/nxt-tests --only-slow
   test('nxt-slow-tests', nxt_tests,
     args : ['--only-slow'],
     suite : 'slow',
-    env : {'MALLOC_PERTURB_' : '0'},
     timeout : 180,
   )
 
