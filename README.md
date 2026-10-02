@@ -239,7 +239,7 @@ unchanged. Disable the tool with `-Dwisp_tool=false`.
 ### Serve plain HTTP behind a reverse proxy
 
 ```sh
-build/wisp run demo/wisp-http.wisp
+build/wisp run demo/wisp-http.wisp --dir demo
 ```
 
 The demo binds loopback port 8080 and directly awaits the native serving task.
@@ -266,6 +266,35 @@ are tried in definition order, and redefining a pattern replaces its handler
 in place. HEAD falls back to GET routes; unmatched paths answer 404, and paths
 served only under other methods answer 405 with `Allow`.
 
+### Files and capabilities
+
+The guest has no ambient filesystem. Like WASI preopens, the command line
+grants directories: `--dir NAME=PATH` (or `--dir PATH` when PATH is a plain
+name) makes PATH visible to the guest as `NAME/...`, read-only, for `run`,
+`restore` and `repl`. Grants are opened at startup and are not part of a tape,
+so a restore must grant them again.
+
+```lisp
+(read-file "site/notes.txt")     ; binary-safe string, up to 64 MiB
+(file-status "site/index.html")  ; [:file "1234" "1790969925597"] or NIL
+(list-directory "site")          ; sorted names
+(serve-file "site/app.wasm")     ; streamed, Content-Type from the extension
+```
+
+Paths are `/`-separated plain names beneath a grant: empty, `.` and `..`
+segments are rejected, and symlinks are never followed, even ones that stay
+inside the tree (stricter than WASI). FIFOs and devices are not read. Failures
+raise `:NOT-CAPABLE` (ungranted or symlinked), `:NOT-FOUND`,
+`:PERMISSION-DENIED`, `:INVALID-ARGUMENT` or `:IO`. `file-status` gives size and
+modification time (Unix ms) as decimal strings, since fixnums are 31 bits.
+
+A response body may be `[:file path]` instead of a string. The native server
+opens it when the handler finishes and streams it with `Content-Length`,
+outside the heap and past the 8 MiB string-body limit. `serve-file` checks the
+path first and answers 404 for anything but a regular file. Each streamed chunk
+gets a fresh write deadline, so long downloads only need to keep making
+progress.
+
 The reusable C++ API is [`nxtrt::http::serve`](src/nxtrt/http-server.hpp), with a
 borrowed listener, `task<response>(request)` handler, and bounded server options.
 It supports HTTP/1.1 keep-alive, pipelining, fixed-length/chunked requests, and
@@ -279,8 +308,9 @@ completed connections return admission capacity when consumed. There are no
 permanent connection workers. Pool close cancels and drains both acceptance
 and connections while their descriptors, handlers, and storage remain alive.
 TLS, access logging, and public exposure belong to your proxy. Forwarded headers
-are untrusted; upgrades, CONNECT, and Expect are rejected. Streaming responses,
-WebSockets, files, effect-result logging, and external-resource restore remain
+are untrusted; upgrades, CONNECT, and Expect are rejected. Responses can stream
+a file (`http::file_body`); other streaming, request-body streaming,
+WebSockets, effect-result logging, and external-resource restore remain
 future work.
 
 ### Make HTTP requests from Wisp

@@ -194,10 +194,12 @@ message make_response(
     response res,
     bool head,
     bool keep_alive,
-    const server_options & options)
+    const server_options & options,
+    std::optional<file_body> & file)
 {
     if (res.status < 200 || res.status > 599
-        || res.body.size() > options.max_response_body_bytes)
+        || res.body.size() > options.max_response_body_bytes
+        || (res.file && !res.body.empty()))
         throw rejection{500};
     auto out = message{static_cast<bh::status>(res.status), 11};
     // Reserve room for generated status line and framing fields.
@@ -221,6 +223,12 @@ message make_response(
     out.keep_alive(keep_alive);
     if (res.status == 204 || res.status == 304)
         return out;
+    if (res.file && res.status != 205) {
+        out.content_length(res.file->length);
+        if (!head)
+            file = std::move(res.file);
+        return out;
+    }
     auto size = res.status == 205 ? 0 : res.body.size();
     out.content_length(size);
     if (!head && res.status != 205)
@@ -228,10 +236,14 @@ message make_response(
     return out;
 }
 
-task<void> write_response(bytesink & output, message & msg)
+// With HEADER_ONLY, stop after the head; the caller streams the body.
+task<void>
+write_response(bytesink & output, message & msg, bool header_only = false)
 {
     auto serializer = bh::response_serializer<bh::string_body>{msg};
-    while (!serializer.is_done()) {
+    serializer.split(header_only);
+    while (header_only ? !serializer.is_header_done()
+                       : !serializer.is_done()) {
         auto ec = boost::system::error_code{};
         auto buffer = boost::asio::const_buffer{};
         // Non-coroutine visitor. References stay in this suspended frame;
@@ -257,6 +269,30 @@ task<void> write_response(bytesink & output, message & msg)
                     buffer.size()});
             serializer.consume(buffer.size());
         }
+    }
+}
+
+task<void> write_file(
+    bytesink & output,
+    file_body & file,
+    const server_options & options)
+{
+    auto buffer = std::array<std::byte, 16 * 1024>{};
+    auto offset = file.offset;
+    auto remaining = file.length;
+    while (remaining) {
+        auto chunk = std::span{buffer}.first(
+            static_cast<std::size_t>(
+                std::min<std::uint64_t>(remaining, buffer.size())));
+        auto count = co_await op::read_some{
+            file.fd.get(), chunk, static_cast<off_t>(offset)};
+        if (count == 0)
+            throw protocol_error{"file body ended early"};
+        co_await with_timeout(
+            options.write_timeout,
+            write_all(output, as_string_view(chunk.first(count))));
+        offset += count;
+        remaining -= count;
     }
 }
 
@@ -286,6 +322,7 @@ task<void> connection(
     for (std::size_t count = 0; count < options.max_requests_per_connection;
          ++count) {
         auto out = message{};
+        auto file = std::optional<file_body>{};
         auto keep_alive = false;
         auto head = false;
         auto status = 0;
@@ -314,7 +351,8 @@ task<void> connection(
             auto res = co_await with_timeout(
                 options.handler_timeout,
                 invoke_handler(handler, std::move(req)));
-            out = make_response(std::move(res), head, keep_alive, options);
+            out = make_response(
+                std::move(res), head, keep_alive, options, file);
         } catch (const operation_cancelled &) {
             if (current_task_stop_token().stop_requested())
                 throw;
@@ -333,6 +371,7 @@ task<void> connection(
         if (current_task_stop_token().stop_requested())
             throw operation_cancelled{};
         if (status) {
+            file.reset();
             keep_alive = false;
             out = message{static_cast<bh::status>(status), 11};
             out.keep_alive(false);
@@ -340,7 +379,10 @@ task<void> connection(
         }
         // Never attempt a second response after a partial write or timeout.
         co_await with_timeout(
-            options.write_timeout, write_response(socket.output(), out));
+            options.write_timeout,
+            write_response(socket.output(), out, file.has_value()));
+        if (file)
+            co_await write_file(socket.output(), *file, options);
         if (!keep_alive)
             co_return;
     }

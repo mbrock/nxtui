@@ -12,7 +12,9 @@
 #include "test.hpp"
 
 #include <array>
+#include <fcntl.h>
 #include <filesystem>
+#include <fstream>
 
 namespace nxt::test {
 namespace {
@@ -29,6 +31,7 @@ struct handler_state
     int peak = 0;
     nxtrt::bell entered;
     nxtrt::bell release;
+    std::string file; // served by /file* targets
 };
 
 task<http::response> handle(handler_state & state, http::request req)
@@ -56,6 +59,21 @@ task<http::response> handle(handler_state & state, http::request req)
         throw std::runtime_error{"handler failed"};
     if (req.target == "/cancel")
         throw nxtrt::operation_cancelled{};
+    if (req.target.starts_with("/file")) {
+        auto served = http::response{};
+        auto size = std::filesystem::file_size(state.file);
+        served.file = http::file_body{
+            nxt::unique_fd{::open(state.file.c_str(), O_RDONLY | O_CLOEXEC)},
+            0,
+            size};
+        if (req.target == "/file-range")
+            served.file->offset = 3, served.file->length = 4;
+        if (req.target == "/file-short")
+            served.file->length = size + 10;
+        if (req.target == "/file-and-body")
+            served.body = "x";
+        co_return served;
+    }
     auto res = http::response{};
     res.body = req.target + ":" + req.body;
     if (req.target == "/large")
@@ -437,9 +455,75 @@ repeated_requests(sockaddr_in address, std::size_t count, bool reconnect)
     }
 }
 
+// A patterned binary file larger than the streaming chunk.
+struct temporary_file
+{
+    std::string path;
+    std::string bytes;
+
+    temporary_file()
+    {
+        path = (std::filesystem::temp_directory_path()
+                / ("nxt-file-body-" + std::to_string(::getpid())))
+                   .string();
+        for (std::size_t i = 0; i < 100'000; ++i)
+            bytes += char(i * 7 % 251);
+        std::ofstream{path, std::ios::binary} << bytes;
+    }
+
+    ~temporary_file()
+    {
+        std::filesystem::remove(path);
+    }
+};
+
+task<void> file_bodies(sockaddr_in address, std::string expected)
+{
+    auto client = client_socket{co_await nxtrt::net::connect(address)};
+    co_await send(
+        client,
+        get("/file", false) + "HEAD /file HTTP/1.1\r\nHost: h\r\n\r\n"
+            + get("/file-range", false) + get("/file"));
+    auto full = co_await read_reply(client);
+    expect(full.head.status == 200);
+    expect(full.body == expected);
+    auto head = co_await read_reply(client, true);
+    expect(http::content_length(head.head) == expected.size());
+    auto range = co_await read_reply(client);
+    expect(range.body == expected.substr(3, 4));
+    auto again = co_await read_reply(client);
+    expect(again.body == expected);
+    co_await expect_closed(client);
+}
+
+task<void> short_file_body(sockaddr_in address, std::size_t size)
+{
+    auto client = client_socket{co_await nxtrt::net::connect(address)};
+    co_await send(client, get("/file-short", false));
+    auto head = co_await http::read_response_head(client.socket.input());
+    expect(head.status == 200);
+    expect(http::content_length(head) == size + 10);
+    auto received = std::size_t{0};
+    while (auto bytes = co_await client.socket.input().take_some())
+        received += bytes->size();
+    expect(received == size); // closed rather than misframed
+}
+
 template<class Wand>
 void server_tests()
 {
+    "file bodies stream past the response body limit"_test = [] {
+        auto file = temporary_file{};
+        auto options = http::server_options{};
+        options.max_response_body_bytes = 10;
+        auto server = server_fixture<Wand>{options};
+        server.state.file = file.path;
+        server.run(file_bodies, server.address, file.bytes);
+        server.run(short_file_body, server.address, file.bytes.size());
+        server.run(
+            exchange, server.address, get("/file-and-body"), 500, "");
+        server.stop();
+    };
     "fragmented binary bodies and sequential pipelines"_test = [] {
         auto server = server_fixture<Wand>{};
         server.run(fragmented_pipeline, server.address);

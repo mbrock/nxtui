@@ -63,6 +63,66 @@
       (fn () (call handler) *response*)
       (fn (value continuation) value))))
 
+;; Files beneath directories the command line granted with --dir NAME=PATH,
+;; like WASI preopens: there is no ambient filesystem. Guest paths are
+;; NAME/relative/path; empty, "." and ".." segments are rejected and symlinks
+;; are never followed. Failures raise :NOT-CAPABLE, :NOT-FOUND,
+;; :PERMISSION-DENIED, :INVALID-ARGUMENT or :IO.
+(defun read-file (path)
+  (await (vector :read-file path)))
+
+;; [kind size modified-unix-ms], kind one of :file :directory :symlink
+;; :other, or NIL when nothing is there. Size and time are decimal strings,
+;; since fixnums are 31 bits.
+(defun file-status (path)
+  (await (vector :file-status path)))
+
+;; Sorted entry names, without "." and "..".
+(defun list-directory (path)
+  (await (vector :list-directory path)))
+
+(defvar *content-types*
+  '(("html" "text/html; charset=utf-8")
+    ("htm" "text/html; charset=utf-8")
+    ("css" "text/css; charset=utf-8")
+    ("js" "text/javascript; charset=utf-8")
+    ("mjs" "text/javascript; charset=utf-8")
+    ("json" "application/json")
+    ("txt" "text/plain; charset=utf-8")
+    ("wisp" "text/plain; charset=utf-8")
+    ("wasm" "application/wasm")
+    ("svg" "image/svg+xml")
+    ("png" "image/png")
+    ("jpg" "image/jpeg")
+    ("jpeg" "image/jpeg")
+    ("gif" "image/gif")
+    ("webp" "image/webp")
+    ("ico" "image/x-icon")
+    ("pdf" "application/pdf")
+    ("woff2" "font/woff2")))
+
+(defun content-type (path)
+  (let* ((name (head (last (split-string path "/"))))
+         (parts (split-string name "."))
+         (found (and (tail parts)
+                     (find-result *content-types*
+                       (fn (entry)
+                         (when (equal? (head entry) (head (last parts)))
+                           (second entry)))))))
+    (if found (tail found) "application/octet-stream")))
+
+;; A response body of [:file path] is streamed by the native server with
+;; Content-Length, instead of being buffered in the heap. The file is opened
+;; when the handler finishes; a missing one then fails the request with 500.
+;; SERVE-FILE checks first and answers 404 for anything but a regular file,
+;; including invalid and ungranted paths.
+(defun serve-file (path &optional type)
+  (let ((status (try (file-status path) (catch (e k) nil))))
+    (if (and status (eq? (vector-get status 0) :file))
+        (do (add-header! "Content-Type" (or type (content-type path)))
+            (set-response-body! (vector :file path)))
+      (send! :respond (response 404 nil "Not Found\n")))))
+
 ;; Routing, adapted from the same web/http.wisp. A pattern is a method
 ;; followed by path segments: strings match exactly, _ skips one segment,
 ;; other symbols bind one segment, and &REST NAME binds the remaining

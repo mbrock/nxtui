@@ -6,6 +6,7 @@ if get_option('tests')
     'tls-test.cpp',
     'include-test.cpp',
     'http-server-test.cpp',
+    'fs-beneath-test.cpp',
     'idea-test.cpp',
     'blocking-test.cpp',
     'pool-test.cpp',
@@ -127,6 +128,10 @@ if get_option('tests')
     )
     test('wisp-http-router-tests', find_program('python3'),
       args : [files('wisp-http-router-test.py'), wisp_tool],
+      timeout : 60,
+    )
+    test('wisp-file-tests', find_program('python3'),
+      args : [files('wisp-file-test.py'), wisp_tool],
       timeout : 60,
     )
     test('wisp-http-client-tests', find_program('python3'),

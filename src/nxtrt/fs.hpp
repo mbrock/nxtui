@@ -10,12 +10,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <utility>
@@ -409,5 +411,141 @@ inline task<std::vector<directory_entry>> list_path(std::string path)
 }
 
 #endif
+
+// --- Paths confined beneath a directory ------------------------------------
+//
+// Like WASI preopens: a granted directory descriptor is the capability, and
+// a relative path can only name things beneath it. Every segment must be a
+// plain name (no empty, ".", ".." or NUL), and no symlink is ever followed,
+// including in the final segment, so resolution cannot leave the directory
+// even when the tree contains links. That is stricter than WASI, which
+// follows links that stay beneath. An empty path names the directory.
+//
+// These use direct, synchronous *at syscalls rather than wishes so callers
+// see the real errno: std::system_error for the OS, std::invalid_argument
+// for a malformed path.
+
+inline std::vector<std::string_view> beneath_segments(std::string_view path)
+{
+    auto segments = std::vector<std::string_view>{};
+    if (path.empty())
+        return segments;
+    for (auto part : std::views::split(path, '/')) {
+        auto name = std::string_view{part.begin(), part.end()};
+        if (name.empty() || name == "." || name == ".."
+            || name.find('\0') != name.npos)
+            throw std::invalid_argument{
+                "path must be relative, '/'-separated plain names"};
+        segments.push_back(name);
+    }
+    return segments;
+}
+
+struct beneath_entry
+{
+    nxt::unique_fd parent;
+    std::string name; // empty: PATH named the directory itself
+};
+
+namespace detail {
+
+[[noreturn]] inline void throw_errno(char const * operation)
+{
+    throw std::system_error{errno, std::generic_category(), operation};
+}
+
+} // namespace detail
+
+inline beneath_entry resolve_beneath(int dirfd, std::string_view path)
+{
+    auto segments = beneath_segments(path);
+    auto parent = nxt::unique_fd{::fcntl(dirfd, F_DUPFD_CLOEXEC, 0)};
+    if (parent.get() < 0)
+        detail::throw_errno("dup");
+    if (segments.empty())
+        return {std::move(parent), {}};
+    for (auto name : segments | std::views::take(segments.size() - 1)) {
+        auto next = ::openat(
+            parent.get(),
+            std::string{name}.c_str(),
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (next < 0) {
+            // Report a refused symlink as ELOOP everywhere; macOS says
+            // ENOTDIR when O_DIRECTORY meets one.
+            auto error = errno;
+            struct stat info {};
+            if (error == ENOTDIR
+                && ::fstatat(
+                       parent.get(),
+                       std::string{name}.c_str(),
+                       &info,
+                       AT_SYMLINK_NOFOLLOW)
+                       == 0
+                && S_ISLNK(info.st_mode))
+                error = ELOOP;
+            throw std::system_error{error, std::generic_category(), "openat"};
+        }
+        parent.reset(next);
+    }
+    return {std::move(parent), std::string{segments.back()}};
+}
+
+/// Status of PATH beneath DIRFD; a final symlink reports itself.
+inline struct stat stat_beneath(int dirfd, std::string_view path)
+{
+    auto entry = resolve_beneath(dirfd, path);
+    struct stat info {};
+    auto rc = entry.name.empty()
+        ? ::fstat(entry.parent.get(), &info)
+        : ::fstatat(
+              entry.parent.get(),
+              entry.name.c_str(),
+              &info,
+              AT_SYMLINK_NOFOLLOW);
+    if (rc != 0)
+        detail::throw_errno("fstatat");
+    return info;
+}
+
+/// Opens PATH beneath DIRFD with FLAGS plus O_NOFOLLOW, so a final symlink
+/// fails with ELOOP. Pass O_NONBLOCK so a FIFO cannot stall the open. An
+/// empty PATH returns a duplicate of DIRFD and ignores FLAGS.
+inline nxt::unique_fd
+open_beneath(int dirfd, std::string_view path, int flags = O_RDONLY)
+{
+    auto entry = resolve_beneath(dirfd, path);
+    if (entry.name.empty())
+        return std::move(entry.parent);
+    auto fd = ::openat(
+        entry.parent.get(),
+        entry.name.c_str(),
+        flags | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0)
+        detail::throw_errno("openat");
+    return nxt::unique_fd{fd};
+}
+
+/// Sorted entry names of an open directory, without "." and "..".
+inline std::vector<std::string> directory_names(nxt::unique_fd dir)
+{
+    auto * stream = ::fdopendir(dir.get());
+    if (!stream)
+        detail::throw_errno("fdopendir");
+    (void) dir.release(); // closedir owns it now
+    auto names = std::vector<std::string>{};
+    errno = 0;
+    while (auto * entry = ::readdir(stream)) {
+        auto name = std::string_view{entry->d_name};
+        if (name != "." && name != "..")
+            names.emplace_back(name);
+        errno = 0;
+    }
+    auto error = errno;
+    ::closedir(stream);
+    if (error)
+        throw std::system_error{error, std::generic_category(), "readdir"};
+    std::ranges::sort(names);
+    return names;
+}
 
 } // namespace nxtrt::fs

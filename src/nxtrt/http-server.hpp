@@ -1,17 +1,32 @@
 #pragma once
 
 #include "nxtrt/http.hpp"
+#include <nxt/unique-fd.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace nxtrt::http {
+
+/// A response body streamed from an owned file descriptor: exactly LENGTH
+/// bytes from OFFSET, framed with Content-Length. A file that shrinks
+/// while streaming aborts the connection instead of misframing it.
+struct file_body
+{
+    nxt::unique_fd fd;
+    std::uint64_t offset = 0;
+    std::uint64_t length = 0;
+};
 
 struct response
 {
     int status = 200;
     std::vector<header> headers;
     std::string body;
+    /// Replaces BODY when set; not bounded by max_response_body_bytes.
+    std::optional<file_body> file;
 };
 
 struct server_options
@@ -58,7 +73,9 @@ using request_handler = std::function<task<response>(request)>;
 /// 204/304 omit body and length, and 205 sends Content-Length: 0.
 /// Informational responses are not an application response. Limits bound
 /// server buffering, not handler allocations. Timeouts cover whole phases,
-/// not individual reads/writes; all must be > 0.
+/// not individual reads/writes, except that a file body gets a fresh
+/// write_timeout for each chunk, so long downloads only need to keep making
+/// progress. All must be > 0.
 task<void>
 serve(int listener, request_handler handler, server_options options = {});
 

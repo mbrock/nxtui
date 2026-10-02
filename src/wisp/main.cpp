@@ -5,6 +5,7 @@
 #include "nxtrt/app.hpp"
 #include "nxtrt/bell.hpp"
 #include "nxtrt/buffers.hpp"
+#include "nxtrt/fs.hpp"
 #include "nxtrt/http-server.hpp"
 #include "nxtrt/net.hpp"
 #include "nxtrt/net_dns.hpp"
@@ -15,6 +16,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <system_error>
 #include <unistd.h>
@@ -162,6 +164,31 @@ void checkpoint(const std::string & path, const evaluator & vm, word entry)
     }
 }
 
+// Directories granted on the command line, like WASI preopens. The
+// guest names them by NAME; there is no ambient filesystem authority.
+using directories = std::map<std::string, nxt::unique_fd, std::less<>>;
+
+// --dir NAME=PATH, or --dir PATH when PATH is itself a plain name.
+void grant(directories & granted, std::string_view spec)
+{
+    const auto equals = spec.find('=');
+    const auto name = spec.substr(0, equals);
+    const auto path = equals == spec.npos ? spec : spec.substr(equals + 1);
+    require(
+        !name.empty() && name.find('/') == name.npos && name != "."
+            && name != "..",
+        "--dir NAME must be one plain path segment (use NAME=PATH)");
+    require(!granted.contains(name), "duplicate --dir name");
+    const auto fd = ::open(
+        std::string{path}.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0)
+        throw std::system_error(
+            errno,
+            std::generic_category(),
+            "cannot open --dir " + std::string{path});
+    granted.emplace(std::string{name}, nxt::unique_fd{fd});
+}
+
 struct host
 {
     heap & h;
@@ -175,6 +202,7 @@ struct host
     bool effects = false, echo = false, saved = false;
     std::string save;
     std::size_t gc_threshold = 1024 * 1024;
+    directories granted;
 
     host(heap & h, evaluator & vm, root & entry)
         : h(h)
@@ -324,6 +352,130 @@ struct host
         }
     };
 
+    // A guest path is NAME or NAME/RELATIVE, where NAME was granted with
+    // --dir. The view borrows PATH.
+    std::pair<int, std::string_view> beneath(std::string_view path) const
+    {
+        const auto slash = path.find('/');
+        const auto found = granted.find(path.substr(0, slash));
+        if (found == granted.end())
+            throw effect_error{
+                "NOT-CAPABLE", "path is not beneath a granted --dir"};
+        return {
+            found->second.get(),
+            slash == path.npos ? std::string_view{} : path.substr(slash + 1)};
+    }
+
+    // Symlinks are never followed (ELOOP), so they are not capabilities.
+    template<typename F>
+    static auto filesystem(F && operation) -> decltype(operation())
+    {
+        try {
+            return operation();
+        } catch (const std::invalid_argument & error) {
+            throw effect_error{"INVALID-ARGUMENT", error.what()};
+        } catch (const std::system_error & error) {
+            const auto code = error.code().value();
+            throw effect_error{
+                code == ENOENT || code == ENOTDIR ? "NOT-FOUND"
+                : code == ELOOP                   ? "NOT-CAPABLE"
+                : code == EACCES || code == EPERM ? "PERMISSION-DENIED"
+                                                  : "IO",
+                error.what()};
+        }
+    }
+
+    std::string guest_path(word value, std::string_view operation)
+    {
+        effect_require(
+            tag_of(value) == tag::v08,
+            std::string{operation} + " expects a path string");
+        return text(h, value);
+    }
+
+    // Opens a regular file with its size, without blocking on FIFOs.
+    std::pair<nxt::unique_fd, std::uint64_t>
+    open_regular(std::string_view path)
+    {
+        const auto [dir, relative] = beneath(path);
+        auto fd = filesystem([&] {
+            return nxtrt::fs::open_beneath(
+                dir, relative, O_RDONLY | O_NONBLOCK);
+        });
+        struct stat info {};
+        if (::fstat(fd.get(), &info) != 0)
+            throw effect_error{"IO", "fstat failed"};
+        effect_require(S_ISREG(info.st_mode), "not a regular file");
+        return {std::move(fd), std::uint64_t(info.st_size)};
+    }
+
+    nxtrt::task<void> read_file(word argument, root & result)
+    {
+        const auto path = guest_path(argument, "read-file");
+        auto [fd, size] = open_regular(path);
+        effect_require(size <= tape::default_limit, "file exceeds 64 MiB");
+        std::string bytes(size, '\0');
+        std::size_t offset = 0;
+        while (offset < bytes.size()) {
+            const auto count = co_await nxtrt::op::read_some{
+                fd.get(),
+                std::as_writable_bytes(std::span{bytes}).subspan(offset),
+                off_t(offset)};
+            if (count == 0)
+                break; // truncated meanwhile
+            offset += count;
+        }
+        bytes.resize(offset);
+        result.set(h.newv08(bytes));
+    }
+
+    // [kind size modified-unix-ms], or NIL when nothing is there. Numbers
+    // are decimal strings, like timer deadlines: fixnums are only 31 bits.
+    void file_status(word argument, root & result)
+    {
+        const auto path = guest_path(argument, "file-status");
+        const auto [dir, relative] = beneath(path);
+        struct stat info {};
+        try {
+            info = filesystem(
+                [&] { return nxtrt::fs::stat_beneath(dir, relative); });
+        } catch (const effect_error & error) {
+            if (error.code == "NOT-FOUND")
+                return;
+            throw;
+        }
+#if defined(__APPLE__)
+        const auto & modified = info.st_mtimespec;
+#else
+        const auto & modified = info.st_mtim;
+#endif
+        const auto kind = S_ISREG(info.st_mode)   ? "FILE"
+                          : S_ISDIR(info.st_mode) ? "DIRECTORY"
+                          : S_ISLNK(info.st_mode) ? "SYMLINK"
+                                                  : "OTHER";
+        result.set(h.newv32(
+            std::array{
+                vm.keyword(kind),
+                h.newv08(std::to_string(info.st_size)),
+                h.newv08(std::to_string(
+                    std::int64_t(modified.tv_sec) * 1000
+                    + modified.tv_nsec / 1000000))}));
+    }
+
+    void list_directory(word argument, root & result)
+    {
+        const auto path = guest_path(argument, "list-directory");
+        const auto [dir, relative] = beneath(path);
+        const auto names = filesystem([&] {
+            return nxtrt::fs::directory_names(nxtrt::fs::open_beneath(
+                dir, relative, O_RDONLY | O_DIRECTORY | O_NONBLOCK));
+        });
+        auto list = nil;
+        for (const auto & name : names | std::views::reverse)
+            list = h.cons(h.newv08(name), list);
+        result.set(list);
+    }
+
     nxtrt::task<nxtrt::http::response>
     http_request(root & pending, nxtrt::http::request request)
     {
@@ -363,10 +515,18 @@ struct host
             tag_of(result[0]) == tag::integer, "invalid HTTP status");
         nxtrt::http::response response;
         response.status = integer(result[0]);
-        if (result[2] != nil) {
+        if (tag_of(result[2]) == tag::v32) {
+            const auto body = h.v32slice(result[2]);
+            effect_require(
+                body.size() == 2 && body[0] == vm.keyword("FILE")
+                    && tag_of(body[1]) == tag::v08,
+                "HTTP body must be a string or [:file path]");
+            auto [fd, size] = open_regular(text(h, body[1]));
+            response.file = nxtrt::http::file_body{std::move(fd), 0, size};
+        } else if (result[2] != nil) {
             effect_require(
                 tag_of(result[2]) == tag::v08,
-                "HTTP body must be a string");
+                "HTTP body must be a string or [:file path]");
             effect_require(
                 h.v08slice(result[2]).size()
                     <= nxtrt::http::server_options{}
@@ -620,6 +780,18 @@ struct host
                     break;
                 }
             }
+            co_return;
+        }
+        if (operation == vm.keyword("READ-FILE")) {
+            co_await read_file(argument, result);
+            co_return;
+        }
+        if (operation == vm.keyword("FILE-STATUS")) {
+            file_status(argument, result);
+            co_return;
+        }
+        if (operation == vm.keyword("LIST-DIRECTORY")) {
+            list_directory(argument, result);
             co_return;
         }
         if (operation == vm.keyword("STDOUT")
@@ -881,32 +1053,31 @@ int main(int argc, char ** argv)
         const std::string command = argc > 1 ? argv[1] : "repl";
         if (command == "--help" || command == "help") {
             std::cout
-                << "wisp run SOURCE [--checkpoint TAPE]\n"
-                   "wisp restore TAPE [--effects] [--cancel] [--checkpoint TAPE]\n"
-                   "wisp inspect TAPE\nwisp repl\n"
-                   "Checkpoints stop at the next timer. Restores default to effects disabled.\n";
-            return 0;
-        }
-        if (command == "repl") {
-            require(argc <= 2, "repl takes no arguments");
-            auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
-            host app{image->storage, image->machine, image->entry};
-            nxtrt::runtime runtime;
-            runtime.run([&] { return app.repl(); });
+                << "wisp run SOURCE [--checkpoint TAPE] [--dir NAME=PATH]...\n"
+                   "wisp restore TAPE [--effects] [--cancel] [--checkpoint TAPE] [--dir NAME=PATH]...\n"
+                   "wisp inspect TAPE\nwisp repl [--dir NAME=PATH]...\n"
+                   "Checkpoints stop at the next timer. Restores default to effects disabled.\n"
+                   "--dir grants read access beneath PATH as guest paths NAME/...;\n"
+                   "--dir PATH grants a plain directory name as itself.\n";
             return 0;
         }
         require(
-            argc >= 3,
+            command == "repl" || argc >= 3,
             "expected run SOURCE, restore TAPE, inspect TAPE, or repl");
         require(
             command == "run" || command == "restore"
-                || command == "inspect",
+                || command == "inspect" || command == "repl",
             "unknown command");
         bool effects = false, cancel = false;
         std::string save;
-        for (int i = 3; i < argc; ++i) {
+        directories granted;
+        for (int i = command == "repl" ? 2 : 3; i < argc; ++i) {
             const std::string_view option{argv[i]};
-            if (option == "--effects" && command == "restore")
+            if (option == "--dir" && command != "inspect" && i + 1 < argc)
+                grant(granted, argv[++i]);
+            else if (command == "repl")
+                throw std::runtime_error("invalid command option");
+            else if (option == "--effects" && command == "restore")
                 effects = true;
             else if (option == "--cancel" && command == "restore")
                 cancel = true;
@@ -917,9 +1088,16 @@ int main(int argc, char ** argv)
             else
                 throw std::runtime_error("invalid command option");
         }
-        if (command == "run") {
+        if (command == "repl") {
             auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
             host app{image->storage, image->machine, image->entry};
+            app.granted = std::move(granted);
+            nxtrt::runtime runtime;
+            runtime.run([&] { return app.repl(); });
+        } else if (command == "run") {
+            auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
+            host app{image->storage, image->machine, image->entry};
+            app.granted = std::move(granted);
             nxtrt::runtime runtime;
             const auto source = read_file(argv[2]);
             const bool done =
@@ -932,6 +1110,7 @@ int main(int argc, char ** argv)
             require(file.is_open(), "cannot open tape");
             auto image = tape::read(file);
             host app{image->storage, image->machine, image->entry};
+            app.granted = std::move(granted);
             if (command == "inspect") {
                 std::cout << "source-byte-offset: "
                           << print(image->storage, app.get(2)) << "\n";

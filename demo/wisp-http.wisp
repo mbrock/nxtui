@@ -1,5 +1,5 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
-;; Run with: build/wisp run demo/wisp-http.wisp
+;; Run with: build/wisp run demo/wisp-http.wisp --dir demo
 ;; Loopback port 8080. Put a TLS-terminating reverse proxy in front.
 
 (defun text! (body)
@@ -7,10 +7,14 @@
   (set-response-body! body))
 
 (defroute ("GET" "")
-  (text! "Hello from Wisp on NXT.\nTry /hello/you, /slow, POST /echo or POST /relay.\n"))
+  (text! "Hello from Wisp on NXT.\nTry /hello/you, /files/wisp-http.wisp, /slow, POST /echo or POST /relay.\n"))
 
 (defroute ("GET" "hello" name)
   (text! (string-append "Hello, " name ".\n")))
+
+;; Streams files from the directory granted with --dir demo.
+(defroute ("GET" "files" &rest path)
+  (serve-file (join-strings "/" (cons "demo" path))))
 
 (defroute ("GET" "slow")
   (sleep-ms 1000)
