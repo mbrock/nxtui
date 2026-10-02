@@ -87,9 +87,16 @@ if get_option('tests')
     dependencies : nxt_test_deps,
     cpp_args : nxt_test_cpp_args,
   )
-  # Includes full Lisp bootstraps and >4096 HTTP request/connection stress
-  # cases, run during discovery and execution. Each leaf keeps its deadline.
+  # Everyday tests, then the slow integration and stress tier (`.slow()`
+  # tests, such as the >4096 HTTP request/connection cases). `meson test`
+  # runs both, as CI does; `meson test --no-suite slow` skips the slow tier.
+  # Each test keeps its own deadline.
   test('nxt-tests', nxt_tests, timeout : 180)
+  test('nxt-slow-tests', nxt_tests,
+    args : ['--only-slow'],
+    suite : 'slow',
+    timeout : 180,
+  )
 
   # Fault injection replaces operator new only in this executable. Compile
   # the guest heap directly rather than linking nxt-core's allocation hooks.
@@ -105,10 +112,12 @@ if get_option('tests')
     # case (90s process deadline); keep each process's own timeout active.
     test('wisp-host-tests', find_program('python3'),
       args : [files('wisp-host-test.py'), wisp_tool],
+      suite : 'slow',
       timeout : 240,
     )
     test('wisp-http-tests', find_program('python3'),
       args : [files('wisp-http-test.py'), wisp_tool],
+      suite : 'slow',
       timeout : 120,
     )
   endif

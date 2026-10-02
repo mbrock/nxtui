@@ -11,7 +11,7 @@ using namespace boost::ut;
 
 static suite http_tests{
     "HTTP", [] {
-        "requests"_test = [] {
+        "requests"_group = [] {
             "serialize minimal bodies"_test = [] {
                 http::request req{
                     .method = "POST",
@@ -39,7 +39,7 @@ static suite http_tests{
             };
         };
 
-        "server-sent events"_test = [] {
+        "server-sent events"_group = [] {
             "parse fields across arbitrary boundaries"_test = [] {
                 http::server_sent_event_parser parser;
                 std::vector<http::server_sent_event> events;

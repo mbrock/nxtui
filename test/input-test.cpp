@@ -14,7 +14,7 @@ using nxtui::input::Key;
 
 static suite input_parser_tests{
     "Input parser", [] {
-        "text"_test = [] {
+        "text"_group = [] {
             "parses plain UTF-8"_test = [] {
                 nxtui::input::Parser parser;
                 auto events = parser.feed("a\xc4\x89");
@@ -51,7 +51,7 @@ static suite input_parser_tests{
             };
         };
 
-        "controls"_test = [] {
+        "controls"_group = [] {
             "parses simple keys"_test = [] {
                 nxtui::input::Parser parser;
                 auto events = parser.feed("\r\t\x7f");
@@ -73,7 +73,7 @@ static suite input_parser_tests{
             };
         };
 
-        "Kitty CSI u"_test = [] {
+        "Kitty CSI u"_group = [] {
             "parses modified characters"_test = [] {
                 nxtui::input::Parser parser;
                 auto events = parser.feed("\x1b[97;5u");

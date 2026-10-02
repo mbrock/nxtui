@@ -29,7 +29,7 @@ nxtrt::task<std::vector<nxtrt::resolved_address>> resolve_localhost()
 
 static suite dns_tests{
     "DNS", [] {
-        "resolver"_test = [] {
+        "resolver"_group = [] {
             "localhost resolves to IPv4 loopback"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};

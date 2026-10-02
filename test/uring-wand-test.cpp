@@ -371,7 +371,7 @@ sockaddr_in loopback_listener_address(int fd)
 
 static suite uring_wand_tests{
     "uring wand", [] {
-        "runner"_test = [] {
+        "runner"_group = [] {
             "runs task factories"_test = [] {
                 auto value = nxtrt::run([]() -> nxtrt::task<int> {
                     co_await nxtrt::op::manual{};
@@ -426,7 +426,7 @@ static suite uring_wand_tests{
             };
         };
 
-        "socket I/O"_test = [] {
+        "socket I/O"_group = [] {
             "echoes over a socketpair"_test = [] {
                 auto sockets = std::array<int, 2>{-1, -1};
                 if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) != 0)
@@ -535,7 +535,7 @@ static suite uring_wand_tests{
             };
         };
 
-        "file I/O"_test = [] {
+        "file I/O"_group = [] {
             "statx wishes return file metadata"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};
@@ -592,7 +592,7 @@ static suite uring_wand_tests{
             };
         };
 
-        "file descriptor I/O"_test = [] {
+        "file descriptor I/O"_group = [] {
             "write wishes write to file descriptors"_test = [] {
                 auto fds = std::array<int, 2>{-1, -1};
                 if (::pipe(fds.data()) != 0)
@@ -916,7 +916,7 @@ static suite uring_wand_tests{
             };
         };
 
-        "timers and polling"_test = [] {
+        "timers and polling"_group = [] {
             "timeout wishes complete"_test = [] {
                 auto wand = nxtrt::uring_wand{};
                 auto deck = nxtrt::deck{&wand};

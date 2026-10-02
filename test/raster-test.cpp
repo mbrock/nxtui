@@ -86,7 +86,7 @@ static suite layout_tests{
     "Layouts", [] {
         using namespace tui;
 
-        "linear layouts"_test = [] {
+        "linear layouts"_group = [] {
             "column"_test = [] {
                 renders(column(text("AAA"), text("BBB"), text("CCC")))
                     | "AAA" | "BBB" | "CCC";
@@ -101,7 +101,7 @@ static suite layout_tests{
             };
         };
 
-        "text lines"_test = [] {
+        "text lines"_group = [] {
             "render multiple rows"_test = [] {
                 auto layout = text_lines("alpha\nbeta");
                 expect(layout.height_hint().min == 2 * ln);
@@ -125,7 +125,7 @@ static suite layout_tests{
             };
         };
 
-        "variants"_test = [] {
+        "variants"_group = [] {
             "either renders selected branch"_test = [] {
                 renders(either(false, text("off"), text("on"))) | "off";
                 renders(either(true, text("off"), text("on"))) | "on";
@@ -157,7 +157,7 @@ static suite layout_tests{
             };
         };
 
-        "data views"_test = [] {
+        "data views"_group = [] {
             "each maps borrowed items to variable-height layouts"_test = [] {
                 auto items = std::vector<std::string>{"a\nb", "c"};
                 auto layout = each(items, [](const std::string & item) {
@@ -170,7 +170,7 @@ static suite layout_tests{
             };
         };
 
-        "rules and styles"_test = [] {
+        "rules and styles"_group = [] {
             "hrule"_test = [] {
                 GlyphTable glyphs;
                 Raster raster(5 * ch, 1 * ln, glyphs);

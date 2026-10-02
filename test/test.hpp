@@ -18,26 +18,33 @@
 #include <utility>
 #include <vector>
 
+// Nested tests in one pass.
+//
+// Tests are declared as a tree: `"name"_group = [] { ... }` holds child
+// groups and tests, and `"name"_test = [] { ... }` is a leaf. Every node gets
+// a dotted number from its position, so `nxt-tests 2.7` selects a subtree.
+// The runner walks the tree once: a group body runs only to declare its
+// children, and a test body runs only when the test is selected, so nothing
+// runs twice and unselected work never runs at all. Results print as each
+// test finishes.
+//
+// Slow tests (`"name"_test.slow()`, or a whole `.slow()` group) are
+// integration and stress cases that CI runs but everyday runs skip:
+// `--slow` adds them, `--only-slow` runs just them, and a selector naming a
+// slow test or something inside it runs it too.
+
 namespace boost::ut {
 
 inline int failures = 0;
 inline int tests_run = 0;
 inline int tests_failed = 0;
-inline bool progress_started = false;
+inline int slow_skipped = 0;
+inline bool include_slow = false;
+inline bool only_slow = false;
 
 inline constexpr double slow_test_failure_ms = 1000.0;
 inline constexpr std::chrono::seconds test_timeout{1};
 inline constexpr std::string_view test_root_name = "nxt";
-
-struct test_result
-{
-    std::string_view name;
-    std::vector<int> path;
-    double elapsed_ms = 0.0;
-    bool failed = false;
-    bool counted = false;
-    std::vector<test_result> children;
-};
 
 struct test_definition
 {
@@ -45,29 +52,28 @@ struct test_definition
     std::function<void()> body;
 };
 
-inline std::vector<test_result> tests;
-inline std::vector<test_result *> active_tests;
-inline std::vector<int> active_path;
-inline std::vector<int> sibling_counts;
-inline std::vector<std::vector<int>> filters;
-inline std::optional<std::vector<int>> active_leaf_path;
-inline char active_timeout_label[512] = {};
-inline struct sigaction previous_alarm_action {};
-inline bool alarm_handler_installed = false;
-
-enum class run_phase
-{
-    discovery,
-    execution,
-};
-
-inline run_phase phase = run_phase::execution;
-
 inline std::vector<test_definition> & test_definitions()
 {
     static auto definitions = std::vector<test_definition>{};
     return definitions;
 }
+
+/// One open group on the way down to the running node.
+struct open_group
+{
+    std::string_view name;
+    std::vector<int> path;
+    bool slow = false;
+    bool printed = false;
+    int children = 0;
+};
+
+inline std::vector<open_group> open_groups;
+inline std::vector<std::vector<int>> filters;
+inline bool inside_test = false;
+inline char active_timeout_label[512] = {};
+inline struct sigaction previous_alarm_action {};
+inline bool alarm_handler_installed = false;
 
 inline std::string format_ms(double elapsed_ms)
 {
@@ -171,6 +177,7 @@ inline bool path_starts_with(
     return true;
 }
 
+/// Inside a selected subtree (everything is, without selectors).
 inline bool selected_path(const std::vector<int> & path)
 {
     if (filters.empty())
@@ -181,6 +188,7 @@ inline bool selected_path(const std::vector<int> & path)
     return false;
 }
 
+/// On the way down to a selected subtree.
 inline bool ancestor_path(const std::vector<int> & path)
 {
     for (const auto & filter : filters)
@@ -189,89 +197,45 @@ inline bool ancestor_path(const std::vector<int> & path)
     return false;
 }
 
-inline bool related_path(const std::vector<int> & path)
+/// A selector names this node or something inside it.
+inline bool named_by_selector(const std::vector<int> & path)
 {
-    return selected_path(path) || ancestor_path(path);
+    return ancestor_path(path);
 }
 
-inline bool active_execution_path(const std::vector<int> & path)
-{
-    return active_leaf_path && path_starts_with(*active_leaf_path, path);
-}
-
-inline test_result & find_or_add_result(
-    std::vector<test_result> & siblings,
+inline void print_line(
+    const std::vector<int> & path,
     std::string_view name,
-    const std::vector<int> & path)
+    bool group,
+    bool failed,
+    double elapsed_ms)
 {
-    for (auto & result : siblings)
-        if (result.path == path)
-            return result;
-
-    auto & result = siblings.emplace_back();
-    result.name = name;
-    result.path = path;
-    return result;
-}
-
-inline test_result *
-find_result(std::vector<test_result> & results, const std::vector<int> & path)
-{
-    for (auto & result : results) {
-        if (result.path == path)
-            return &result;
-        if (auto * child = find_result(result.children, path))
-            return child;
-    }
-    return nullptr;
-}
-
-inline void collect_selected_leaves(
-    const std::vector<test_result> & results,
-    std::vector<std::vector<int>> & leaves)
-{
-    for (const auto & result : results) {
-        if (!related_path(result.path))
-            continue;
-        if (result.children.empty()) {
-            if (selected_path(result.path))
-                leaves.push_back(result.path);
-            continue;
-        }
-        collect_selected_leaves(result.children, leaves);
-    }
-}
-
-inline void print_test_result(const test_result & result)
-{
-    auto status = result.failed ? " FAILED" : "";
-    auto duration = visible_duration(result.elapsed_ms);
-    auto has_children = !result.children.empty();
-
-    std::cout << "\x1b[2m" << format_path(result.path) << "\x1b[0m  ";
-    if (has_children) {
+    std::cout << "\x1b[2m" << format_path(path) << "\x1b[0m  ";
+    if (group) {
         std::cout << "\x1b[1m";
-        for (auto c : result.name)
+        for (auto c : name)
             std::cout << char(::toupper(static_cast<unsigned char>(c)));
-        std::cout << status;
-    } else {
-        std::cout << result.name << status;
-    }
-    if (has_children)
         std::cout << "\x1b[0m";
-    if (!duration.empty())
-        std::cout << ' ' << duration;
+    } else {
+        std::cout << name;
+        if (failed)
+            std::cout << " \x1b[31mFAILED\x1b[0m";
+        if (auto duration = visible_duration(elapsed_ms); !duration.empty())
+            std::cout << ' ' << duration;
+    }
     std::cout << '\n';
-
-    for (const auto & child : result.children)
-        print_test_result(child);
 }
 
-inline void print_report()
+/// Group headers print just before their first reported test, so a filtered
+/// run never shows empty groups.
+inline void print_open_groups()
 {
-    std::cout << "\x1b[1m" << test_root_name << "\x1b[0m\n";
-    for (const auto & test : tests)
-        print_test_result(test);
+    for (auto & group : open_groups) {
+        if (group.printed)
+            continue;
+        print_line(group.path, group.name, true, false, 0.0);
+        group.printed = true;
+    }
 }
 
 inline std::string plural(int count, std::string_view singular)
@@ -279,16 +243,26 @@ inline std::string plural(int count, std::string_view singular)
     return std::format("{} {}{}", count, singular, count == 1 ? "" : "s");
 }
 
-inline void print_summary()
+inline void print_summary(double elapsed_ms)
 {
-    if (!filters.empty() && tests_run == 0) {
-        std::cout << "\n\x1b[31m✗\x1b[0m no tests matched\n";
+    auto const slow_note = slow_skipped == 0
+                               ? std::string{}
+                               : std::format(
+                                     " \x1b[2m({} skipped; run with "
+                                     "--slow)\x1b[0m",
+                                     plural(slow_skipped, "slow test"));
+    auto const timing =
+        std::format(" \x1b[2min {:.1f}s\x1b[0m", elapsed_ms / 1000.0);
+
+    if ((!filters.empty() || only_slow) && tests_run == 0) {
+        std::cout << "\n\x1b[31m✗\x1b[0m no tests matched" << slow_note
+                  << '\n';
         return;
     }
 
-    if (tests_failed == 0) {
+    if (tests_failed == 0 && failures == 0) {
         std::cout << "\n\x1b[32m✓\x1b[0m all " << plural(tests_run, "test")
-                  << " passed\n";
+                  << " passed" << timing << slow_note << '\n';
         return;
     }
 
@@ -297,128 +271,131 @@ inline void print_summary()
     if (failures != tests_failed)
         std::cout << " with " << plural(failures, "expectation")
                   << " failed";
-    std::cout << " out of " << tests_run << '\n';
+    std::cout << " out of " << tests_run << timing << slow_note << '\n';
 }
 
-inline void note_progress(bool failed)
+template<typename F>
+void run_group(
+    std::string_view name, std::vector<int> path, bool slow, F && body)
 {
-    if (!progress_started) {
-        progress_started = true;
-        std::cout << "\x1b[2mrunning tests…\x1b[0m";
+    open_groups.push_back(
+        {.name = name, .path = std::move(path), .slow = slow});
+    try {
+        std::forward<F>(body)();
+    } catch (const std::exception & e) {
+        ++failures;
+        std::cerr << name << ": group failed while declaring tests: "
+                  << e.what() << '\n';
+        nxt::debug::print_current_exception_trace(std::cerr, "  ");
+    } catch (...) {
+        ++failures;
+        std::cerr << name << ": group failed while declaring tests\n";
+    }
+    open_groups.pop_back();
+}
+
+template<typename F>
+void run_test(
+    std::string_view name,
+    const std::vector<int> & path,
+    std::chrono::seconds timeout,
+    F && body)
+{
+    auto failures_before = failures;
+    arm_test_timeout(
+        std::format("after {}s: {} {}", timeout.count(), format_path(path), name),
+        timeout);
+    inside_test = true;
+    auto start = std::chrono::steady_clock::now();
+    try {
+        std::forward<F>(body)();
+    } catch (const std::exception & e) {
+        ++failures;
+        std::cerr << name << ": unexpected exception: " << e.what() << '\n';
+        nxt::debug::print_current_exception_trace(std::cerr, "  ");
+    } catch (...) {
+        ++failures;
+        std::cerr << name << ": unexpected non-std exception\n";
+        nxt::debug::print_current_exception_trace(std::cerr, "  ");
+    }
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - start)
+                          .count();
+    inside_test = false;
+    disarm_test_timeout();
+
+    auto timeout_ms =
+        std::chrono::duration<double, std::milli>(timeout).count();
+    if (elapsed_ms >= timeout_ms) {
+        ++failures;
+        std::cerr << name << ": too slow: " << format_ms(elapsed_ms)
+                  << " >= " << format_ms(timeout_ms) << '\n';
     }
 
+    auto failed = failures != failures_before;
+    ++tests_run;
     if (failed)
-        std::cout << " \x1b[31m×\x1b[0m";
+        ++tests_failed;
+    print_open_groups();
+    print_line(path, name, false, failed, elapsed_ms);
+    std::cout.flush();
 }
-
-struct scoped_test
-{
-    scoped_test(test_result & result, const std::vector<int> & path)
-    {
-        active_tests.push_back(&result);
-        active_path = path;
-        sibling_counts.push_back(0);
-    }
-
-    ~scoped_test()
-    {
-        sibling_counts.pop_back();
-        active_tests.pop_back();
-        if (active_tests.empty())
-            active_path.clear();
-        else
-            active_path = active_tests.back()->path;
-    }
-};
 
 struct test_case
 {
     std::string_view name;
     std::chrono::seconds timeout = test_timeout;
+    bool is_slow = false;
+    bool is_group = false;
 
     // Full-system integration tests can opt into a longer deadline without
     // weakening the one-second limit on ordinary unit tests.
     test_case with_timeout(std::chrono::seconds limit) const
     {
-        return {name, limit};
+        auto result = *this;
+        result.timeout = limit;
+        return result;
+    }
+
+    /// Mark a test, or a whole group, as a slow integration case.
+    test_case slow() const
+    {
+        auto result = *this;
+        result.is_slow = true;
+        return result;
     }
 
     template<typename F>
     void operator=(F && f) const
     {
-        auto path = active_path;
-        auto & sibling_count = sibling_counts.back();
-        path.push_back(++sibling_count);
+        if (inside_test) {
+            ++failures;
+            std::cerr << "\"" << name
+                      << "\" is declared inside a test; declare its parent "
+                         "with _group\n";
+            return;
+        }
 
-        if (phase == run_phase::execution && !active_execution_path(path))
+        auto & parent = open_groups.back();
+        auto path = parent.path;
+        path.push_back(++parent.children);
+        if (!selected_path(path) && !ancestor_path(path))
             return;
 
-        auto & siblings =
-            active_tests.empty() ? tests : active_tests.back()->children;
-        auto & result = phase == run_phase::discovery
-                           ? siblings.emplace_back()
-                           : find_or_add_result(siblings, name, path);
-        if (phase == run_phase::discovery) {
-            result.name = name;
-            result.path = path;
+        auto const slow = is_slow || parent.slow;
+        if (slow && !include_slow && !only_slow && !named_by_selector(path)) {
+            ++slow_skipped;
+            return;
         }
 
-        auto failures_before = failures;
-        auto failed_tests_before = tests_failed;
-        auto count_this_test =
-            phase == run_phase::execution && active_leaf_path == path;
-        auto scope = scoped_test{result, path};
-        auto timeout_label = std::format(
-            "after {}s: {} {}",
-            timeout.count(),
-            format_path(path),
-            result.name);
-        arm_test_timeout(timeout_label, timeout);
-        auto start = std::chrono::steady_clock::now();
-        try {
-            std::forward<F>(f)();
-        } catch (const std::exception & e) {
-            if (phase == run_phase::execution) {
-                ++failures;
-                std::cerr << result.name
-                          << ": unexpected exception: " << e.what() << '\n';
-                nxt::debug::print_current_exception_trace(std::cerr, "  ");
-            }
-        } catch (...) {
-            if (phase == run_phase::execution) {
-                ++failures;
-                std::cerr << result.name << ": unexpected non-std exception\n";
-                nxt::debug::print_current_exception_trace(std::cerr, "  ");
-            }
+        if (is_group) {
+            run_group(name, std::move(path), slow, std::forward<F>(f));
+            return;
         }
-        disarm_test_timeout();
-
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - start);
-        if (phase == run_phase::execution)
-            result.elapsed_ms += static_cast<double>(elapsed.count()) / 1000.0;
-
-        if (count_this_test) {
-            result.counted = true;
-            ++tests_run;
-        }
-        const auto timeout_ms =
-            std::chrono::duration<double, std::milli>(timeout).count();
-        if (count_this_test && result.elapsed_ms >= timeout_ms) {
-            ++failures;
-            std::cerr << result.name
-                      << ": too slow: " << format_ms(result.elapsed_ms)
-                      << " >= " << format_ms(timeout_ms) << '\n';
-        }
-
-        result.failed = result.failed || failures != failures_before
-                        || tests_failed != failed_tests_before;
-        if (count_this_test && result.failed)
-            ++tests_failed;
-
-        if (count_this_test)
-            note_progress(result.failed);
+        // A test cannot hold a deeper selection, so only selected tests run.
+        if (!selected_path(path) || (only_slow && !slow))
+            return;
+        run_test(name, path, timeout, std::forward<F>(f));
     }
 };
 
@@ -442,6 +419,11 @@ struct suite
 inline test_case operator""_test(const char * name, std::size_t len)
 {
     return {std::string_view{name, len}};
+}
+
+inline test_case operator""_group(const char * name, std::size_t len)
+{
+    return {.name = std::string_view{name, len}, .is_group = true};
 }
 
 constexpr int operator""_i(unsigned long long value)
@@ -478,8 +460,6 @@ struct expectation
 
 inline expectation expect(bool ok)
 {
-    if (phase == run_phase::discovery)
-        return {true};
     if (!ok)
         ++failures;
     return {ok};
@@ -523,14 +503,26 @@ inline std::optional<std::vector<int>> parse_filter(std::string_view text)
     return path;
 }
 
-inline bool configure_filters(run_options options)
+inline bool configure(run_options options)
 {
     filters.clear();
+    include_slow = false;
+    only_slow = false;
     for (auto i = 1; i < options.argc; ++i) {
-        auto filter = parse_filter(options.argv[i]);
+        auto const arg = std::string_view{options.argv[i]};
+        if (arg == "--slow") {
+            include_slow = true;
+            continue;
+        }
+        if (arg == "--only-slow") {
+            only_slow = true;
+            continue;
+        }
+        auto filter = parse_filter(arg);
         if (!filter) {
-            std::cerr << "invalid test selector: " << options.argv[i]
-                      << '\n';
+            std::cerr << "invalid test selector: " << arg
+                      << " (expected a dotted number like 2.7, --slow, or "
+                         "--only-slow)\n";
             return false;
         }
         filters.push_back(std::move(*filter));
@@ -543,84 +535,9 @@ inline void reset_run_state()
     failures = 0;
     tests_run = 0;
     tests_failed = 0;
-    progress_started = false;
-    tests.clear();
-    active_tests.clear();
-    active_path.clear();
-    sibling_counts.clear();
-    active_leaf_path.reset();
-    phase = run_phase::execution;
-}
-
-inline void run_registered_tests()
-{
-    sibling_counts.push_back(0);
-    for (const auto & definition : test_definitions())
-        test_case{definition.name} = definition.body;
-    sibling_counts.pop_back();
-}
-
-inline std::vector<std::vector<int>> discover_test_leaves()
-{
-    tests.clear();
-    active_tests.clear();
-    active_path.clear();
-    sibling_counts.clear();
-    active_leaf_path.reset();
-    phase = run_phase::discovery;
-
-    run_registered_tests();
-
-    auto leaves = std::vector<std::vector<int>>{};
-    collect_selected_leaves(tests, leaves);
-    return leaves;
-}
-
-inline void run_test_leaf(const std::vector<int> & path)
-{
-    active_tests.clear();
-    active_path.clear();
-    sibling_counts.clear();
-    active_leaf_path = path;
-    phase = run_phase::execution;
-
-    auto failures_before = failures;
-    auto tests_run_before = tests_run;
-    auto tests_failed_before = tests_failed;
-
-    run_registered_tests();
-
-    if (failures == failures_before && tests_failed == tests_failed_before)
-        return;
-
-    if (auto * leaf = find_result(tests, path)) {
-        leaf->failed = true;
-        leaf->counted = true;
-    }
-    if (tests_run == tests_run_before)
-        ++tests_run;
-    if (tests_failed == tests_failed_before)
-        ++tests_failed;
-}
-
-inline void run_selected_tests()
-{
-    auto leaves = discover_test_leaves();
-
-    failures = 0;
-    tests_run = 0;
-    tests_failed = 0;
-    progress_started = false;
-    tests.clear();
-
-    for (const auto & leaf : leaves)
-        run_test_leaf(leaf);
-
-    active_tests.clear();
-    active_path.clear();
-    sibling_counts.clear();
-    active_leaf_path.reset();
-    phase = run_phase::execution;
+    slow_skipped = 0;
+    inside_test = false;
+    open_groups.clear();
 }
 
 template<typename>
@@ -629,20 +546,26 @@ struct config
     int run(run_options options = {}) const
     {
         reset_run_state();
-        if (!configure_filters(options))
+        if (!configure(options))
             return 1;
-        run_selected_tests();
 
-        if (progress_started)
-            std::cout << "\x1b[2m done\x1b[0m\n\n";
-        else
-            std::cout << '\n';
-        print_report();
-        print_summary();
-        return tests_failed == 0
-                       && (!filters.empty() ? tests_run != 0 : true)
-                   ? 0
-                   : 1;
+        std::cout << "\x1b[1m" << test_root_name << "\x1b[0m\n";
+        std::cout.flush();
+        auto start = std::chrono::steady_clock::now();
+
+        // The registered suites are the root's children.
+        open_groups.push_back({.name = test_root_name, .printed = true});
+        for (const auto & definition : test_definitions())
+            test_case{.name = definition.name, .is_group = true} =
+                definition.body;
+        open_groups.clear();
+
+        print_summary(std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - start)
+                          .count());
+        auto const matched =
+            (filters.empty() && !only_slow) || tests_run != 0;
+        return tests_failed == 0 && failures == 0 && matched ? 0 : 1;
     }
 };
 

@@ -1761,7 +1761,7 @@ inline nxtrt::task<int> map_over_manual_wish(nxtrt::coin_t token)
 
 static suite runtime_tests{
     "Runtime", [] {
-        "charting"_test = [] {
+        "charting"_group = [] {
             "sparkline is a pure width-to-text transform"_test = [] {
                 auto values = std::to_array<double>({0.0, 1.0, 2.0});
 
@@ -1820,7 +1820,7 @@ static suite runtime_tests{
             };
         };
 
-        "text flow"_test = [] {
+        "text flow"_group = [] {
             "wraps paragraphs with markdown list continuation"_test = [] {
                 auto lines = nxtui::tui::text_flow::wrap_text(
                     "- hello wide world\n\nnext paragraph",
@@ -1857,7 +1857,7 @@ static suite runtime_tests{
             };
         };
 
-        "deck"_test = [] {
+        "deck"_group = [] {
             "sync_wait returns completed root task values"_test = [] {
                 auto deck = nxtrt::deck{};
 
@@ -2460,8 +2460,7 @@ static suite runtime_tests{
             };
         };
 
-        "environment"_test = [] {
-            auto deck = nxtrt::deck{};
+        "environment"_group = [] {
 
             "empty optional refs throw on access"_test = [] {
                 struct probe
@@ -2498,7 +2497,8 @@ static suite runtime_tests{
                 expect(get_threw);
             };
 
-            "survives nested task awaits"_test = [&] {
+            "survives nested task awaits"_test = [] {
+                auto deck = nxtrt::deck{};
                 auto result = deck.sync_wait([]() -> nxtrt::task<int> {
                     co_return co_await nxtrt::with_env<ambient_int_key>(
                         41, [] { return read_ambient_int_after_yield(); });
@@ -2507,7 +2507,8 @@ static suite runtime_tests{
                 expect(result == 41_i);
             };
 
-            "restores outer env values"_test = [&] {
+            "restores outer env values"_test = [] {
+                auto deck = nxtrt::deck{};
                 auto result = deck.sync_wait([]() -> nxtrt::task<int> {
                     co_return co_await nxtrt::with_env<ambient_int_key>(
                         10, []() -> nxtrt::task<int> {
@@ -2524,7 +2525,8 @@ static suite runtime_tests{
                 expect(result == 1210_i);
             };
 
-            "forked tasks keep env after binder exits"_test = [&] {
+            "forked tasks keep env after binder exits"_test = [] {
+                auto deck = nxtrt::deck{};
                 auto child =
                     deck.sync_wait([]()
                         -> nxtrt::task<nxtrt::catching_deed<int>> {
@@ -2552,7 +2554,8 @@ static suite runtime_tests{
                 expect(*result == 99_i);
             };
 
-            "trace context is inherited by forked tasks"_test = [&] {
+            "trace context is inherited by forked tasks"_test = [] {
+                auto deck = nxtrt::deck{};
                 auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
 
@@ -2592,7 +2595,8 @@ static suite runtime_tests{
                 expect(children[1].status == "ok"sv);
             };
 
-            "with trace span scopes task bodies"_test = [&] {
+            "with trace span scopes task bodies"_test = [] {
+                auto deck = nxtrt::deck{};
                 auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
 
@@ -2622,14 +2626,14 @@ static suite runtime_tests{
             };
         };
 
-        "terminal app"_test = [] {
+        "terminal app"_group = [] {
             "keeps the alternate screen opt-in"_test = [] {
                 auto options = nxtrt::terminal_app_options{};
                 expect(!options.alternate_screen);
             };
         };
 
-        "games"_test = [] {
+        "games"_group = [] {
             "bind the current game while the body runs"_test = [] {
                 auto deck = nxtrt::deck{};
 
@@ -2754,7 +2758,7 @@ static suite runtime_tests{
             };
         };
 
-        "firms"_test = [] {
+        "firms"_group = [] {
             "bind the current firm while the body runs"_test = [] {
                 auto deck = nxtrt::deck{};
 
@@ -4460,7 +4464,7 @@ static suite runtime_tests{
                 };
         };
 
-        "tool batches"_test = [] {
+        "tool batches"_group = [] {
             "parse calls and return function_call_output items in order"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto calls = deck.sync_wait([] {
@@ -4521,7 +4525,7 @@ static suite runtime_tests{
             };
         };
 
-        "wishes"_test = [] {
+        "wishes"_group = [] {
             "typed urges are prepared and parked"_test = [] {
                 auto wand = manual_wand{};
                 auto deck = nxtrt::deck{&wand};
@@ -4617,7 +4621,7 @@ static suite runtime_tests{
             };
         };
 
-        "buffers"_test = [] {
+        "buffers"_group = [] {
             "ema rate smooths byte deltas over time"_test = [] {
                 auto rate = nxtrt::ema_rate{std::chrono::seconds{1}};
 
@@ -5156,7 +5160,7 @@ static suite runtime_tests{
                 expect(sink.text == "abcdef");
             };
 
-            "task_bytefeed reads through a task callable"_test = [] {
+            "task_bytefeed reads through a task callable"_group = [] {
                 "from read results"_test = [] {
                     auto deck = nxtrt::deck{};
                     auto read = [](nxtrt::junk<std::byte> dst)
@@ -5347,8 +5351,8 @@ static suite runtime_tests{
                 expect(sink.text == "xy");
             };
 
-            "BYTESINK"_test = [] {
-                "with borrowed storage"_test = [] {
+            "BYTESINK"_group = [] {
+                "with borrowed storage"_group = [] {
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto storage = std::array<std::byte, 4>{};
@@ -5398,7 +5402,7 @@ static suite runtime_tests{
                     };
                 };
 
-                "with owned storage"_test = [] {
+                "with owned storage"_group = [] {
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto writer = chunking_string_sink{64, std::size_t{4}};
@@ -5652,7 +5656,7 @@ static suite runtime_tests{
                     };
                 };
 
-                "with borrowed sink and owned storage"_test = [] {
+                "with borrowed sink and owned storage"_group = [] {
                     "buffers bytes until flush"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto text = std::make_shared<std::string>();
@@ -5674,7 +5678,7 @@ static suite runtime_tests{
                     };
                 };
 
-                "with zero storage"_test = [] {
+                "with zero storage"_group = [] {
                     "owned zero-size buffers write directly"_test = [] {
                         auto deck = nxtrt::deck{};
                         auto writer = chunking_string_sink{2, std::size_t{0}};
@@ -5707,7 +5711,7 @@ static suite runtime_tests{
             };
         };
 
-        "feeds and sinks"_test = [] {
+        "feeds and sinks"_group = [] {
             "peek fills the source buffer without consuming"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto storage = nxtrt::static_value_storage<int, 1>{};
@@ -6092,7 +6096,7 @@ static suite runtime_tests{
             };
         };
 
-        "wires"_test = [] {
+        "wires"_group = [] {
             "buffer values until consumed"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto storage = nxtrt::rack<int>{2};
@@ -6342,7 +6346,7 @@ static suite runtime_tests{
             };
         };
 
-        "bells"_test = [] {
+        "bells"_group = [] {
             "ring wakes waiting tasks"_test = [] {
                 auto rt = nxtrt::runtime{};
                 auto ready = nxtrt::bell{};
@@ -6385,7 +6389,7 @@ static suite runtime_tests{
             };
         };
 
-        "HTTP requests"_test = [] {
+        "HTTP requests"_group = [] {
             "parse simple URLs"_test = [] {
                 auto url = nxtrt::http::parse_url(
                     "http://example.test:8080/path?q=1");
@@ -6417,7 +6421,7 @@ static suite runtime_tests{
             };
         };
 
-        "HTTP bodies"_test = [] {
+        "HTTP bodies"_group = [] {
             "the next response remains buffered after chunked bodies"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto chunks = std::array{

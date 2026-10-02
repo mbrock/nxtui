@@ -778,7 +778,7 @@ void server_tests()
         expect(count() == before);
     };
 #endif
-    "many requests reuse per-operation scopes"_test.with_timeout(30s) = [] {
+    "many requests reuse per-operation scopes"_test.slow().with_timeout(30s) = [] {
         auto options = http::server_options{};
         options.max_connections = 1;
         options.max_requests_per_connection = 5000;
@@ -787,7 +787,7 @@ void server_tests()
         server.stop();
         expect(server.state.requests.size() == 4100);
     };
-    "many connections reuse fixed workers"_test.with_timeout(30s) = [] {
+    "many connections reuse fixed workers"_test.slow().with_timeout(30s) = [] {
         auto options = http::server_options{};
         options.max_connections = 1;
         auto server = server_fixture<Wand>{options};

@@ -564,7 +564,7 @@ static suite compositor_tests{
 
 static suite hud_tests{
     "HUD", [] {
-        "placement"_test = [] {
+        "placement"_group = [] {
             "appears at the bottom of the terminal"_test = [] {
                 GlyphTable glyphs;
                 tui::TerminalCompositor compositor(
@@ -591,7 +591,7 @@ static suite hud_tests{
             };
         };
 
-        "initial install"_test = [] {
+        "initial install"_group = [] {
             "scrolls existing bottom prompts above the HUD"_test = [] {
                 GlyphTable glyphs;
                 tui::TerminalCompositor compositor(
@@ -782,7 +782,7 @@ static suite hud_tests{
                 };
         };
 
-        "rendering"_test = [] {
+        "rendering"_group = [] {
             "preserves the scrollback insertion cursor"_test = [] {
                 GlyphTable glyphs;
                 tui::TerminalCompositor compositor(
@@ -842,7 +842,7 @@ static suite hud_tests{
             };
         };
 
-        "resizing"_test = [] {
+        "resizing"_group = [] {
             "clears rows freed by shrinking"_test = [] {
                 GlyphTable glyphs;
                 tui::TerminalCompositor compositor(
@@ -1103,7 +1103,7 @@ static suite hud_tests{
                 };
         };
 
-        "block output"_test = [] {
+        "block output"_group = [] {
             "stacks the next block without a spacer row after newlines"_test =
                 [] {
                     GlyphTable glyphs;
