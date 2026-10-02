@@ -283,13 +283,13 @@ absence of structured cancellation.
 
 ## Migrate recognizable uses, not every class at once
 
-The usage inventory suggests the following path. HTTP serving and the Wisp
-host have now been converted as described above; the other rows remain
-migration targets, not reports of completed work:
+The usage inventory suggests the following path. HTTP serving, the Wisp
+host, and AI tool batches have now been converted as described here; the
+remaining targets are identified below:
 
 | Use | Why it fits / what must be preserved |
 | --- | --- |
-| [AI tool batches][tool-batches] | Homogeneous jobs; remove fork/join/deed-vector shell. Preserve input-order results and collect-before-rethrow behavior unless deliberately changed. |
+| [AI tool batches][tool-batches] | Migrated to bounded pool admission without fork/join/deed vectors. Ordered collection and collect-before-rethrow are preserved; cancellation stops admission and drains. Direct tool ideas expose completion-order feeds. See [NXTAI status](ai-overview.md). |
 | [Directory metadata][directory-metadata] | Bounded stat ideas; results are sorted afterward, so completion-order production is natural. |
 | [Connection racing][connection-racing] | Coped attempts and first-success consumption. Existing range selection chooses an input-order success after drain; distinguish that from first published success. |
 | [HTTP serving][http-serving] | Migrated to one accept feed and a bounded connection pool, preserving connection-local error containment. |

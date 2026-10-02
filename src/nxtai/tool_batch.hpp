@@ -1,21 +1,29 @@
 #pragma once
 
 #include <nxt/json.hpp>
+#include <nxtrt/pool.hpp>
 #include <nxtrt/scoped_process.hpp>
 #include <nxtrt/task.hpp>
 #include <nxtai/openai_types.hpp>
 #include <nxtai/tool_json.hpp>
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <expected>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <ranges>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace nxtai::tools {
@@ -286,6 +294,8 @@ nxtrt::task<tool_result> run_one_function_tool(
 
     try {
         co_return co_await tool.run(std::move(arguments));
+    } catch (const nxtrt::operation_cancelled &) {
+        throw;
     } catch (const std::exception & e) {
         co_return tool_result{
             .failed = true,
@@ -345,9 +355,8 @@ struct function_call_result
     openai::raw_json output_item;
 };
 
-inline nxtrt::task<function_call_result> run_one_call_for_batch(
-    const tool_registry & tools,
-    function_call call)
+inline nxtrt::task<function_call_result>
+run_function_call(const tool_registry & tools, function_call call)
 {
     auto result = co_await run_function_tool(tools, call);
     auto output_item =
@@ -359,35 +368,89 @@ inline nxtrt::task<function_call_result> run_one_call_for_batch(
     };
 }
 
-inline nxtrt::task<std::vector<function_call_result>> run_function_tool_batch(
-    const tool_registry & tools,
-    std::vector<function_call> calls)
+/// A pool recipe owning one call and borrowing a registry through
+/// settlement. pool<function_call_idea> publishes results in completion
+/// order. Tool errors are failed results; cancellation and uncaught
+/// infrastructure errors throw.
+struct function_call_idea
 {
-    auto deeds = co_await nxtrt::with_firm(
-        [&](nxtrt::firm & scope)
-            -> nxtrt::task<
-                std::vector<nxtrt::catching_deed<function_call_result>>> {
-            auto out =
-                std::vector<nxtrt::catching_deed<function_call_result>>{};
-            out.reserve(calls.size());
-            for (auto & call : calls)
-                out.push_back(scope
-                                  .fork(run_one_call_for_batch(
-                                      tools, std::move(call)))
-                                  .cope());
-            co_await scope.join();
-            co_return out;
-        });
+    const tool_registry * tools;
+    function_call call;
+
+    nxtrt::task<function_call_result> operator()() &
+    {
+        return run_function_call(*tools, std::move(call));
+    }
+};
+
+/// Bounded convenience collector. Retains input order and settles every
+/// call before rethrowing the first input-order infrastructure failure.
+/// Cancellation instead stops admission and drains running work before
+/// propagating.
+inline nxtrt::task<std::vector<function_call_result>>
+run_function_tool_batch(
+    const tool_registry & tools,
+    std::vector<function_call> calls,
+    std::size_t max_in_flight = 4)
+{
+    if (max_in_flight == 0)
+        throw std::invalid_argument{"tool batch needs nonzero capacity"};
+    nxtrt::throw_if_stop_requested();
+    if (calls.empty())
+        co_return std::vector<function_call_result>{};
+
+    using outcome = std::expected<function_call_result, std::exception_ptr>;
+
+    struct batch_call
+    {
+        function_call_idea work;
+        std::optional<outcome> * result;
+
+        nxtrt::task<void> operator()() &
+        {
+            try {
+                result->emplace(co_await work());
+            } catch (const nxtrt::operation_cancelled &) {
+                throw;
+            } catch (...) {
+                result->emplace(std::unexpected{std::current_exception()});
+            }
+        }
+    };
+
+    auto outcomes = std::vector<std::optional<outcome>>(calls.size());
+    auto recipes = std::views::iota(std::size_t{0}, calls.size())
+                   | std::views::transform([&](std::size_t i) {
+                         return batch_call{
+                             {&tools, std::move(calls[i])}, &outcomes[i]};
+                     });
+    auto input_land = nxtrt::static_value_storage<batch_call, 1>{};
+    auto input = nxtrt::value_range_source{recipes, input_land.ref()};
+    auto capacity = std::min(max_in_flight, calls.size());
+    auto slots = std::make_unique<nxtrt::pool_slot<batch_call>[]>(capacity);
+    auto hot_size =
+        nxtrt::farm<nxtrt::pool_slot<batch_call>>::hot_capacity_for(
+            capacity);
+    auto hot = std::vector<std::size_t>(hot_size);
+    auto cold =
+        std::vector<std::uint64_t>(nxtrt::mask<>::words_for(capacity));
+    auto available = nxtrt::farm<nxtrt::pool_slot<batch_call>>{
+        std::span{slots.get(), capacity}, {hot, cold}};
+    auto output = nxtrt::rack<std::monostate>{capacity};
+    auto pending = nxtrt::pool<batch_call>{input, available, output.ref()};
+    auto discard = nxtrt::discarding_sink<std::monostate>{};
+    // The pool, recipes, outcomes, and borrowed land outlive the consuming
+    // task and its shielded cleanup, including cancellation and failure.
+    co_await nxtrt::finally(
+        nxtrt::stream_all(pending, discard),
+        [&pending] { return pending.close(); });
 
     auto out = std::vector<function_call_result>{};
-    out.reserve(deeds.size());
-    for (auto & deed : deeds) {
-        auto result = std::move(deed).get();
-        if (result) {
-            out.push_back(std::move(*result));
-        } else {
-            nxtrt::rethrow(result.error());
-        }
+    out.reserve(outcomes.size());
+    for (auto & result : outcomes) {
+        if (!*result)
+            nxtrt::rethrow(result->error());
+        out.push_back(std::move(**result));
     }
     co_return out;
 }

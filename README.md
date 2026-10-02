@@ -176,6 +176,13 @@ executable. The OpenAI event/data types live under
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
+The executable currently handles one text response, not a model/tool/model
+agent loop. The separate tool library exposes pool-ready call recipes and a
+bounded batch collector (four concurrent calls by default), preserving ordered
+batch results without firm child records or deeds. See the
+[NXTAI status and next steps](docs/ai-overview.md) for what is connected,
+ownership/error contracts, and the remaining integration work.
+
 ## Wisp — portable Lisp machines and HTTP on NXT
 
 The `wisp` executable runs Wisp's guest evaluator on the same NXT deck, with

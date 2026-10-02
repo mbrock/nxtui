@@ -17,6 +17,7 @@
 
 #include "test.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -885,6 +886,85 @@ struct echo_tool
         };
     }
 };
+
+struct tool_batch_probe
+{
+    std::vector<int> delays;
+    std::set<int> failures;
+    std::vector<int> completed;
+    int started = 0;
+    int active = 0;
+    int peak = 0;
+    int settled = 0;
+    int cancelled = 0;
+    bool block = false;
+    bool self_cancel = false;
+};
+
+nxtrt::task<nxtai::tools::tool_result>
+run_tool_batch_probe(tool_batch_probe & state, int id)
+{
+    ++state.started;
+    ++state.active;
+    state.peak = std::max(state.peak, state.active);
+    expect(nxtrt::require_current_firm().child_count() == 0);
+
+    struct active_guard
+    {
+        tool_batch_probe & state;
+
+        ~active_guard()
+        {
+            --state.active;
+            ++state.settled;
+        }
+    } guard{state};
+
+    if (state.block) {
+        while (!nxtrt::task_stop_requested())
+            co_await nxtrt::yield();
+        // Cleanup must await actual settlement, not just request stop.
+        co_await nxtrt::yield();
+        co_await nxtrt::yield();
+        ++state.cancelled;
+        throw nxtrt::operation_cancelled{};
+    }
+    for (int i = 0; i < state.delays[id]; ++i)
+        co_await nxtrt::yield();
+    nxtrt::throw_if_stop_requested();
+    if (state.self_cancel) {
+        ++state.cancelled;
+        throw nxtrt::operation_cancelled{};
+    }
+    state.completed.push_back(id);
+    if (state.failures.contains(id))
+        throw nxtrt::runtime_error{"probe failure " + std::to_string(id)};
+    co_return nxtai::tools::tool_result{.output = std::to_string(id)};
+}
+
+struct batch_probe_tool : echo_tool
+{
+    tool_batch_probe * state;
+
+    nxtrt::task<nxtai::tools::tool_result> run(parameters args) const
+    {
+        return run_tool_batch_probe(*state, std::stoi(args.text));
+    }
+};
+
+std::vector<nxtai::tools::function_call> tool_batch_probe_calls(int count)
+{
+    auto calls = std::vector<nxtai::tools::function_call>{};
+    for (int i = 0; i < count; ++i) {
+        auto id = std::to_string(i);
+        calls.push_back({
+            .call_id = id,
+            .name = "echo",
+            .arguments = "{\"text\":\"" + id + "\"}",
+        });
+    }
+    return calls;
+}
 
 nxtrt::task<int> read_ambient_int_after_yield()
 {
@@ -4479,6 +4559,227 @@ static suite runtime_tests{
                 expect(results[0].result.failed);
                 expect(results[0].result.output == "unknown tool");
             };
+
+            "bounded admission reuses slots and preserves input order"_test =
+                [] {
+                    for (auto capacity : {1, 2, 4, 9}) {
+                        auto deck = nxtrt::deck{};
+                        auto state = tool_batch_probe{
+                            .delays = {80, 1, 5, 1, 3, 2, 1}};
+                        auto tools = nxtai::tools::make_tool_registry(
+                            {nxtai::tools::make_function_tool(
+                                batch_probe_tool{.state = &state})});
+                        auto results = deck.sync_wait([&] {
+                            if (capacity == 4)
+                                return nxtai::tools::
+                                    run_function_tool_batch(
+                                        tools, tool_batch_probe_calls(7));
+                            return nxtai::tools::run_function_tool_batch(
+                                tools, tool_batch_probe_calls(7), capacity);
+                        });
+                        expect(state.peak == std::min(capacity, 7));
+                        expect(state.started == 7 && state.settled == 7);
+                        expect(state.active == 0);
+                        expect(
+                            state.completed.front()
+                            == (capacity == 1 ? 0 : 1));
+                        expect(results.size() == 7_ul);
+                        for (int i = 0; i < 7; ++i) {
+                            expect(
+                                results[i].call.call_id
+                                == std::to_string(i));
+                            expect(
+                                results[i].result.output
+                                == std::to_string(i));
+                            expect(!results[i].result.failed);
+                        }
+                    }
+                };
+
+            "tool ideas feed completion order directly through a pool"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto state = tool_batch_probe{.delays = {80, 1, 1}};
+                    auto tools = nxtai::tools::make_tool_registry(
+                        {nxtai::tools::make_function_tool(
+                            batch_probe_tool{.state = &state})});
+                    auto calls = tool_batch_probe_calls(3);
+                    using idea = nxtai::tools::function_call_idea;
+                    auto ideas =
+                        calls | std::views::transform([&](auto & call) {
+                            return idea{&tools, std::move(call)};
+                        });
+                    auto input = nxtrt::value_range_source{ideas};
+                    auto slots = std::array<nxtrt::pool_slot<idea>, 2>{};
+                    auto available =
+                        nxtrt::farm<nxtrt::pool_slot<idea>, 2>{&slots};
+                    auto output = nxtrt::static_value_storage<
+                        nxtai::tools::function_call_result,
+                        2>{};
+                    auto results =
+                        nxtrt::pool<idea>{input, available, output.ref()};
+                    auto collected =
+                        std::vector<nxtai::tools::function_call_result>{};
+                    auto sink = nxtrt::container_sink{collected};
+                    auto count = deck.sync_wait([&] {
+                        return nxtrt::finally(
+                            nxtrt::stream_all(results, sink),
+                            [&] { return results.close(); });
+                    });
+                    expect(count == 3_ul);
+                    expect(collected.size() == 3_ul);
+                    expect(collected[0].call.call_id == "1");
+                    expect(collected[1].call.call_id == "2");
+                    expect(collected[2].call.call_id == "0");
+                    expect(collected[0].result.output == "1");
+                    expect(state.peak == 2 && state.active == 0);
+                    expect(results.occupied() == 0_ul);
+                };
+
+            "tool failures and invalid arguments remain per call results"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto state = tool_batch_probe{
+                        .delays = {1, 1, 1}, .failures = {0}};
+                    auto tools = nxtai::tools::make_tool_registry(
+                        {nxtai::tools::make_function_tool(
+                            batch_probe_tool{.state = &state})});
+                    auto calls = tool_batch_probe_calls(3);
+                    calls[1].arguments = R"({"missing":"text"})";
+                    auto results = deck.sync_wait([&] {
+                        return nxtai::tools::run_function_tool_batch(
+                            tools, std::move(calls), 1);
+                    });
+                    expect(results[0].result.failed);
+                    expect(
+                        results[0].result.output
+                        == "tool execution failed: probe failure 0");
+                    expect(results[1].result.failed);
+                    expect(
+                        results[1].result.output
+                        == "invalid tool arguments json");
+                    expect(!results[2].result.failed);
+                    expect(results[2].result.output == "2");
+                    expect(state.started == 2 && state.settled == 2);
+                };
+
+            "typed tool cancellation is not converted to a failed result"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto state = tool_batch_probe{
+                        .delays = std::vector<int>(7, 1),
+                        .self_cancel = true};
+                    auto tools = nxtai::tools::make_tool_registry(
+                        {nxtai::tools::make_function_tool(
+                            batch_probe_tool{.state = &state})});
+                    auto cancelled = false;
+                    try {
+                        deck.sync_wait([&] {
+                            return nxtai::tools::run_function_tool_batch(
+                                tools, tool_batch_probe_calls(7), 1);
+                        });
+                    } catch (const nxtrt::operation_cancelled &) {
+                        cancelled = true;
+                    }
+                    expect(cancelled);
+                    expect(state.started == 1 && state.settled == 1);
+                    expect(state.active == 0 && state.cancelled == 1);
+                };
+
+            "infrastructure failures settle all calls before input order rethrow"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto state = tool_batch_probe{
+                        .delays = {80, 1, 1, 1, 1}, .failures = {0, 1}};
+                    // Bypass the typed tool adapter so exceptions are
+                    // transport / registry failures rather than ordinary
+                    // failed tool results.
+                    auto tools = nxtai::tools::make_tool_registry(
+                        {nxtai::tools::function_tool_entry{
+                            .name = "echo",
+                            .run = [&state](std::string_view arguments) {
+                                auto text =
+                                    nxtai::tools::json_string_member(
+                                        arguments, "text");
+                                return run_tool_batch_probe(
+                                    state, std::stoi(*text));
+                            }}});
+                    auto message = std::string{};
+                    try {
+                        deck.sync_wait([&] {
+                            return nxtai::tools::run_function_tool_batch(
+                                tools, tool_batch_probe_calls(5), 2);
+                        });
+                    } catch (const nxtrt::runtime_error & error) {
+                        message = error.what();
+                    }
+                    expect(message == "probe failure 0");
+                    expect(state.completed.front() == 1);
+                    expect(state.started == 5 && state.settled == 5);
+                    expect(state.active == 0);
+                };
+
+            "cancellation at startup and during work stops admission and drains"_test =
+                [] {
+                    auto saw_running = false;
+                    for (int turns = 0; turns < 30; ++turns) {
+                        auto deck = nxtrt::deck{};
+                        auto state = tool_batch_probe{.block = true};
+                        auto tools = nxtai::tools::make_tool_registry(
+                            {nxtai::tools::make_function_tool(
+                                batch_probe_tool{.state = &state})});
+                        auto root = nxtrt::root_task{
+                            deck, [&] {
+                                return nxtai::tools::
+                                    run_function_tool_batch(
+                                        tools,
+                                        tool_batch_probe_calls(9),
+                                        2);
+                            }};
+                        root.start();
+                        for (int i = 0; i < turns; ++i)
+                            deck.run_ready();
+                        root.inner().request_stop();
+                        deck.run_until_idle();
+                        expect(root.inner().done());
+                        auto cancelled = false;
+                        try {
+                            (void) std::move(root.inner()).result();
+                        } catch (const nxtrt::operation_cancelled &) {
+                            cancelled = true;
+                        }
+                        expect(cancelled);
+                        expect(state.started <= 2);
+                        expect(state.active == 0);
+                        expect(state.settled == state.started);
+                        expect(state.cancelled == state.started);
+                        if (turns == 0)
+                            expect(state.started == 0);
+                        saw_running |= state.started != 0;
+                    }
+                    expect(saw_running);
+                };
+
+            "empty batches and invalid capacity do not invoke tools"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto tools = nxtai::tools::tool_registry{};
+                    auto results = deck.sync_wait([&] {
+                        return nxtai::tools::run_function_tool_batch(
+                            tools, {});
+                    });
+                    expect(results.empty());
+                    auto rejected = false;
+                    try {
+                        deck.sync_wait([&] {
+                            return nxtai::tools::run_function_tool_batch(
+                                tools, {}, 0);
+                        });
+                    } catch (const std::invalid_argument &) {
+                        rejected = true;
+                    }
+                    expect(rejected);
+                };
         };
 
         "wishes"_group = [] {
