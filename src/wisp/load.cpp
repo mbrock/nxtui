@@ -16,10 +16,14 @@ std::string_view base_library() noexcept
         reinterpret_cast<const char *>(base_source), sizeof(base_source)};
 }
 
-loader::loader(heap & storage, evaluator & machine, std::string_view source)
+loader::loader(
+    heap & storage,
+    evaluator & machine,
+    std::string_view source,
+    std::string_view path)
     : heap_(storage)
     , machine_(machine)
-    , input_(storage, machine, source)
+    , input_(storage, machine, source, path)
     , run_(storage)
 {
 }

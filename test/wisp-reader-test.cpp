@@ -53,6 +53,35 @@ struct reading
 
 static suite reader_tests{
     "WISP READER", [] {
+        "named readers keep absolute locations across cursor restarts"_test =
+            [] {
+                reading m;
+                const std::string source = "nil\n; comment\n  \"é\" )";
+                reader first{m.h, m.vm, source, "app/example.wisp"};
+                expect(first.next() == std::optional{nil});
+                reader rest{
+                    m.h,
+                    m.vm,
+                    source,
+                    "app/example.wisp",
+                    first.position()};
+                expect(rest.next().has_value());
+                expect(
+                    rest.location(rest.form_position())
+                    == "app/example.wisp:3:3");
+                try {
+                    (void) rest.next();
+                    expect(false) << "accepted unmatched close";
+                } catch (const read_error & error) {
+                    expect(error.offset == source.size() - 1);
+                    expect(
+                        std::string{error.what()}
+                        == "app/example.wisp:3:8: unexpected character");
+                }
+                expect(source_location("", "empty", 0) == "empty:1:1");
+                expect(source_location("a\n", "eof", 2) == "eof:2:1");
+            };
+
         "incremental forms distinguish NIL, zero, and clean EOF"_test = [] {
             reading m;
             reader empty{m.h, m.vm, ""};

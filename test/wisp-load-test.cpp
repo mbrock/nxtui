@@ -114,6 +114,23 @@ static suite source_tests{
                 }
             };
 
+        "loader diagnostics name the enclosing top-level form"_test = [] {
+            source_machine m;
+            loader source{
+                m.h, m.vm, "nil\n; ignored\n  (head 1)", "app.wisp"};
+            auto state = evaluation::runnable;
+            while (state == evaluation::runnable) {
+                state = source.advance(1);
+                m.h.collect();
+            }
+            expect(state == evaluation::failed);
+            expect(source.location() == "app.wisp:3:3");
+            loader bad{m.h, m.vm, "nil\n  )", "bad.wisp"};
+            expect(bad.advance(100) == evaluation::failed);
+            expect(print(m.h, m.h.get<tag::run, field::err>(bad.run()))
+                       .contains("bad.wisp:2:3: unexpected character"));
+        };
+
         "the guest bootstrap supplies definitions, quasiquotation, and eager lambdas"_test
             .with_timeout(10s) = [] {
             source_machine m{base_image()};

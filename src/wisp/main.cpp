@@ -90,16 +90,17 @@ std::int64_t deadline_ms(const heap & h, word value)
 std::string read_file(const std::string & path)
 {
     std::ifstream file(path, std::ios::binary);
-    require(file.is_open(), "cannot open source file");
+    require(file.is_open(), path + ":1:1: cannot open source file");
     std::string result;
     std::array<char, 8192> buffer;
     while (file.read(buffer.data(), buffer.size()) || file.gcount()) {
         require(
             result.size() + file.gcount() <= tape::default_limit,
-            "source exceeds 64 MiB");
+            path + ":1:1: source exceeds 64 MiB");
         result.append(buffer.data(), file.gcount());
     }
-    require(file.eof() && !file.bad(), "cannot read source file");
+    require(
+        file.eof() && !file.bad(), path + ":1:1: cannot read source file");
     return result;
 }
 
@@ -237,7 +238,7 @@ struct host
     {
         const auto xs = vector(h, entry.get(), 7);
         require(
-            xs[0] == vm.keyword("NXT-WISP-3"), "unsupported host image");
+            xs[0] == vm.keyword("NXT-WISP-4"), "unsupported host image");
         return xs[field];
     }
 
@@ -281,19 +282,33 @@ struct host
         co_return value;
     }
 
-    void source(std::string_view value)
+    void source(std::string_view value, std::string_view path = "<repl>")
     {
         require(
             value.size() <= tape::default_limit, "source exceeds 64 MiB");
+        // Source name and enclosing form position are saved with the text;
+        // diagnostics after restore never consult the original file.
+        const auto source =
+            h.newv32(std::array{h.newv08(value), h.newv08(path), word{0}});
         entry.set(h.newv32(
             std::array{
-                vm.keyword("NXT-WISP-3"),
-                h.newv08(value),
+                vm.keyword("NXT-WISP-4"),
+                source,
                 word{0},
                 nil,
                 nil,
                 nil,
                 h.newv08("0")}));
+    }
+
+    std::string location() const
+    {
+        const auto source = vector(h, get(1), 3);
+        require(
+            tag_of(source[2]) == tag::integer && integer(source[2]) >= 0,
+            "invalid source form position");
+        return source_location(
+            text(h, source[0]), text(h, source[1]), integer(source[2]));
     }
 
     void identify(root & pending)
@@ -1012,7 +1027,8 @@ struct host
             const bool active = get(3) != nil || get(4) != nil;
             if (!co_await execute(entry, cancel && get(4) != nil))
                 throw std::runtime_error(
-                    print(h, h.get<tag::run, field::err>(get(3))));
+                    location() + ": while evaluating top-level form: "
+                    + print(h, h.get<tag::run, field::err>(get(3))));
             cancel = false;
             if (saved)
                 co_return false;
@@ -1023,17 +1039,20 @@ struct host
                     output, print(h, get(5), vm.current_package()) + "\n");
             }
             const auto offset = get(2);
-            const auto program = text(h, get(1));
+            const auto info = vector(h, get(1), 3);
+            const auto program = text(h, info[0]);
+            const auto path = text(h, info[1]);
             require(
                 tag_of(offset) == tag::integer && integer(offset) >= 0
                     && std::size_t(integer(offset)) <= program.size(),
                 "invalid source position");
             reader source{
-                h, vm, std::string_view{program}.substr(integer(offset))};
+                h, vm, program, path, std::size_t(integer(offset))};
             const auto form = source.next();
-            set(2, fixnum(integer(offset) + source.position()));
+            set(2, fixnum(source.position()));
             if (!form)
                 co_return true;
+            h.v32set(get(1), 2, fixnum(source.form_position()));
             const auto thunk = h.make<tag::fun>({nil, nil, *form, nil, 0});
             set(3, start(thunk, entry.get()));
             collect_if_needed();
@@ -1067,9 +1086,10 @@ struct host
     }
 };
 
-nxtrt::task<bool> execute(host & app, std::string source, std::string save)
+nxtrt::task<bool>
+execute(host & app, std::string source, std::string path, std::string save)
 {
-    app.source(source);
+    app.source(source, path);
     co_return co_await app.run(true, save);
 }
 
@@ -1131,8 +1151,8 @@ int main(int argc, char ** argv)
             app.granted = std::move(granted);
             nxtrt::runtime runtime;
             const auto source = read_file(argv[2]);
-            const bool done =
-                runtime.run([&] { return execute(app, source, save); });
+            const bool done = runtime.run(
+                [&] { return execute(app, source, argv[2], save); });
             require(
                 !done || save.empty(),
                 "program completed without a timer; no checkpoint written");
@@ -1143,7 +1163,8 @@ int main(int argc, char ** argv)
             host app{image->storage, image->machine, image->entry};
             app.granted = std::move(granted);
             if (command == "inspect") {
-                std::cout << "source-byte-offset: "
+                std::cout << "source-location: " << app.location()
+                          << "\nsource-byte-offset: "
                           << print(image->storage, app.get(2)) << "\n";
                 const auto pending = app.get(4);
                 if (pending == nil) {

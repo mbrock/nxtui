@@ -18,7 +18,8 @@
 (set! %host-read-bytes
   (fn (count) (await (vector :read-bytes count))))
 
-;; Entry: [:NXT-WISP-3 source byte-offset run pending last-result serial].
+;; Entry: [:NXT-WISP-4 [source path form-start] byte-offset run pending
+;;         last-result serial].
 ;; Callback activations share its run/pending/result field positions.
 ;; Pending: [id [operation arguments] deadline resume raise].
 ;; The host assigns a decimal request ID. Interning a GENKEY per effect
@@ -70,6 +71,69 @@
 ;; :PERMISSION-DENIED, :INVALID-ARGUMENT or :IO.
 (defun read-file (path)
   (await (vector :read-file path)))
+
+;; Local source loading, adapted from mbrock/wisp web/deno-base.wisp.
+;; Grant-qualified paths select a file; ./ and ../ are relative only to an
+;; active LOAD, never to the host cwd or the CLI entry file. Normalize before
+;; cache/cycle checks, without letting .. cross a grant root. READ-FILE still
+;; enforces the actual authority and never follows symlinks.
+(defvar *loaded-files* nil)
+(defparameter *loading-files* nil)
+
+(defun %load-parts (parts reversed path)
+  (if (nil? parts)
+      (reverse reversed)
+    (let ((part (head parts)))
+      (cond
+        ((equal? part "") (error 'load-path-error path "empty path segment"))
+        ((equal? part ".") (%load-parts (tail parts) reversed path))
+        ((equal? part "..")
+         (if (tail reversed)
+             (%load-parts (tail parts) (tail reversed) path)
+           (error 'load-path-error path "cannot cross a grant root")))
+        (t (%load-parts (tail parts) (cons part reversed) path))))))
+
+(defun %load-path (path)
+  (let* ((parts (split-string path "/"))
+         (relative (or (equal? (head parts) ".")
+                       (equal? (head parts) ".."))))
+    (when (and relative (nil? *loading-files*))
+      (error 'load-path-error path "relative load needs an active source file"))
+    (join-strings "/"
+      (%load-parts
+        (if relative
+            (append (butlast (split-string (head *loading-files*) "/")) parts)
+          parts)
+        nil path))))
+
+(defun %load-forms (stream)
+  (let ((next (read-from-string-stream! stream)))
+    (when next
+      (eval (head next))
+      (%load-forms stream))))
+
+;; Returns the normalized path on success, NIL on a cache hit. Failed or
+;; escaped loads are not cached; earlier definitions/effects are not undone.
+;; The dynamic stack unwinds on errors/nonlocal exits, and survives awaits.
+;; Source, cursor, cache and continuations are heap data, including at a
+;; timer checkpoint inside a loaded form. No implicit evaluator yield.
+(defun load (filename)
+  (let ((path (%load-path filename)))
+    (when (includes? *loading-files* path)
+      (error 'load-cycle (reverse (cons path *loading-files*))))
+    (unless (includes? *loaded-files* path)
+      (binding ((*loading-files* (cons path *loading-files*)))
+        (let ((stream nil))
+          (try
+            (do
+              (set! stream (string-input-stream (read-file path) path))
+              (%load-forms stream)
+              (set! *loaded-files* (cons path *loaded-files*))
+              path)
+            (catch (condition continuation)
+              (error 'load-error
+                (if stream (vector-get stream 4) (string-append path ":1:1"))
+                condition))))))))
 
 ;; [kind size modified-unix-ms], kind one of :file :directory :symlink
 ;; :other, or NIL when nothing is there. Size and time are decimal strings,
