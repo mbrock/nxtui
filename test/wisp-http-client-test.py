@@ -12,8 +12,6 @@ import threading
 
 binary = str(pathlib.Path(sys.argv[1]).resolve())
 payload = b"decoded:\x00\xff\x80:end"
-waiting = threading.Event()
-released = threading.Event()
 timed_out = threading.Event()
 closed = threading.Event()
 requests = []
@@ -37,17 +35,12 @@ class Peer(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         requests.append((self.path, self.command, self.headers, body))
-        if self.path == "/wait":
-            waiting.set()
-            assert released.wait(10), "Wisp did not run the release request"
         if self.path == "/stall":
             timed_out.set()
             # A timeout must close the connection after draining native I/O.
             assert self.rfile.read(1) == b""
             closed.set()
             return
-        if self.path == "/release":
-            released.set()
         if self.path == "/interim":
             self.wfile.write(b"HTTP/1.1 103 Early Hints\r\nLink: </asset>\r\n\r\n")
         if self.path == "/chunked":
@@ -65,10 +58,8 @@ class Peer(http.server.BaseHTTPRequestHandler):
         if self.path in ("/limit", "/oversized"):
             # Bound the decoded size, not just the small compressed input.
             body = gzip.compress(b"x" * (8 * 1024 * 1024 + (self.path == "/oversized")))
-        elif self.path == "/state":
-            body = b"waiting" if waiting.is_set() else b"starting"
-        elif self.path in ("/wait", "/interim"):
-            body = payload if self.path == "/interim" else body
+        elif self.path == "/interim":
+            body = payload
         elif self.path == "/redirect":
             body = b"redirect not followed"
         elif self.path != "/echo":
@@ -117,20 +108,20 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
             b'207\n(#<"Set-Cookie" "a=1"> #<"Set-Cookie" "b=2"> '
             b'#<"Content-Encoding" "gzip"> #<"Transfer-Encoding" "chunked">)\n'
             + payload), decoded.stdout
-        overlap = run('''
-          (defun wait-ready ()
-            (if (equal? (vector-get (fetch-http "URL/state") 2) "waiting")
-                nil (do (sleep-ms 1) (wait-ready))))
-          (let* ((body (read-bytes 9))
-                 (job (spawn (fn () (fetch-http "URL/wait" "POST"
-                          (list (vector "X-Test" "first")
-                                (vector "X-Test" "second")) body)))))
-            (wait-ready) (gc) (fetch-http "URL/release")
-            (let ((r (join job))) (gc) (write (vector-get r 2))))
+        direct = run('''
+          (let ((r (await (vector :HTTP-FETCH
+                         (vector "URL/echo" "POST" nil "direct-await")))))
+            (write (vector-get r 2)))
+        ''')
+        assert direct.stdout == b"direct-await", direct.stdout
+        echoed = run('''
+          (write (vector-get (fetch-http "URL/echo" "POST"
+            (list (vector "X-Test" "first")
+                  (vector "X-Test" "second")) (read-bytes 9)) 2))
         ''', input=b"before\0\xff!")
-        assert overlap.stdout == b"before\0\xff!", overlap.stdout
-        sent = next(r for r in requests if r[0] == "/wait")
-        assert sent[1] == "POST" and sent[3] == overlap.stdout, sent
+        assert echoed.stdout == b"before\0\xff!", echoed.stdout
+        sent = next(r for r in requests if r[0] == "/echo" and r[3] == b"before\0\xff!")
+        assert sent[1] == "POST" and sent[3] == echoed.stdout, sent
         assert sent[2].get_all("X-Test") == ["first", "second"]
         assert sent[2]["Connection"] == "close"
         assert sent[2]["Host"] == f"localhost:{peer.server_port}"
@@ -198,9 +189,8 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
         assert timed_out.is_set() and timeout.stdout == b":TIMEOUT\n200\n", timeout.stdout
         assert closed.wait(5), "timed-out request left its socket open"
     finally:
-        released.set()
         peer.shutdown()
         peer.server_close()
         thread.join(timeout=5)
 
-print("Wisp HTTP client: binary POST, chunked gzip, duplicate headers, GC overlap, HEAD/204, errors, limits, timeout and checkpoint rejection passed")
+print("Wisp HTTP client: composite await, binary POST, chunked gzip, duplicate headers, GC, HEAD/204, errors, limits, timeout and checkpoint rejection passed")

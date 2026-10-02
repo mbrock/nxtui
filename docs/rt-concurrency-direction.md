@@ -5,10 +5,11 @@ direction established while simplifying firms and introducing bounded idea
 pools, and the questions to resolve with real migrations.
 
 The implemented baseline is the pool introduced in commit `8946acc`.
-The separate Wisp async/HTTP simplification is in progress while this note is
-being written. Its intended boundary is recorded below, not claimed as a
-completed implementation. Reconcile that work before treating its old worker
-architecture as either a requirement or an API to preserve.
+The Wisp async/HTTP simplification now uses that pool for native connections
+and an explicit operation-awaiting bridge, without permanent guest workers.
+See [the Wisp guide](../README.md#wisp--portable-lisp-machines-and-http-on-nxt)
+and [RFC 0018](../rfc/new/rfc-0018-portable-wisp-lisp-machines.md) for its
+implemented contract; guest structured concurrency remains a design question.
 
 ## What exists, and what is a direction
 
@@ -21,7 +22,7 @@ architecture as either a requirement or an API to preserve.
 | Frame provision | Still supplied by the ambient firm, including for pool jobs |
 | Idea-level `cope`, generic feed mapping, lifetime-aware terminal consumers | Design direction; no APIs are specified here as already available |
 | Static heterogeneous teams | Design direction, not a revived bounded-firm implementation |
-| Wisp without permanent evaluation workers | Coordinated work in progress; guest structured-concurrency semantics remain open |
+| Wisp without permanent evaluation workers | Implemented explicit-await bridge and pool-based HTTP; guest structured-concurrency semantics remain open |
 
 See @ref rt_pool "the pool guide" for the current API and executable example.
 
@@ -239,15 +240,16 @@ bridge can await a native task, which may compose many low-level wishes, then
 arrange resumption of that computation. HTTP is such a composite operation,
 not necessarily one wand wish.
 
-The agreed direction for the parallel Wisp work is to simplify toward that
-single-threaded async bridge, removing the permanent worker/job layer rather
-than preserving it as an implicit language contract. Single-threaded does not
+The executable Wisp host now uses that single-threaded async bridge, removing
+the permanent worker/job layer rather than preserving it as an implicit
+language contract. Single-threaded does not
 mean one outstanding HTTP request: several computations can be suspended while
 native operations progress. A bounded HTTP connection pool can own native
 admission without becoming an evaluator-worker limit.
 
-The precise bridge implementation and guest structured-concurrency syntax are
-not settled by this note. In particular:
+The current bridge awaits descriptor-selected native tasks and keeps callback
+activations rooted until their native awaits drain. Guest structured-concurrency
+syntax remains open. The broader design still needs to respect these boundaries:
 
 - heap continuations are data, not another scheduler;
 - native frames, roots, buffers, and backend operations still need owners;
@@ -265,17 +267,18 @@ absence of structured cancellation.
 
 ## Migrate recognizable uses, not every class at once
 
-The usage inventory suggests the following path. These are migration targets,
-not reports that these files have already been converted:
+The usage inventory suggests the following path. HTTP serving and the Wisp
+host have now been converted as described above; the other rows remain
+migration targets, not reports of completed work:
 
 | Use | Why it fits / what must be preserved |
 | --- | --- |
 | [AI tool batches][tool-batches] | Homogeneous jobs; remove fork/join/deed-vector shell. Preserve input-order results and collect-before-rethrow behavior unless deliberately changed. |
 | [Directory metadata][directory-metadata] | Bounded stat ideas; results are sorted afterward, so completion-order production is natural. |
 | [Connection racing][connection-racing] | Coped attempts and first-success consumption. Existing range selection chooses an input-order success after drain; distinguish that from first published success. |
-| [HTTP serving][http-serving] | One accept source feeding connection ideas can replace manual idle-slot/worker/bell coordination. Preserve connection-local error containment. Coordinate with the parallel HTTP work. |
+| [HTTP serving][http-serving] | Migrated to one accept feed and a bounded connection pool, preserving connection-local error containment. |
 | [Process capture][process-capture] and [shell supervision][shell-supervision] | Heterogeneous resource lifetimes; express a team or primary activity with companions, not an artificial uniform job stream. |
-| [Wisp host][wisp-host] | Simplify the effect bridge first; do not make its old guest-job identities a prerequisite for all pools. |
+| [Wisp host][wisp-host] | Migrated to explicit native-task awaiting; old guest-job identities are no longer a prerequisite for I/O. |
 
 These source links pin the inventory to the implemented baseline, so the
 comparison remains intelligible after those applications change.

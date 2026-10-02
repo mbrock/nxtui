@@ -13,8 +13,8 @@
            (set-response-body! "Other requests kept running during that timer.\n")))
       ((equal? (request-path) "/echo")
        (set-response-body! (request-text)))
-      ;; The handler waits for an outbound request while another job handles
-      ;; /echo on this very listener. SEND! returns the fetched response early.
+      ;; The handler awaits an outbound request while another callback handles
+      ;; /echo on this listener. SEND! returns the fetched response early.
       ((equal? (request-path) "/relay")
        (send! :respond
          (fetch-http "http://127.0.0.1:8080/echo" "POST"

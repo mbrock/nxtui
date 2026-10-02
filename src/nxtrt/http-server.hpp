@@ -21,7 +21,7 @@ struct server_options
     // Includes chunk framing, extensions and trailers, not the initial
     // head.
     std::size_t max_body_wire_bytes = 2 * 1024 * 1024;
-    std::size_t max_connections = 64; // 1..1024 fixed workers
+    std::size_t max_connections = 64; // 1..1024 concurrent connections
     std::size_t max_requests_per_connection = 1000;
     std::size_t max_response_header_bytes = 16 * 1024;
     std::size_t max_response_body_bytes = 8 * 1024 * 1024;
@@ -39,10 +39,15 @@ using request_handler = std::function<task<response>(request)>;
 /// drained. Cancel and await serve to stop; handlers must cooperate with
 /// runtime cancellation.
 ///
-/// Requests are sequential per connection, concurrent across fixed workers.
-/// Only origin-form targets (and OPTIONS *) are accepted. CONNECT,
-/// upgrades, expectations, folded headers and ambiguous framing are
-/// rejected and closed. Trailer fields are not exposed to handlers.
+/// A bounded pool admits connection recipes from a single async accept
+/// feed, rather than running permanent workers. Stop drains both acceptance
+/// and connections before returning normally and releasing the pool's
+/// storage.
+///
+/// Requests are sequential per connection, concurrent up to
+/// max_connections. Only origin-form targets (and OPTIONS *) are accepted.
+/// CONNECT, upgrades, expectations, folded headers and ambiguous framing
+/// are rejected and closed. Trailer fields are not exposed to handlers.
 /// Forwarded/X-Forwarded-* remain untrusted ordinary headers. There is no
 /// decompression or streaming body API.
 ///

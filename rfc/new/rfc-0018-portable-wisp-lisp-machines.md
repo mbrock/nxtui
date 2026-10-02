@@ -844,49 +844,47 @@ cycles/sharing, aliased vector payloads, pins, saved definitions/current package
 fresh keys, pending GC, reordered builtin/table/column identities, malformed
 images with recomputed checksums, stream failures, and deep continuations.
 
-### The executable host owns bounded concurrent jobs
+### The executable host bridges explicit awaits
 
 [`wisp`](../../src/wisp/main.cpp) now supplies `run`, a line-oriented REPL,
 `inspect`, and `restore`. Its optional [`host.wisp`](../../src/wisp/host.wisp)
-library routes console output, line/byte input, `sleep-ms`, `spawn`/`join`, and
-HTTP through `send!` effects. It adds no jets or authority to the portable base.
-NXT drives bounded evaluator turns, file-descriptor I/O and timer waits;
-source-file loading and checkpoint replacement are explicitly blocking host
-operations. Evaluator quanta bound transitions, not wall-clock time within a
-primitive, so this is cooperative concurrency, not CPU/memory isolation.
+library implements `await`, console output, line/byte input, `sleep-ms`,
+`fetch-http`, and HTTP serving through `send!` effects. It adds no jets or
+authority to the portable base. Public `(await task-description)` sends a
+`:host` effect; its descriptor is `[operation argument]`, for example
+`(await (vector :timer 5))`. Low-level wishes and composite native tasks use
+this same bridge. A descriptor selects a native implementation; it is not an
+arbitrary C++ task object serialized into Wisp.
 
-The v2 executable-host schema is separate from the portable tape format:
+The executable host advances its rooted guest run synchronously until it
+finishes or explicitly awaits. It does not schedule fixed evaluator quanta or
+create guest worker jobs. While an activation is suspended in a native wait,
+other pending I/O can progress on the NXT deck; Wisp itself exposes no spawn,
+join, or structured-concurrency API. HTTP callbacks are rooted heap
+activations, not guest jobs or handles. Each callback runs until return or
+explicit await, retaining its request-local dynamic bindings across suspension.
+An activation's host record contains its rooted `run`, `pending`, and `result`;
+it is internal request state, not a guest-visible task handle.
+Packages and globals are shared; request dynamic contexts remain isolated.
+Console operations are serialized per stream even when callbacks overlap.
+Guest GC does not yield to sibling callbacks. CPU-bound code blocks the event
+loop until it returns or awaits, as in Node/browser JS; Wisp structured
+concurrency is deliberately deferred.
+
+The v3 executable-host schema is separate from the portable tape format:
 
 ```
-[:NXT-WISP-2 source byte-offset run pending last-result jobs request-serial]
-child = [:NXT-JOB NIL slot run pending result status]
-pending = NIL | [id [operation arguments] deadline resume raise]
+[:NXT-WISP-3 source byte-offset run pending last-result request-serial]
+pending = NIL | [id request deadline resume raise]
+request = [operation argument]
 ```
 
-`jobs` is a 64-element vector; slot zero is reserved for the source job and
-contains NIL in this vector. Child status is 0 running, 1 successful, 2 failed
-and unobserved, or 3 failed and observed/cancelled. Treat job handles and host
-records as opaque, not mutable application vectors. Successful jobs are unlinked
-from the slot vector; a retained handle keeps its result. Unobserved failures
-remain rooted until joined, and are reported when the other jobs finish. They
-do not race with the parent's opportunity to install an error handler. Main-job
-failure stops the whole session. Normal main completion waits for children.
-
-`spawn` admits a zero-argument closure or raises `:CAPACITY`; it never waits for
-a free slot. `join` may be repeated, returns the result, raises `:JOB-FAILED`,
-or rejects a cycle with `:JOIN-CYCLE`. These are session-owned jobs, not lexical
-structured-concurrency scopes exposed to Lisp. They share globals, packages,
-and current-package state, and start with fresh dynamic contexts. Console
-operations serialize per stream, including cancellation-safe ownership cleanup.
-
-Each slot has a long-lived native worker, a rooted job, and a single-waiter
-bell. Each current job has its own short-lived NXT firm and forked execution
-task. This lets cancellation stop a request without destroying its reusable
-worker, and avoids accumulating one deed per job in an everlasting firm.
-Ordinary NXT wishes park these tasks; the platform wand owns backend execution
-and cancellation/drain. Guest job/request identities are not native exec IDs.
-Restore creates fresh native execs; no deck, wish, wand registration, descriptor,
-or coroutine frame is serialized. No NXT lifecycle rule changes are required.
+The schema has seven fields and no jobs table. Pending remains
+`[id request deadline resume raise]`; request IDs are decimal strings allocated
+from the saved 64-bit sequence. Restore creates fresh native waits; no deck,
+wish, wand registration, descriptor, native task object, or coroutine frame is
+serialized. Old executable-host schemas are intentionally rejected, while the
+portable tape format is unchanged.
 
 The deep guest handler writes resume/raise closures into the pending record
 before the host starts the operation. The host assigns a decimal string ID from
@@ -895,28 +893,22 @@ permanently retain consumed request identities in the KEY package. Language
 GENKEY semantics are unchanged. All live guest words, including results returned
 from native helper coroutines, are rooted across suspension and collection.
 Host-triggered collection follows allocation growth at committed boundaries;
-explicit guest GC requests still collect through `drive` at safe transitions.
+explicit guest GC requests are serviced at safe evaluator transitions.
 
 Completion installs a callback run before removing the pending record. CLI
 `restore --effects --cancel` delivers `[HOST-ERROR operation :CANCELLED message]`
-through each saved pending request's raise closure. Other machine-readable codes
+through the saved pending request's raise closure. Other machine-readable codes
 include `:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, and `:IO`; delivery covers
 both standard and cpptrace runtime exceptions. Ctrl-C still terminates the
-process; it is not an automatic checkpoint or guest raise. V1 host images are
-not migrated: use the previous executable for `NXT-WISP-1` images. The portable
-tape format itself is unchanged.
+process; it is not an automatic checkpoint or guest raise. Old host schemas are
+intentionally rejected; the portable tape format itself is unchanged.
 
-`run SOURCE --checkpoint TAPE` freezes timers at the next newly armed timer,
-then saves only when every worker is idle, parked on an armed timer, or joining
-another job. Merely having a pending record is not sufficient: a native effect
-may still be in flight. Existing console I/O must finish and commit before
-saving. Failure to quiesce within five seconds aborts the session without writing
-a tape; network listeners are rejected with `:NOT-REPLAYABLE` in checkpoint mode.
-The save is synchronous, then the host stops and joins all native workers before
-returning. This prevents a saved timer from also firing in the original process.
-`restore --effects --checkpoint OUT` does not request a save merely because a
-timer was restored; only a newly armed timer requests the next checkpoint.
-Other jobs' older timers can still be pending in that next image. The source
+`run SOURCE --checkpoint TAPE` synchronously saves at the next newly issued
+timer, before starting its native wait, then exits. Restoring an existing timer
+does not request another checkpoint; only a newly issued timer does.
+`restore --effects --checkpoint OUT` therefore saves only at a later newly
+issued timer. Network operations and listeners are rejected with
+`:NOT-REPLAYABLE`; there is no result ledger or live-socket restoration. The source
 and byte offset are in the entry, not a native reader, so a fresh process resumes
 inside the current form and then reads later forms in the saved current package.
 The deadline is an absolute Unix-millisecond decimal string (epoch time exceeds
@@ -928,7 +920,7 @@ rename reports uncertain durability; it cannot roll the rename back. No timer
 means no checkpoint, reported as a CLI error. Saving does not retain an OS task.
 
 Restore requires `--effects` before dispatching any operation. `inspect` prints
-all jobs' pending requests, IDs, deadlines, and the source offset without running the guest.
+the pending request, ID, deadline, and source offset without running the guest.
 Neither command implicitly updates the input tape. Enabling effects in multiple
 forks can duplicate output: there is no exactly-once promise or result ledger,
 and request sequence IDs are not globally unique across forks.
@@ -936,8 +928,8 @@ and request sequence IDs are not globally unique across forks.
 [`test/wisp-host-test.py`](../../test/wisp-host-test.py) exercises actual process
 exit/restart, deletion of the original source, future and expired deadlines,
 effect gating, cancellation/error handlers, binary input, REPL recovery, console
-serialization, join cycles, 4,100 job admissions, multi-job restore, and refusing
-checkpoints with in-flight stdin I/O. There is no Lisp-form stdin reader,
+I/O, direct timer await, chained timer checkpoints, and timer continuation.
+There is no Lisp-form stdin reader,
 file capability, debugger, external-resource rebinding, or guest checkpoint
 effect. Network effects are intentionally not checkpointable; add reconciliation
 before enabling network-resource restore. Journaling remains separate work.
@@ -948,8 +940,14 @@ before enabling network-resource restore. Journaling remains separate work.
 [`nxtrt::http::serve`](../../src/nxtrt/http-server.hpp) borrows a listener and
 accepts a `task<response>(request)` handler. Beast parses and serializes bytes;
 NXT alone schedules I/O, timers, and cancellation. There is no Asio event loop.
-One dispatcher accepts connections into fixed workers, with one waiter per bell
-to avoid overlapping same-fd readiness registrations on kqueue. Per-operation
+An async feed accepts connections only after a bounded `pool` reserves a slot.
+Each recipe owns an accepted descriptor and borrows the serving task's handler
+and options. Exactly one accept can be pending, including on kqueue; there are
+no dispatcher/worker loops or assignment bells. Completed connection results
+are consumed to return admission capacity. `finally` closes the pool on error
+or stop, draining the pending accept and connections before any borrowed state
+or pool storage is released. External stop remains a clean server shutdown.
+Per-operation
 timeout scopes retire on completion rather than accumulating deeds in the
 server's lifetime scope. Accepted sockets close after their operations drain;
 the caller retains ownership of the listener through cancellation and join.
@@ -970,16 +968,19 @@ buffers, not arbitrary allocations inside a handler. Handlers must cooperate
 with cancellation. TLS and public exposure belong to a reverse proxy; forwarded
 headers have no trusted meaning here.
 
-Wisp's `serve-http` returns a listener job. Each request gets an independent
-guest job and dynamic `*request*`/`*response*` bindings, preserving the old
+Wisp's `serve-http` directly awaits the native serving task and returns no job
+handle. Each request gets an independent rooted guest activation and dynamic
+`*request*`/`*response*` bindings, preserving the old
 zero-argument web-handler convention. Request records contain method, raw path,
 raw query string, header pairs, and binary body. `request-header` compares names
 case-insensitively and returns the first matching value. Responses are
 `[status headers body]`, with headers a list of `[name value]` vectors. Handler
 return values are ignored; mutate the response or use `send! :respond` to exit
-early. Guest failures become a generic 500, and exhausted guest slots a 503.
-HTTP handler timeout cancels the corresponding guest job's firm, including
-timers or console I/O; it does not abandon a still-running guest task.
+early. Guest failures become `500 Internal Server Error\n`. HTTP handler
+timeout cancels and drains the activation's actual pending native wait, including
+timers or console I/O; it does not abandon work. Low-level and composite awaits
+share the same bridge, and concurrent pending I/O does not merge request
+dynamic contexts.
 
 [`demo/wisp-http.wisp`](../../demo/wisp-http.wisp) serves loopback port 8080.
 [`test/http-server-test.cpp`](../../test/http-server-test.cpp) tests real sockets

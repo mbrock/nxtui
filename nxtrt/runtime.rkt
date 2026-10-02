@@ -47,12 +47,13 @@ model runtime-model
   signature deck
     has-ready var set task
   // Ownership here is a snapshot, not a model of admission or exception
-  // selection. A stopped C++ firm rejects new forks: timeout/server scope
+  // selection. A stopped C++ firm rejects new forks: timeout scope
   // bodies must check stop before spawning if cancelled before their first
   // turn. Once wishes exist, both timeout and external stop drain their
   // execs under the same lifecycle below, before the owning scope returns.
-  // Wisp workers and HTTP workers use short-lived child firms per job or
-  // operation; guest continuations stay in the Wisp heap, not in this deck.
+  // HTTP connection tasks use the bounded pool below; Wisp callbacks await
+  // native tasks directly. Guest continuations stay in the Wisp heap, not
+  // in this deck. Neither layer needs permanent evaluator/connection workers.
   // Firms are ordinary nurseries with growable child bookkeeping. Tuple
   // combinators use these same nurseries; tuple arity is not an admission
   // bound. Child records remain until nursery destruction, independently

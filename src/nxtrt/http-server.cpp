@@ -1,7 +1,8 @@
 #include "nxtrt/http-server.hpp"
 
-#include "nxtrt/bell.hpp"
+#include "nxtrt/farm.hpp"
 #include "nxtrt/net.hpp"
+#include "nxtrt/pool.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/beast/http/parser.hpp>
@@ -345,86 +346,66 @@ task<void> connection(
     }
 }
 
-struct worker_slot
+task<void> run_connection(
+    nxt::unique_fd fd,
+    request_handler * handler,
+    const server_options * options)
 {
-    bell assigned;
-    nxt::unique_fd fd;
-    bool idle = true;
-};
-
-struct server_state
-{
-    int listener;
-    request_handler handler;
-    server_options options;
-    std::unique_ptr<worker_slot[]> slots;
-    bell available;
-};
-
-task<void> worker(server_state & state, worker_slot & slot)
-{
-    while (true) {
-        co_await slot.assigned;
-        slot.assigned.reset();
-        try {
-            co_await connection(
-                std::move(slot.fd), state.handler, state.options);
-        } catch (const operation_cancelled &) {
+    try {
+        co_await connection(std::move(fd), *handler, *options);
+    } catch (const operation_cancelled &) {
+        if (current_task_stop_token().stop_requested())
             throw;
-        } catch (const std::exception &) {
-            // A peer disconnect/write timeout must not kill the accept
-            // loop.
-            if (current_task_stop_token().stop_requested())
-                throw;
-        }
-        slot.idle = true;
-        state.available.ring();
+    } catch (...) {
+        if (current_task_stop_token().stop_requested())
+            throw;
+        // A peer disconnect or write failure must not stop acceptance.
     }
 }
 
-task<void> dispatch(server_state & state)
+struct connection_recipe
 {
-    while (true) {
-        auto * idle = static_cast<worker_slot *>(nullptr);
-        for (std::size_t i = 0; i < state.options.max_connections; ++i) {
-            if (state.slots[i].idle) {
-                idle = &state.slots[i];
-                break;
-            }
-        }
-        if (!idle) {
-            state.available.reset();
-            co_await state.available;
-            continue;
-        }
-        // Only this task accepts. Each bell also has exactly one waiter,
-        // which matters for kqueue's single (fd, filter) readiness
-        // registration.
-        idle->fd = co_await net::accept(state.listener);
-        idle->idle = false;
-        idle->assigned.ring();
-    }
-}
+    nxt::unique_fd fd;
+    request_handler * handler;
+    const server_options * options;
 
-struct server_scope : stop_on_failure
-{
-    server_state * state;
-
-    explicit server_scope(server_state & state)
-        : state(&state)
+    task<void> operator()() &
     {
-    }
-
-    task<void> operator()()
-    {
-        if (stop_requested())
-            co_return;
-        for (std::size_t i = 0; i < state->options.max_connections; ++i)
-            fork(worker(*state, state->slots[i]));
-        fork(dispatch(*state));
-        co_await join();
+        return run_connection(std::move(fd), handler, options);
     }
 };
+
+class accepted_connections final : public feed<connection_recipe>
+{
+public:
+    accepted_connections(
+        int listener,
+        request_handler & handler,
+        const server_options & options)
+        : feed(1)
+        , listener_(listener)
+        , handler_(handler)
+        , options_(options)
+    {
+    }
+
+private:
+    task<std::optional<connection_recipe>> next_value() override
+    {
+        auto fd = co_await net::accept(listener_);
+        co_return connection_recipe{std::move(fd), &handler_, &options_};
+    }
+
+    int listener_;
+    request_handler & handler_;
+    const server_options & options_;
+};
+
+task<void> consume_connections(pool<connection_recipe> & connections)
+{
+    while (co_await connections.take())
+        ;
+}
 
 } // namespace
 
@@ -443,15 +424,39 @@ serve(int listener, request_handler handler, server_options options)
         || options.handler_timeout <= std::chrono::nanoseconds::zero()
         || options.write_timeout <= std::chrono::nanoseconds::zero())
         throw std::invalid_argument{"invalid HTTP server options"};
-    auto state = server_state{
-        listener,
-        std::move(handler),
-        options,
-        std::make_unique<worker_slot[]>(options.max_connections),
-        {}};
-    // State, bells and any queued descriptors outlive cancellation and
-    // join.
-    co_await server_scope{state};
+    auto slots = std::make_unique<pool_slot<connection_recipe>[]>(
+        options.max_connections);
+    auto hot_size =
+        nxtrt::farm<pool_slot<connection_recipe>>::hot_capacity_for(
+            options.max_connections);
+    auto cold_size = mask<>::words_for(options.max_connections);
+    auto farm_indices = std::make_unique<std::size_t[]>(hot_size);
+    auto cold_indices = std::make_unique<std::uint64_t[]>(cold_size);
+    auto output =
+        std::make_unique<std::monostate[]>(options.max_connections);
+    auto farm = nxtrt::farm<pool_slot<connection_recipe>>{
+        std::span{slots.get(), options.max_connections},
+        farm_index_storage_ref{
+            std::span{farm_indices.get(), hot_size},
+            std::span{cold_indices.get(), cold_size}}};
+    auto accepted = accepted_connections{listener, handler, options};
+    auto connections = pool<connection_recipe>{
+        accepted,
+        farm,
+        value_storage_ref<std::monostate>{
+            output.get(), options.max_connections}};
+    // Borrowed state and every piece of pool land remain alive through
+    // drain.
+    try {
+        co_await finally(consume_connections(connections), [&connections] {
+            return connections.close();
+        });
+    } catch (const operation_cancelled &) {
+        // As with the former server scope, stopping the serving task is a
+        // normal shutdown, but only after acceptance and connections drain.
+        if (!current_task_stop_token().stop_requested())
+            throw;
+    }
 }
 
 } // namespace nxtrt::http

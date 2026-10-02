@@ -1,27 +1,25 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 ;; Optional executable-host policy. The portable base has no I/O authority.
 
+;; A description selects a native task, which may await one wish or compose
+;; many operations. It starts when awaited; no guest worker or future is born.
+(defun await (task-description)
+  (send! :host task-description))
+
 (defun sleep-ms (milliseconds)
-  (send! :host (vector :timer milliseconds)))
-
-(defun spawn (thunk)
-  (send! :host (vector :spawn thunk)))
-
-(defun join (job)
-  (send! :host (vector :join job)))
+  (await (vector :timer milliseconds)))
 
 (set! %host-write
-  (fn (&rest strings) (send! :host (vector :stdout strings))))
+  (fn (&rest strings) (await (vector :stdout strings))))
 (set! %host-write-error
-  (fn (&rest strings) (send! :host (vector :stderr strings))))
+  (fn (&rest strings) (await (vector :stderr strings))))
 (set! %host-read-line
-  (fn () (send! :host (vector :read-line nil))))
+  (fn () (await (vector :read-line nil))))
 (set! %host-read-bytes
-  (fn (count) (send! :host (vector :read-bytes count))))
+  (fn (count) (await (vector :read-bytes count))))
 
-;; Entries and child jobs share the run/pending/result field positions.
-;; Entry: [:NXT-WISP-2 source byte-offset run pending last-result jobs serial].
-;; Job: [:NXT-JOB nil slot run pending result status]. Treat handles as opaque.
+;; Entry: [:NXT-WISP-3 source byte-offset run pending last-result serial].
+;; Callback activations share its run/pending/result field positions.
 ;; Pending: [id [operation arguments] deadline resume raise].
 ;; The host assigns a decimal request ID. Interning a GENKEY per effect
 ;; would retain every request identity forever in the KEY package.
@@ -57,7 +55,7 @@
 (defun request-query-string () (vector-get *request* 2))
 (defun request-text () (vector-get *request* 4))
 (defun request-header (name)
-  (send! :host (vector :request-header (vector *request* name))))
+  (await (vector :request-header (vector *request* name))))
 
 (defun %nxt-http-handle (handler request)
   (binding ((*request* request) (*response* (response 200 nil nil)))
@@ -65,13 +63,14 @@
       (fn () (call handler) *response*)
       (fn (value continuation) value))))
 
-;; Returns a job handle. The session stays alive while the listener runs.
+;; Await the serving task. Native connection recipes run in a bounded pool;
+;; callbacks interleave at awaits on the same thread, without guest jobs.
 ;; Plain HTTP on loopback only; TLS belongs to the reverse proxy.
 (defun serve-http (port handler)
-  (spawn (fn () (send! :host (vector :http-serve (vector port handler))))))
+  (await (vector :http-serve (vector port handler))))
 
-;; Waits in the calling job; spawn/join can make requests concurrent.
+;; Await the composite DNS/TCP/TLS/HTTP task in the calling activation.
 ;; Returns [status headers body], like RESPONSE. Headers are a list of
 ;; [name value] vectors, and the decoded body is a binary-safe string.
 (defun fetch-http (url &optional method headers body)
-  (send! :host (vector :http-fetch (vector url (or method "GET") headers body))))
+  (await (vector :http-fetch (vector url (or method "GET") headers body))))

@@ -24,12 +24,15 @@ def command(*args, input=b"", ok=True, timeout=20):
 
 with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     directory = pathlib.Path(directory)
-    source = directory / "job.wisp"
-    tape = directory / "job.tape"
+    source = directory / "checkpoint.wisp"
+    tape = directory / "timer.tape"
 
     repl = command("repl", input=b"(+ 17 25)\nunbound\n(+ 19 4)\nnil\n")
     assert repl.stdout == b"42\n23\nNIL\n", repl.stdout
     assert b"UNBOUND-VARIABLE" in repl.stderr, repl.stderr
+
+    source.write_text('(print (await (vector :timer 1)))')
+    assert command("run", source).stdout == b"NIL\n"
 
     source.write_text('''
       (write "before\\n")
@@ -134,21 +137,6 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
         os.close(write)
     assert broken.returncode == 0 and broken.stderr == b":IO", broken.stderr
 
-    source.write_text(f'''
-      (let ((a (spawn (fn () (write "{'A' * 8192}"))))
-            (b (spawn (fn () (write "{'B' * 8192}")))))
-        (join a) (join b))
-    ''')
-    writes = command("run", source).stdout
-    assert writes in (b"A" * 8192 + b"B" * 8192, b"B" * 8192 + b"A" * 8192)
-    source.write_text('''
-      (let ((a (spawn (fn () (read-line))))
-            (b (spawn (fn () (read-line)))))
-        (print (join a)) (print (join b)))
-    ''')
-    lines = command("run", source, input=b"A" * 3000 + b"\n" + b"B" * 6000 + b"\n")
-    assert sorted(lines.stdout.splitlines()) == [b'"' + b"A" * 3000 + b'"', b'"' + b"B" * 6000 + b'"']
-
     source.write_text('(error "unhandled") (sleep-ms 1)')
     absent = directory / "error.tape"
     unhandled = command("run", source, "--checkpoint", absent, ok=False)
@@ -168,92 +156,4 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     assert b"no checkpoint written" in no_timer.stderr and not missing.exists()
     assert command("inspect", source, ok=False).stdout == b""
 
-    # A sequential host deadlocks here. The second job must run while the
-    # first waits; collection must preserve its lexical state and result.
-    source.write_text('''
-      (defvar ready nil)
-      (defun await-ready () (if ready 37 (do (sleep-ms 1) (await-ready))))
-      (let* ((a (spawn (fn () (vector (await-ready) "alpha"))))
-             (b (spawn (fn () (gc) (set! ready t) 19))))
-        (print (join a)) (print (join b)) (print (join a)))
-    ''')
-    assert command("run", source).stdout == b'#<37 "alpha">\n19\n#<37 "alpha">\n'
-
-    source.write_text('''
-      (let ((job nil))
-        (set! job (spawn (fn () (sleep-ms 1)
-          (try (join job) (error (why k) (vector-get (head why) 2))))))
-        (print (join job)))
-      (let ((a nil) (b nil))
-        (set! a (spawn (fn () (sleep-ms 1) (join b))))
-        (set! b (spawn (fn () (sleep-ms 1)
-          (try (join a) (error (why k) (vector-get (head why) 2))))))
-        (print (try (join a) (error (why k) (vector-get (head why) 2))))
-        (print (try (join b) (error (why k) (vector-get (head why) 2)))))
-      (let ((bad (spawn (fn () (error "child failed")))))
-        (sleep-ms 5)
-        (print (try (join bad) (error (why k) (vector-get (head why) 2)))))
-    ''')
-    cycles = command("run", source).stdout.splitlines()
-    assert cycles[0] == b":JOIN-CYCLE" and cycles[-1] == b":JOB-FAILED", cycles
-    assert all(x in (b":JOIN-CYCLE", b":JOB-FAILED") for x in cycles[1:3]), cycles
-    source.write_text('(spawn (fn () (error "unobserved failure")))')
-    assert b"unjoined Wisp job failed" in command("run", source, ok=False).stderr
-
-    # More jobs than one firm's deed capacity. Slots and per-job scopes
-    # must recycle; completed handles must not pin the whole job history.
-    source.write_text('''
-      (defun repeat-jobs (n)
-        (if (eq? n 0) 'finished
-          (do (join (spawn (fn () (+ n 17)))) (repeat-jobs (- n 1)))))
-      (print (repeat-jobs 4100))
-    ''')
-    assert command("run", source, timeout=90).stdout == b"FINISHED\n"
-
-    source.write_text('''
-      (let* ((a (spawn (fn () (sleep-ms 30) (gc) 37)))
-             (b (spawn (fn () (sleep-ms 40) 19))))
-        (write "before-join\\n")
-        (print (+ (join a) (join b))))
-    ''')
-    stopped = command("run", source, "--checkpoint", tape)
-    assert stopped.stdout == b"before-join\n", stopped.stdout
-    inspection = command("inspect", tape).stdout
-    assert inspection.count(b"request: #<:TIMER ") == 2, inspection
-    source.unlink()
-    assert command("restore", tape, "--effects").stdout == b"56\n"
-    assert b"effects disabled" in command("restore", tape, ok=False).stderr
-
-    # A pending request is not sufficient for a checkpoint: the native
-    # stdin read is still in flight. Refuse, leave the destination intact,
-    # and drain that read when the session aborts.
-    source.write_text('(spawn (fn () (read-line))) (sleep-ms 1)')
-    before = tape.read_bytes()
-    blocked = subprocess.Popen([binary, "run", str(source), "--checkpoint", str(tape)],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE)
-    try:
-        blocked.wait(timeout=15)
-        stdout, stderr = blocked.communicate(timeout=2)
-    finally:
-        if blocked.poll() is None:
-            blocked.kill()
-            blocked.communicate()
-    assert blocked.returncode != 0 and b"cannot quiesce" in stderr, stderr
-    assert stdout == b"" and tape.read_bytes() == before
-
-    # Admission is bounded rather than blocking all occupied workers.
-    source.write_text('''
-      (defun fill (n)
-        (if (eq? n 0) nil
-          (cons (spawn (fn () (sleep-ms 5) n)) (fill (- n 1)))))
-      (let ((jobs (fill 63)))
-        (print (try (spawn (fn () 7))
-                    (error (why k) (vector-get (head why) 2))))
-        (for-each jobs (fn (job) (join job))))
-    ''')
-    # Freeze the timers so the capacity test is independent of CPU speed.
-    assert command("run", source, "--checkpoint", tape).stdout == b":CAPACITY\n"
-    assert command("restore", tape, "--effects").returncode == 0
-
-print("Wisp host: console, restart, checkpoints, concurrent jobs, GC, joins, cycles, and admission passed")
+print("Wisp host: console, restart, checkpoints, direct timer await, and effect handling passed")

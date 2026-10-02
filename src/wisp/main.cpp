@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "wisp/reader.hpp"
-#include "wisp/nxt.hpp"
 #include "wisp/printer.hpp"
 #include "wisp/tape.hpp"
 #include "nxtrt/app.hpp"
@@ -165,59 +164,23 @@ void checkpoint(const std::string & path, const evaluator & vm, word entry)
 
 struct host
 {
-    // Each slot has one long-lived NXT task and one bell waiter. Finished
-    // deeds are not recycled by a firm, so never fork per guest job into
-    // this session's lifetime scope.
-    static constexpr std::size_t capacity = 64;
-    enum class phase { idle, running, timer, frozen, joining, io };
-
-    struct worker
-    {
-        root job;
-        nxtrt::bell wake;
-        phase state = phase::idle;
-        bool cancel = false;
-        bool decline = false;
-        nxtrt::firm * scope = nullptr;
-
-        explicit worker(heap & h)
-            : job(h)
-        {
-        }
-    };
-
     heap & h;
     evaluator & vm;
     root & entry;
     nxtrt::fd_source input{STDIN_FILENO, 1};
     nxtrt::fd_sink output{STDOUT_FILENO};
     nxtrt::fd_sink errors{STDERR_FILENO};
-    std::array<std::unique_ptr<worker>, capacity> workers;
-    std::vector<nxtrt::bell *> observers;
-    nxtrt::bell changed;
-    std::array<worker *, 3> console{};
-    std::exception_ptr fatal;
-    bool effects = false, echo = false, freezing = false;
+    struct console_guard;
+    std::array<std::vector<console_guard *>, 3> console;
+    bool effects = false, echo = false, saved = false;
     std::string save;
     std::size_t gc_threshold = 1024 * 1024;
-    steady_clock::time_point freeze_deadline;
 
     host(heap & h, evaluator & vm, root & entry)
         : h(h)
         , vm(vm)
         , entry(entry)
     {
-        for (auto & slot : workers)
-            slot = std::make_unique<worker>(h);
-    }
-
-    void notify()
-    {
-        changed.ring();
-        for (auto & slot : workers)
-            slot->wake.ring();
-        for (auto * observer : observers)
-            observer->ring();
     }
 
     std::size_t heap_bytes() const
@@ -234,29 +197,18 @@ struct host
     void collect_if_needed()
     {
         // Collect at committed host boundaries, proportional to allocation,
-        // not on every effect. Guest GC requests still collect in drive().
+        // not on every effect. Guest GC requests collect during evaluation.
         if (heap_bytes() >= gc_threshold) {
             vm.collect();
             gc_threshold = heap_bytes() * 2 + 1024 * 1024;
         }
     }
 
-    word get(const worker & slot, std::size_t field) const
-    {
-        return vector(
-            h, slot.job.get(), &slot == workers[0].get() ? 8 : 7)[field];
-    }
-
-    void set(worker & slot, std::size_t field, word value)
-    {
-        h.v32set(slot.job.get(), field, value);
-    }
-
     word get(std::size_t field) const
     {
-        const auto xs = vector(h, entry.get(), 8);
+        const auto xs = vector(h, entry.get(), 7);
         require(
-            xs[0] == vm.keyword("NXT-WISP-2"), "unsupported host image");
+            xs[0] == vm.keyword("NXT-WISP-3"), "unsupported host image");
         return xs[field];
     }
 
@@ -306,13 +258,12 @@ struct host
             value.size() <= tape::default_limit, "source exceeds 64 MiB");
         entry.set(h.newv32(
             std::array{
-                vm.keyword("NXT-WISP-2"),
+                vm.keyword("NXT-WISP-3"),
                 h.newv08(value),
                 word{0},
                 nil,
                 nil,
                 nil,
-                h.filledv32(capacity, nil),
                 h.newv08("0")}));
     }
 
@@ -320,7 +271,7 @@ struct host
     {
         if (vector(h, pending.get(), 5)[0] != nil)
             return;
-        const auto counter = text(h, get(7));
+        const auto counter = text(h, get(6));
         std::uint64_t serial = 0;
         const auto [end, error] = std::from_chars(
             counter.data(), counter.data() + counter.size(), serial);
@@ -329,149 +280,47 @@ struct host
                 && serial != std::numeric_limits<std::uint64_t>::max(),
             "invalid or exhausted host request counter");
         const auto id = h.newv08(std::to_string(serial + 1));
-        set(7, id);
+        set(6, id);
         h.v32set(pending.get(), 0, id);
     }
 
-    word start(word thunk, word job)
+    word start(word thunk, word state)
     {
         return vm.start(h.cons(
             vm.intern("%NXT-START"),
-            h.cons(quote(thunk), h.cons(quote(job), nil))));
+            h.cons(quote(thunk), h.cons(quote(state), nil))));
     }
 
-    word spawn(word thunk)
-    {
-        effect_require(
-            tag_of(thunk) == tag::fun, "spawn expected a function");
-        for (std::size_t i = 1; i < capacity; ++i) {
-            auto & slot = *workers[i];
-            if (slot.job.get() != nil
-                || vector(h, get(6), capacity)[i] != nil)
-                continue;
-            const auto job = h.newv32(
-                std::array{
-                    vm.keyword("NXT-JOB"),
-                    nil,
-                    fixnum(i),
-                    nil,
-                    nil,
-                    nil,
-                    fixnum(0)});
-            slot.job.set(job);
-            slot.cancel = false;
-            slot.state = phase::running;
-            h.v32set(get(6), i, job);
-            set(slot, 3, start(thunk, job));
-            notify();
-            return job;
-        }
-        throw effect_error{"CAPACITY", "all Wisp job slots are occupied"};
-    }
-
-    int job_status(word job)
-    {
-        effect_require(
-            tag_of(job) == tag::v32 && h.v32slice(job).size() == 7,
-            "join expected a job");
-        const auto xs = h.v32slice(job);
-        effect_require(
-            xs[0] == vm.keyword("NXT-JOB") && tag_of(xs[6]) == tag::integer
-                && integer(xs[6]) >= 0 && integer(xs[6]) <= 3,
-            "invalid job");
-        return integer(xs[6]);
-    }
-
-    void observe(word job)
-    {
-        if (job_status(job) < 2)
-            return;
-        h.v32set(job, 6, fixnum(3));
-        for (std::size_t i = 1; i < capacity; ++i)
-            if (vector(h, get(6), capacity)[i] == job)
-                h.v32set(get(6), i, nil);
-        notify();
-    }
-
-    void check_join(worker & slot, word target)
-    {
-        std::set<word> visited{slot.job.get()};
-        while (job_status(target) == 0) {
-            if (!visited.insert(target).second)
-                throw effect_error{"JOIN-CYCLE", "cyclic job join"};
-            effect_require(
-                std::ranges::any_of(
-                    workers,
-                    [&](auto & w) { return w->job.get() == target; }),
-                "job is not live in this session");
-            const auto pending = vector(h, target, 7)[4];
-            if (pending == nil)
-                return;
-            const auto request = vector(h, vector(h, pending, 5)[1], 2);
-            if (request[0] != vm.keyword("JOIN"))
-                return;
-            target = request[1];
-        }
-    }
-
-    nxtrt::task<void> acquire(worker & slot, int stream)
-    {
-        while (true) {
-            slot.wake.reset();
-            if (!console[stream]) {
-                console[stream] = &slot;
-                co_return;
-            }
-            co_await slot.wake;
-        }
-    }
-
+    // Only console operations need serialization. Each waiter owns its bell
+    // and removes itself on cancellation; there are no evaluator workers.
     struct console_guard
     {
         host & app;
-        worker & slot;
         int stream;
+        nxtrt::bell wake;
+
+        console_guard(host & app, int stream)
+            : app(app)
+            , stream(stream)
+        {
+            app.console[stream].push_back(this);
+        }
+
+        nxtrt::task<void> acquire()
+        {
+            while (app.console[stream].front() != this) {
+                wake.reset();
+                co_await wake;
+            }
+            nxtrt::throw_if_stop_requested();
+        }
 
         ~console_guard()
         {
-            if (app.console[stream] == &slot) {
-                app.console[stream] = nullptr;
-                app.notify();
-            }
-        }
-    };
-
-    // An HTTP callback has its own single-waiter bell. Destruction cancels
-    // only its guest job, including any outstanding I/O, and leaves the
-    // reusable worker alive. No guest word is kept in a native registry.
-    struct request_waiter
-    {
-        host & app;
-        root & job;
-        nxtrt::bell wake;
-
-        request_waiter(host & app, root & job)
-            : app(app)
-            , job(job)
-        {
-            app.observers.push_back(&wake);
-        }
-
-        ~request_waiter()
-        {
-            std::erase(app.observers, &wake);
-            if (job.get() == nil)
-                return;
-            app.observe(job.get());
-            if (app.job_status(job.get()) != 0)
-                return;
-            for (auto & slot : app.workers) {
-                if (slot->job.get() == job.get()) {
-                    slot->cancel = true;
-                    if (slot->scope)
-                        slot->scope->stop();
-                }
-            }
+            auto & queue = app.console[stream];
+            std::erase(queue, this);
+            if (!queue.empty())
+                queue.front()->wake.ring();
         }
     };
 
@@ -501,30 +350,15 @@ struct host
             vm.intern("%NXT-HTTP-HANDLE"),
             h.cons(quote(handler), h.cons(quote(value), nil)));
         const auto thunk = h.make<tag::fun>({nil, nil, expression, nil, 0});
-        root job{h};
-        // Establish notification/cancellation ownership before admission;
-        // descriptor or allocation failure must not leave an orphan job.
-        request_waiter waiter{*this, job};
-        try {
-            job.set(spawn(thunk));
-        } catch (const effect_error & error) {
-            if (error.code != "CAPACITY")
-                throw;
-            co_return nxtrt::http::response{
-                503, {}, "Service Unavailable\n"};
-        }
-        while (true) {
-            // A bell reset and the condition check form one deck turn.
-            // The registry wakes all interested callbacks at completion.
-            waiter.wake.reset();
-            if (job_status(job.get()) != 0)
-                break;
-            co_await waiter.wake;
-        }
-        if (job_status(job.get()) >= 2)
+        root state{h, h.filledv32(7, nil)};
+        h.v32set(state.get(), 3, start(thunk, state.get()));
+        // This callback directly owns its activation and native awaits. The
+        // server's deadline/stop follows this task, with no guest job
+        // registry.
+        if (!co_await execute(state))
             co_return nxtrt::http::response{
                 500, {}, "Internal Server Error\n"};
-        const auto result = vector(h, vector(h, job.get(), 7)[5], 3);
+        const auto result = vector(h, vector(h, state.get(), 7)[5], 3);
         effect_require(
             tag_of(result[0]) == tag::integer, "invalid HTTP status");
         nxtrt::http::response response;
@@ -740,9 +574,9 @@ struct host
 
     // Native registrations are temporary. The guest record remains rooted
     // throughout the await and is removed only when a resume/raise run has
-    // been installed. Results also need roots: another worker can collect
+    // been installed. Results also need roots: another callback can collect
     // between this task returning and its caller resuming.
-    nxtrt::task<void> perform(worker & slot, root & pending, root & result)
+    nxtrt::task<void> perform(root & pending, root & result)
     {
         const auto record = vector(h, pending.get(), 5);
         const auto request = vector(h, record[1], 2);
@@ -752,16 +586,6 @@ struct host
             // Recheck wall time in bounded monotonic waits. Already elapsed
             // timers fire immediately after restore, never restart a delay.
             while (true) {
-                slot.wake.reset();
-                if (slot.cancel)
-                    co_return;
-                if (freezing) {
-                    slot.state = phase::frozen;
-                    changed.ring();
-                    co_await slot.wake;
-                    continue;
-                }
-                slot.state = phase::timer;
                 const auto remaining = deadline - now_ms();
                 if (remaining <= 0)
                     break;
@@ -770,32 +594,6 @@ struct host
             }
             co_return;
         }
-        if (operation == vm.keyword("SPAWN")) {
-            result.set(spawn(argument));
-            co_return;
-        }
-        if (operation == vm.keyword("JOIN")) {
-            root target{h, argument};
-            while (true) {
-                slot.wake.reset();
-                check_join(slot, target.get());
-                const auto status = job_status(target.get());
-                if (status) {
-                    observe(target.get());
-                    result.set(vector(h, target.get(), 7)[5]);
-                    if (status >= 2)
-                        throw effect_error{
-                            "JOB-FAILED", print(h, result.get())};
-                    co_return;
-                }
-                if (slot.cancel)
-                    co_return;
-                slot.state = phase::joining;
-                changed.ring();
-                co_await slot.wake;
-            }
-        }
-        slot.state = phase::io;
         if (operation == vm.keyword("HTTP-SERVE")) {
             co_await http_serve(pending);
             co_return;
@@ -841,14 +639,14 @@ struct host
             const int stream = operation == vm.keyword("STDOUT") ? 1 : 2;
             // Own cleanup before acquisition: cancellation can arrive
             // after acquire returns but before this coroutine resumes.
-            const console_guard guard{*this, slot, stream};
-            co_await acquire(slot, stream);
+            console_guard guard{*this, stream};
+            co_await guard.acquire();
             co_await write(stream == 1 ? output : errors, std::move(bytes));
             co_return;
         }
         if (operation == vm.keyword("READ-LINE")) {
-            const console_guard guard{*this, slot, 0};
-            co_await acquire(slot, 0);
+            console_guard guard{*this, 0};
+            co_await guard.acquire();
             const auto value = co_await line();
             result.set(value ? h.newv08(*value) : nil);
             co_return;
@@ -860,8 +658,8 @@ struct host
                            <= std::int64_t(tape::default_limit),
                 "invalid byte count");
             const auto count = integer(argument);
-            const console_guard guard{*this, slot, 0};
-            co_await acquire(slot, 0);
+            console_guard guard{*this, 0};
+            co_await guard.acquire();
             std::string bytes;
             for (int i = 0; i < count; ++i) {
                 const auto byte = co_await input.take();
@@ -888,41 +686,31 @@ struct host
                 h.newv08(message)});
     }
 
-    void finish(worker & slot, word result, int status)
-    {
-        set(slot, 3, nil);
-        set(slot, 4, nil);
-        set(slot, 5, result);
-        if (&slot != workers[0].get()) {
-            set(slot, 6, fixnum(status));
-            if (status != 2) {
-                for (std::size_t i = 1; i < capacity; ++i)
-                    if (vector(h, get(6), capacity)[i] == slot.job.get())
-                        h.v32set(get(6), i, nil);
-            }
-        }
-        notify();
-    }
-
-    nxtrt::task<void> execute_job(worker & slot)
+    nxtrt::task<bool> execute(root & state, bool decline = false)
     {
         while (true) {
-            slot.state = phase::running;
-            root run{h, get(slot, 3)};
+            nxtrt::throw_if_stop_requested();
+            root run{h, vector(h, state.get(), 7)[3]};
             if (run.get() != nil) {
                 require(tag_of(run.get()) == tag::run, "invalid host run");
-                if (co_await drive(vm, run) == evaluation::failed) {
-                    const auto error =
-                        h.get<tag::run, field::err>(run.get());
-                    if (&slot == workers[0].get())
-                        throw std::runtime_error(print(h, error));
-                    finish(slot, error, 2);
-                    co_return;
+                // Run to return/effect, not to an evaluator scheduling
+                // quantum. Collection commits guest transitions but does
+                // not yield.
+                while (true) {
+                    const auto outcome = vm.advance(
+                        run.get(), std::numeric_limits<std::size_t>::max());
+                    if (vm.collection_requested())
+                        vm.collect();
+                    if (outcome == evaluation::failed)
+                        co_return false;
+                    if (outcome == evaluation::done)
+                        break;
                 }
-                set(slot, 5, h.get<tag::run, field::val>(run.get()));
-                set(slot, 3, nil);
+                h.v32set(
+                    state.get(), 5, h.get<tag::run, field::val>(run.get()));
+                h.v32set(state.get(), 3, nil);
             }
-            root pending{h, get(slot, 4)};
+            root pending{h, vector(h, state.get(), 7)[4]};
             if (pending.get() != nil) {
                 identify(pending);
                 auto record = vector(h, pending.get(), 5);
@@ -939,8 +727,8 @@ struct host
                 bool failed = false;
                 bool armed = false;
                 try {
-                    if (slot.decline) {
-                        slot.decline = false;
+                    if (decline) {
+                        decline = false;
                         throw effect_error{
                             "CANCELLED", "operation cancelled"};
                     }
@@ -961,15 +749,17 @@ struct host
                         failure(pending.get(), error.code, error.what()));
                 }
                 if (!failed && armed && !save.empty()) {
-                    if (!freezing) {
-                        freezing = true;
-                        freeze_deadline = steady_clock::now() + seconds{5};
-                        notify();
-                    }
+                    // No other guest activations exist in checkpoint mode:
+                    // network effects are rejected, and console awaits
+                    // drain before reaching this newly issued timer.
+                    vm.collect();
+                    checkpoint(save, vm, entry.get());
+                    saved = true;
+                    co_return true;
                 }
                 if (!failed) {
                     try {
-                        co_await perform(slot, pending, result);
+                        co_await perform(pending, result);
                     } catch (const nxtrt::operation_cancelled &) {
                         throw;
                     } catch (const effect_error & error) {
@@ -990,149 +780,20 @@ struct host
 #endif
                     }
                 }
+                nxtrt::throw_if_stop_requested();
                 const auto callback =
                     vector(h, pending.get(), 5)[failed ? 4 : 3];
-                set(slot, 3, vm.start(call(callback, result.get())));
-                set(slot, 4, nil);
+                h.v32set(
+                    state.get(), 3, vm.start(call(callback, result.get())));
+                h.v32set(state.get(), 4, nil);
                 collect_if_needed();
                 continue;
             }
-            if (&slot != workers[0].get()) {
-                finish(slot, get(slot, 5), 1);
-                co_return;
-            }
-            if (echo && run.get() != nil) {
-                auto bytes = print(h, get(5), vm.current_package()) + "\n";
-                slot.state = phase::io;
-                const console_guard guard{*this, slot, 1};
-                co_await acquire(slot, 1);
-                co_await write(output, std::move(bytes));
-            }
-            const auto offset = get(2);
-            const auto program = text(h, get(1));
-            require(
-                tag_of(offset) == tag::integer && integer(offset) >= 0
-                    && std::size_t(integer(offset)) <= program.size(),
-                "invalid source position");
-            reader input{
-                h, vm, std::string_view{program}.substr(integer(offset))};
-            const auto form = input.next();
-            set(2, fixnum(integer(offset) + input.position()));
-            if (!form)
-                co_return;
-            const auto thunk = h.make<tag::fun>({nil, nil, *form, nil, 0});
-            set(3, start(thunk, entry.get()));
-            collect_if_needed();
+            co_return true;
         }
     }
 
-    nxtrt::task<void> work_item(worker & slot)
-    {
-        if (slot.cancel || nxtrt::current_firm()->stop_requested())
-            co_return;
-        slot.scope = nxtrt::current_firm();
-
-        struct clear_scope
-        {
-            worker & slot;
-
-            ~clear_scope()
-            {
-                slot.scope = nullptr;
-            }
-        } guard{slot};
-
-        nxtrt::fork(execute_job(slot));
-        co_await nxtrt::join();
-    }
-
-    nxtrt::task<void> work(worker & slot)
-    {
-        try {
-            while (true) {
-                slot.wake.reset();
-                if (slot.job.get() == nil) {
-                    co_await slot.wake;
-                    continue;
-                }
-                co_await nxtrt::with_firm([&] { return work_item(slot); });
-                if (slot.cancel)
-                    finish(slot, h.newv08("request cancelled"), 3);
-                slot.job.set(nil);
-                slot.state = phase::idle;
-                collect_if_needed();
-                notify();
-            }
-        } catch (const nxtrt::operation_cancelled &) {
-            throw;
-        } catch (...) {
-            if (!fatal)
-                fatal = std::current_exception();
-            changed.ring();
-        }
-    }
-
-    nxtrt::task<void> wait_changed()
-    {
-        co_await changed;
-    }
-
-    nxtrt::task<bool> session()
-    {
-        auto & scope = *nxtrt::current_firm();
-        if (scope.stop_requested())
-            throw nxtrt::operation_cancelled{};
-        for (auto & slot : workers)
-            scope.fork(work(*slot));
-        while (true) {
-            changed.reset();
-            if (fatal)
-                std::rethrow_exception(fatal);
-            const bool idle = std::ranges::all_of(workers, [](auto & slot) {
-                return slot->state == phase::idle;
-            });
-            if (idle) {
-                for (auto job : vector(h, get(6), capacity))
-                    if (job != nil && job_status(job) == 2)
-                        throw std::runtime_error(
-                            "unjoined Wisp job failed: "
-                            + print(h, vector(h, job, 7)[5]));
-                scope.stop();
-                co_await scope.join();
-                co_return true;
-            }
-            if (freezing) {
-                const bool quiescent =
-                    std::ranges::all_of(workers, [](auto & slot) {
-                        return slot->state == phase::idle
-                               || slot->state == phase::frozen
-                               || slot->state == phase::joining;
-                    });
-                if (quiescent) {
-                    vm.collect();
-                    checkpoint(save, vm, entry.get());
-                    scope.stop();
-                    co_await scope.join();
-                    co_return false;
-                }
-                const auto remaining =
-                    freeze_deadline - steady_clock::now();
-                require(
-                    remaining > steady_clock::duration::zero(),
-                    "checkpoint cannot quiesce live I/O or computation");
-                try {
-                    co_await nxtrt::with_timeout(remaining, wait_changed());
-                } catch (const nxtrt::timeout_error &) {
-                    throw std::runtime_error(
-                        "checkpoint cannot quiesce live I/O or computation");
-                }
-            } else {
-                co_await changed;
-            }
-        }
-    }
-
-    // Return false only after a successful quiescent save-and-stop.
+    // Return false only after saving at a newly issued timer.
     nxtrt::task<bool>
     run(bool enable_effects,
         const std::string & destination,
@@ -1142,21 +803,38 @@ struct host
         effects = enable_effects;
         save = destination;
         echo = print_results;
-        freezing = false;
-        fatal = nullptr;
-        (void) vector(h, get(6), capacity);
-        for (std::size_t i = 0; i < capacity; ++i) {
-            auto & slot = *workers[i];
-            const auto job =
-                i == 0 ? entry.get() : vector(h, get(6), capacity)[i];
-            const bool live =
-                job != nil && (i == 0 || job_status(job) == 0);
-            slot.job.set(live ? job : nil);
-            slot.state = live ? phase::running : phase::idle;
-            slot.cancel = false;
-            slot.decline = cancel && live && get(slot, 4) != nil;
+        saved = false;
+        (void) get(0);
+        while (true) {
+            const bool active = get(3) != nil || get(4) != nil;
+            if (!co_await execute(entry, cancel && get(4) != nil))
+                throw std::runtime_error(
+                    print(h, h.get<tag::run, field::err>(get(3))));
+            cancel = false;
+            if (saved)
+                co_return false;
+            if (echo && active) {
+                console_guard guard{*this, 1};
+                co_await guard.acquire();
+                co_await write(
+                    output, print(h, get(5), vm.current_package()) + "\n");
+            }
+            const auto offset = get(2);
+            const auto program = text(h, get(1));
+            require(
+                tag_of(offset) == tag::integer && integer(offset) >= 0
+                    && std::size_t(integer(offset)) <= program.size(),
+                "invalid source position");
+            reader source{
+                h, vm, std::string_view{program}.substr(integer(offset))};
+            const auto form = source.next();
+            set(2, fixnum(integer(offset) + source.position()));
+            if (!form)
+                co_return true;
+            const auto thunk = h.make<tag::fun>({nil, nil, *form, nil, 0});
+            set(3, start(thunk, entry.get()));
+            collect_if_needed();
         }
-        co_return co_await nxtrt::with_firm([&] { return session(); });
     }
 
     nxtrt::task<void> repl()
@@ -1257,19 +935,10 @@ int main(int argc, char ** argv)
             if (command == "inspect") {
                 std::cout << "source-byte-offset: "
                           << print(image->storage, app.get(2)) << "\n";
-                std::vector<word> jobs{image->entry.get()};
-                for (auto job :
-                     vector(image->storage, app.get(6), host::capacity))
-                    if (job != nil)
-                        jobs.push_back(job);
-                for (std::size_t i = 0; i < jobs.size(); ++i) {
-                    const auto pending =
-                        vector(image->storage, jobs[i], i == 0 ? 8 : 7)[4];
-                    std::cout << "job: " << i << "\n";
-                    if (pending == nil) {
-                        std::cout << "pending: NIL\n";
-                        continue;
-                    }
+                const auto pending = app.get(4);
+                if (pending == nil) {
+                    std::cout << "pending: NIL\n";
+                } else {
                     const auto xs = vector(image->storage, pending, 5);
                     std::cout
                         << "request-id: " << print(image->storage, xs[0])

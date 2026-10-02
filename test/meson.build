@@ -110,8 +110,8 @@ if get_option('tests')
   test('wisp-alloc-tests', wisp_alloc_tests)
 
   if get_option('wisp_tool')
-    # Independent host processes plus the 4100-job stress
-    # case (90s process deadline); keep each process's own timeout active.
+    # Independent host processes exercise replayable timer awaits and console
+    # I/O. Keep each process's own timeout active.
     test('wisp-host-tests', find_program('python3'),
       args : [files('wisp-host-test.py'), wisp_tool],
       suite : 'slow',

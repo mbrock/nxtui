@@ -348,7 +348,7 @@ task<void> stalled_writer(sockaddr_in address, handler_state & state)
         client.socket.fd(), SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
     co_await send(client, get("/large"));
     co_await state.entered;
-    // The sole worker cannot accept /after until the blocked write is
+    // The sole pool slot cannot admit /after until the blocked write is
     // drained.
     co_await exchange(address, get("/after"), 200, "/after:");
 }
@@ -659,7 +659,7 @@ void server_tests()
         server.run(overlap, server.address, server.state);
         server.stop();
     };
-    "connection cap queues acceptance and reuses worker"_test = [] {
+    "connection cap queues acceptance and reuses pool slot"_test = [] {
         auto options = http::server_options{};
         options.max_connections = 1;
         auto server = server_fixture<Wand>{options};
@@ -687,7 +687,7 @@ void server_tests()
         server.run(exchange, server.address, get("/after"), 200, "/after:");
         server.stop();
     };
-    "write timeout frees sole worker"_test = [] {
+    "write timeout frees sole pool slot"_test = [] {
         auto options = http::server_options{};
         options.max_connections = 1;
         options.write_timeout = 5ms;
@@ -758,7 +758,7 @@ void server_tests()
         }
     };
 #if defined(__linux__)
-    "shutdown releases worker bells and accepted descriptors"_test = [] {
+    "shutdown releases pool storage and accepted descriptors"_test = [] {
         auto count = [] {
             return std::distance(
                 std::filesystem::directory_iterator{"/proc/self/fd"},
@@ -778,7 +778,8 @@ void server_tests()
         expect(count() == before);
     };
 #endif
-    "many requests reuse per-operation scopes"_test.slow().with_timeout(30s) = [] {
+    "many requests reuse per-operation scopes"_test.slow().with_timeout(
+        30s) = [] {
         auto options = http::server_options{};
         options.max_connections = 1;
         options.max_requests_per_connection = 5000;
@@ -787,7 +788,8 @@ void server_tests()
         server.stop();
         expect(server.state.requests.size() == 4100);
     };
-    "many connections reuse fixed workers"_test.slow().with_timeout(30s) = [] {
+    "many connections reuse bounded pool slots"_test.slow().with_timeout(
+        30s) = [] {
         auto options = http::server_options{};
         options.max_connections = 1;
         auto server = server_fixture<Wand>{options};

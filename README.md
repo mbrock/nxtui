@@ -176,27 +176,26 @@ executable. The OpenAI event/data types live under
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
-## Wisp — portable Lisp jobs and HTTP on NXT
+## Wisp — portable Lisp machines and HTTP on NXT
 
 The `wisp` executable runs Wisp's guest evaluator on the same NXT deck, with
-console effects, `sleep-ms` timers, `spawn`/`join`, and a loopback HTTP server.
-The guest heap holds closures, suspended control state, source position, job
-results, and pending requests; native coroutines own temporary waits and sockets.
+console effects, explicit `await`, `sleep-ms` timers, and a loopback HTTP server.
+The guest heap holds closures, suspended control state, source position, and
+pending requests; native coroutines own temporary waits and sockets.
 See [RFC 0018](rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
 for the language, GC, and portable tape contracts.
 
 ```sh
 nix develop -c meson compile -C build wisp-root-link
 build/wisp repl
-build/wisp run demo/wisp-timer.wisp --checkpoint build/job.tape
-build/wisp inspect build/job.tape
-build/wisp restore build/job.tape --effects
+build/wisp run demo/wisp-timer.wisp --checkpoint build/timer.tape
+build/wisp inspect build/timer.tape
+build/wisp restore build/timer.tape --effects
 ```
 
-`--checkpoint` freezes timers at the next newly issued timer, waits for all jobs
-to finish or park at replayable timers/joins, then saves and exits. In-flight
-console I/O must finish; failure to quiesce within five seconds aborts without
-writing an image. HTTP listeners are rejected in checkpoint mode. Restore uses
+`--checkpoint` synchronously saves at the next newly issued timer, then exits.
+Earlier console awaits have already finished; no live native wait is saved.
+HTTP listeners are rejected in checkpoint mode. Restore uses
 saved absolute deadlines; elapsed timers fire immediately. The source is
 inside the tape, so restore needs no source file and does not repeat earlier
 forms. Checkpoints replace the selected file atomically, with file and directory
@@ -204,7 +203,7 @@ fsync. Only load trusted tapes: validation is not a security sandbox.
 
 Restores have **effects disabled** unless given `--effects`. `inspect` executes
 no guest code. Add `--cancel` to restore to deliver a `:CANCELLED` host condition
-through each saved pending request's guest error handler instead of performing
+through the saved pending request's guest error handler instead of performing
 it. Restoring again is a fork, not an exactly-once guarantee: enabling both forks can
 repeat effects. The input tape is never updated implicitly.
 
@@ -213,19 +212,21 @@ such as `:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, `:IO`, and `:CANCELLED`.
 `restore --effects --checkpoint OUT` does not save merely because a timer was
 restored: only a newly issued timer requests another checkpoint.
 
-`(spawn (fn () ...))` returns a job handle; `(join job)` returns its result or
-raises `:JOB-FAILED`. There are 63 child slots, shared by spawned jobs, HTTP
-listeners, and HTTP handlers. Admission fails with `:CAPACITY`, rather than
-blocking; cyclic joins raise `:JOIN-CYCLE`. Jobs share the evaluator's packages
-and globals but begin with fresh dynamic contexts. Main-job failure stops the
-session; unjoined child failures are retained and reported when the session
-finishes. Successful main completion waits for its children. Console operations
-are serialized per stream.
+`(await task-description)` sends a `:host` effect and returns the selected
+native operation's result. Descriptors have the form `[operation argument]`;
+for example, `(await (vector :timer 5))` awaits a five-millisecond timer.
+Low-level wishes and composite native tasks use this same bridge. `sleep-ms`
+and `fetch-http` are guest wrappers around `await`; there is no Wisp spawn/join
+API or guest worker/job model. Console operations remain serialized per stream.
+Guest evaluation runs uninterrupted until return or explicit await, including
+across GC; CPU-bound code can block the event loop, just as in Node/browser JS.
+Wisp structured concurrency is deliberately deferred.
 
 The REPL accepts complete forms on one line and preserves definitions. Console
 hooks include `write`, `print`, `write-error`, `read-line`, and `read-bytes`.
-The executable host uses **image schema `NXT-WISP-2`**; old `NXT-WISP-1` host
-images require the earlier executable. The underlying portable tape format is
+The executable host uses **image schema `NXT-WISP-3`**:
+`[tag source byte-offset run pending last-result request-serial]`. Old host
+schemas are intentionally rejected; the underlying portable tape format is
 unchanged. Disable the tool with `-Dwisp_tool=false`.
 
 ### Serve plain HTTP behind a reverse proxy
@@ -234,8 +235,9 @@ unchanged. Disable the tool with `-Dwisp_tool=false`.
 build/wisp run demo/wisp-http.wisp
 ```
 
-The demo binds loopback port 8080. `serve-http` calls a zero-argument handler in
-a separate job with dynamic `*request*` and `*response*`. Use `request-method`,
+The demo binds loopback port 8080 and directly awaits the native serving task.
+Each callback calls a zero-argument handler with dynamic `*request*` and
+`*response*`. Use `request-method`,
 `request-path`, `request-query-string`, `request-header` (case-insensitive), and
 `request-text`; paths/query strings are raw, not URL-decoded. Set response state
 with `set-response-status!`, `add-header!`, and `set-response-body!`, or exit early
@@ -248,7 +250,12 @@ It supports HTTP/1.1 keep-alive, pipelining, fixed-length/chunked requests, and
 binary bodies. Defaults bound headers to 16 KiB, request bodies to 1 MiB,
 responses to 8 MiB, and connections to 64. Whole-phase deadlines cover headers
 (10s), bodies, handlers, and writes (30s each). Cancellation drains operations
-before socket close; timed-out guest handlers are cancelled, not abandoned.
+before socket close; timed-out handlers are cancelled and their actual pending
+native waits are drained.
+An async accept feed supplies connection recipes to the native bounded `pool`;
+completed connections return admission capacity when consumed. There are no
+permanent connection workers. Pool close cancels and drains both acceptance
+and connections while their descriptors, handlers, and storage remain alive.
 TLS, access logging, and public exposure belong to your proxy. Forwarded headers
 are untrusted; upgrades, CONNECT, and Expect are rejected. Streaming responses,
 WebSockets, files, effect-result logging, and external-resource restore remain
@@ -278,17 +285,16 @@ one line instead:
 (fetch-http "http://127.0.0.1:8080/echo" "POST"
   (list (vector "Content-Type" "text/plain")) "hello from the client")
 
-;; Both requests start independently. A slow peer need not stall other jobs.
-(let* ((slow (spawn (fn () (fetch-http "http://127.0.0.1:8080/slow"))))
-       (fast (spawn (fn () (fetch-http "http://127.0.0.1:8080/")))))
-  (print (vector-get (join fast) 0))
-  (write (vector-get (join slow) 2)))
+;; Await a native composite task directly. Other pending I/O can progress
+;; while this call is suspended.
+(await (vector :http-fetch
+        (vector "http://127.0.0.1:8080/" "GET" nil "")))
 ```
 
 The demo's `/relay` route also uses `fetch-http` *inside a server handler*,
 POSTing its body to `/echo` on the same listener and returning that response
-with `send! :respond`. This works because waiting for network I/O parks only
-the calling job; another job can accept and handle the nested request. Don't
+with `send! :respond`. Waiting for network I/O suspends only this guest
+activation; other callbacks can accept and handle the nested request. Don't
 forward arbitrary client-selected URLs without an explicit access policy.
 
 The initial client interface buffers the whole response, opens one connection
@@ -333,7 +339,7 @@ terminal applications and the OpenAI/SSE client.
 └─────────────────────┬─────────────────────┘
                       │ :host effect
 ┌─────────────────────▼─────────────────────┐
-│ Executable host: guest jobs ↔ native tasks │
+│ Host: heap continuations ↔ native tasks    │
 └─────────────────────┬─────────────────────┘
                       │ awaits
 ┌─────────────────────▼─────────────────────┐
@@ -348,29 +354,32 @@ terminal applications and the OpenAI/SSE client.
 ```
 
 An incoming request is parsed and bounded by the native server, copied into
-the Wisp heap as `[method path query headers body]`, then given its own guest
-job. `%nxt-http-handle` dynamically binds `*request*` and `*response*` for that
-job and installs the `:respond` prompt. Ordinary handler returns are discarded;
+the Wisp heap as `[method path query headers body]`, then run as a rooted heap
+activation until it returns or explicitly awaits. `%nxt-http-handle` dynamically
+binds `*request*` and `*response*` for that activation and installs the
+`:respond` prompt. Ordinary handler returns are discarded;
 the mutated response is used unless `send! :respond` exits early. Dynamic
 bindings keep overlapping requests isolated, while packages/globals are shared.
 
-For outbound I/O, `fetch-http` sends a `:HTTP-FETCH` host effect. `%nxt-start`
-captures its resume/raise continuations in a heap record; the host copies the
-arguments into native storage and awaits DNS, connect, optional TLS, and body
+For outbound I/O, `fetch-http` calls `await` with a `:HTTP-FETCH` descriptor.
+The public `await` sends a `:host` effect; its captured resume/raise
+continuations and request are stored in the heap. The host selects the native
+implementation, copies its arguments into native storage, and awaits DNS,
+connect, optional TLS, and body
 decoding. On completion it roots a heap response and resumes the guest; on
 failure it raises a host condition. Guest control state stays in the moving
 heap, while native coroutine frames temporarily own sockets and buffers. A
-server handler deadline cancels its guest job, including nested native waits;
-structured cancellation drains outstanding operations before socket teardown.
+server handler deadline cancels and drains the actual pending native wait before
+socket teardown. HTTP activations are not guest jobs or handles.
 
 Useful source entry points:
 
 - [`src/wisp/host.wisp`](src/wisp/host.wisp): the small Lisp-facing interface
   and effect/dynamic-binding policy, evaluated into the executable's boot tape.
-- [`src/wisp/main.cpp`](src/wisp/main.cpp): host effects, job admission, rooting,
+- [`src/wisp/main.cpp`](src/wisp/main.cpp): host effects, rooting,
   request conversion, native awaits and response/error delivery.
-- [`src/wisp/nxt.hpp`](src/wisp/nxt.hpp): `drive`, which runs bounded evaluator
-  quanta and yields back to the NXT deck.
+- [`src/wisp/nxt.hpp`](src/wisp/nxt.hpp): optional `drive` adapter for bounded
+  evaluator turns; the executable host runs guest activations to explicit await.
 - [`src/nxtrt/http-server.hpp`](src/nxtrt/http-server.hpp): native server contract
   and limits; its implementation uses Boost.Beast for request parsing.
 - [`src/nxtrt/http.hpp`](src/nxtrt/http.hpp),
