@@ -118,38 +118,24 @@ using firm_work_result_t =
     task_result_t<decltype(start_firm_work(std::declval<Work &>()))>;
 
 template<typename Policy, typename... Work>
-class tuple_firm : public Policy
+task<std::tuple<catching_deed<firm_work_result_t<Work>>...>>
+run_firm_work(Policy & policy, std::tuple<Work...> & work)
 {
-public:
     using deeds_type =
         std::tuple<catching_deed<firm_work_result_t<Work>>...>;
-
-    tuple_firm(
-        firm_bookkeeping_storage_ref storage, std::tuple<Work...> & work)
-        : Policy(storage)
-        , work_(work)
-    {
-    }
-
-    task<deeds_type> operator()()
-    {
-        if (this->stop_requested())
-            throw operation_cancelled{};
-        // Braced initialization admits work left to right. The owning
-        // coroutine keeps factories alive even if a later factory throws.
-        auto deeds = std::apply(
-            [this](auto &... work) {
-                return deeds_type{
-                    this->fork(start_firm_work(work)).cope()...};
-            },
-            work_);
-        co_await this->join();
-        co_return deeds;
-    }
-
-private:
-    std::tuple<Work...> & work_;
-};
+    if (policy.stop_requested())
+        throw operation_cancelled{};
+    // Braced initialization admits work left to right. The owning
+    // coroutine keeps factories alive even if a later factory throws.
+    auto deeds = std::apply(
+        [&policy](auto &... work) {
+            return deeds_type{
+                policy.fork(start_firm_work(work)).cope()...};
+        },
+        work);
+    co_await policy.join();
+    co_return deeds;
+}
 
 template<typename, typename T>
 using repeat_type = T;
@@ -257,30 +243,28 @@ template<typename Tuple, std::size_t... Is>
 
 } // namespace detail
 
-/// A closed set of children, with one bookkeeping slot per tuple element.
+/// Start tuple elements in an ordinary nursery.
 /// Elements are tasks or owned nullary task factories. Factories run once,
 /// under the new firm, and survive all child settlement (including
 /// failure). Preconstructed tasks retain their original frame allocation;
-/// both forms run under this firm's environment. Additional forks require a
-/// nested firm. Returns settled catching deeds; the policy controls sibling
-/// cancellation, not result extraction. Frame-byte capacity is independent
-/// of child count and retains the ordinary firm default.
+/// both forms run under this firm's environment and may fork more children.
+/// Returns settled catching deeds; the policy controls sibling cancellation,
+/// not result extraction.
 template<typename Policy = firm, typename... Work>
     requires std::derived_from<Policy, firm>
-             && std::
-                 constructible_from<Policy, firm_bookkeeping_storage_ref>
+             && std::default_initializable<Policy>
              && ((is_task_v<Work> || stored_task_factory<Work>) && ...)
 [[nodiscard]] task<
     std::tuple<catching_deed<detail::firm_work_result_t<Work>>...>>
 with_firm(std::tuple<Work...> work)
 {
-    // This backing is nonmovable. Keep it in the coroutine frame, not in
-    // the movable policy passed to run_firm's owning awaiter.
-    auto storage = static_firm_bookkeeping_storage<sizeof...(Work)>{};
-    co_return co_await detail::tuple_firm<Policy, Work...>{storage, work};
+    co_return co_await detail::make_firm_body<Policy>(
+        [&work](Policy & policy) {
+            return detail::run_firm_work(policy, work);
+        });
 }
 
-/// Fixed-set all: results retain tuple order; void positions are monostate.
+/// Tuple all: results retain tuple order; void positions are monostate.
 template<typename... Work>
     requires((is_task_v<Work> || stored_task_factory<Work>) && ...)
 [[nodiscard]] auto when_all(std::tuple<Work...> work)
@@ -294,7 +278,7 @@ template<typename... Work>
         deeds, std::index_sequence_for<Work...>{});
 }
 
-/// Fixed-set first success, not first completion; all failures are grouped.
+/// Tuple first success, not first completion; all failures are grouped.
 template<typename First, typename... Rest>
     requires(is_task_v<First> || stored_task_factory<First>)
             && ((is_task_v<Rest> || stored_task_factory<Rest>) && ...)

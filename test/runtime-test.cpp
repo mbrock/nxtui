@@ -904,86 +904,6 @@ nxtrt::task<void> record_after_yield(std::vector<int> & events, int value)
     events.push_back(value * 10 + 2);
 }
 
-nxtrt::task<void> aggregate_firm_storage_probe(
-    nxtrt::firm_storage_ref storage,
-    std::vector<int> & events,
-    std::size_t & frame_capacity,
-    std::size_t & child_capacity,
-    std::size_t & deed_capacity,
-    std::size_t & completion_capacity,
-    std::size_t & join_failure_capacity,
-    std::size_t & deed_high_water,
-    std::size_t & completion_high_water,
-    std::size_t & child_high_water)
-{
-    struct aggregate_storage_firm : nxtrt::firm
-    {
-        aggregate_storage_firm(
-            nxtrt::firm_storage_ref storage,
-            std::vector<int> & events,
-            std::size_t & frame_capacity,
-            std::size_t & child_capacity,
-            std::size_t & deed_capacity,
-            std::size_t & completion_capacity,
-            std::size_t & join_failure_capacity,
-            std::size_t & deed_high_water,
-            std::size_t & completion_high_water,
-            std::size_t & child_high_water)
-            : nxtrt::firm(storage)
-            , events(&events)
-            , frame_capacity_out(&frame_capacity)
-            , child_capacity_out(&child_capacity)
-            , deed_capacity_out(&deed_capacity)
-            , completion_capacity_out(&completion_capacity)
-            , join_failure_capacity_out(&join_failure_capacity)
-            , deed_high_water_out(&deed_high_water)
-            , completion_high_water_out(&completion_high_water)
-            , child_high_water_out(&child_high_water)
-        {}
-
-        aggregate_storage_firm(aggregate_storage_firm &&) noexcept = default;
-        aggregate_storage_firm & operator=(
-            aggregate_storage_firm &&) = delete;
-
-        nxtrt::task<void> operator()()
-        {
-            *frame_capacity_out = frame_capacity();
-            *child_capacity_out = child_capacity();
-            *deed_capacity_out = deed_capacity();
-            *completion_capacity_out = child_completion_capacity();
-            *join_failure_capacity_out = join_failure_capacity();
-            nxtrt::fork(record_after_yield(*events, 1));
-            *child_high_water_out = child_high_water();
-            *deed_high_water_out = deed_high_water();
-            co_await nxtrt::join();
-            *completion_high_water_out = child_completion_high_water();
-        }
-
-        std::vector<int> * events = nullptr;
-        std::size_t * frame_capacity_out = nullptr;
-        std::size_t * child_capacity_out = nullptr;
-        std::size_t * deed_capacity_out = nullptr;
-        std::size_t * completion_capacity_out = nullptr;
-        std::size_t * join_failure_capacity_out = nullptr;
-        std::size_t * deed_high_water_out = nullptr;
-        std::size_t * completion_high_water_out = nullptr;
-        std::size_t * child_high_water_out = nullptr;
-    };
-
-    co_await aggregate_storage_firm{
-        storage,
-        events,
-        frame_capacity,
-        child_capacity,
-        deed_capacity,
-        completion_capacity,
-        join_failure_capacity,
-        deed_high_water,
-        completion_high_water,
-        child_high_water,
-    };
-}
-
 nxtrt::task<int> frame_reuse_step(int value)
 {
     co_return value + 1;
@@ -1424,7 +1344,7 @@ nxtrt::task<int> tuple_ambient_fork(std::vector<int> & events)
     co_return 17;
 }
 
-struct borrowed_deeds_firm : nxtrt::firm
+struct returned_deeds_firm : nxtrt::firm
 {
     using firm::firm;
 
@@ -2822,12 +2742,13 @@ static suite runtime_tests{
                     auto * third = arena.allocate(8000);
                     auto const capacity = arena.capacity();
                     auto const top = arena.top();
+                    auto const block = nxtrt::firm_frame_arena::block_size(2000);
                     arena.deallocate(first);
-                    expect(arena.free_listed_bytes() == std::size_t{2032});
+                    expect(arena.free_listed_bytes() == block);
                     auto * reused = arena.allocate(2000);
                     expect(reused == first);
                     arena.deallocate(second);
-                    expect(arena.top() == top - std::size_t{2032});
+                    expect(arena.top() == top - block);
                     auto * tail = arena.allocate(2000);
                     expect(tail == second);
                     expect(arena.capacity() == capacity);
@@ -2844,12 +2765,14 @@ static suite runtime_tests{
                     auto empty =
                         nxtrt::firm_frame_arena{nxtrt::frame_storage_ref{}};
                     expect(empty.allocate(1) == nullptr);
-                    auto land = nxtrt::owned_frame_storage{16};
+                    auto const bytes = nxtrt::firm_frame_arena::block_size(200);
+                    auto land = nxtrt::owned_frame_storage{
+                        bytes / sizeof(nxtrt::frame_cell)};
                     auto arena = nxtrt::firm_frame_arena{land};
                     auto * frame = arena.allocate(200);
                     expect(frame != nullptr);
                     expect(arena.allocate(1) == nullptr);
-                    expect(arena.capacity() == std::size_t{256});
+                    expect(arena.capacity() == bytes);
                     arena.deallocate(frame);
                 };
 
@@ -3097,321 +3020,25 @@ static suite runtime_tests{
                 expect(message.contains("high water"));
             };
 
-            "firm child storage reports borrowed slot overflow"_test = [] {
-                struct bounded_child_firm : nxtrt::firm
-                {
-                    bounded_child_firm(
-                        nxtrt::frame_storage_ref frames,
-                        nxtrt::firm_child_storage_ref children,
-                        std::vector<int> & events,
-                        bool & overflowed,
-                        std::size_t & capacity,
-                        std::size_t & high_water)
-                        : nxtrt::firm(frames, children)
-                        , events(&events)
-                        , overflowed(&overflowed)
-                        , capacity(&capacity)
-                        , high_water(&high_water)
-                    {}
-
-                    bounded_child_firm(bounded_child_firm &&) noexcept =
-                        default;
-                    bounded_child_firm & operator=(
-                        bounded_child_firm &&) = delete;
-
-                    nxtrt::task<void> operator()()
-                    {
-                        *capacity = child_capacity();
-                        nxtrt::fork(record_after_yield(*events, 1));
-                        try {
-                            nxtrt::fork(record_after_yield(*events, 2));
-                        } catch (const std::exception & e) {
-                            *overflowed = std::string_view{e.what()}.contains(
-                                "firm child storage");
-                        }
-                        *high_water = child_high_water();
-                        co_await nxtrt::join();
-                    }
-
-                    std::vector<int> * events = nullptr;
-                    bool * overflowed = nullptr;
-                    std::size_t * capacity = nullptr;
-                    std::size_t * high_water = nullptr;
-                };
-
+            "nursery grows beyond the former child limit with stable deeds"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
-                auto children = nxtrt::static_firm_child_storage<1>{};
-                auto events = std::vector<int>{};
-                auto overflowed = false;
-                auto capacity = std::size_t{};
-                auto high_water = std::size_t{};
-
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await bounded_child_firm{
-                        frames,
-                        children,
-                        events,
-                        overflowed,
-                        capacity,
-                        high_water,
-                    };
-                });
-
-                expect(overflowed);
-                expect(capacity == std::size_t{1});
-                expect(high_water == std::size_t{1});
-                expect(events == std::vector<int>{11, 12});
-            };
-
-            "firm join storage reports borrowed failure overflow"_test = [] {
-                struct bounded_join_firm : nxtrt::firm
-                {
-                    bounded_join_firm(
-                        nxtrt::frame_storage_ref frames,
-                        nxtrt::firm_child_storage_ref children,
-                        nxtrt::firm_join_storage_ref joins,
-                        std::vector<int> & events,
-                        bool & overflowed,
-                        std::size_t & capacity,
-                        std::size_t & high_water)
-                        : nxtrt::firm(frames, children, joins)
-                        , events(&events)
-                        , overflowed(&overflowed)
-                        , capacity(&capacity)
-                        , high_water(&high_water)
-                    {}
-
-                    bounded_join_firm(bounded_join_firm &&) noexcept =
-                        default;
-                    bounded_join_firm & operator=(
-                        bounded_join_firm &&) = delete;
-
-                    nxtrt::task<void> operator()()
-                    {
-                        *capacity = join_failure_capacity();
-                        nxtrt::fork(throw_after_yield(*events, 1));
-                        nxtrt::fork(throw_after_yield(*events, 2));
-                        try {
-                            co_await nxtrt::join();
-                        } catch (const std::exception & e) {
-                            *overflowed =
-                                std::string_view{e.what()}.contains(
-                                    "firm join failure storage");
-                            *high_water = join_failure_high_water();
-                        }
-                    }
-
-                    std::vector<int> * events = nullptr;
-                    bool * overflowed = nullptr;
-                    std::size_t * capacity = nullptr;
-                    std::size_t * high_water = nullptr;
-                };
-
-                auto deck = nxtrt::deck{};
-                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
-                auto children = nxtrt::static_firm_child_storage<2>{};
-                auto joins = nxtrt::static_firm_join_storage<1>{};
-                auto events = std::vector<int>{};
-                auto overflowed = false;
-                auto capacity = std::size_t{};
-                auto high_water = std::size_t{};
-
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await bounded_join_firm{
-                        frames,
-                        children,
-                        joins,
-                        events,
-                        overflowed,
-                        capacity,
-                        high_water,
-                    };
-                });
-
-                expect(overflowed);
-                expect(capacity == std::size_t{1});
-                expect(high_water == std::size_t{1});
-                expect(events == std::vector<int>{11, 21});
-            };
-
-            "firm deed storage reports borrowed record overflow"_test = [] {
-                struct bounded_deed_firm : nxtrt::firm
-                {
-                    bounded_deed_firm(
-                        nxtrt::frame_storage_ref frames,
-                        nxtrt::firm_child_storage_ref children,
-                        nxtrt::firm_deed_storage_ref deeds,
-                        std::vector<int> & events,
-                        bool & overflowed,
-                        std::size_t & capacity,
-                        std::size_t & high_water)
-                        : nxtrt::firm(frames, children, deeds)
-                        , events(&events)
-                        , overflowed(&overflowed)
-                        , capacity(&capacity)
-                        , high_water(&high_water)
-                    {}
-
-                    bounded_deed_firm(
-                        bounded_deed_firm &&) noexcept = default;
-                    bounded_deed_firm & operator=(
-                        bounded_deed_firm &&) = delete;
-
-                    nxtrt::task<void> operator()()
-                    {
-                        *capacity = deed_capacity();
-                        nxtrt::fork(record_after_yield(*events, 1));
-                        try {
-                            nxtrt::fork(record_after_yield(*events, 2));
-                        } catch (const std::exception & e) {
-                            *overflowed =
-                                std::string_view{e.what()}.contains(
-                                    "firm deed record storage");
-                            *high_water = deed_high_water();
+                auto deeds = deck.sync_wait([] {
+                    return nxtrt::with_firm([]() -> nxtrt::task<
+                        std::vector<nxtrt::deed<int>>> {
+                        auto deeds = std::vector<nxtrt::deed<int>>{};
+                        for (auto i = 0; i < 4100; ++i) {
+                            deeds.push_back(nxtrt::fork(value_after_yield(i)));
+                            // Reuse frames while retaining linked results.
+                            if (i % 64 == 63)
+                                co_await nxtrt::join();
                         }
                         co_await nxtrt::join();
-                    }
-
-                    std::vector<int> * events = nullptr;
-                    bool * overflowed = nullptr;
-                    std::size_t * capacity = nullptr;
-                    std::size_t * high_water = nullptr;
-                };
-
-                auto deck = nxtrt::deck{};
-                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
-                auto children = nxtrt::static_firm_child_storage<2>{};
-                auto deeds = nxtrt::static_firm_deed_storage<1>{};
-                auto events = std::vector<int>{};
-                auto overflowed = false;
-                auto capacity = std::size_t{};
-                auto high_water = std::size_t{};
-
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await bounded_deed_firm{
-                        frames,
-                        children,
-                        deeds,
-                        events,
-                        overflowed,
-                        capacity,
-                        high_water,
-                    };
+                        expect(nxtrt::current_firm()->child_count() == 4100);
+                        co_return deeds;
+                    });
                 });
-
-                expect(overflowed);
-                expect(capacity == std::size_t{1});
-                expect(high_water == std::size_t{1});
-                expect(events == std::vector<int>{11, 12});
-            };
-
-            "firm completion storage reports borrowed overflow"_test = [] {
-                struct bounded_completion_firm : nxtrt::firm
-                {
-                    bounded_completion_firm(
-                        nxtrt::frame_storage_ref frames,
-                        nxtrt::firm_bookkeeping_storage_ref storage,
-                        std::vector<int> & events,
-                        bool & overflowed,
-                        std::size_t & capacity,
-                        std::size_t & high_water)
-                        : nxtrt::firm(frames, storage)
-                        , events(&events)
-                        , overflowed(&overflowed)
-                        , capacity(&capacity)
-                        , high_water(&high_water)
-                    {}
-
-                    bounded_completion_firm(
-                        bounded_completion_firm &&) noexcept = default;
-                    bounded_completion_firm & operator=(
-                        bounded_completion_firm &&) = delete;
-
-                    nxtrt::task<void> operator()()
-                    {
-                        *capacity = child_completion_capacity();
-                        nxtrt::fork(record_after_yield(*events, 1));
-                        nxtrt::fork(record_after_yield(*events, 2));
-                        try {
-                            co_await nxtrt::join();
-                        } catch (const std::exception & e) {
-                            *overflowed =
-                                std::string_view{e.what()}.contains(
-                                    "firm child completion storage");
-                            *high_water = child_completion_high_water();
-                        }
-                    }
-
-                    std::vector<int> * events = nullptr;
-                    bool * overflowed = nullptr;
-                    std::size_t * capacity = nullptr;
-                    std::size_t * high_water = nullptr;
-                };
-
-                auto deck = nxtrt::deck{};
-                auto frames = nxtrt::static_frame_storage<64 * 1024>{};
-                auto storage =
-                    nxtrt::static_firm_bookkeeping_storage<2, 2, 1>{};
-                auto events = std::vector<int>{};
-                auto overflowed = false;
-                auto capacity = std::size_t{};
-                auto high_water = std::size_t{};
-
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await bounded_completion_firm{
-                        frames,
-                        storage,
-                        events,
-                        overflowed,
-                        capacity,
-                        high_water,
-                    };
-                });
-
-                expect(overflowed);
-                expect(capacity == std::size_t{1});
-                expect(high_water == std::size_t{1});
-                expect(events == std::vector<int>{11, 21, 12, 22});
-            };
-
-            "firm storage can be borrowed as one aggregate"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto storage =
-                    nxtrt::static_firm_storage<64 * 1024, 2, 3>{};
-                auto events = std::vector<int>{};
-                auto frame_capacity = std::size_t{};
-                auto child_capacity = std::size_t{};
-                auto completion_capacity = std::size_t{};
-                auto join_failure_capacity = std::size_t{};
-                auto deed_capacity = std::size_t{};
-                auto deed_high_water = std::size_t{};
-                auto completion_high_water = std::size_t{};
-                auto child_high_water = std::size_t{};
-
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await aggregate_firm_storage_probe(
-                        storage,
-                        events,
-                        frame_capacity,
-                        child_capacity,
-                        deed_capacity,
-                        completion_capacity,
-                        join_failure_capacity,
-                        deed_high_water,
-                        completion_high_water,
-                        child_high_water);
-                });
-
-                expect(frame_capacity == std::size_t{64 * 1024});
-                expect(child_capacity == std::size_t{2});
-                expect(deed_capacity == std::size_t{2});
-                expect(completion_capacity == std::size_t{2});
-                expect(join_failure_capacity == std::size_t{3});
-                expect(deed_high_water == std::size_t{1});
-                expect(completion_high_water == std::size_t{1});
-                expect(child_high_water == std::size_t{1});
-                expect(events == std::vector<int>{11, 12});
+                for (auto i = 0; i < 4100; ++i)
+                    expect(std::move(deeds[i]).get() == i);
             };
 
             "join forked tasks before the firm exits"_test = [] {
@@ -3592,7 +3219,7 @@ static suite runtime_tests{
                 expect(completed_ids.front() == running_ids.front());
             };
 
-            "firm fork unwinds child slot after deck registry overflow"_test =
+            "firm fork unwinds child record after deck registry overflow"_test =
                 [] {
                     // The sync_wait/firm scaffolding occupies three live task
                     // IDs before this body tries to fork its child.
@@ -4273,31 +3900,19 @@ static suite runtime_tests{
                 expect(events == std::vector<int>{8});
             };
 
-            "moved joined deeds detach from borrowed child records"_test =
+            "moved joined deeds survive nursery destruction"_test =
                 [] {
                     auto deck = nxtrt::deck{};
-                    auto storage =
-                        nxtrt::static_firm_bookkeeping_storage<2>{};
-                    auto deeds = deck.sync_wait([&] {
+                    auto deeds = deck.sync_wait([] {
                         return nxtrt::run_firm(
-                            borrowed_deeds_firm{storage});
+                            returned_deeds_firm{});
                     });
-                    auto records = storage.children().slots;
                     {
                         auto first = std::move(std::get<0>(deeds));
                         auto second = std::move(std::get<1>(deeds));
-                        expect(records[0].record->result_exported());
-                        expect(records[1].record->result_exported());
                         expect(std::move(first).get() == 41);
                         std::move(second).get();
                     }
-                    // The records outlive the firm and both moved deeds. A
-                    // one-sided evacuation unlink leaves stale pointers
-                    // here.
-                    expect(!records[0].record->result_exported());
-                    expect(!records[1].record->result_exported());
-                    expect(records[0].record->result_observed());
-                    expect(records[1].record->result_observed());
                 };
 
             "rejoining does not repeat failures from released observed deeds"_test =
@@ -4323,7 +3938,7 @@ static suite runtime_tests{
                     expect(events == std::vector<int>{131});
                 };
 
-            "tuple all owns factories and sizes heterogeneous bookkeeping"_test =
+            "tuple all owns factories and collects heterogeneous results"_test =
                 [] {
                     auto deck = nxtrt::deck{};
                     auto events = std::vector<int>{};
@@ -4340,13 +3955,7 @@ static suite runtime_tests{
                                     -> nxtrt::task<std::unique_ptr<int>> {
                                     ++calls;
                                     auto & scope = *nxtrt::current_firm();
-                                    expect(scope.child_capacity() == 3);
-                                    expect(scope.deed_capacity() == 3);
-                                    expect(
-                                        scope.child_completion_capacity()
-                                        == 3);
-                                    expect(
-                                        scope.join_failure_capacity() == 3);
+                                    expect(scope.child_count() == 3);
                                     co_await nxtrt::yield();
                                     co_return std::make_unique<int>(*value);
                                 },
@@ -4379,10 +3988,7 @@ static suite runtime_tests{
                                 nxtrt::when_all(std::tuple{[&, parent] {
                                     ++calls;
                                     expect(nxtrt::current_firm() != parent);
-                                    expect(
-                                        nxtrt::current_firm()
-                                            ->child_capacity()
-                                        == 1);
+                                    expect(nxtrt::current_firm() != nullptr);
                                     return value_after_yield(53);
                                 }});
                             expect(calls == 0);
@@ -4426,8 +4032,8 @@ static suite runtime_tests{
                     deck.sync_wait([] {
                         return nxtrt::wait_any(
                             std::tuple{
-                                borrowed_deeds_firm::empty_child,
-                                borrowed_deeds_firm::empty_child});
+                                returned_deeds_firm::empty_child,
+                                returned_deeds_firm::empty_child});
                     });
                 };
 
@@ -4501,7 +4107,7 @@ static suite runtime_tests{
                     expect(events == std::vector<int>{43});
                 };
 
-            "tuple bound is explicit and open combinators keep ambient forks"_test =
+            "tuple and variadic combinators both allow ambient forks"_test =
                 [] {
                     auto deck = nxtrt::deck{};
                     auto events = std::vector<int>{};
@@ -4515,26 +4121,16 @@ static suite runtime_tests{
                         && std::get<1>(result) == 7);
                     expect(events == std::vector<int>{31, 32});
                     events.clear();
-                    auto full = false;
-                    try {
-                        (void) deck.sync_wait([&] {
-                            return nxtrt::when_all(
-                                std::tuple{
-                                    [&] {
-                                        return tuple_ambient_fork(events);
-                                    },
-                                    [&] {
-                                        return tuple_wait_for_stop(
-                                            events, 47);
-                                    },
-                                });
-                        });
-                    } catch (const nxtrt::runtime_error & error) {
-                        full = std::string_view{error.what()}.contains(
-                            "child storage is full");
-                    }
-                    expect(full);
-                    expect(events == std::vector<int>{47});
+                    result = deck.sync_wait([&] {
+                        return nxtrt::when_all(
+                            std::tuple{
+                                [&] { return tuple_ambient_fork(events); },
+                                [] { return value_after_yield(7); },
+                            });
+                    });
+                    expect(std::get<0>(result) == 17);
+                    expect(std::get<1>(result) == 7);
+                    expect(events == std::vector<int>{31, 32});
                 };
 
             "tuple all accepts cancellation at every startup turn"_test =

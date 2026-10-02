@@ -164,12 +164,6 @@ struct firm_child_record_header
     bool result_observed = false;
 };
 
-struct child_completion
-{
-    task_id child;
-    std::exception_ptr failure;
-};
-
 struct child_record_base
 {
     child_record_base() = default;
@@ -208,11 +202,6 @@ struct deed_record_header
     bool contained = false;
     bool observed = false;
     bool result_taken = false;
-};
-
-struct firm_deed_record
-{
-    task_id child;
 };
 
 struct deed_result_state_base
@@ -910,54 +899,6 @@ struct child_record<void> final : child_record_base
     std::exception_ptr failure_;
     bool joined_ = false;
     bool evacuated_ = false;
-};
-
-struct firm_child_slot
-{
-    static constexpr std::size_t inline_record_bytes = 128;
-
-    firm_child_slot() = default;
-    firm_child_slot(const firm_child_slot &) = delete;
-    firm_child_slot & operator=(const firm_child_slot &) = delete;
-    firm_child_slot(firm_child_slot &&) = delete;
-    firm_child_slot & operator=(firm_child_slot &&) = delete;
-
-    ~firm_child_slot()
-    {
-        reset();
-    }
-
-    template<typename Record, typename... Args>
-        requires std::derived_from<Record, child_record_base>
-    [[nodiscard]] Record & emplace(Args &&... args)
-    {
-        static_assert(
-            sizeof(Record) <= inline_record_bytes,
-            "firm child slot inline storage is too small");
-        static_assert(
-            alignof(Record) <= alignof(firm_child_slot),
-            "firm child slot inline storage is under-aligned");
-
-        reset();
-        auto * child = ::new (storage_.data())
-            Record(std::forward<Args>(args)...);
-        record = child;
-        return *child;
-    }
-
-    void reset() noexcept
-    {
-        if (record == nullptr)
-            return;
-        std::destroy_at(record);
-        record = nullptr;
-    }
-
-    child_record_base * record = nullptr;
-
-private:
-    alignas(std::max_align_t)
-        std::array<std::byte, inline_record_bytes> storage_{};
 };
 
 } // namespace detail

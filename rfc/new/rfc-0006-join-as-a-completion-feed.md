@@ -2,6 +2,15 @@
 
 Status: new
 
+## Implementation status
+
+This remains a proposal, not the current join algorithm. The nursery
+simplification removed the bounded completion ledger because join did not
+consume it. Current join traverses child records; final-suspend notification
+still drives cancellation policies directly. Any future completion feed should
+replace that traversal with an actual consumer, rather than add a parallel
+ledger or impose a fixed child-admission bound.
+
 ## Summary
 
 Firm join should be modeled as a feed of child completions.

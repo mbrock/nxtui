@@ -1,6 +1,30 @@
 # RFC 0005: Firm Bookkeeping without Heap Vectors {#rfc_firm_bookkeeping}
 
-Status: current
+Status: superseded; bounded bookkeeping is a deferred optimization
+
+## Current decision: ordinary nurseries
+
+Firms are ordinary structured-concurrency nurseries, not fixed-shape storage
+bundles. Child records have stable addresses and grow with admission. They
+remain until nursery destruction so that surviving deeds can retain their
+observation links; joining evacuates results and releases task frames, not
+child-record slots.
+
+The bounded child/deed/completion/join storage APIs and exact-N tuple-firm
+specialization have been removed. Tuple combinators remain convenience APIs
+over ordinary nurseries; tuple arity does not constrain further forks.
+Separate issued-deed and completion ledgers have also been removed: the
+child record already supplies the identity and settlement state used by join
+and cancellation policy. Join failures are collected dynamically.
+
+Frame allocation is independent of this decision. The reusable frame pool
+still supports lazy owned chunks or explicitly borrowed, bounded frame land.
+Deeds still own or name evacuated result storage without owning live frames.
+
+A future static-storage optimization must preserve these nursery semantics
+and establish sound lifetime and capacity rules before exposing a constrained
+shape. The proposal and implementation history below are retained as historical
+context, not descriptions of the current API.
 
 ## Summary
 

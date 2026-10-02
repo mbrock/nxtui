@@ -2,6 +2,20 @@
 
 Status: current
 
+## Current implementation note
+
+The frame pool remains in use: default firms grow lazy, nonmoving owned chunks;
+explicitly borrowed frame land is bounded. Frames are individually recycled
+using top retraction and size-class free lists, as described below.
+
+Firm bookkeeping is now ordinary growable nursery bookkeeping, not the bounded
+storage bundles proposed in this RFC's original plan. Separate deed and
+completion ledgers and exact-N tuple firms have been removed; join traverses
+child records. See the [RFC 0005 supersession
+note](rfc-0005-firm-bookkeeping-without-heap-vectors.md).
+The historical plan and sketches below should not be read as current API
+signatures or as a guarantee that default firms never allocate from the heap.
+
 ## Summary
 
 A firm should become the required allocation scope for coroutine frames.

@@ -8,9 +8,14 @@ speculative scaffolding.
 
 - [RFC 0002: Firm Frame Arenas](../rfc/cur/rfc-0002-firm-frame-arenas.md)
 - [RFC 0003: Deck Task Registry and Task IDs](../rfc/cur/rfc-0003-deck-task-registry.md)
-- [RFC 0005: Firm Bookkeeping without Heap Vectors](../rfc/cur/rfc-0005-firm-bookkeeping-without-heap-vectors.md)
 - [RFC 0007: Ring Geometry Extraction](../rfc/cur/rfc-0007-ring-geometry-extraction.md)
 - [RFC 0013: Runtime Env Core Fields](../rfc/cur/rfc-0013-runtime-env-core-fields.md)
+
+## Superseded RFCs
+
+- [RFC 0005: Firm Bookkeeping without Heap Vectors](../rfc/cur/rfc-0005-firm-bookkeeping-without-heap-vectors.md)
+  — firms are ordinary growable nurseries; constrained static storage is a
+  deferred optimization, not an admission rule.
 
 ## New RFCs
 

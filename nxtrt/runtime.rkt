@@ -40,9 +40,10 @@ model runtime-model
   // execs under the same lifecycle below, before the owning scope returns.
   // Wisp workers and HTTP workers use short-lived child firms per job or
   // operation; guest continuations stay in the Wisp heap, not in this deck.
-  // Tuple-backed firms use these same ownership and drain rules. Their
-  // exact-N admission bound and factory invocation are storage/API rules,
-  // outside this snapshot model; more children require a nested firm.
+  // Firms are ordinary nurseries with growable child bookkeeping. Tuple
+  // combinators use these same nurseries; tuple arity is not an admission
+  // bound. Child records remain until nursery destruction, independently
+  // of task-frame evacuation. Storage specialization is not modeled here.
   signature firm
     spawned set task
     issued set deed
@@ -71,6 +72,7 @@ model runtime-model
     // Observation survives task-frame evacuation. C++ keeps the deed and
     // settlement record linked until either is destroyed, retargeting the
     // record when the deed moves. This is not ownership of a live frame.
+    // issued/observes are semantic relations, not separate C++ ledgers.
     observes one task
 
   predicate structural-invariants

@@ -3,170 +3,21 @@
 // Structured child ownership, forking, stopping, and joining.
 // Include nxtrt/task.hpp for the complete runtime API.
 
-#include "nxtrt/task/storage.hpp"
+#include "nxtrt/task/deed.hpp"
+#include "nxtrt/task/frame_arena.hpp"
 
 namespace nxtrt {
 
 class firm
 {
 public:
-    static constexpr std::size_t default_child_capacity = 4096;
-
     firm()
-        : owned_child_storage_(default_child_capacity)
-        , child_slots_(owned_child_storage_.ref().slots)
-        , uses_owned_child_storage_(true)
-        , owned_deed_storage_(default_child_capacity)
-        , deed_records_(owned_deed_storage_.ref().records)
-        , uses_owned_deed_storage_(true)
-        , owned_completion_storage_(default_child_capacity)
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , owned_join_storage_(default_child_capacity)
-        , join_failure_slots_(owned_join_storage_.ref().failures)
-        , uses_owned_join_storage_(true)
     {
         register_debug();
     }
 
     explicit firm(frame_storage_ref frames)
         : frames_(frames)
-        , owned_child_storage_(default_child_capacity)
-        , child_slots_(owned_child_storage_.ref().slots)
-        , uses_owned_child_storage_(true)
-        , owned_deed_storage_(default_child_capacity)
-        , deed_records_(owned_deed_storage_.ref().records)
-        , uses_owned_deed_storage_(true)
-        , owned_completion_storage_(default_child_capacity)
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , owned_join_storage_(default_child_capacity)
-        , join_failure_slots_(owned_join_storage_.ref().failures)
-        , uses_owned_join_storage_(true)
-    {
-        register_debug();
-    }
-
-    explicit firm(firm_child_storage_ref children)
-        : child_slots_(children.slots)
-        , owned_deed_storage_(children.slots.size())
-        , deed_records_(owned_deed_storage_.ref().records)
-        , uses_owned_deed_storage_(true)
-        , owned_completion_storage_(children.slots.size())
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , owned_join_storage_(children.slots.size())
-        , join_failure_slots_(owned_join_storage_.ref().failures)
-        , uses_owned_join_storage_(true)
-    {
-        register_debug();
-    }
-
-    firm(
-        firm_child_storage_ref children,
-        firm_deed_storage_ref deeds)
-        : child_slots_(children.slots)
-        , deed_records_(deeds.records)
-        , owned_completion_storage_(children.slots.size())
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , owned_join_storage_(children.slots.size())
-        , join_failure_slots_(owned_join_storage_.ref().failures)
-        , uses_owned_join_storage_(true)
-    {
-        register_debug();
-    }
-
-    explicit firm(firm_bookkeeping_storage_ref storage)
-        : child_slots_(storage.children.slots)
-        , deed_records_(storage.deeds.records)
-        , completion_slots_(storage.completions.completions)
-        , join_failure_slots_(storage.joins.failures)
-    {
-        register_debug();
-    }
-
-    firm(frame_storage_ref frames, firm_child_storage_ref children)
-        : frames_(frames)
-        , child_slots_(children.slots)
-        , owned_deed_storage_(children.slots.size())
-        , deed_records_(owned_deed_storage_.ref().records)
-        , uses_owned_deed_storage_(true)
-        , owned_completion_storage_(children.slots.size())
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , owned_join_storage_(children.slots.size())
-        , join_failure_slots_(owned_join_storage_.ref().failures)
-        , uses_owned_join_storage_(true)
-    {
-        register_debug();
-    }
-
-    firm(
-        frame_storage_ref frames,
-        firm_child_storage_ref children,
-        firm_deed_storage_ref deeds)
-        : frames_(frames)
-        , child_slots_(children.slots)
-        , deed_records_(deeds.records)
-        , owned_completion_storage_(children.slots.size())
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , owned_join_storage_(children.slots.size())
-        , join_failure_slots_(owned_join_storage_.ref().failures)
-        , uses_owned_join_storage_(true)
-    {
-        register_debug();
-    }
-
-    firm(frame_storage_ref frames, firm_bookkeeping_storage_ref storage)
-        : frames_(frames)
-        , child_slots_(storage.children.slots)
-        , deed_records_(storage.deeds.records)
-        , completion_slots_(storage.completions.completions)
-        , join_failure_slots_(storage.joins.failures)
-    {
-        register_debug();
-    }
-
-    firm(
-        firm_child_storage_ref children,
-        firm_join_storage_ref join)
-        : child_slots_(children.slots)
-        , owned_deed_storage_(children.slots.size())
-        , deed_records_(owned_deed_storage_.ref().records)
-        , uses_owned_deed_storage_(true)
-        , owned_completion_storage_(children.slots.size())
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , join_failure_slots_(join.failures)
-    {
-        register_debug();
-    }
-
-    firm(
-        frame_storage_ref frames,
-        firm_child_storage_ref children,
-        firm_join_storage_ref join)
-        : frames_(frames)
-        , child_slots_(children.slots)
-        , owned_deed_storage_(children.slots.size())
-        , deed_records_(owned_deed_storage_.ref().records)
-        , uses_owned_deed_storage_(true)
-        , owned_completion_storage_(children.slots.size())
-        , completion_slots_(owned_completion_storage_.ref().completions)
-        , uses_owned_completion_storage_(true)
-        , join_failure_slots_(join.failures)
-    {
-        register_debug();
-    }
-
-    explicit firm(firm_storage_ref storage)
-        : frames_(storage.frames)
-        , child_slots_(storage.children().slots)
-        , deed_records_(storage.deeds().records)
-        , completion_slots_(storage.completions().completions)
-        , join_failure_slots_(storage.joins().failures)
     {
         register_debug();
     }
@@ -179,7 +30,7 @@ private:
             debug::firm_snapshot{
                 .id = debug_id_,
                 .parent = debug_parent_,
-                .children = child_count_,
+                .children = children_.size(),
                 .stopping = stopping_,
             });
     }
@@ -195,59 +46,15 @@ public:
     firm & operator=(const firm &) = delete;
     firm(firm && other) noexcept
         : frames_(std::move(other.frames_))
-        , owned_child_storage_(std::move(other.owned_child_storage_))
-        , child_slots_(
-            other.uses_owned_child_storage_
-                ? owned_child_storage_.ref().slots
-                : other.child_slots_)
-        , uses_owned_child_storage_(
-            std::exchange(other.uses_owned_child_storage_, false))
-        , owned_deed_storage_(std::move(other.owned_deed_storage_))
-        , deed_records_(
-            other.uses_owned_deed_storage_
-                ? owned_deed_storage_.ref().records
-                : other.deed_records_)
-        , uses_owned_deed_storage_(
-            std::exchange(other.uses_owned_deed_storage_, false))
-        , owned_completion_storage_(
-            std::move(other.owned_completion_storage_))
-        , completion_slots_(
-            other.uses_owned_completion_storage_
-                ? owned_completion_storage_.ref().completions
-                : other.completion_slots_)
-        , uses_owned_completion_storage_(
-            std::exchange(other.uses_owned_completion_storage_, false))
-        , owned_join_storage_(std::move(other.owned_join_storage_))
-        , join_failure_slots_(
-            other.uses_owned_join_storage_
-                ? owned_join_storage_.ref().failures
-                : other.join_failure_slots_)
-        , uses_owned_join_storage_(
-            std::exchange(other.uses_owned_join_storage_, false))
-        , join_failure_count_(
-            std::exchange(other.join_failure_count_, 0))
-        , join_failure_high_water_(
-            std::exchange(other.join_failure_high_water_, 0))
-        , completion_count_(
-            std::exchange(other.completion_count_, 0))
-        , completion_high_water_(
-            std::exchange(other.completion_high_water_, 0))
-        , completion_overflow_(
-            std::exchange(other.completion_overflow_, false))
-        , deed_count_(std::exchange(other.deed_count_, 0))
-        , deed_high_water_(
-            std::exchange(other.deed_high_water_, 0))
-        , child_count_(std::exchange(other.child_count_, 0))
-        , child_high_water_(std::exchange(other.child_high_water_, 0))
+        , children_(std::move(other.children_))
         , stop_(std::move(other.stop_))
         , debug_id_(std::exchange(other.debug_id_, 0))
         , debug_parent_(std::exchange(other.debug_parent_, 0))
         , stopping_(std::exchange(other.stopping_, false))
     {
-        other.child_slots_ = {};
-        other.deed_records_ = {};
-        other.completion_slots_ = {};
-        other.join_failure_slots_ = {};
+        for_each_child([this](auto & child) {
+            child.firm_record.owner = this;
+        });
         debug_update();
     }
     firm & operator=(firm &&) = delete;
@@ -279,49 +86,9 @@ public:
         return frames_;
     }
 
-    [[nodiscard]] std::size_t child_capacity() const noexcept
-    {
-        return child_slots_.size();
-    }
-
     [[nodiscard]] std::size_t child_count() const noexcept
     {
-        return child_count_;
-    }
-
-    [[nodiscard]] std::size_t child_high_water() const noexcept
-    {
-        return child_high_water_;
-    }
-
-    [[nodiscard]] std::size_t deed_capacity() const noexcept
-    {
-        return deed_records_.size();
-    }
-
-    [[nodiscard]] std::size_t deed_high_water() const noexcept
-    {
-        return deed_high_water_;
-    }
-
-    [[nodiscard]] std::size_t join_failure_capacity() const noexcept
-    {
-        return join_failure_slots_.size();
-    }
-
-    [[nodiscard]] std::size_t join_failure_high_water() const noexcept
-    {
-        return join_failure_high_water_;
-    }
-
-    [[nodiscard]] std::size_t child_completion_capacity() const noexcept
-    {
-        return completion_slots_.size();
-    }
-
-    [[nodiscard]] std::size_t child_completion_high_water() const noexcept
-    {
-        return completion_high_water_;
+        return children_.size();
     }
 
     void stop() noexcept
@@ -360,49 +127,41 @@ public:
                 "nxtrt firm fork used without a running deck"};
         if (stopping_)
             throw runtime_error{"nxtrt firm fork used after stop"};
-        if (child_count_ >= child_slots_.size())
-            throw runtime_error{"nxtrt firm child storage is full"};
-        if (deed_count_ >= deed_records_.size())
-            throw runtime_error{"nxtrt firm deed record storage is full"};
-
         auto handle = child.release();
         if (!handle || handle.done())
             throw runtime_error{"nxtrt firm fork used with empty task"};
 
         auto result = deed<T>{std::in_place};
-        auto * record = static_cast<detail::child_record<T> *>(nullptr);
-        auto record_constructed = false;
+        auto record = std::unique_ptr<detail::child_record<T>>{};
         try {
             auto & promise = handle.promise();
             // Forked children outlive the call site, so they inherit the
             // current immutable environment snapshot.
             promise.env.copy_entries_from(*current);
-            record = &child_slots_[child_count_]
-                .template emplace<detail::child_record<T>>(
+            record = std::make_unique<detail::child_record<T>>(
                 handle,
                 *this,
                 &result.state());
-            record_constructed = true;
+            // Grow before enqueueing: allocation failure must not leave
+            // the deck pointing at a destroyed child.
+            children_.emplace_back();
             promise.observe_completion_of(*record);
-            record->firm_record.task =
-                active_deck->enqueue(handle, &promise);
+            try {
+                record->firm_record.task =
+                    active_deck->enqueue(handle, &promise);
+            } catch (...) {
+                children_.pop_back();
+                throw;
+            }
             result.state().record.child_task =
                 record->firm_record.task;
-            deed_records_[deed_count_] = detail::firm_deed_record{
-                .child = record->firm_record.task,
-            };
         } catch (...) {
-            if (record_constructed)
-                child_slots_[child_count_].reset();
-            else
+            if (!record)
                 handle.destroy();
             throw;
         }
 
-        ++child_count_;
-        child_high_water_ = std::max(child_high_water_, child_count_);
-        ++deed_count_;
-        deed_high_water_ = std::max(deed_high_water_, deed_count_);
+        children_.back() = std::move(record);
         debug_update();
         return result;
     }
@@ -422,8 +181,8 @@ public:
 
     [[nodiscard]] bool has_unjoined_children() const noexcept
     {
-        for (auto i = std::size_t{0}; i < child_count_; ++i) {
-            if (!child_slots_[i].record->joined())
+        for (auto const & child : children_) {
+            if (!child->joined())
                 return true;
         }
         return false;
@@ -458,7 +217,6 @@ private:
         child.firm_record.completion_reported = true;
         auto failure =
             known_failure ? known_failure : child.completion_failure();
-        remember_child_completion(child.firm_record.task, failure);
         child_finished(
             child,
             failure);
@@ -470,7 +228,7 @@ private:
             debug::firm_snapshot{
                 .id = debug_id_,
                 .parent = debug_parent_,
-                .children = child_count_,
+                .children = children_.size(),
                 .stopping = stopping_,
             });
     }
@@ -478,89 +236,17 @@ private:
     template<typename Fn>
     void for_each_child(Fn && fn) noexcept
     {
-        for (auto i = std::size_t{0}; i < child_count_; ++i)
-            std::invoke(fn, *child_slots_[i].record);
-    }
-
-    void remember_join_failure(std::exception_ptr failure)
-    {
-        if (join_failure_count_ >= join_failure_slots_.size())
-            throw runtime_error{
-                "nxtrt firm join failure storage is full"};
-        join_failure_slots_[join_failure_count_++] = std::move(failure);
-        join_failure_high_water_ =
-            std::max(join_failure_high_water_, join_failure_count_);
-    }
-
-    void remember_child_completion(
-        task_id child,
-        std::exception_ptr failure) noexcept
-    {
-        if (completion_count_ >= completion_slots_.size()) {
-            completion_overflow_ = true;
-            return;
-        }
-        completion_slots_[completion_count_++] = detail::child_completion{
-            .child = child,
-            .failure = std::move(failure),
-        };
-        completion_high_water_ =
-            std::max(completion_high_water_, completion_count_);
-    }
-
-    void throw_if_completion_overflow()
-    {
-        if (completion_overflow_)
-            throw runtime_error{
-                "nxtrt firm child completion storage is full"};
-    }
-
-    void clear_join_failures() noexcept
-    {
-        for (auto i = std::size_t{0}; i < join_failure_count_; ++i)
-            join_failure_slots_[i] = {};
-        join_failure_count_ = 0;
+        for (auto & child : children_)
+            std::invoke(fn, *child);
     }
 
     [[noreturn]] void throw_frame_arena_full(std::size_t frame_size) const;
 
-    [[noreturn]] void throw_join_failures()
-    {
-        if (join_failure_count_ == 0)
-            throw logic_error{
-                "nxtrt firm throw_join_failures called without failures"};
-        if (join_failure_count_ == 1)
-            rethrow(join_failure_slots_[0]);
-
-        auto exceptions = std::vector<std::exception_ptr>{};
-        exceptions.reserve(join_failure_count_);
-        for (auto i = std::size_t{0}; i < join_failure_count_; ++i)
-            exceptions.push_back(join_failure_slots_[i]);
-        throw exception_group{"firm tasks failed", std::move(exceptions)};
-    }
-
     firm_frame_arena frames_;
-    owned_firm_child_storage owned_child_storage_;
-    std::span<detail::firm_child_slot> child_slots_;
-    bool uses_owned_child_storage_ = false;
-    owned_firm_deed_storage owned_deed_storage_;
-    std::span<detail::firm_deed_record> deed_records_;
-    bool uses_owned_deed_storage_ = false;
-    owned_firm_completion_storage owned_completion_storage_;
-    std::span<detail::child_completion> completion_slots_;
-    bool uses_owned_completion_storage_ = false;
-    owned_firm_join_storage owned_join_storage_;
-    std::span<std::exception_ptr> join_failure_slots_;
-    bool uses_owned_join_storage_ = false;
-    std::size_t join_failure_count_ = 0;
-    std::size_t join_failure_high_water_ = 0;
-    std::size_t completion_count_ = 0;
-    std::size_t completion_high_water_ = 0;
-    bool completion_overflow_ = false;
-    std::size_t deed_count_ = 0;
-    std::size_t deed_high_water_ = 0;
-    std::size_t child_count_ = 0;
-    std::size_t child_high_water_ = 0;
+    // Records never move: promises and deeds link directly to them.
+    // Retain settlement records until nursery destruction, even after
+    // their frames have been evacuated and returned to the frame pool.
+    std::vector<std::unique_ptr<detail::child_record_base>> children_;
     std::stop_source stop_;
     debug::firm_id debug_id_ = 0;
     debug::firm_id debug_parent_ = 0;
@@ -691,20 +377,11 @@ auto fork(Fn && fn, Args &&... args)
 }
 inline task<void> firm::join()
 {
-    struct join_failure_guard
-    {
-        firm * owner = nullptr;
-
-        ~join_failure_guard() noexcept
-        {
-            if (owner != nullptr)
-                owner->clear_join_failures();
-        }
-    };
-
-    auto failure_guard = join_failure_guard{this};
-    for (auto i = std::size_t{0}; i < child_count_; ++i) {
-        auto & record = child_slots_[i].record;
+    auto failures = std::vector<std::exception_ptr>{};
+    for (auto i = std::size_t{0}; i < children_.size(); ++i) {
+        // A child may fork more children while join is suspended.
+        // Keep the stable record pointer, not a vector element reference.
+        auto * record = children_[i].get();
         auto failure = std::exception_ptr{};
         auto collect_failure = std::exception_ptr{};
         try {
@@ -728,13 +405,11 @@ inline task<void> firm::join()
                 collect_failure = failure;
         }
         if (collect_failure)
-            remember_join_failure(std::move(collect_failure));
+            failures.push_back(std::move(collect_failure));
     }
 
-    throw_if_completion_overflow();
-
-    if (join_failure_count_ != 0)
-        throw_join_failures();
+    if (!failures.empty())
+        throw_exceptions("firm tasks failed", std::move(failures));
 }
 
 } // namespace nxtrt
