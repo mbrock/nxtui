@@ -1,2 +1,0 @@
-// Generated from host.wisp; do not edit this header.
-constexpr std::string_view host_source = R"WISP_HOST(@WISP_HOST@)WISP_HOST";

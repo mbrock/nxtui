@@ -6,7 +6,7 @@ project('nxtui', 'cpp', 'c',
     'buildtype=debugoptimized',
     'default_library=shared',
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.3',
 )
 
 nxt_section_args = [

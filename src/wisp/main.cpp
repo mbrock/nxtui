@@ -21,7 +21,9 @@
 namespace wisp {
 namespace {
 
-#include "wisp-boot.hpp"
+constexpr unsigned char boot_tape[] = {
+#embed "wisp-boot.tape"
+};
 
 using namespace std::chrono;
 
@@ -1042,8 +1044,7 @@ int main(int argc, char ** argv)
         }
         if (command == "repl") {
             require(argc <= 2, "repl takes no arguments");
-            auto image = tape::decode(std::as_bytes(
-                std::span{boot_tape, sizeof(boot_tape) - 1}));
+            auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
             host app{image->storage, image->machine, image->entry};
             nxtrt::runtime runtime;
             runtime.run([&] { return app.repl(); });
@@ -1072,8 +1073,7 @@ int main(int argc, char ** argv)
                 throw std::runtime_error("invalid command option");
         }
         if (command == "run") {
-            auto image = tape::decode(std::as_bytes(
-                std::span{boot_tape, sizeof(boot_tape) - 1}));
+            auto image = tape::decode(std::as_bytes(std::span{boot_tape}));
             host app{image->storage, image->machine, image->entry};
             nxtrt::runtime runtime;
             const auto source = read_file(argv[2]);

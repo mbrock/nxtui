@@ -4,13 +4,16 @@
 namespace wisp {
 namespace {
 
-#include "wisp-base.hpp"
+constexpr unsigned char base_source[] = {
+#embed "base.wisp"
+};
 
 } // namespace
 
 std::string_view base_library() noexcept
 {
-    return base_source;
+    return {
+        reinterpret_cast<const char *>(base_source), sizeof(base_source)};
 }
 
 loader::loader(heap & storage, evaluator & machine, std::string_view source)

@@ -269,7 +269,10 @@ future work.
 
 ## Building
 
-This repo builds with Meson and does not require Nix:
+This repo builds with Meson 1.3+ and does not require Nix. Building requires a
+C++23 compiler with `#embed` support (GCC 15+ or Clang 19+). `#embed` is
+standard in C23/C++26 and supported as an extension in C++23 mode; the
+project still uses `-std=c++23`. Meson checks support at configure time.
 
 ```sh
 meson setup build
@@ -282,10 +285,12 @@ symbols, with assertions enabled. Use `meson setup build --buildtype=debug`
 for an unoptimized build, or `meson configure build -Dbuildtype=debugoptimized`
 to update an existing debug build.
 
-The Wisp tool boots its base and host libraries once at build time and embeds
-the resulting tape. Fresh runs and REPLs decode a private copy; restores still
-use only the selected checkpoint. Library source, evaluator, or tape-codec
-changes regenerate the embedded image automatically.
+Wisp embeds `base.wisp` and `host.wisp` directly with `#embed`, without
+generated C++ source headers. The Wisp tool boots those libraries once at
+build time, writes a binary tape, and embeds that tape with `#embed` too.
+Fresh runs and REPLs decode a private copy; restores still use only the
+selected checkpoint. Library source, evaluator, or tape-codec changes
+regenerate the embedded image automatically.
 
 The default build produces `nxt-tests`, `nxtllm`, `nxtmt`, `wisp`, the shared
 `libnxt-core`, the demo programs, and the `nxt-dev` developer command bundle.

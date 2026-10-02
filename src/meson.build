@@ -35,13 +35,15 @@ nxt_core_deps = [
   declare_dependency(compile_args : nxt_wand_args),
 ] + nxt_compression_deps
 
-wisp_base_config = configuration_data()
-wisp_base_config.set('WISP_BASE', import('fs').read('wisp/base.wisp'))
-configure_file(
-  input : 'wisp/base.hpp.in',
-  output : 'wisp-base.hpp',
-  configuration : wisp_base_config,
-)
+# Wisp sources and the boot tape use #embed as a C++23 extension.
+if not cpp.compiles('''
+  constexpr unsigned char data[] = {
+  #embed __FILE__ limit(1)
+  };
+  static_assert(sizeof(data) == 1);
+''', name : '#embed in C++23')
+  error('Wisp requires #embed support (GCC 15+ or Clang 19+)')
+endif
 
 nxt_core_sources = files(
   'nxtrt/alloc_trace.cpp',
@@ -153,19 +155,12 @@ nxt_core_dep = declare_dependency(
 )
 
 if get_option('wisp_tool')
-  wisp_host_config = configuration_data()
-  wisp_host_config.set('WISP_HOST', import('fs').read('wisp/host.wisp'))
-  configure_file(
-    input : 'wisp/host.hpp.in',
-    output : 'wisp-host.hpp',
-    configuration : wisp_host_config,
-  )
   wisp_boot = executable('wisp-boot', 'wisp/boot.cpp',
     include_directories : nxt_inc,
     dependencies : [nxt_core_dep],
   )
-  wisp_boot_header = custom_target('wisp-boot-tape',
-    output : 'wisp-boot.hpp',
+  wisp_boot_tape = custom_target('wisp-boot-tape',
+    output : 'wisp-boot.tape',
     input : files('wisp/base.wisp', 'wisp/host.wisp'),
     command : [wisp_boot, '@OUTPUT@'],
     # The generator uses the embedded sources and the current evaluator
@@ -173,9 +168,14 @@ if get_option('wisp_tool')
     # shared library's exported symbols remain the same.
     depends : [nxt_core_lib],
   )
-  wisp_tool = executable('wisp', ['wisp/main.cpp', wisp_boot_header],
+  wisp_tool = executable('wisp', ['wisp/main.cpp', wisp_boot_tape],
     include_directories : nxt_inc,
     dependencies : [nxt_core_dep, nxt_stacktrace_dep],
+    # Unlike #include, GCC's #embed does not search -I directories.
+    # Use a build-relative search path so the compiler depfile and Ninja agree
+    # on the generated tape's build-relative identity.
+    cpp_args : ['--embed-dir=' + import('fs').relative_to(
+      meson.current_build_dir(), meson.global_build_root())],
     install : true,
   )
 endif
@@ -247,11 +247,9 @@ nxt_header_install_excludes = {
     'load.cpp',
     'tape.cpp',
     'base.wisp',
-    'base.hpp.in',
     'boot.cpp',
     'main.cpp',
     'host.wisp',
-    'host.hpp.in',
   ],
 }
 
