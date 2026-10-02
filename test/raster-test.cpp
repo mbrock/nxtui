@@ -1,3 +1,5 @@
+#include <nxtai/tool_tui.hpp>
+#include <nxtai/trace_tui.hpp>
 #include <nxtui/ansi.hpp>
 #include <nxtui/raster-diff.hpp>
 #include <nxtui/tui.hpp>
@@ -5,6 +7,7 @@
 
 #include "test.hpp"
 #include <format>
+#include <tuple>
 
 namespace nxt::test {
 
@@ -78,6 +81,38 @@ RenderChecker<Layout> renders(const Layout & layout)
     return RenderChecker<Layout>{layout};
 }
 
+/// Render `layout` into a `size` raster and return its ASCII rows.
+template<typename Layout>
+std::vector<std::string> rendered_rows(const Layout & layout, Size size)
+{
+    GlyphTable glyphs;
+    Raster raster(size.w, size.h, glyphs);
+    auto view = raster.view();
+    layout.render(view, size);
+
+    auto rows = std::vector<std::string>{};
+    for (std::size_t y = 0; y < size.h.count(); ++y) {
+        auto & row = rows.emplace_back();
+        for (std::size_t x = 0; x < size.w.count(); ++x)
+            if (auto cell = view.get_cell(Pos::at(x * ch, y * ln)))
+                row += static_cast<char>(cell->glyph);
+    }
+    return rows;
+}
+
+void expect_shows(
+    const std::vector<std::string> & rows,
+    std::string_view needle)
+{
+    auto shown = std::ranges::any_of(rows, [&](const std::string & row) {
+        return row.contains(needle);
+    });
+    auto screen = std::string{};
+    for (const auto & row : rows)
+        screen += std::format("\n|{}|", row);
+    expect(shown) << std::format("'{}' not shown in:{}", needle, screen);
+}
+
 // ============================================================================
 // Layout tests
 // ============================================================================
@@ -146,6 +181,23 @@ static suite layout_tests{
                 expect(true_selected.height_hint().min == 1 * ln);
             };
 
+            "either builds only the chosen thunk"_test = [] {
+                auto built = std::vector<std::string>{};
+                auto layout = either(
+                    true,
+                    [&] {
+                        built.push_back("off");
+                        return text("off");
+                    },
+                    [&] {
+                        built.push_back("on");
+                        return text("on");
+                    });
+
+                expect(built == std::vector<std::string>{"on"});
+                renders(layout) | "on";
+            };
+
             "when is an optional typed child"_test = [] {
                 auto hidden = when(false, text("hidden"));
                 expect(hidden.width_hint().min == 0 * ch);
@@ -154,6 +206,51 @@ static suite layout_tests{
                 renders(column(text("top"), hidden, text("bottom")))
                     | "top" | "bottom";
                 renders(when(true, text("visible"))) | "visible";
+            };
+        };
+
+        "static shapes"_group = [] {
+            "compositions keep their child types"_test = [] {
+                using Text = decltype(text("x"));
+                using Hidden = decltype(when(false, text("x")));
+                static_assert(std::same_as<Hidden, Either<Empty, Text>>);
+                static_assert(std::same_as<
+                              decltype(row(text("a"), when(true, text("b")))),
+                              Row<Text, Hidden>>);
+                static_assert(std::same_as<
+                              decltype(column(surface({}, text("a")))),
+                              Column<Surface<Text>>>);
+                static_assert(!std::convertible_to<Row<Text>, Text>);
+            };
+
+            "type erasure is opt-in at the boundary"_test = [] {
+                auto erased = AnyLayout{row(text("L"), fill(), text("R"))};
+                renders(erased) | "L        R";
+            };
+        };
+
+        "runtime-sized children"_group = [] {
+            "row of erased children"_test = [] {
+                auto children = std::vector<AnyLayout>{};
+                children.emplace_back(text("A"));
+                children.emplace_back(fill());
+                children.emplace_back(fixed_width(1 * ch, column(text("Z"))));
+                renders(row(std::move(children))) | "A   Z";
+            };
+
+            "column of same-typed children"_test = [] {
+                auto children = std::vector{text("one"), text("two")};
+                auto layout = column(children);
+                expect(layout.height_hint().min == 2 * ln);
+                renders(layout) | "one" | "two";
+            };
+
+            "flex children share leftover space"_test = [] {
+                auto layout = row(
+                    std::vector{fill(), fill()});
+                expect(layout.width_hint().flex == 2.0 * one);
+                renders(row(text("["), fill(), text("|"), fill(), text("]")))
+                    | "[   |   ]";
             };
         };
 
@@ -167,6 +264,63 @@ static suite layout_tests{
                 expect(layout.height_hint().min == 3 * ln);
                 expect(layout.width_hint().min == 1 * ch);
                 renders(layout) | "a" | "b" | "c";
+            };
+        };
+
+        "tool views"_group = [] {
+            "render a finished generic call with its result"_test = [] {
+                namespace tt = nxtai::tool_tui;
+                auto turn = tt::turn_view{
+                    .thought = {},
+                    .calls = {tt::call_view{
+                        .name = "read_file",
+                        .arguments = "src/main.cpp",
+                        .output = "int main() {}",
+                        .latest_memory_current = std::nullopt,
+                        .state = tt::status::ok,
+                        .elapsed_ms = 12,
+                    }},
+                };
+                auto rows =
+                    rendered_rows(tt::render_turn(turn), {60 * ch, 3 * ln});
+
+                expect_shows(rows, " ok  file src/main.cpp");
+                expect_shows(rows, " 12ms  13B ");
+                expect_shows(rows, "int main() {}");
+            };
+
+            "render a running multi-line shell script"_test = [] {
+                namespace tt = nxtai::tool_tui;
+                auto call = tt::call_view{
+                    .name = "bash",
+                    .arguments = R"({"command":"cd src\nls"})",
+                    .output = {},
+                    .latest_memory_current = 2048,
+                    .state = tt::status::running,
+                    .elapsed_ms = -1,
+                };
+                auto rows =
+                    rendered_rows(tt::render_call(call), {60 * ch, 6 * ln});
+
+                expect_shows(rows, R"({"command":"cd src\nls"})");
+                expect_shows(rows, " 2K ");
+                expect_shows(rows, "$ cd src");
+                expect_shows(rows, "> ls");
+                expect_shows(rows, "waiting for process output");
+            };
+
+            "render an empty span waterfall"_test = [] {
+                namespace tr = nxtai::trace_tui;
+                auto rows = rendered_rows(
+                    tr::render_waterfall(tr::waterfall_view{
+                        .subject = "request",
+                        .total = std::chrono::milliseconds{5},
+                        .rows = {},
+                    }),
+                    {60 * ch, 2 * ln});
+
+                expect_shows(rows, " span request ");
+                expect_shows(rows, "no completed child spans");
             };
         };
 

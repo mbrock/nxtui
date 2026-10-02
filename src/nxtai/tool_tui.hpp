@@ -1,8 +1,7 @@
 #pragma once
 
-#include <nxtui/any_layout.hpp>
-#include <nxtui/style.hpp>
-#include <nxtui/units.hpp>
+#include <nxtui/tui.hpp>
+#include <nxtui/tui_text.hpp>
 #include <nxtai/tool_json.hpp>
 
 #include <format>
@@ -143,34 +142,226 @@ first_lines(std::string_view text, std::size_t max_lines)
     return lines;
 }
 
-nxtui::tui::AnyLayout chip(
+inline auto chip(
     std::string s,
     Rgba8 fg_color,
     Rgba8 bg_color,
-    Emphasis em_flags = DEFAULT_EMPHASIS);
+    Emphasis em_flags = DEFAULT_EMPHASIS)
+{
+    auto style = fg(fg_color) | bg(bg_color);
+    if (em_flags != DEFAULT_EMPHASIS)
+        style = style | em(em_flags);
+    return text(std::move(s), style);
+}
 
-nxtui::tui::AnyLayout status_chip(
+inline auto status_chip(
     std::string_view s,
     Rgba8 fg_color,
     Rgba8 bg_color,
-    Emphasis em_flags = DEFAULT_EMPHASIS);
+    Emphasis em_flags = DEFAULT_EMPHASIS)
+{
+    return chip(std::format(" {} ", s), fg_color, bg_color, em_flags);
+}
 
-nxtui::tui::AnyLayout inset_block(
-    nxtui::tui::AnyLayout body,
-    width_t pad = 1 * ch);
+template<Layout Body>
+auto inset_block(Body && body, width_t pad = 1 * ch)
+{
+    return row(hfill(pad, page_bg), grow_width(std::forward<Body>(body)));
+}
 
-nxtui::tui::AnyLayout block(
-    nxtui::tui::AnyLayout header,
-    nxtui::tui::AnyLayout body,
-    width_t pad = 1 * ch);
+template<Layout Header, Layout Body>
+auto block(Header && header, Body && body, width_t pad = 1 * ch)
+{
+    return inset_block(
+        column(std::forward<Header>(header), std::forward<Body>(body)),
+        pad);
+}
 
-nxtui::tui::AnyLayout body_line(std::string s, Rgba8 fg_color);
-nxtui::tui::AnyLayout body_lines(
-    std::vector<std::string> lines,
-    Rgba8 fg_color);
-nxtui::tui::AnyLayout render_call(const call_view & c);
-nxtui::tui::AnyLayout thought_block(std::string s);
-nxtui::tui::AnyLayout assistant_block(std::string s);
-nxtui::tui::AnyLayout render_turn(const turn_view & t);
+inline auto body_line(std::string s, Rgba8 fg_color)
+{
+    return text(std::move(s), fg(fg_color));
+}
+
+inline auto body_lines(std::vector<std::string> lines, Rgba8 fg_color)
+{
+    if (lines.empty())
+        lines.push_back({});
+
+    auto styled = std::vector<std::vector<Span>>{};
+    styled.reserve(lines.size());
+    for (auto & line : lines)
+        styled.push_back({span(std::move(line), fg(fg_color))});
+    return styled_lines(
+        std::move(styled), Style{.fg = fg_color, .bg = page_bg});
+}
+
+inline auto spine(const call_view & c)
+{
+    auto k = classify(c.name);
+    switch (c.state) {
+    case status::ok:
+        return status_chip("ok", slate_950, k.accent, Emphasis::bold);
+    case status::error:
+        return status_chip("!!", slate_950, rose_300, Emphasis::bold);
+    case status::running:
+        return status_chip("..", amber_200, band_bg);
+    }
+    return status_chip("", slate_300, band_bg);
+}
+
+inline auto call_header(const call_view & c)
+{
+    auto k = classify(c.name);
+    return row(
+        spine(c),
+        chip(std::format(" {} ", k.display), k.accent, band_bg, Emphasis::bold),
+        flex_text(primary_arg(c), fg(slate_500) | bg(band_bg)),
+        when(
+            c.elapsed_ms >= 0,
+            chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg)),
+        when(
+            !c.output.empty(),
+            chip(std::format(" {}B ", c.output.size()), slate_400, band_bg)));
+}
+
+inline auto result_window(const call_view & c)
+{
+    auto line_color = c.state == status::error ? rose_300 : slate_300;
+    auto lines = first_lines(c.output, 4);
+    if (lines.empty())
+        lines.push_back("running");
+    return inset_block(body_lines(std::move(lines), line_color));
+}
+
+inline auto shell_header(
+    const call_view & c,
+    std::string title,
+    Rgba8 title_color)
+{
+    auto latest_memory = c.latest_memory_current
+        ? compact_bytes(*c.latest_memory_current)
+        : std::string{};
+    return row(
+        flex_text(
+            std::move(title),
+            fg(title_color) | bg(band_bg) | em(Emphasis::bold)),
+        when(
+            c.elapsed_ms >= 0,
+            chip(std::format(" {}ms ", c.elapsed_ms), slate_500, band_bg)),
+        when(
+            !latest_memory.empty(),
+            chip(std::format(" {} ", latest_memory), slate_400, band_bg)),
+        when(
+            !c.output.empty(),
+            chip(std::format(" {}B ", c.output.size()), slate_400, band_bg)));
+}
+
+inline auto shell_script_window(std::string_view command)
+{
+    auto rows = std::vector<std::vector<Span>>{};
+    auto prefix = std::string{"$ "};
+    for (auto & line : first_lines(command, 12)) {
+        rows.push_back({
+            span(prefix, fg(orange_300)),
+            span(std::move(line), fg(amber_200)),
+        });
+        prefix = "> ";
+    }
+    return inset_block(
+        styled_lines(std::move(rows), Style{.fg = amber_200, .bg = page_bg}));
+}
+
+inline auto shell_output_window(const call_view & c)
+{
+    auto line_color = c.state == status::error ? rose_300 : slate_300;
+    auto header = chip(
+        c.state == status::running ? " running " : " output ",
+        c.state == status::error ? rose_300 : slate_500,
+        page_bg,
+        c.state == status::running ? DEFAULT_EMPHASIS : Emphasis::bold);
+    auto lines = std::vector<std::string>{};
+    if (!c.output.empty()) {
+        auto sanitized = text_flow::sanitize_terminal_text(c.output);
+        lines = text_flow::wrap_text(sanitized, 88 * ch);
+        if (lines.size() > 8)
+            lines.resize(8);
+    }
+    if (c.output.empty() && c.state == status::running)
+        lines.push_back("waiting for process output");
+    return block(std::move(header), body_lines(std::move(lines), line_color));
+}
+
+inline auto render_bash_call(const call_view & c)
+{
+    auto command = bash_command(c.arguments);
+    auto short_command = command && short_shell_oneliner(*command);
+    auto title = short_command ? std::format("$ {}", *command)
+        : c.arguments.empty()  ? std::string{"shell script"}
+                               : truncate_bytes(c.arguments, 96);
+    auto title_color = short_command ? amber_200 : orange_300;
+    return column(
+        inset_block(shell_header(c, std::move(title), title_color)),
+        when(
+            command.has_value() && !short_command,
+            [&] { return shell_script_window(*command); }),
+        when(
+            !c.output.empty() || c.state == status::running,
+            [&] { return shell_output_window(c); }));
+}
+
+inline auto render_generic_call(const call_view & c)
+{
+    return column(
+        inset_block(call_header(c)),
+        when(
+            !c.output.empty() || c.state == status::running,
+            [&] { return result_window(c); }));
+}
+
+inline auto render_call(const call_view & c)
+{
+    return either(
+        c.name == "bash",
+        [&] { return render_generic_call(c); },
+        [&] { return render_bash_call(c); });
+}
+
+inline auto
+labeled_markdown_block(std::string_view label, Rgba8 accent, std::string_view s)
+{
+    return block(
+        chip(std::format(" {} ", label), slate_950, accent, Emphasis::bold),
+        text_flow::markdown_block(
+            s,
+            fg(slate_300),
+            88 * ch,
+            Style{.fg = slate_300, .bg = page_bg}));
+}
+
+inline auto thought_block(std::string_view s)
+{
+    return labeled_markdown_block("thinking", sky_300, s);
+}
+
+inline auto assistant_block(std::string_view s)
+{
+    return labeled_markdown_block("assistant", emerald_300, s);
+}
+
+inline auto render_turn(const turn_view & t)
+{
+    auto has_thought = !t.thought.empty();
+    auto has_calls = !t.calls.empty();
+    return surface(
+        Style{.fg = slate_300, .bg = page_bg, .em = DEFAULT_EMPHASIS},
+        column(
+            when(has_thought, [&] { return thought_block(t.thought); }),
+            when(has_calls, [&] {
+                return each(std::vector{t.calls}, [](const call_view & c) {
+                    return render_call(c);
+                });
+            }),
+            when(!has_thought && !has_calls, text(""))));
+}
 
 } // namespace nxtai::tool_tui

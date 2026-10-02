@@ -12,6 +12,10 @@ namespace nxtui::tui {
 /// behind a small vtable so it can sit inside `Slot<AnyLayout>` and be
 /// swapped for differently-shaped layouts over time.
 ///
+/// Compositions in `tui.hpp` keep their statically known shapes; erase
+/// only where the shape genuinely varies at runtime or must cross an
+/// opaque boundary, e.g. a `std::vector<AnyLayout>` of mixed children.
+///
 /// Cheap to copy (shared_ptr bump). The held layout is immutable; new
 /// shapes replace the whole AnyLayout.
 class AnyLayout

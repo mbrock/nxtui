@@ -225,8 +225,6 @@ nxt_header_install_excludes = {
   'nxtai' : [
     'nxtllm.cpp',
     'nxtmt.cpp',
-    'tool_tui.cpp',
-    'trace_tui.cpp',
   ],
   'nxtrt' : [
     'alloc_trace.cpp',

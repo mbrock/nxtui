@@ -122,28 +122,117 @@ inline waterfall_view collect_waterfall(
     return view;
 }
 
-nxtui::tui::AnyLayout waterfall_bar(
+inline auto waterfall_bar(
     nxtrt::trace_clock::duration offset,
     nxtrt::trace_clock::duration duration,
     nxtrt::trace_clock::duration total,
-    Rgba8 accent = tool_tui::sky_300);
+    Rgba8 accent = tool_tui::sky_300)
+{
+    using std::chrono::duration_cast;
+    using std::chrono::microseconds;
+    auto total_us = duration_cast<microseconds>(total).count();
+    auto offset_us = duration_cast<microseconds>(offset).count();
+    auto duration_us = duration_cast<microseconds>(duration).count();
+    auto begin = total_us > 0
+        ? static_cast<double>(offset_us) / static_cast<double>(total_us)
+        : 0.0;
+    auto end = total_us > 0
+        ? static_cast<double>(offset_us + duration_us)
+              / static_cast<double>(total_us)
+        : 0.0;
+    return tui::range_progress_bar(begin, end, accent, tool_tui::slate_800);
+}
 
-nxtui::tui::AnyLayout waterfall_header(
+inline auto waterfall_header(
     const waterfall_view & view,
-    const waterfall_options & options);
+    const waterfall_options & options)
+{
+    namespace tt = tool_tui;
+    return tui::row(
+        tui::when(
+            !options.label.empty(),
+            tt::chip(
+                " " + options.label + " ",
+                tt::slate_950,
+                options.accent,
+                Emphasis::bold)),
+        tui::when(
+            !options.detail.empty(),
+            tt::chip(
+                " " + options.detail + " ",
+                options.accent,
+                tt::band_bg,
+                Emphasis::bold)),
+        tui::flex_text(view.subject, tui::fg(tt::slate_300) | tui::bg(tt::band_bg)),
+        tt::chip(
+            std::format(" {} ", format_duration(view.total)),
+            tt::slate_950,
+            tt::amber_300,
+            Emphasis::bold));
+}
 
-nxtui::tui::AnyLayout waterfall_row_layout(
+inline auto waterfall_row_layout(
     const waterfall_row & row,
     nxtrt::trace_clock::duration total,
-    Rgba8 accent);
+    Rgba8 accent)
+{
+    namespace tt = tool_tui;
+    return tui::row(
+        tui::fixed_width(
+            28 * ch,
+            tui::flex_text(row.name, tui::fg(tt::slate_300) | tui::bg(tt::page_bg))),
+        tui::fixed_width(
+            9 * ch,
+            tui::text(
+                std::format("+{:>7}", format_duration(row.offset)),
+                tui::fg(tt::slate_500) | tui::bg(tt::page_bg))),
+        tui::fixed_width(
+            9 * ch,
+            tui::text(
+                std::format("{:>7}  ", format_duration(row.duration)),
+                tui::fg(tt::slate_400) | tui::bg(tt::page_bg))),
+        waterfall_bar(row.offset, row.duration, total, accent));
+}
 
-nxtui::tui::AnyLayout render_waterfall(
+inline auto render_waterfall(
     waterfall_view view,
-    waterfall_options options = {});
+    waterfall_options options = {})
+{
+    namespace tt = tool_tui;
+    auto header = waterfall_header(view, options);
+    auto total = view.total;
+    auto accent = options.accent;
+    return tui::surface(
+        tui::Style{
+            .fg = tt::slate_300,
+            .bg = tt::page_bg,
+            .em = DEFAULT_EMPHASIS,
+        },
+        tt::block(
+            std::move(header),
+            tui::either(
+                view.rows.empty(),
+                [&] {
+                    return tui::each(
+                        std::move(view.rows),
+                        [total, accent](const waterfall_row & row) {
+                            return waterfall_row_layout(row, total, accent);
+                        });
+                },
+                [] {
+                    return tt::body_line(
+                        "no completed child spans", tt::slate_500);
+                })));
+}
 
-nxtui::tui::AnyLayout render_span_waterfall(
+inline auto render_span_waterfall(
     const nxtrt::trace_context & trace,
     const nxtrt::trace_span & span,
-    waterfall_options options = {});
+    waterfall_options options = {})
+{
+    auto subject = options.subject;
+    auto view = collect_waterfall(trace, span, std::move(subject));
+    return render_waterfall(std::move(view), std::move(options));
+}
 
 } // namespace nxtai::trace_tui

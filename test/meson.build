@@ -9,6 +9,7 @@ if get_option('tests')
     'idea-test.cpp',
     'pool-test.cpp',
     'runtime-test.cpp',
+    'raster-test.cpp',
     'terminal-test.cpp',
     'mtproto-test.cpp',
     'wisp-test.cpp',
