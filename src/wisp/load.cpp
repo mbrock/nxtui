@@ -33,7 +33,7 @@ evaluation loader::advance(std::size_t budget)
                     state_ = evaluation::done;
             } catch (const read_error & error) {
                 const std::array details{
-                    machine_.intern("READ-ERROR"),
+                    machine_.known("READ-ERROR"),
                     heap_.newv08(error.what())};
                 run_.set(machine_.start(nil));
                 heap_.set<tag::run, field::err>(

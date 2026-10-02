@@ -107,31 +107,48 @@ constexpr std::string_view kind_name(field_kind kind)
 // state. Table traversal and column identities come from the vat schemas.
 struct tape_codec
 {
+    // A tape root is an evaluator member or an entry in its known table.
     struct saved_root
     {
         std::string_view name;
-        root evaluator::* slot;
+        root evaluator::* member;
+        std::size_t known_index;
+
+        root & in(evaluator & vm) const
+        {
+            if (member != nullptr)
+                return vm.*member;
+            return vm.known_[known_index];
+        }
+
+        const root & in(const evaluator & vm) const
+        {
+            if (member != nullptr)
+                return vm.*member;
+            return vm.known_[known_index];
+        }
     };
 
+
     static constexpr std::array roots{
-        saved_root{"WISP", &evaluator::base_},
-        saved_root{"KEYWORD", &evaluator::keywords_},
-        saved_root{"KEY", &evaluator::keys_},
-        saved_root{"packages", &evaluator::packages_},
-        saved_root{"current", &evaluator::current_},
-        saved_root{"NIL-name", &evaluator::nil_name_},
-        saved_root{"T-name", &evaluator::true_name_},
-        saved_root{"DO", &evaluator::do_},
-        saved_root{"IF", &evaluator::if_},
-        saved_root{"EVAL", &evaluator::eval_},
-        saved_root{"LET", &evaluator::let_},
-        saved_root{"PROMPT", &evaluator::prompt_},
-        saved_root{"BINDING", &evaluator::binding_},
-        saved_root{"CONTINUATION", &evaluator::continuation_},
-        saved_root{"RESUME", &evaluator::resume_},
-        saved_root{"&OPTIONAL", &evaluator::optional_},
-        saved_root{"&REST", &evaluator::rest_},
-        saved_root{"&BODY", &evaluator::body_},
+        saved_root{"WISP", &evaluator::base_, 0},
+        saved_root{"KEYWORD", &evaluator::keywords_, 0},
+        saved_root{"KEY", &evaluator::keys_, 0},
+        saved_root{"packages", &evaluator::packages_, 0},
+        saved_root{"current", &evaluator::current_, 0},
+        saved_root{"NIL-name", &evaluator::nil_name_, 0},
+        saved_root{"T-name", &evaluator::true_name_, 0},
+        saved_root{"DO", nullptr, known_name::find("DO")},
+        saved_root{"IF", nullptr, known_name::find("IF")},
+        saved_root{"EVAL", nullptr, known_name::find("EVAL")},
+        saved_root{"LET", nullptr, known_name::find("LET")},
+        saved_root{"PROMPT", nullptr, known_name::find("PROMPT")},
+        saved_root{"BINDING", nullptr, known_name::find("BINDING")},
+        saved_root{"CONTINUATION", nullptr, known_name::find("CONTINUATION")},
+        saved_root{"RESUME", nullptr, known_name::find("RESUME")},
+        saved_root{"&OPTIONAL", nullptr, known_name::find("&OPTIONAL")},
+        saved_root{"&REST", nullptr, known_name::find("&REST")},
+        saved_root{"&BODY", nullptr, known_name::find("&BODY")},
     };
 
     static void validate(const evaluator & vm, word entry)
@@ -189,8 +206,8 @@ struct tape_codec
             }
         };
         value(entry);
-        for (auto [name, slot] : roots)
-            value((vm.*slot).get());
+        for (const auto & saved : roots)
+            value(saved.in(vm).get());
         for (auto [id, x] : h.pins_) {
             demand(id > 0 && id < h.next_pin_, "invalid pin ID");
             value(x);
@@ -286,8 +303,8 @@ struct tape_codec
             packages.contains(vm.current_.get()),
             "current package missing");
         for (std::size_t i = 0; i < roots.size(); ++i) {
-            const auto [name, slot] = roots[i];
-            const auto x = (vm.*slot).get();
+            const auto name = roots[i].name;
+            const auto x = roots[i].in(vm).get();
             if (i < 3) {
                 demand(packages.contains(x), "canonical package missing");
                 demand(
@@ -312,15 +329,15 @@ struct tape_codec
                 typed(x, tag::ktx);
         };
         const auto boundary_kind = [&](word kind) {
-            return kind == vm.prompt_.get() || kind == vm.binding_.get()
-                   || kind == vm.resume_.get();
+            return kind == vm.known("PROMPT") || kind == vm.known("BINDING")
+                   || kind == vm.known("RESUME");
         };
         const auto segment = [&](word x) {
             continuation(x);
             if (x != top) {
                 const auto kind = h.get<tag::ktx, field::fun>(x);
                 demand(
-                    !boundary_kind(kind) && kind != vm.continuation_.get(),
+                    !boundary_kind(kind) && kind != vm.known("CONTINUATION"),
                     "invalid continuation segment");
             }
         };
@@ -340,7 +357,7 @@ struct tape_codec
         for (word i = 0; i < edges.size(); ++i) {
             const auto [hop, env, kind, acc, arg] =
                 h.read<tag::ktx>(pointer(tag::ktx, i, h.era_));
-            if (kind == vm.continuation_.get()) {
+            if (kind == vm.known("CONTINUATION")) {
                 demand(hop == top, "invalid continuation wrapper");
                 segment(acc);
                 meta(arg);
@@ -416,9 +433,9 @@ struct tape_codec
         out.u32(vm.collect_);
         out.u32(entry);
         out.count(roots.size());
-        for (auto [name, slot] : roots) {
-            out.text(name);
-            out.u32((vm.*slot).get());
+        for (const auto & saved : roots) {
+            out.text(saved.name);
+            out.u32(saved.in(vm).get());
         }
         const auto jets = evaluator::jet_manifest();
         out.count(jets.size());
@@ -497,7 +514,7 @@ struct tape_codec
             const auto index = std::size_t(found - roots.begin());
             demand(!seen_roots[index], "duplicate root");
             seen_roots[index] = true;
-            (vm.*found->slot).set(in.u32());
+            found->in(vm).set(in.u32());
         }
         const auto jets = evaluator::jet_manifest();
         const auto jet_count = in.u32();
@@ -592,8 +609,8 @@ struct tape_codec
             return immediate(tag::jet, jet_map[id]);
         };
         result->entry.set(remap(result->entry.get()));
-        for (auto [name, slot] : roots)
-            (vm.*slot).set(remap((vm.*slot).get()));
+        for (const auto & saved : roots)
+            saved.in(vm).set(remap(saved.in(vm).get()));
         for (auto & [id, x] : h.pins_)
             x = remap(x);
         for (auto & x : h.words_)
@@ -610,6 +627,9 @@ struct tape_codec
             },
             h.vat_);
         validate(vm, result->entry.get());
+        // Saved names were checked above; the rest of the known table is
+        // derived from the restored packages, as Zig's tape loader does.
+        vm.install_known();
         h.freeze_continuations();
         return result;
     }

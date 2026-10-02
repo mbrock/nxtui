@@ -110,6 +110,19 @@ constexpr std::string_view type_name(tag type)
     return "UNKNOWN";
 }
 
+// Index in known_names of each tag's TYPE-OF name, or npos when it has none.
+constexpr auto type_symbols = [] {
+    std::array<std::size_t, 32> table{};
+    for (word t = 0; t < table.size(); ++t) {
+        table[t] = std::string_view::npos;
+        const auto name = type_name(tag(t));
+        for (std::size_t k = 0; k < known_names.size(); ++k)
+            if (known_names[k] == name)
+                table[t] = k;
+    }
+    return table;
+}();
+
 word list(heap & h, std::span<const word> xs)
 {
     word result = nil;
@@ -134,18 +147,17 @@ evaluator::evaluator(heap & storage, std::nullptr_t)
     , current_(storage)
     , nil_name_(storage)
     , true_name_(storage)
-    , do_(storage)
-    , if_(storage)
-    , eval_(storage)
-    , let_(storage)
-    , prompt_(storage)
-    , binding_(storage)
-    , continuation_(storage)
-    , resume_(storage)
-    , optional_(storage)
-    , rest_(storage)
-    , body_(storage)
+    , known_([&]<std::size_t... I>(std::index_sequence<I...>) {
+        return std::array<root, sizeof...(I)>{
+            (static_cast<void>(I), root{storage})...};
+    }(std::make_index_sequence<known_names.size()>{}))
 {
+}
+
+void evaluator::install_known()
+{
+    for (std::size_t i = 0; i < known_names.size(); ++i)
+        known_[i].set(intern(known_names[i]));
 }
 
 evaluator::evaluator(heap & storage)
@@ -160,17 +172,7 @@ evaluator::evaluator(heap & storage)
     current_.set(base_.get());
     nil_name_.set(storage.newv08("NIL"));
     true_name_.set(storage.newv08("T"));
-    do_.set(intern("DO"));
-    if_.set(intern("IF"));
-    eval_.set(intern("EVAL"));
-    let_.set(intern("LET"));
-    prompt_.set(intern("PROMPT"));
-    binding_.set(intern("BINDING"));
-    continuation_.set(intern("CONTINUATION"));
-    resume_.set(intern("RESUME"));
-    optional_.set(intern("&OPTIONAL"));
-    rest_.set(intern("&REST"));
-    body_.set(intern("&BODY"));
+    install_known();
     const auto jets = builtins();
     for (word i = 0; i < jets.size(); ++i)
         heap_.set<tag::sym, field::fun>(
@@ -293,17 +295,23 @@ struct eval_step
     word step_target = nil;
 
     [[noreturn]] void
-    fail(std::string_view name, std::initializer_list<word> details = {})
+    fail(known_name name, std::initializer_list<word> details = {})
     {
-        std::vector<word> xs{vm.intern(name)};
+        std::vector<word> xs{vm.known(name)};
         xs.insert(xs.end(), details.begin(), details.end());
         throw condition{h.newv32(xs)};
     }
 
-    void require(word x, tag type, std::string_view name)
+    // The TYPE-OF symbol for a type tag other than sys.
+    word type_symbol(tag type) const noexcept
+    {
+        return vm.known_[type_symbols[std::size_t(type)]].get();
+    }
+
+    void require(word x, tag type)
     {
         if (tag_of(x) != type)
-            fail("TYPE-MISMATCH", {vm.intern(name), x});
+            fail("TYPE-MISMATCH", {type_symbol(type), x});
     }
 
     // Reject dotted and cyclic syntax instead of hanging in one host turn.
@@ -312,7 +320,7 @@ struct eval_step
         std::vector<word> xs;
         auto slow = x;
         while (x != nil) {
-            require(x, tag::duo, "CONS");
+            require(x, tag::duo);
             auto [car, cdr] = h.read<tag::duo>(x);
             xs.push_back(car);
             x = cdr;
@@ -352,14 +360,14 @@ struct eval_step
 
     word lookup(word sym, bool assign = false, word value = nil)
     {
-        require(sym, tag::sym, "SYMBOL");
+        require(sym, tag::sym);
         if (!assign
             && h.get<tag::sym, field::pkg>(sym) == vm.keywords_.get())
             return sym;
         // Explicit lexical binders stay lexical even when the symbol's
         // dynamic declaration changes after a closure captures them.
         for (auto scope : scan(env)) {
-            require(scope, tag::v32, "VECTOR");
+            require(scope, tag::v32);
             const auto xs = h.v32slice(scope);
             if (xs.size() % 2 != 0)
                 fail("INVALID-ENVIRONMENT", {scope});
@@ -375,7 +383,7 @@ struct eval_step
             for (auto cur = meta; cur != top;) {
                 const auto [hop, saved_env, fun, name, binding] =
                     h.read<tag::ktx>(cur);
-                if (fun == vm.binding_.get() && name == sym) {
+                if (fun == vm.known("BINDING") && name == sym) {
                     const auto xs = h.v32slice(binding);
                     const auto old = xs[0], segment = xs[1];
                     if (assign) {
@@ -410,7 +418,7 @@ struct eval_step
         const auto [first, rest] = h.read<tag::duo>(body);
         // The last form is in tail position, including a singleton DO.
         if (rest != nil)
-            push(vm.do_.get(), nil, rest);
+            push(vm.known("DO"), nil, rest);
         enter(first);
     }
 
@@ -424,31 +432,31 @@ struct eval_step
         std::size_t used = 0;
         for (std::size_t i = 0; i < pars.size(); ++i) {
             auto p = pars[i];
-            if (p == vm.optional_.get()) {
+            if (p == vm.known("&OPTIONAL")) {
                 optional = true;
                 continue;
             }
-            if (p == vm.rest_.get() || p == vm.body_.get()) {
+            if (p == vm.known("&REST") || p == vm.known("&BODY")) {
                 if (i + 2 != pars.size())
                     fail("INVALID-PARAMETERS", {parameters});
-                require(pars[i + 1], tag::sym, "SYMBOL");
+                require(pars[i + 1], tag::sym);
                 scope.push_back(pars[i + 1]);
                 scope.push_back(list(h, args.subspan(used)));
                 used = args.size();
                 break;
             }
-            require(p, tag::sym, "SYMBOL");
+            require(p, tag::sym);
             if (used == args.size() && !optional)
                 fail(
                     "PROGRAM-ERROR",
-                    {vm.intern("INVALID-ARGUMENT-COUNT"), fun});
+                    {vm.known("INVALID-ARGUMENT-COUNT"), fun});
             scope.push_back(p);
             scope.push_back(used < args.size() ? args[used++] : nil);
         }
         if (used != args.size())
             fail(
                 "PROGRAM-ERROR",
-                {vm.intern("INVALID-ARGUMENT-COUNT"), fun});
+                {vm.known("INVALID-ARGUMENT-COUNT"), fun});
         env = h.cons(h.newv32(scope), captured);
         if (tag_of(fun) == tag::fun)
             h.set<tag::fun, field::cnt>(fun, count + 1);
@@ -463,7 +471,7 @@ struct eval_step
             if (args.size() != 1)
                 fail(
                     "PROGRAM-ERROR",
-                    {vm.intern("CONTINUATION-CALL-ERROR")});
+                    {vm.known("CONTINUATION-CALL-ERROR")});
             install(compose(context(fun)));
             give(args[0]);
             return;
@@ -493,7 +501,7 @@ struct eval_step
             fail("UNDEFINED-FUNCTION", {callee});
         const auto args = scan(arguments);
         if (tag_of(fun) == tag::mac) {
-            push(vm.eval_.get(), nil, nil);
+            push(vm.known("EVAL"), nil, nil);
             call(fun, args);
         } else if (
             tag_of(fun) == tag::jet && payload_of(fun) < builtins().size()
@@ -520,24 +528,24 @@ struct eval_step
         }
         const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(way);
         env = saved_env;
-        if (fun == vm.do_.get()) {
+        if (fun == vm.known("DO")) {
             way = hop;
             sequence(arg);
-        } else if (fun == vm.if_.get()) {
-            require(arg, tag::duo, "CONS");
+        } else if (fun == vm.known("IF")) {
+            require(arg, tag::duo);
             const auto [yes, no] = h.read<tag::duo>(arg);
             way = hop;
             enter(val == nil ? no : yes);
-        } else if (fun == vm.eval_.get()) {
+        } else if (fun == vm.known("EVAL")) {
             way = hop;
             enter(val);
-        } else if (fun == vm.let_.get()) {
+        } else if (fun == vm.known("LET")) {
             // Reverse accumulator: name, value, name, ..., body.
             auto xs = scan(acc);
             if (xs.empty() || xs.size() % 2 != 0)
                 fail("INVALID-CONTINUATION", {way});
             for (std::size_t i = 0; i + 1 < xs.size(); i += 2)
-                require(xs[i], tag::sym, "SYMBOL");
+                require(xs[i], tag::sym);
             (void) scan(arg);
             if (arg == nil) {
                 const auto body = xs.back();
@@ -555,7 +563,7 @@ struct eval_step
                 const auto pair = scan(binding);
                 if (pair.size() != 2)
                     fail("INVALID-BINDING", {binding});
-                require(pair[0], tag::sym, "SYMBOL");
+                require(pair[0], tag::sym);
                 auto next_acc = h.cons(pair[0], h.cons(val, acc));
                 writable_frame();
                 h.set<tag::ktx, field::acc>(way, next_acc);
@@ -577,7 +585,7 @@ struct eval_step
                 h.v32set(vector, 0, 0);
                 h.set<tag::ktx, field::acc>(way, vector);
             }
-            require(vector, tag::v32, "VECTOR");
+            require(vector, tag::v32);
             const auto xs = h.v32slice(vector);
             if (xs.size() < 2 || xs[0] >= xs.size() - 1
                 || remaining.size() != xs.size() - xs[0] - 2)
@@ -611,7 +619,7 @@ struct eval_step
             if (args.size() < def.minimum || args.size() > def.maximum)
                 fail(
                     "PROGRAM-ERROR",
-                    {vm.intern("INVALID-ARGUMENT-COUNT"), jet});
+                    {vm.known("INVALID-ARGUMENT-COUNT"), jet});
             def.invoke(*this, args);
         } catch (const condition & c) {
             fail("BUILTIN-FAILURE", {jet, c.value});
@@ -620,7 +628,7 @@ struct eval_step
 
     std::int64_t number(word x)
     {
-        require(x, tag::integer, "INTEGER");
+        require(x, tag::integer);
         return integer(x);
     }
 
@@ -631,14 +639,14 @@ struct eval_step
 
     void function(word sym)
     {
-        require(sym, tag::sym, "SYMBOL");
+        require(sym, tag::sym);
         give(h.get<tag::sym, field::fun>(sym));
     }
 
     void fn(word name, word parameters, word body)
     {
         if (name != nil)
-            require(name, tag::sym, "SYMBOL");
+            require(name, tag::sym);
         give(h.make<tag::fun>({env, parameters, body, name, 0}));
     }
 
@@ -649,7 +657,7 @@ struct eval_step
 
     void if_(word test, word yes, word no)
     {
-        push(vm.if_.get(), nil, h.cons(yes, no));
+        push(vm.known("IF"), nil, h.cons(yes, no));
         enter(test);
     }
 
@@ -666,16 +674,16 @@ struct eval_step
             const auto pair = scan(binding);
             if (pair.size() != 2)
                 fail("INVALID-BINDING", {binding});
-            require(pair[0], tag::sym, "SYMBOL");
+            require(pair[0], tag::sym);
         }
-        const auto body = h.cons(vm.do_.get(), list(h, forms));
+        const auto body = h.cons(vm.known("DO"), list(h, forms));
         if (bindings.empty()) {
             enter(body);
             return;
         }
         const auto first = scan(bindings[0]);
         push(
-            vm.let_.get(),
+            vm.known("LET"),
             h.cons(first[0], h.cons(body, nil)),
             h.get<tag::duo, field::cdr>(clauses));
         enter(first[1]);
@@ -762,7 +770,7 @@ struct eval_step
         if (x == nil)
             give(nil);
         else {
-            require(x, tag::duo, "CONS");
+            require(x, tag::duo);
             give(h.get<tag::duo, F>(x));
         }
     }
@@ -789,15 +797,15 @@ struct eval_step
     void type_of(word x)
     {
         if (x == nil)
-            give(vm.intern("NULL"));
+            give(vm.known("NULL"));
         else if (x == t)
-            give(vm.intern("BOOLEAN"));
+            give(vm.known("BOOLEAN"));
         else if (x == top)
-            give(vm.intern("CONTINUATION"));
+            give(vm.known("CONTINUATION"));
         else if (tag_of(x) == tag::sys)
             fail("INVALID-VALUE", {x});
         else
-            give(vm.intern(type_name(tag_of(x))));
+            give(type_symbol(tag_of(x)));
     }
 
     template<bool Control>
@@ -816,7 +824,7 @@ struct eval_step
         give(
             xs.empty()       ? nil
             : xs.size() == 1 ? xs[0]
-                             : h.cons(vm.do_.get(), forms));
+                             : h.cons(vm.known("DO"), forms));
     }
 
     void macroexpand_1(word form)
@@ -838,7 +846,7 @@ struct eval_step
     template<tag T, field F>
     void get_field(word x)
     {
-        require(x, T, type_name(T));
+        require(x, T);
         if constexpr (T == tag::pkg && F == field::sym)
             // As with PACKAGES, expose a snapshot, not the private index
             // that interning (including condition creation) must trust.
@@ -850,7 +858,7 @@ struct eval_step
     template<tag T, field F>
     void set_field(word x, word value)
     {
-        require(x, T, type_name(T));
+        require(x, T);
         h.set<T, F>(x, value);
         give(x);
     }
@@ -902,7 +910,7 @@ struct eval_step
     {
         if constexpr (F == field::sym)
             if (value != nil)
-                require(value, tag::sym, "SYMBOL");
+                require(value, tag::sym);
         if (tag_of(fun) == tag::fun)
             h.set<tag::fun, F>(fun, value);
         else if (tag_of(fun) == tag::mac)
@@ -917,7 +925,7 @@ struct eval_step
     template<field F>
     void set_symbol(word sym, word value)
     {
-        require(sym, tag::sym, "SYMBOL");
+        require(sym, tag::sym);
         h.set<tag::sym, F>(sym, value);
         if constexpr (F == field::fun) {
             if (tag_of(value) == tag::fun)
@@ -948,7 +956,7 @@ struct eval_step
     template<tag T>
     void length(word x)
     {
-        require(x, T, type_name(T));
+        require(x, T);
         give_count(h.get<T, field::len>(x));
     }
 
@@ -959,10 +967,10 @@ struct eval_step
 
     std::size_t vector_index(word vec, word idx)
     {
-        require(vec, tag::v32, "VECTOR");
+        require(vec, tag::v32);
         const auto index = number(idx);
         if (index < 0 || std::size_t(index) >= h.v32slice(vec).size())
-            fail("TYPE-MISMATCH", {vm.intern("INTEGER"), idx});
+            fail("TYPE-MISMATCH", {vm.known("INTEGER"), idx});
         return static_cast<std::size_t>(index);
     }
 
@@ -985,7 +993,7 @@ struct eval_step
         // cannot invalidate any source slice, even when xs alias.
         std::vector<word> result;
         for (auto x : xs) {
-            require(x, tag::v32, "VECTOR");
+            require(x, tag::v32);
             const auto piece = h.v32slice(x);
             result.insert(result.end(), piece.begin(), piece.end());
         }
@@ -1000,15 +1008,15 @@ struct eval_step
 
     std::string_view string(word x)
     {
-        require(x, tag::v08, "STRING");
+        require(x, tag::v08);
         return h.v08slice(x);
     }
 
     void string_equal(word x, word y)
     {
         // Validate both before borrowing; fail() can grow the byte pool.
-        require(x, tag::v08, "STRING");
-        require(y, tag::v08, "STRING");
+        require(x, tag::v08);
+        require(y, tag::v08);
         give(h.v08slice(x) == h.v08slice(y) ? t : nil);
     }
 
@@ -1022,8 +1030,8 @@ struct eval_step
 
     void string_search(word x, word y)
     {
-        require(x, tag::v08, "STRING");
-        require(y, tag::v08, "STRING");
+        require(x, tag::v08);
+        require(y, tag::v08);
         const auto pos = h.v08slice(x).find(h.v08slice(y));
         if (pos == std::string_view::npos)
             give(nil);
@@ -1033,7 +1041,7 @@ struct eval_step
 
     void string_slice(word x, word i, word j)
     {
-        require(x, tag::v08, "STRING");
+        require(x, tag::v08);
         const auto start = number(i), end = number(j);
         const auto bytes = h.v08slice(x);
         if (start < 0 || end < start || std::size_t(end) > bytes.size()) {
@@ -1080,8 +1088,8 @@ struct eval_step
 
     void read_string_stream(word stream)
     {
-        require(stream, tag::v32, "VECTOR");
-        const auto marker = vm.intern("STRING-INPUT-STREAM");
+        require(stream, tag::v32);
+        const auto marker = vm.known("STRING-INPUT-STREAM");
         const auto fields = h.v32slice(stream);
         if (fields.size() != 3 || fields[0] != marker)
             fail("INVALID-STRING-INPUT-STREAM", {stream});
@@ -1128,25 +1136,25 @@ struct eval_step
 
     void package_uses(word pkg, word uses)
     {
-        require(pkg, tag::pkg, "PACKAGE");
+        require(pkg, tag::pkg);
         for (auto used : scan(uses))
-            require(used, tag::pkg, "PACKAGE");
+            require(used, tag::pkg);
         h.set<tag::pkg, field::use>(pkg, uses);
         give(pkg);
     }
 
     void defpackage(word name, word uses)
     {
-        require(name, tag::sym, "SYMBOL");
+        require(name, tag::sym);
         for (auto used : scan(uses))
-            require(used, tag::pkg, "PACKAGE");
+            require(used, tag::pkg);
         define_package(h.get<tag::sym, field::str>(name));
         h.set<tag::pkg, field::use>(val, uses);
     }
 
     void in_package(word name)
     {
-        require(name, tag::sym, "SYMBOL");
+        require(name, tag::sym);
         const auto pkg =
             vm.find_package(string(h.get<tag::sym, field::str>(name)));
         if (pkg == nil)
@@ -1157,7 +1165,7 @@ struct eval_step
 
     void intern(word name, word pkg)
     {
-        require(pkg, tag::pkg, "PACKAGE");
+        require(pkg, tag::pkg);
         try {
             give(vm.intern(string(name), pkg));
         } catch (const std::invalid_argument &) {
@@ -1181,7 +1189,7 @@ struct eval_step
             auto found = false;
             for (auto x :
                  scan(h.get<tag::pkg, field::sym>(vm.keys_.get()))) {
-                require(x, tag::sym, "SYMBOL");
+                require(x, tag::sym);
                 if (string(h.get<tag::sym, field::str>(x)) == name) {
                     found = true;
                     break;
@@ -1213,7 +1221,7 @@ struct eval_step
 
     void release_pin(word x)
     {
-        require(x, tag::pin, "PIN");
+        require(x, tag::pin);
         h.free_pin(x);
         give(nil);
     }
@@ -1225,7 +1233,7 @@ struct eval_step
 
     void step_run(word target)
     {
-        require(target, tag::run, "EVALUATOR");
+        require(target, tag::run);
         if (std::ranges::find(active_runs, target) != active_runs.end())
             fail("ACTIVE-EVALUATOR", {target});
         step_target = target;
@@ -1240,12 +1248,12 @@ struct eval_step
 
     void run_expression(word run)
     {
-        require(run, tag::run, "EVALUATOR");
+        require(run, tag::run);
         const auto expression = h.get<tag::run, field::exp>(run);
         give(
             expression == nah
-                ? h.cons(vm.intern("VAL"), h.get<tag::run, field::val>(run))
-                : h.cons(vm.intern("EXP"), expression));
+                ? h.cons(vm.known("VAL"), h.get<tag::run, field::val>(run))
+                : h.cons(vm.known("EXP"), expression));
     }
 
     // Ordinary frames end at TOP. Only dynamic boundaries link segments;
@@ -1281,16 +1289,16 @@ struct eval_step
         if (ctx.meta == top)
             return ctx.way;
         return h.make<tag::ktx>(
-            {top, nil, vm.continuation_.get(), ctx.way, ctx.meta});
+            {top, nil, vm.known("CONTINUATION"), ctx.way, ctx.meta});
     }
 
     control_context context(word ptr)
     {
         if (ptr == top)
             return {};
-        require(ptr, tag::ktx, "CONTINUATION");
+        require(ptr, tag::ktx);
         const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(ptr);
-        if (fun == vm.continuation_.get())
+        if (fun == vm.known("CONTINUATION"))
             return {acc, arg};
         return {ptr, top};
     }
@@ -1319,7 +1327,7 @@ struct eval_step
         h.freeze_continuations();
         // Tail resumes must not accumulate empty return boundaries.
         const auto tail =
-            way == top ? meta : boundary(vm.resume_.get(), nil, nil);
+            way == top ? meta : boundary(vm.known("RESUME"), nil, nil);
         return {captured.way, append_meta(captured.meta, top, tail)};
     }
 
@@ -1334,7 +1342,7 @@ struct eval_step
         for (auto cur = source; cur != top;) {
             const auto [hop, saved_env, fun, acc, arg] =
                 h.read<tag::ktx>(cur);
-            if (fun == vm.prompt_.get() && acc == prompt_tag)
+            if (fun == vm.known("PROMPT") && acc == prompt_tag)
                 return cur;
             cur = hop;
         }
@@ -1376,7 +1384,7 @@ struct eval_step
     {
         // A nonlocal raise may miss ERROR in the captured slice. Re-signal
         // at its caller, or terminate if there is no outside handler.
-        send(vm.intern("ERROR"), value, nah);
+        send(vm.known("ERROR"), value, nah);
     }
 
     void
@@ -1387,15 +1395,15 @@ struct eval_step
 
     void call_with_prompt(word prompt_tag, word thunk, word handler)
     {
-        meta = boundary(vm.prompt_.get(), prompt_tag, handler);
+        meta = boundary(vm.known("PROMPT"), prompt_tag, handler);
         way = top;
         call(thunk, {});
     }
 
     void call_with_binding(word sym, word value, word thunk)
     {
-        require(sym, tag::sym, "SYMBOL");
-        meta = boundary(vm.binding_.get(), sym, value);
+        require(sym, tag::sym);
+        meta = boundary(vm.known("BINDING"), sym, value);
         way = top;
         call(thunk, {});
     }
@@ -1412,7 +1420,7 @@ struct eval_step
 
     void run_way(word run)
     {
-        require(run, tag::run, "EVALUATOR");
+        require(run, tag::run);
         give(snapshot(
             {h.get<tag::run, field::way>(run),
              h.get<tag::run, field::meta>(run)}));
@@ -1427,7 +1435,7 @@ struct eval_step
             const auto entry = h.read<tag::ktx>(ctx.meta);
             const auto next = outer(entry);
             if (entry[column_index<tag::ktx, field::fun>()]
-                != vm.resume_.get())
+                != vm.known("RESUME"))
                 return {
                     snapshot(next),
                     entry[column_index<tag::ktx, field::env>()],
@@ -1437,7 +1445,7 @@ struct eval_step
                         entry[column_index<tag::ktx, field::arg>()])[0]};
             ctx = next;
         }
-        require(ctx.way, tag::ktx, "CONTINUATION");
+        require(ctx.way, tag::ktx);
         auto frame = h.read<tag::ktx>(ctx.way);
         auto & hop = frame[column_index<tag::ktx, field::hop>()];
         hop = snapshot({hop, ctx.meta});
@@ -1643,7 +1651,7 @@ evaluation evaluator::step(word run)
             s.once();
         } catch (const condition & c) {
             try {
-                s.send(intern("ERROR"), c.value, nah);
+                s.send(known("ERROR"), c.value, nah);
             } catch (const condition & unhandled) {
                 s.err = unhandled.value;
             }

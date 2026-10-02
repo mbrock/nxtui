@@ -4,7 +4,69 @@
 
 #include "wisp/heap.hpp"
 
+#include <array>
+#include <string_view>
+#include <utility>
+
 namespace wisp {
+
+/// Symbols in WISP that native code names, like Zig's `Kwd`. A machine
+/// interns all of them when it starts or is restored and keeps them as
+/// roots, so no transition ever searches a package for one. Native code
+/// names them as `vm.known("ERROR")`; a name missing here does not compile.
+inline constexpr auto known_names = std::to_array<std::string_view>({
+    // Reader and special forms.
+    "QUOTE", "BACKQUOTE", "UNQUOTE", "UNQUOTE-SPLICING", "FUNCTION",
+    "&REST", "&BODY", "&OPTIONAL",
+    "BINDING", "COND", "DEFUN", "IF", "FN", "LET", "DO", "EVAL",
+    "PROMPT", "RESUME",
+    // Evaluator states and conditions.
+    "EXP", "VAL", "ERROR",
+    // Types, as TYPE-OF names them.
+    "BOOLEAN", "CHARACTER", "CONS", "CONTINUATION", "EVALUATOR",
+    "EXTERNAL", "INTEGER", "MACRO", "NULL", "PACKAGE", "PIN", "STRING",
+    "SYMBOL", "VECTOR",
+    // Condition names.
+    "ACTIVE-EVALUATOR", "BAD-FIXNUM-DIVISION", "BAD-MODULO",
+    "BOUNDS-ERROR", "BUG", "BUILTIN-FAILURE", "CONTINUATION-CALL-ERROR",
+    "CYCLIC-LIST", "END-OF-FILE", "EXHAUSTED", "FIXNUM-OVERFLOW",
+    "INVALID-ARGUMENT-COUNT", "INVALID-BINDING", "INVALID-CALLEE",
+    "INVALID-CONTINUATION", "INVALID-ENVIRONMENT", "INVALID-EXPRESSION",
+    "INVALID-FUNCTION", "INVALID-PACKAGE-USES", "INVALID-PARAMETERS",
+    "INVALID-STRING-INPUT-STREAM", "INVALID-VALUE", "KEY-SPACE-EXHAUSTED",
+    "LOW-LEVEL-ERROR", "PACKAGE-ERROR", "PACKAGE-EXISTS", "PROGRAM-ERROR",
+    "PROMPT-TAG-MISSING", "READ-ERROR", "TYPE-MISMATCH",
+    "UNBOUND-VARIABLE", "UNDEFINED-FUNCTION", "UNDEFINED-PACKAGE",
+    "UNHANDLED-ERROR",
+    // Data markers.
+    "STRING-INPUT-STREAM",
+});
+
+/// A position in `known_names`, found at compile time.
+class known_name
+{
+public:
+    consteval known_name(const char * name)
+        : index_(find(name))
+    {
+    }
+
+    constexpr std::size_t index() const noexcept
+    {
+        return index_;
+    }
+
+    static constexpr std::size_t find(std::string_view name)
+    {
+        for (std::size_t i = 0; i < known_names.size(); ++i)
+            if (known_names[i] == name)
+                return i;
+        throw "not a known Wisp symbol; add it to wisp::known_names";
+    }
+
+private:
+    std::size_t index_;
+};
 
 enum class evaluation { runnable, done, failed };
 
@@ -36,6 +98,12 @@ public:
     word current_package() const noexcept
     {
         return current_.get();
+    }
+
+    /// A symbol from `known_names`, without searching any package.
+    word known(known_name name) const noexcept
+    {
+        return known_[name.index()].get();
     }
 
     /// Inputs must be live words in this heap; an environment is NIL or a
@@ -94,10 +162,12 @@ private:
     root current_;
     root nil_name_;
     root true_name_;
-    // Like Zig's cached keyword identities: never search the package list
-    // on the transition hot path. Roots keep these current across GC.
-    root do_, if_, eval_, let_, prompt_, binding_, continuation_, resume_;
-    root optional_, rest_, body_;
+    // Interns every known name in WISP. Runs when a machine starts and
+    // after a tape restores one, like Zig's tape loader.
+    void install_known();
+
+    // Roots keep these current across collection.
+    std::array<root, known_names.size()> known_;
     bool collect_ = false;
     // Host-independent fresh keys: unique within this evaluator, not
     // Zig's date/random names or a portable identity across images.

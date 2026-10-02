@@ -254,14 +254,14 @@ std::optional<word> reader::next()
             case '`':
             case ',': {
                 take();
-                auto op = c == '\''  ? "QUOTE"
-                          : c == '`' ? "BACKQUOTE"
-                                     : "UNQUOTE";
+                auto op = c == '\''  ? evaluator_.known("QUOTE")
+                          : c == '`' ? evaluator_.known("BACKQUOTE")
+                                     : evaluator_.known("UNQUOTE");
                 if (c == ',' && peek() == '@') {
                     take();
-                    op = "UNQUOTE-SPLICING";
+                    op = evaluator_.known("UNQUOTE-SPLICING");
                 }
-                stack.push_back({kind::quote, evaluator_.intern(op)});
+                stack.push_back({kind::quote, op});
                 continue;
             }
             case '#': {
@@ -279,7 +279,7 @@ std::optional<word> reader::next()
                     break;
                 case '\'':
                     stack.push_back(
-                        {kind::quote, evaluator_.intern("FUNCTION")});
+                        {kind::quote, evaluator_.known("FUNCTION")});
                     continue;
                 default:
                     throw read_error(dispatch, "unknown '#' dispatch");
