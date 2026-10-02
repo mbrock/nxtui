@@ -11,6 +11,9 @@ option('default_wand', type : 'combo', value : 'auto',
 option('wisp_tool', type : 'boolean', value : true,
   description : 'Build the Wisp console and timer host')
 
+option('wisp_boot_compression', type : 'boolean', value : true,
+  description : 'Compress the embedded Wisp boot tape with zlib')
+
 option('llm_tool', type : 'boolean', value : true,
   description : 'Build the nxtllm tool')
 

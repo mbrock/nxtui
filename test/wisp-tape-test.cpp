@@ -8,6 +8,7 @@
 #include "test.hpp"
 #include "wisp-base.hpp"
 #include <sstream>
+#include <zlib.h>
 
 namespace wisp::test {
 namespace {
@@ -65,6 +66,29 @@ bool throws(auto && action)
 void rejected(const bytes & data)
 {
     expect(throws<tape::error>([&] { (void) tape::decode(data); }));
+}
+
+// Construct the compression envelope independently of tape::encode so
+// decoder tests do not inherit mistakes in the encoder's framing.
+bytes compressed_fixture(const bytes & data)
+{
+    constexpr std::string_view magic = "NXWISPZ\n";
+    const auto header =
+        std::as_bytes(std::span{magic.data(), magic.size()});
+    bytes result(header.begin(), header.end());
+    result.resize(12 + compressBound(data.size()));
+    put32(result, 8, static_cast<word>(data.size()));
+    uLongf size = result.size() - 12;
+    expect(
+        compress2(
+            reinterpret_cast<Bytef *>(result.data() + 12),
+            &size,
+            reinterpret_cast<const Bytef *>(data.data()),
+            data.size(),
+            Z_BEST_SPEED)
+        == Z_OK);
+    result.resize(12 + size);
+    return result;
 }
 
 // Independent wire walker for deliberate valid-checksum corruptions and
@@ -175,6 +199,134 @@ word resume(image & restored, word value)
 
 static suite tape_tests{
     "WISP TAPE", [] {
+        "zlib tapes preserve the raw image and work through stream I/O"_test =
+            [] {
+                auto original = image::fresh();
+                auto & h = original->storage;
+                std::string text(8192, 'Q');
+                text.replace(31, 5, std::string{"a\0\xffz", 4});
+                original->entry.set(
+                    h.newv32(std::array{fixnum(-173), h.newv08(text)}));
+                const auto raw =
+                    tape::encode(original->machine, original->entry.get());
+                const auto packed = tape::encode(
+                    original->machine,
+                    original->entry.get(),
+                    tape::compression::zlib);
+                expect(packed.size() < raw.size());
+                expect(
+                    std::string_view(
+                        reinterpret_cast<const char *>(packed.data()), 8)
+                    == "NXWISPZ\n");
+                expect(get32(packed, 8) == raw.size());
+                bytes decoded(raw.size());
+                uLongf size = decoded.size();
+                uLong source_size = packed.size() - 12;
+                expect(
+                    uncompress2(
+                        reinterpret_cast<Bytef *>(decoded.data()),
+                        &size,
+                        reinterpret_cast<const Bytef *>(packed.data() + 12),
+                        &source_size)
+                    == Z_OK);
+                expect(
+                    size == raw.size()
+                    && source_size == packed.size() - 12);
+                expect(decoded == raw);
+                auto restored = tape::decode(packed);
+                expect(
+                    tape::encode(restored->machine, restored->entry.get())
+                    == raw);
+                const auto entry =
+                    restored->storage.v32slice(restored->entry.get());
+                expect(integer(entry[0]) == -173);
+                expect(restored->storage.v08slice(entry[1]) == text);
+                std::stringstream stream;
+                tape::write(
+                    stream,
+                    original->machine,
+                    original->entry.get(),
+                    tape::compression::zlib);
+                const auto encoded = stream.str();
+                expect(
+                    std::ranges::equal(
+                        std::as_bytes(
+                            std::span{encoded.data(), encoded.size()}),
+                        packed));
+                restored = tape::read(stream, raw.size());
+                expect(
+                    tape::encode(restored->machine, restored->entry.get())
+                    == raw);
+            };
+
+        "compressed tapes enforce framing, decoded limits, and inner validation"_test =
+            [] {
+                heap h;
+                evaluator vm{h};
+                root entry{h, h.newv08(std::string(8192, 'R'))};
+                const auto raw = tape::encode(vm, entry.get());
+                const auto packed = compressed_fixture(raw);
+                expect(packed.size() < raw.size());
+                auto restored = tape::decode(packed, raw.size());
+                expect(
+                    tape::encode(restored->machine, restored->entry.get())
+                    == raw);
+                for (auto [limit, message] :
+                     {std::pair{
+                          packed.size() - 1, "tape exceeds input limit"},
+                      std::pair{
+                          raw.size() - 1, "tape exceeds decoded limit"}}) {
+                    try {
+                        (void) tape::decode(packed, limit);
+                        expect(false);
+                    } catch (const tape::error & error) {
+                        expect(std::string_view{error.what()} == message);
+                    }
+                }
+                for (auto length :
+                     {std::size_t{0},
+                      std::size_t{7},
+                      std::size_t{8},
+                      std::size_t{11},
+                      std::size_t{12},
+                      packed.size() - 1})
+                    rejected(
+                        bytes(packed.begin(), packed.begin() + length));
+                for (auto length :
+                     {word{0},
+                      word(raw.size() - 1),
+                      word(raw.size() + 1),
+                      word(tape::default_limit + 1)}) {
+                    auto bad = packed;
+                    put32(bad, 8, length);
+                    rejected(bad);
+                }
+                for (auto offset : {std::size_t{12}, packed.size() - 1}) {
+                    auto bad = packed;
+                    bad[offset] ^= std::byte{1};
+                    rejected(bad);
+                }
+                auto bad = packed;
+                bad.push_back(std::byte{0});
+                rejected(bad);
+                bad = packed;
+                bad.insert(bad.end(), packed.begin() + 12, packed.end());
+                rejected(bad);
+                bad = raw;
+                bad.back() ^= std::byte{1};
+                rejected(compressed_fixture(bad));
+                bad = raw;
+                put32(bad, 8, 999);
+                seal(bad);
+                rejected(compressed_fixture(bad));
+                std::stringstream limited{std::string(
+                    reinterpret_cast<const char *>(packed.data()),
+                    packed.size())};
+                expect(throws<tape::error>([&] {
+                    (void) tape::read(limited, raw.size() - 1);
+                }));
+            };
+
         "little-endian tapes preserve cycles, aliasing, raw fields, pins, and both eras"_test =
             [] {
                 for (bool collect_first : {false, true}) {

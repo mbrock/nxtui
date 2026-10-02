@@ -162,7 +162,8 @@ if get_option('wisp_tool')
   wisp_boot_tape = custom_target('wisp-boot-tape',
     output : 'wisp-boot.tape',
     input : files('wisp/base.wisp', 'wisp/host.wisp'),
-    command : [wisp_boot, '@OUTPUT@'],
+    command : [wisp_boot, '@OUTPUT@',
+      get_option('wisp_boot_compression') ? 'zlib' : 'none'],
     # The generator uses the embedded sources and the current evaluator
     # and tape codec. Regenerate when any of those change, even if the
     # shared library's exported symbols remain the same.

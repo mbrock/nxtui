@@ -21,8 +21,12 @@ int main(int argc, char ** argv)
 {
     using namespace wisp;
     try {
-        if (argc != 2)
-            throw std::runtime_error("expected output tape path");
+        if (argc != 3)
+            throw std::runtime_error(
+                "expected output tape path and none|zlib");
+        const std::string_view format{argv[2]};
+        if (format != "none" && format != "zlib")
+            throw std::runtime_error("expected compression none|zlib");
         auto booted = image::fresh();
         for (auto source : {base_library(), host_source}) {
             {
@@ -41,7 +45,12 @@ int main(int argc, char ** argv)
         std::ofstream output;
         output.exceptions(std::ios::failbit | std::ios::badbit);
         output.open(argv[1], std::ios::binary);
-        tape::write(output, booted->machine);
+        tape::write(
+            output,
+            booted->machine,
+            nil,
+            format == "zlib" ? tape::compression::zlib
+                             : tape::compression::none);
         output.close();
         return 0;
     } catch (const std::exception & error) {

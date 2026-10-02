@@ -6,11 +6,13 @@
 #include <limits>
 #include <ostream>
 #include <set>
+#include <zlib.h>
 
 namespace wisp {
 namespace {
 
 constexpr std::string_view magic = "NXWISP\r\n";
+constexpr std::string_view compressed_magic = "NXWISPZ\n";
 constexpr word version = 3;
 
 void demand(bool good, const char * message)
@@ -637,20 +639,73 @@ struct tape_codec
 
 namespace tape {
 
-std::vector<std::byte> encode(const evaluator & vm, word entry)
+std::vector<std::byte>
+encode(const evaluator & vm, word entry, compression format)
 {
-    return tape_codec::encode(vm, entry);
+    auto data = tape_codec::encode(vm, entry);
+    if (format == compression::none)
+        return data;
+    writer out;
+    out.raw(
+        std::as_bytes(
+            std::span{compressed_magic.data(), compressed_magic.size()}));
+    out.count(data.size());
+    const auto header_size = out.bytes.size();
+    uLongf size = compressBound(data.size());
+    out.bytes.resize(header_size + size);
+    const auto status = compress2(
+        reinterpret_cast<Bytef *>(out.bytes.data() + header_size),
+        &size,
+        reinterpret_cast<const Bytef *>(data.data()),
+        data.size(),
+        Z_BEST_COMPRESSION);
+    if (status == Z_MEM_ERROR)
+        throw std::bad_alloc{};
+    demand(status == Z_OK, "tape compression failed");
+    out.bytes.resize(header_size + size);
+    return std::move(out.bytes);
 }
 
 std::unique_ptr<image>
 decode(std::span<const std::byte> data, std::size_t limit)
 {
+    if (data.size() >= compressed_magic.size()
+        && std::ranges::equal(
+            data.first(compressed_magic.size()),
+            std::as_bytes(
+                std::span{
+                    compressed_magic.data(), compressed_magic.size()}))) {
+        demand(data.size() <= limit, "tape exceeds input limit");
+        reader in{data.subspan(compressed_magic.size())};
+        const auto decoded_size = in.u32();
+        demand(decoded_size <= limit, "tape exceeds decoded limit");
+        std::vector<std::byte> decoded(decoded_size);
+        uLongf size = decoded.size();
+        uLong source_size = in.bytes.size();
+        const auto status = uncompress2(
+            reinterpret_cast<Bytef *>(decoded.data()),
+            &size,
+            reinterpret_cast<const Bytef *>(in.bytes.data()),
+            &source_size);
+        if (status == Z_MEM_ERROR)
+            throw std::bad_alloc{};
+        demand(status == Z_OK, "invalid compressed tape");
+        demand(size == decoded_size, "wrong decoded tape size");
+        demand(
+            source_size == in.bytes.size(),
+            "trailing compressed tape data");
+        return tape_codec::decode(decoded, limit);
+    }
     return tape_codec::decode(data, limit);
 }
 
-void write(std::ostream & output, const evaluator & vm, word entry)
+void write(
+    std::ostream & output,
+    const evaluator & vm,
+    word entry,
+    compression format)
 {
-    const auto data = encode(vm, entry);
+    const auto data = encode(vm, entry, format);
     // Bounded chunks also work where streamsize is narrower than size_t.
     for (std::size_t pos = 0; pos < data.size();) {
         const auto n = std::min(std::size_t{8192}, data.size() - pos);

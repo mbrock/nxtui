@@ -60,6 +60,11 @@ struct error : std::runtime_error
 
 inline constexpr std::size_t default_limit = 64 * 1024 * 1024;
 
+enum class compression {
+    none,
+    zlib,
+};
+
 /// Encode at a safepoint between evaluator calls. No collection, mutation,
 /// or implicit I/O. Includes whole pools/tables (including garbage), pins,
 /// evaluator roots/state, and entry; other host root registrations are not
@@ -68,7 +73,10 @@ inline constexpr std::size_t default_limit = 64 * 1024 * 1024;
 /// builtin IDs by name. SHA-256 detects corruption, not authenticity.
 /// Version 3 uses lexical-first lookup and isolated public EVAL scope;
 /// versions 1 and 2 are rejected rather than changing saved code semantics.
-std::vector<std::byte> encode(const evaluator &, word entry = nil);
+/// Optional compression wraps the unchanged tape in NXWISPZ\n, a 32-bit
+/// little-endian decoded byte count, and one zlib stream.
+std::vector<std::byte> encode(
+    const evaluator &, word entry = nil, compression = compression::none);
 
 /// Restore into a separate owner or throw error; never changes a live
 /// machine. Validates references, private package indexes, cached roots,
@@ -76,7 +84,9 @@ std::vector<std::byte> encode(const evaluator &, word entry = nil);
 /// and continuation payloads keep their runtime meaning, including
 /// conditions on use; they need not describe a successful program to be
 /// checkpointable. Load trusted checkpoints only: this is not a sandbox for
-/// hostile executable images. Limits input bytes, not execution time or
+/// hostile executable images. Accepts raw and compressed tapes. Limits both
+/// input and decoded bytes, checking the decoded count before allocation;
+/// rejects trailing compressed data. Does not limit execution time or
 /// total resident memory. Allocation failures propagate normally.
 std::unique_ptr<image>
 decode(std::span<const std::byte>, std::size_t limit = default_limit);
@@ -84,7 +94,11 @@ decode(std::span<const std::byte>, std::size_t limit = default_limit);
 /// Blocking host stream I/O; use binary file streams. Reads exactly one
 /// whole tape through EOF. Checks stream failures, but does not flush,
 /// close, fsync, or atomically replace a file. Hosts own that policy.
-void write(std::ostream &, const evaluator &, word entry = nil);
+void write(
+    std::ostream &,
+    const evaluator &,
+    word entry = nil,
+    compression = compression::none);
 std::unique_ptr<image>
 read(std::istream &, std::size_t limit = default_limit);
 

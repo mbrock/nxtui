@@ -287,10 +287,20 @@ to update an existing debug build.
 
 Wisp embeds `base.wisp` and `host.wisp` directly with `#embed`, without
 generated C++ source headers. The Wisp tool boots those libraries once at
-build time, writes a binary tape, and embeds that tape with `#embed` too.
-Fresh runs and REPLs decode a private copy; restores still use only the
-selected checkpoint. Library source, evaluator, or tape-codec changes
-regenerate the embedded image automatically.
+build time, writes a zlib-compressed binary tape, and embeds that tape with
+`#embed` too. Fresh runs and REPLs decompress and decode a private copy;
+restores still use only the selected checkpoint. Library source, evaluator,
+or tape-codec changes regenerate the embedded image automatically. Zlib is
+already a required dependency; this does not require zstd or Brotli. Disable
+boot compression with `meson configure build -Dwisp_boot_compression=false`.
+
+The tape API also accepts compressed tapes from files or byte buffers.
+Pass `wisp::tape::compression::zlib` as the final argument to `encode` or
+`write` to opt in; `decode` and `read` detect compression automatically.
+Default API writes and CLI checkpoints remain uncompressed, with the same
+version-3 bytes as before. Compressed tapes retain the inner SHA-256 and
+schema validation; the size limit applies to both compressed and expanded
+bytes, and the expanded count is checked before allocating its buffer.
 
 The default build produces `nxt-tests`, `nxtllm`, `nxtmt`, `wisp`, the shared
 `libnxt-core`, the demo programs, and the `nxt-dev` developer command bundle.

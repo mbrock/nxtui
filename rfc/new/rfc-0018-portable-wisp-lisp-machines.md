@@ -743,6 +743,19 @@ separate, address-stable `image` owning `storage`, `machine`, and the rooted
 `entry`. It never replaces or mutates a running machine. Its restore-only
 evaluator constructor does not install primitives over saved definitions.
 
+`encode` and `write` optionally accept `tape::compression::zlib` as their
+last argument. The compression envelope is eight bytes `NXWISPZ\n`, a
+32-bit little-endian expanded byte count, and exactly one zlib stream
+containing the complete version-3 tape, including its SHA-256 digest.
+`decode` and `read` recognize raw and compressed tapes automatically. The
+configured byte limit applies to both the envelope and its expanded tape;
+the expanded count is checked before allocation. Wrong lengths, truncated
+streams, trailing compressed data, and invalid inner tapes are rejected.
+Default writes remain raw and byte-compatible. The executable embeds a
+compressed boot tape by default (`-Dwisp_boot_compression=false` disables
+this); CLI checkpoint writes remain raw. This envelope is a C++-port format,
+not a claim of Zig tape compatibility.
+
 The tape preserves complete column tables and byte/word pools, evaluator roots
 and caches, current package, pin map/next ID, fresh-key sequence, GC-request
 flag, and one caller-selected entry value. A vector or list entry can hold

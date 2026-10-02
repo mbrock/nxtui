@@ -44,7 +44,8 @@ utf8proc_dep = dependency(
   default_options : ['tests=disabled'],
 )
 
-zlib_dep = dependency('zlib')
+# uncompress2 reports consumed input so compressed tapes reject trailing data.
+zlib_dep = dependency('zlib', version : '>= 1.2.9')
 boost_dep = dependency('boost')
 zstd_dep = cpp.find_library('zstd', required : false)
 brotli_dep = dependency('libbrotlidec', required : false)

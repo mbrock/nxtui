@@ -4,10 +4,12 @@ import pathlib
 import os
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import zlib
 
 binary = str(pathlib.Path(sys.argv[1]).resolve())
 
@@ -40,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     assert stopped.stdout == b"before\n" and stopped.stderr == b"", stopped
     assert stat.S_IMODE(tape.stat().st_mode) == 0o600
     original = tape.read_bytes()
+    assert original[:8] == b"NXWISP\r\n", "checkpoint writes must remain raw"
     info = command("inspect", tape)
     assert b"request: #<:TIMER 4000>" in info.stdout, info.stdout
     assert re.search(rb'request-id: "[1-9][0-9]*"', info.stdout), info.stdout
@@ -61,6 +64,18 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     expired = command("restore", tape, "--effects", timeout=2)
     assert expired.stdout == resumed.stdout
     assert tape.read_bytes() == original, "restores must not rewrite input"
+
+    # A compressed copy restores the same suspended guest state. Construct
+    # it with Python's zlib, independently of the C++ tape encoder.
+    compressed = directory / "compressed.tape"
+    packed = b"NXWISPZ\n" + struct.pack("<I", len(original)) + zlib.compress(original)
+    compressed.write_bytes(packed)
+    assert command("inspect", compressed).stdout == info.stdout
+    disabled = command("restore", compressed, ok=False)
+    assert disabled.stdout == b"" and b"effects disabled" in disabled.stderr
+    restored = command("restore", compressed, "--effects", timeout=2)
+    assert restored.stdout == resumed.stdout and restored.stderr == b""
+    assert compressed.read_bytes() == packed, "restores must not rewrite input"
 
     # Chained checkpoints must consume the restored timer and stop at a
     # newly issued one, even when both effects are inside the same form.
