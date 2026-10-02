@@ -307,12 +307,14 @@ runs on pushes and pull requests with the locked Nix development toolchain:
 Each job runs the complete `nxt-tests` binary, Wisp allocation-failure tests,
 and Wisp host and HTTP integration tests. Linux also includes the direct
 epoll and io_uring suites; macOS includes the kqueue suite. Meson logs are
-uploaded even on failure. Backends are not silently skipped or substituted.
+uploaded even on failure. Builds use `debugoptimized` (optimization plus
+debug symbols, with assertions still enabled); the test harness's per-test
+deadlines remain intact. Backends are not silently skipped or substituted.
 
 To reproduce a matrix leg inside `nix develop`:
 
 ```sh
-meson setup build/ci -Ddefault_wand=epoll -Ddemo=false -Ddev=false -Dllm_tool=false -Dcares=enabled
+meson setup build/ci --buildtype=debugoptimized -Ddefault_wand=epoll -Ddemo=false -Ddev=false -Dllm_tool=false -Dcares=enabled
 meson compile -C build/ci -j 2 nxt-tests wisp-alloc-tests wisp-root-link
 meson test -C build/ci --print-errorlogs --timeout-multiplier 3
 ```

@@ -34,6 +34,7 @@ jobs:
       - name: Configure
         run: >-
           nix develop --no-write-lock-file -c meson setup build
+          --buildtype=debugoptimized
           -Ddefault_wand=${{ matrix.wand }} -Dtests=true -Dwisp_tool=true
           -Ddemo=false -Ddev=false -Dllm_tool=false -Dcares=enabled
       - name: Build NXT and Wisp tests
@@ -46,7 +47,7 @@ jobs:
           --print-errorlogs --timeout-multiplier 3
       - name: Upload Meson logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: meson-logs-${{ matrix.wand }}
           path: build/meson-logs/
