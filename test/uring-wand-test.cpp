@@ -260,8 +260,8 @@ nxtrt::task<nxtrt::child_result> terminate_sleeping_shell()
     argv.emplace_back("sleep 10");
     auto child = co_await nxtrt::op::spawn_piped{std::move(argv)};
 
-    co_await nxtrt::op::signal_child{child.pid_fd(), SIGTERM};
-    co_return co_await nxtrt::op::wait_child{child.pid_fd()};
+    co_await nxtrt::op::signal_child{child.child_ref(), SIGTERM};
+    co_return co_await nxtrt::op::wait_child{child.child_ref()};
 }
 
 nxtrt::task<bool> wait_child_until_stopped(int pidfd)
@@ -840,7 +840,7 @@ static suite uring_wand_tests{
                         expect(
                             ::waitid(
                                 P_PIDFD,
-                                child.pid_fd(),
+                                child.child_ref(),
                                 &info,
                                 WEXITED | WNOWAIT)
                             == 0_i);
@@ -852,7 +852,7 @@ static suite uring_wand_tests{
                     auto root = nxtrt::root_task{
                         deck,
                         [&] {
-                            return wait_child_until_stopped(child.pid_fd());
+                            return wait_child_until_stopped(child.child_ref());
                         },
                     };
                     root.start();
@@ -902,7 +902,7 @@ static suite uring_wand_tests{
 
                 for (auto code : {ECHILD, EBADF}) {
                     if (code == EBADF)
-                        child.pidfd.reset();
+                        child.handle.reset();
                     auto failed = false;
                     try {
                         (void) nxtrt::run([&] {

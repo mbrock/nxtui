@@ -78,7 +78,6 @@ template<typename Tag>
     return wrapped;
 }
 
-#if defined(__linux__)
 struct piped_child
 {
     subprocess::piped_child child;
@@ -102,7 +101,6 @@ inline task<piped_child> spawn_piped(
         .observed = std::move(observed),
     };
 }
-#endif
 
 inline task<void> monitor_until_done(
     observation & observed,

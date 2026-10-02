@@ -16,8 +16,8 @@ firms, and explicit UI/runtime capabilities.
 - `nxtrt::with_firm`, explicit `scope.fork` / `scope.join` / `scope.stop`,
   deeds, `when_all`, and timeout helpers.
 - DNS, HTTP, TLS, and socket experiments.
-- Linux subprocess wishes for piped children, pty children, pidfd waits, and
-  pidfd signals.
+- Subprocess wishes for piped children, pty children, waits, and signals:
+  pidfd-based on Linux, pid-based with `EVFILT_PROC` on kqueue.
 - OpenAI Responses request JSON and small SSE streaming clients.
 - Core terminal input types and parsing in `src/nxtui/input.hpp`.
 - The default `nxtllm` executable as a minimal one-shot streaming client.

@@ -685,6 +685,17 @@ wait mechanism itself requires Linux 5.4 or later. The `io_uring` backend
 still requires io_uring to be enabled and permitted by the host; there is no
 automatic switch to epoll if ring creation is unavailable.
 
+On macOS and the BSDs, the kqueue backend runs the same process wishes
+without pidfds. A child's handle is its pid, kept reserved by reading exit
+status with `waitid(WNOWAIT)` and reaping only when the handle is destroyed,
+so a signal can never reach a reused pid. Waits register `EVFILT_PROC`
+`NOTE_EXIT`; a process caught mid-exit refuses that registration (`ESRCH`),
+and the wait retries on a short timer. One difference remains: waiting twice
+reports the same status again, where Linux reports `ECHILD`. On macOS,
+`posix_spawn` uses `POSIX_SPAWN_CLOEXEC_DEFAULT`, so children inherit only
+their standard streams. All wands share the spawn code in
+[`nxtrt/spawn.hpp`](src/nxtrt/spawn.hpp).
+
 ### The runtime spec
 
 `make spec` checks the Racket model (`nxtrt/runtime.rkt` and friends): its

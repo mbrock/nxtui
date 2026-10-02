@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxtrt/exec_lifecycle.hpp"
+#include "nxtrt/spawn.hpp"
 #include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
@@ -27,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
@@ -657,6 +659,75 @@ private:
             return true;
         }
 
+        bool submit_op(
+            kqueue_wand &,
+            deck &,
+            wait_token,
+            std::vector<kqueue_event> &,
+            op::spawn_piped & op)
+        {
+            auto spawned = spawn::spawned{};
+            if (auto rc = spawn::piped(op.argv, spawned); rc < 0)
+                finish_result(rc);
+            else
+                finish_value(piped_child{
+                    .pid = spawned.pid,
+                    .handle = child_handle{spawned.pid},
+                    .output = std::move(spawned.fd),
+                });
+            return false;
+        }
+
+        bool submit_op(
+            kqueue_wand &,
+            deck &,
+            wait_token,
+            std::vector<kqueue_event> &,
+            op::spawn_pty & op)
+        {
+            auto spawned = spawn::spawned{};
+            if (auto rc = spawn::pty(op.argv, op.columns, op.rows, spawned);
+                rc < 0)
+                finish_result(rc);
+            else
+                finish_value(pty_child{
+                    .pid = spawned.pid,
+                    .handle = child_handle{spawned.pid},
+                    .master = std::move(spawned.fd),
+                });
+            return false;
+        }
+
+        // Without pidfds the pid is the handle. Exit is read with WNOWAIT so
+        // the pid stays reserved until the child_handle reaps it. A child
+        // that already exited still delivers NOTE_EXIT at registration.
+        bool submit_op(
+            kqueue_wand & wand,
+            deck &,
+            wait_token token,
+            std::vector<kqueue_event> &,
+            op::wait_child & op)
+        {
+            if (child_exited(op))
+                return false;
+            return !watch_child(wand, token, op);
+        }
+
+        bool submit_op(
+            kqueue_wand &,
+            deck &,
+            wait_token,
+            std::vector<kqueue_event> &,
+            op::signal_child & op)
+        {
+            if (op.child <= 0) {
+                finish_result(-ESRCH);
+                return false;
+            }
+            finish_result(::kill(op.child, op.signal) < 0 ? -errno : 0);
+            return false;
+        }
+
         template<typename Op>
         bool submit_op(
             kqueue_wand &,
@@ -801,6 +872,36 @@ private:
             return true;
         }
 
+        bool event_op(
+            kqueue_wand & wand,
+            deck &,
+            wait_token token,
+            kqueue_event const &,
+            op::wait_child & op)
+        {
+            if (child_exited(op))
+                return true;
+            return watch_child(wand, token, op);
+        }
+
+        // Registers NOTE_EXIT directly, outside the batched changelist,
+        // because XNU refuses it with ESRCH while a process is exiting but
+        // not yet a zombie. Then a short timer retries instead. Reports
+        // whether the wait finished (with an error) instead of parking.
+        bool watch_child(kqueue_wand & wand, wait_token token, op::wait_child & op)
+        {
+            auto error = wand.try_arm(
+                token, static_cast<uintptr_t>(op.child), EVFILT_PROC, NOTE_EXIT);
+            watching_timer_ = error == ESRCH;
+            if (watching_timer_)
+                error = wand.try_arm(
+                    token, token, EVFILT_TIMER, NOTE_NSECONDS, 200'000);
+            if (error == 0)
+                return false;
+            finish_error(error);
+            return true;
+        }
+
         template<typename Op>
         bool event_op(
             kqueue_wand &,
@@ -811,6 +912,51 @@ private:
         {
             finish_error(ENOTSUP);
             return true;
+        }
+
+        // Finishes with the exit status, or an error such as ECHILD, and
+        // reports true; false while the child is still running.
+        bool child_exited(op::wait_child & op)
+        {
+            if (op.child <= 0) {
+                finish_result(-ECHILD);
+                return true;
+            }
+            op.info = siginfo_t{};
+            if (::waitid(
+                    P_PID,
+                    static_cast<id_t>(op.child),
+                    &op.info,
+                    WEXITED | WNOHANG | WNOWAIT)
+                < 0) {
+                finish_result(-errno);
+                return true;
+            }
+            if (op.info.si_pid == 0)
+                return false;
+            auto const & info = op.info;
+            auto killed = info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED;
+            finish_value(child_result{
+                    .pid = info.si_pid,
+                    .code = info.si_code,
+                    .exited = info.si_code == CLD_EXITED,
+                    .exit_code = info.si_code == CLD_EXITED ? info.si_status : 0,
+                .signaled = killed,
+                .signal = killed ? info.si_status : 0,
+            });
+            return true;
+        }
+
+        // Delivers a result the scalar path cannot carry.
+        template<typename Value>
+        void finish_value(Value && value)
+        {
+            this->finished_ = true;
+            if constexpr (std::is_same_v<T, std::decay_t<Value>>)
+                state_->set_value(std::forward<Value>(value));
+            else
+                state_->set_exception(std::make_exception_ptr(runtime_error{
+                    "kqueue delivered a result to the wrong urge"}));
         }
 
         void delete_op_events(
@@ -902,6 +1048,24 @@ private:
             if ((op.events & POLLOUT) != 0)
                 set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
             set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
+        }
+
+        void delete_op_events(
+            wait_token token,
+            std::vector<kqueue_event> & changes,
+            op::wait_child & op)
+        {
+            if (watching_timer_)
+                set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
+            else
+                set_event(
+                    changes,
+                    static_cast<uintptr_t>(op.child),
+                    EVFILT_PROC,
+                    EV_DELETE,
+                    0,
+                    0,
+                    token);
         }
 
         template<typename Op>
@@ -1012,6 +1176,7 @@ private:
         }
 
         std::shared_ptr<urge_state<T>> state_;
+        bool watching_timer_ = false; // wait_child: timer, not NOTE_EXIT
     };
 
     /// Immutable wish recipe plus the typed completion sink for an exec.
@@ -1159,27 +1324,38 @@ private:
         }
     }
 
-    void arm(wait_token token, int fd, short filter)
+    // Registers one oneshot event immediately; returns 0 or the errno.
+    int try_arm(
+        wait_token token,
+        uintptr_t ident,
+        short filter,
+        unsigned int fflags = 0,
+        intptr_t data = 0)
     {
         auto change = kqueue_event{};
         EV_SET(
             &change,
-            fd,
+            ident,
             filter,
             EV_ADD | EV_ONESHOT,
-            0,
-            0,
+            fflags,
+            data,
             reinterpret_cast<void *>(static_cast<uintptr_t>(token)));
         while (true) {
             auto rc = ::kevent(kq_.get(), &change, 1, nullptr, 0, nullptr);
             if (rc == 0)
-                return;
+                return 0;
             if (rc < 0 && errno == EINTR)
                 continue;
-            if (rc < 0)
-                throw runtime_error{
-                    "kevent rearm failed: " + std::to_string(errno)};
+            return errno;
         }
+    }
+
+    void arm(wait_token token, int fd, short filter)
+    {
+        if (auto error = try_arm(token, static_cast<uintptr_t>(fd), filter))
+            throw runtime_error{
+                "kevent rearm failed: " + std::to_string(error)};
     }
 
     [[nodiscard]] bool delete_poll_siblings(

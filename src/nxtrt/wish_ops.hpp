@@ -15,6 +15,8 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -63,6 +65,7 @@ struct poll_until_result
 
 #if defined(__linux__)
 using statx_result = struct statx;
+#endif
 
 struct child_result
 {
@@ -74,15 +77,70 @@ struct child_result
     int signal = 0;
 };
 
+#if defined(__linux__)
+/// A pidfd: waits and signals through it can never reach a reused pid.
+using child_handle = nxt::unique_fd;
+#else
+/// The child's pid. An unreaped pid cannot be reused, and wait_child reads
+/// the exit status without reaping (WNOWAIT), so signals can never reach
+/// another process while this handle lives. The handle reaps the child when
+/// destroyed, if it has exited; one still running then stays a zombie
+/// after it exits, as it would on Linux once its pidfd is closed.
+class child_handle
+{
+public:
+    explicit child_handle(pid_t pid = -1) noexcept
+        : pid_(pid)
+    {}
+
+    child_handle(child_handle && other) noexcept
+        : pid_(std::exchange(other.pid_, -1))
+    {}
+
+    child_handle & operator=(child_handle && other) noexcept
+    {
+        if (this != &other)
+            reset(std::exchange(other.pid_, -1));
+        return *this;
+    }
+
+    child_handle(const child_handle &) = delete;
+    child_handle & operator=(const child_handle &) = delete;
+
+    ~child_handle()
+    {
+        reset();
+    }
+
+    [[nodiscard]] int get() const noexcept
+    {
+        return pid_;
+    }
+
+    void reset(pid_t pid = -1) noexcept
+    {
+        if (pid_ > 0)
+            (void) ::waitpid(pid_, nullptr, WNOHANG);
+        pid_ = pid;
+    }
+
+private:
+    pid_t pid_ = -1;
+};
+#endif
+
+/// A child whose stdout and stderr share one pipe; stdin is /dev/null.
 struct piped_child
 {
     pid_t pid = -1;
-    nxt::unique_fd pidfd;
-    nxt::unique_fd output;
+    child_handle handle{};
+    nxt::unique_fd output{};
 
-    [[nodiscard]] int pid_fd() const noexcept
+    /// What wait_child and signal_child take: a pidfd on Linux, the pid
+    /// elsewhere.
+    [[nodiscard]] int child_ref() const noexcept
     {
-        return pidfd.get();
+        return handle.get();
     }
 
     [[nodiscard]] int output_fd() const noexcept
@@ -91,15 +149,16 @@ struct piped_child
     }
 };
 
+/// A child running as session leader on a PTY whose master we hold.
 struct pty_child
 {
     pid_t pid = -1;
-    nxt::unique_fd pidfd;
-    nxt::unique_fd master;
+    child_handle handle{};
+    nxt::unique_fd master{};
 
-    [[nodiscard]] int pid_fd() const noexcept
+    [[nodiscard]] int child_ref() const noexcept
     {
-        return pidfd.get();
+        return handle.get();
     }
 
     [[nodiscard]] int master_fd() const noexcept
@@ -107,7 +166,6 @@ struct pty_child
         return master.get();
     }
 };
-#endif
 
 namespace op {
 
@@ -222,6 +280,8 @@ struct getdents64 : wish<std::size_t, "getdents64">
     }
 };
 
+#endif
+
 struct spawn_piped : wish<piped_child, "spawn-piped">
 {
     std::vector<std::string> argv;
@@ -259,41 +319,43 @@ struct spawn_pty : wish<pty_child, "spawn-pty">
     }
 };
 
+/// Waits for a child to exit. Linux reaps it here; elsewhere the status is
+/// read without reaping and the child_handle reaps it later, so waiting
+/// again reports the same status instead of ECHILD.
 struct wait_child : wish<child_result, "wait-child">
 {
-    int pidfd = -1;
+    int child = -1; // child_ref(): a pidfd on Linux, the pid elsewhere
     siginfo_t info{}; // NOLINT(misc-include-cleaner)
 
-    constexpr explicit wait_child(int pidfd = -1) noexcept
-        : pidfd(pidfd)
+    constexpr explicit wait_child(int child = -1) noexcept
+        : child(child)
     {}
 
     auto args() const
     {
-        return pidfd_args(pidfd);
+        return wish_args(wish_arg{"child", child});
     }
 };
 
 struct signal_child : wish<void, "signal-child">
 {
-    int pidfd = -1;
+    int child = -1; // child_ref(): a pidfd on Linux, the pid elsewhere
     int signal = SIGTERM;
 
     constexpr explicit signal_child(
-        int pidfd = -1,
+        int child = -1,
         int signal = SIGTERM) noexcept
-        : pidfd(pidfd)
+        : child(child)
         , signal(signal)
     {}
 
     auto args() const
     {
         return wish_args(
-            wish_arg{"pidfd", pidfd},
+            wish_arg{"child", child},
             wish_arg{"signal", signal});
     }
 };
-#endif
 
 struct read_some : wish<std::size_t, "read">
 {
@@ -519,11 +581,11 @@ using wish_variant = std::variant<
     op::openat2,
     op::statx,
     op::getdents64,
+#endif
     op::spawn_piped,
     op::spawn_pty,
     op::wait_child,
     op::signal_child,
-#endif
     op::read_some,
     op::write_some,
     op::recv_some,

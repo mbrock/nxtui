@@ -9,7 +9,6 @@
 
 namespace nxtrt::subprocess {
 
-#if defined(__linux__)
 using result = child_result;
 using piped_child = nxtrt::piped_child;
 using pty_child = nxtrt::pty_child;
@@ -23,26 +22,26 @@ inline task<piped_child> spawn_piped(std::vector<std::string> argv)
 
 inline task<result> wait_child(piped_child const & child)
 {
-    co_return co_await op::wait_child{child.pid_fd()};
+    co_return co_await op::wait_child{child.child_ref()};
 }
 
 inline task<result> wait_child(pty_child const & child)
 {
-    co_return co_await op::wait_child{child.pid_fd()};
+    co_return co_await op::wait_child{child.child_ref()};
 }
 
 inline task<void> signal_child(
     piped_child const & child,
     int signal = SIGTERM)
 {
-    co_await op::signal_child{child.pid_fd(), signal};
+    co_await op::signal_child{child.child_ref(), signal};
 }
 
 inline task<void> signal_child(
     pty_child const & child,
     int signal = SIGTERM)
 {
-    co_await op::signal_child{child.pid_fd(), signal};
+    co_await op::signal_child{child.child_ref(), signal};
 }
 
 namespace detail {
@@ -77,6 +76,5 @@ inline task<result> terminate_and_wait(
 {
     co_return co_await shield(detail::terminate_and_wait_impl(child, grace));
 }
-#endif
 
 } // namespace nxtrt::subprocess

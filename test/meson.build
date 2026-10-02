@@ -7,6 +7,7 @@ if get_option('tests')
     'include-test.cpp',
     'http-server-test.cpp',
     'fs-beneath-test.cpp',
+    'process-test.cpp',
     'idea-test.cpp',
     'blocking-test.cpp',
     'pool-test.cpp',

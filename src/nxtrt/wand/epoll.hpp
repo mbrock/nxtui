@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxtrt/exec_lifecycle.hpp"
+#include "nxtrt/spawn.hpp"
 #include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
@@ -419,11 +420,11 @@ private:
             exec & execution,
             op::wait_child & op)
         {
-            if (op.pidfd < 0) {
+            if (op.child < 0) {
                 finish_result(-EBADF);
                 return false;
             }
-            wand.add(execution, op.pidfd, EPOLLIN | EPOLLONESHOT, event_kind::op);
+            wand.add(execution, op.child, EPOLLIN | EPOLLONESHOT, event_kind::op);
             return true;
         }
 
@@ -434,11 +435,11 @@ private:
             exec &,
             op::signal_child & op)
         {
-            if (op.pidfd < 0) {
+            if (op.child < 0) {
                 finish_result(-EBADF);
                 return false;
             }
-            auto rc = send_pidfd_signal(op.pidfd, op.signal);
+            auto rc = send_pidfd_signal(op.child, op.signal);
             finish_result(rc < 0 ? -errno : 0);
             return false;
         }
@@ -709,7 +710,7 @@ private:
             event_kind,
             op::wait_child & op)
         {
-            auto rc = ::waitid(P_PIDFD, op.pidfd, &op.info, WEXITED);
+            auto rc = ::waitid(P_PIDFD, op.child, &op.info, WEXITED);
             if (rc < 0) {
                 finish_error(errno);
             } else {
@@ -1228,70 +1229,6 @@ private:
         return fd < 0 ? -errno : fd;
     }
 
-    static bool move_fd_above_stdio(int & fd)
-    {
-        if (fd > STDERR_FILENO)
-            return true;
-        auto replacement = ::fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
-        if (replacement < 0)
-            return false;
-        ::close(fd);
-        fd = replacement;
-        return true;
-    }
-
-    static bool make_cloexec_pipe(int pipefd[2])
-    {
-        if (::pipe2(pipefd, O_CLOEXEC) != 0)
-            return false;
-        if (!move_fd_above_stdio(pipefd[0])
-            || !move_fd_above_stdio(pipefd[1])) {
-            ::close(pipefd[0]);
-            ::close(pipefd[1]);
-            pipefd[0] = -1;
-            pipefd[1] = -1;
-            return false;
-        }
-        return true;
-    }
-
-    static std::vector<char *> argv_ptrs(std::vector<std::string> & argv)
-    {
-        auto ptrs = std::vector<char *>{};
-        ptrs.reserve(argv.size() + 1);
-        for (auto & arg : argv)
-            ptrs.push_back(arg.data());
-        ptrs.push_back(nullptr);
-        return ptrs;
-    }
-
-    class spawn_file_actions
-    {
-    public:
-        spawn_file_actions()
-        {
-            if (::posix_spawn_file_actions_init(&actions_) != 0)
-                throw runtime_error{"posix_spawn_file_actions_init failed"};
-        }
-        spawn_file_actions(const spawn_file_actions &) = delete;
-        spawn_file_actions & operator=(const spawn_file_actions &) = delete;
-        ~spawn_file_actions()
-        {
-            ::posix_spawn_file_actions_destroy(&actions_);
-        }
-        [[nodiscard]] posix_spawn_file_actions_t * get() noexcept
-        {
-            return &actions_;
-        }
-    private:
-        posix_spawn_file_actions_t actions_{};
-    };
-
-    static int check_spawn_file_action(int rc)
-    {
-        return rc == 0 ? 0 : -rc;
-    }
-
     static int open_pidfd(pid_t pid)
     {
 #ifdef SYS_pidfd_open
@@ -1313,180 +1250,45 @@ private:
 #endif
     }
 
-    static int spawn_piped_child(op::spawn_piped & wish)
+    // Wraps a spawned pid in a pidfd, or kills and reaps it.
+    static int adopt(spawn::spawned & spawned, child_handle & handle)
     {
-        if (wish.argv.empty())
-            return -EINVAL;
-
-        auto pipefd = std::array<int, 2>{-1, -1};
-        if (!make_cloexec_pipe(pipefd.data()))
-            return -errno;
-
-        auto read_fd = nxt::unique_fd{pipefd[0]};
-        auto write_fd = nxt::unique_fd{pipefd[1]};
-
-        auto actions = spawn_file_actions{};
-        auto rc = check_spawn_file_action(
-            ::posix_spawn_file_actions_addopen(
-                actions.get(),
-                STDIN_FILENO,
-                "/dev/null",
-                O_RDONLY,
-                0));
-        if (rc == 0)
-            rc = check_spawn_file_action(
-                ::posix_spawn_file_actions_adddup2(
-                    actions.get(), write_fd.get(), STDOUT_FILENO));
-        if (rc == 0)
-            rc = check_spawn_file_action(
-                ::posix_spawn_file_actions_adddup2(
-                    actions.get(), write_fd.get(), STDERR_FILENO));
-        if (rc == 0)
-            rc = check_spawn_file_action(
-                ::posix_spawn_file_actions_addclose(
-                    actions.get(), read_fd.get()));
-        if (rc == 0)
-            rc = check_spawn_file_action(
-                ::posix_spawn_file_actions_addclose(
-                    actions.get(), write_fd.get()));
-        if (rc < 0)
-            return rc;
-
-        auto ptrs = argv_ptrs(wish.argv);
-        auto pid = pid_t{-1};
-        rc = ::posix_spawnp(
-            &pid,
-            wish.argv.front().c_str(),
-            actions.get(),
-            nullptr,
-            ptrs.data(),
-            environ);
-        if (rc != 0)
-            return -rc;
-
-        auto pidfd = open_pidfd(pid);
+        auto pidfd = open_pidfd(spawned.pid);
         if (pidfd < 0) {
             auto saved_errno = errno;
-            ::kill(pid, SIGKILL);
-            (void)::waitpid(pid, nullptr, 0);
+            spawn::abandon(spawned.pid);
             return -saved_errno;
         }
-
-        write_fd.reset();
-        *wish.child = piped_child{
-            .pid = pid,
-            .pidfd = nxt::unique_fd{pidfd},
-            .output = std::move(read_fd),
-        };
+        handle.reset(pidfd);
         return 0;
     }
 
-    static void set_cloexec(int fd)
+    static int spawn_piped_child(op::spawn_piped & wish)
     {
-        auto flags = ::fcntl(fd, F_GETFD);
-        if (flags < 0)
-            throw runtime_error{"fcntl(F_GETFD) failed: " + std::to_string(errno)};
-        if (::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
-            throw runtime_error{"fcntl(F_SETFD) failed: " + std::to_string(errno)};
-    }
-
-    static winsize winsize_from(std::size_t columns, std::size_t rows)
-    {
-        return winsize{
-            .ws_row = static_cast<unsigned short>(std::max<std::size_t>(1, rows)),
-            .ws_col =
-                static_cast<unsigned short>(std::max<std::size_t>(1, columns)),
-            .ws_xpixel = 0,
-            .ws_ypixel = 0,
-        };
-    }
-
-    static nxt::unique_fd open_pty_master()
-    {
-        auto master = nxt::unique_fd{::posix_openpt(
-            O_RDWR | O_NOCTTY | O_CLOEXEC)};
-        if (master.get() < 0)
-            throw runtime_error{"posix_openpt failed: " + std::to_string(errno)};
-        if (::grantpt(master.get()) < 0)
-            throw runtime_error{"grantpt failed: " + std::to_string(errno)};
-        if (::unlockpt(master.get()) < 0)
-            throw runtime_error{"unlockpt failed: " + std::to_string(errno)};
-        return master;
-    }
-
-    static std::string pty_slave_name(int master_fd)
-    {
-        auto name = std::array<char, 256>{};
-        if (::ptsname_r(master_fd, name.data(), name.size()) != 0)
-            throw runtime_error{"ptsname_r failed: " + std::to_string(errno)};
-        return name.data();
+        auto spawned = spawn::spawned{};
+        auto child = piped_child{};
+        if (auto rc = spawn::piped(wish.argv, spawned); rc < 0)
+            return rc;
+        if (auto rc = adopt(spawned, child.handle); rc < 0)
+            return rc;
+        child.pid = spawned.pid;
+        child.output = std::move(spawned.fd);
+        *wish.child = std::move(child);
+        return 0;
     }
 
     static int spawn_pty_child(op::spawn_pty & wish)
     {
-        if (wish.argv.empty())
-            return -EINVAL;
-
-        auto master = nxt::unique_fd{};
-        auto slave = nxt::unique_fd{};
-        try {
-            master = open_pty_master();
-            auto slave_name = pty_slave_name(master.get());
-            slave = nxt::unique_fd{
-                ::open(slave_name.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC)};
-            if (slave.get() < 0)
-                return -errno;
-            auto ws = winsize_from(wish.columns, wish.rows);
-            if (::ioctl(slave.get(), TIOCSWINSZ, &ws) < 0)
-                return -errno;
-        } catch (const runtime_error &) {
-            return -errno;
-        }
-
-        auto ptrs = argv_ptrs(wish.argv);
-        auto pid = ::fork();
-        if (pid < 0)
-            return -errno;
-
-        if (pid == 0) {
-            ::close(master.get());
-            if (::setsid() < 0)
-                _exit(126);
-            if (::ioctl(slave.get(), TIOCSCTTY, 0) < 0)
-                _exit(126);
-            ::dup2(slave.get(), STDIN_FILENO);
-            ::dup2(slave.get(), STDOUT_FILENO);
-            ::dup2(slave.get(), STDERR_FILENO);
-            if (slave.get() > STDERR_FILENO)
-                ::close(slave.get());
-            ::execvp(ptrs[0], ptrs.data());
-            _exit(errno == ENOENT ? 127 : 126);
-        }
-
-        slave.reset();
-
-        auto pidfd = open_pidfd(pid);
-        if (pidfd < 0) {
-            auto saved_errno = errno;
-            ::kill(pid, SIGKILL);
-            (void)::waitpid(pid, nullptr, 0);
-            return -saved_errno;
-        }
-
-        try {
-            set_cloexec(master.get());
-        } catch (const runtime_error &) {
-            auto saved_errno = errno;
-            ::kill(pid, SIGKILL);
-            (void)::waitpid(pid, nullptr, 0);
-            return -saved_errno;
-        }
-
-        *wish.child = pty_child{
-            .pid = pid,
-            .pidfd = nxt::unique_fd{pidfd},
-            .master = std::move(master),
-        };
+        auto spawned = spawn::spawned{};
+        auto child = pty_child{};
+        if (auto rc = spawn::pty(wish.argv, wish.columns, wish.rows, spawned);
+            rc < 0)
+            return rc;
+        if (auto rc = adopt(spawned, child.handle); rc < 0)
+            return rc;
+        child.pid = spawned.pid;
+        child.master = std::move(spawned.fd);
+        *wish.child = std::move(child);
         return 0;
     }
 

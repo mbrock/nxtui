@@ -2,6 +2,7 @@
 
 #include "nxtrt/exec_lifecycle.hpp"
 #include "nxtrt/raw_uring.hpp"
+#include "nxtrt/spawn.hpp"
 #include "nxtrt/task.hpp"
 
 #include <boost/container/hub.hpp>
@@ -418,7 +419,7 @@ private:
                         auto & wish = std::get<op::wait_child>(request);
                         auto rc = ::waitid(
                             P_PIDFD,
-                            wish.pidfd,
+                            wish.child,
                             &wish.info,
                             WEXITED | WNOHANG);
                         if (rc < 0)
@@ -907,82 +908,6 @@ inline void uring_submission::complete_sync(int result)
     wand_.complete(deck_, token_, result);
 }
 
-inline bool set_fd_cloexec(int fd)
-{
-    auto flags = ::fcntl(fd, F_GETFD);
-    return flags >= 0 && ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
-}
-
-inline bool move_fd_above_stdio(int & fd)
-{
-    if (fd > STDERR_FILENO)
-        return true;
-
-    auto replacement = ::fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
-    if (replacement < 0)
-        return false;
-
-    ::close(fd);
-    fd = replacement;
-    return true;
-}
-
-inline bool make_cloexec_pipe(int pipefd[2])
-{
-    if (::pipe2(pipefd, O_CLOEXEC) != 0)
-        return false;
-    if (!move_fd_above_stdio(pipefd[0])
-        || !move_fd_above_stdio(pipefd[1])) {
-        ::close(pipefd[0]);
-        ::close(pipefd[1]);
-        pipefd[0] = -1;
-        pipefd[1] = -1;
-        return false;
-    }
-    return true;
-}
-
-inline std::vector<char *> argv_ptrs(std::vector<std::string> & argv)
-{
-    auto ptrs = std::vector<char *>{};
-    ptrs.reserve(argv.size() + 1);
-    for (auto & arg : argv)
-        ptrs.push_back(arg.data());
-    ptrs.push_back(nullptr);
-    return ptrs;
-}
-
-class spawn_file_actions
-{
-public:
-    spawn_file_actions()
-    {
-        if (::posix_spawn_file_actions_init(&actions_) != 0)
-            throw runtime_error{"posix_spawn_file_actions_init failed"};
-    }
-
-    spawn_file_actions(const spawn_file_actions &) = delete;
-    spawn_file_actions & operator=(const spawn_file_actions &) = delete;
-
-    ~spawn_file_actions()
-    {
-        ::posix_spawn_file_actions_destroy(&actions_);
-    }
-
-    [[nodiscard]] posix_spawn_file_actions_t * get() noexcept
-    {
-        return &actions_;
-    }
-
-private:
-    posix_spawn_file_actions_t actions_{};
-};
-
-inline int check_spawn_file_action(int rc)
-{
-    return rc == 0 ? 0 : -rc;
-}
-
 inline int open_pidfd(pid_t pid)
 {
 #ifdef SYS_pidfd_open
@@ -1004,43 +929,17 @@ inline int send_pidfd_signal(int pidfd, int signal)
 #endif
 }
 
-inline void set_cloexec(int fd)
+// Wraps a spawned pid in a pidfd, or kills and reaps it.
+inline int adopt_child(spawn::spawned & spawned, child_handle & handle)
 {
-    auto flags = ::fcntl(fd, F_GETFD);
-    if (flags < 0)
-        throw runtime_error{"fcntl(F_GETFD) failed: " + std::to_string(errno)};
-    if (::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
-        throw runtime_error{"fcntl(F_SETFD) failed: " + std::to_string(errno)};
-}
-
-inline winsize winsize_from(std::size_t columns, std::size_t rows)
-{
-    return winsize{
-        .ws_row = static_cast<unsigned short>(std::max<std::size_t>(1, rows)),
-        .ws_col = static_cast<unsigned short>(std::max<std::size_t>(1, columns)),
-        .ws_xpixel = 0,
-        .ws_ypixel = 0,
-    };
-}
-
-inline nxt::unique_fd open_pty_master()
-{
-    auto master = nxt::unique_fd{::posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)};
-    if (master.get() < 0)
-        throw runtime_error{"posix_openpt failed: " + std::to_string(errno)};
-    if (::grantpt(master.get()) < 0)
-        throw runtime_error{"grantpt failed: " + std::to_string(errno)};
-    if (::unlockpt(master.get()) < 0)
-        throw runtime_error{"unlockpt failed: " + std::to_string(errno)};
-    return master;
-}
-
-inline std::string pty_slave_name(int master_fd)
-{
-    auto name = std::array<char, 256>{};
-    if (::ptsname_r(master_fd, name.data(), name.size()) != 0)
-        throw runtime_error{"ptsname_r failed: " + std::to_string(errno)};
-    return name.data();
+    auto pidfd = open_pidfd(spawned.pid);
+    if (pidfd < 0) {
+        auto saved_errno = errno;
+        spawn::abandon(spawned.pid);
+        return -saved_errno;
+    }
+    handle.reset(pidfd);
+    return 0;
 }
 
 inline bool stage_uring(uring_submission & submission, op::manual & wish)
@@ -1107,163 +1006,39 @@ inline bool stage_uring(uring_submission & submission, op::getdents64 & wish)
 
 inline bool stage_uring(uring_submission & submission, op::spawn_piped & wish)
 {
-    if (wish.argv.empty()) {
-        submission.complete_sync(-EINVAL);
-        return false;
-    }
-
-    auto pipefd = std::array<int, 2>{-1, -1};
-    if (!make_cloexec_pipe(pipefd.data())) {
-        submission.complete_sync(-errno);
-        return false;
-    }
-
-    auto read_fd = nxt::unique_fd{pipefd[0]};
-    auto write_fd = nxt::unique_fd{pipefd[1]};
-
-    auto actions = spawn_file_actions{};
-    auto rc = check_spawn_file_action(
-        ::posix_spawn_file_actions_addopen(
-            actions.get(),
-            STDIN_FILENO,
-            "/dev/null",
-            O_RDONLY,
-            0));
+    auto spawned = spawn::spawned{};
+    auto child = piped_child{};
+    auto rc = spawn::piped(wish.argv, spawned);
     if (rc == 0)
-        rc = check_spawn_file_action(
-            ::posix_spawn_file_actions_adddup2(
-                actions.get(), write_fd.get(), STDOUT_FILENO));
-    if (rc == 0)
-        rc = check_spawn_file_action(
-            ::posix_spawn_file_actions_adddup2(
-                actions.get(), write_fd.get(), STDERR_FILENO));
-    if (rc == 0)
-        rc = check_spawn_file_action(
-            ::posix_spawn_file_actions_addclose(actions.get(), read_fd.get()));
-    if (rc == 0)
-        rc = check_spawn_file_action(
-            ::posix_spawn_file_actions_addclose(actions.get(), write_fd.get()));
-    if (rc < 0) {
-        submission.complete_sync(rc);
-        return false;
+        rc = adopt_child(spawned, child.handle);
+    if (rc == 0) {
+        child.pid = spawned.pid;
+        child.output = std::move(spawned.fd);
+        *wish.child = std::move(child);
     }
-
-    auto ptrs = argv_ptrs(wish.argv);
-    auto pid = pid_t{-1};
-    rc = ::posix_spawnp(
-        &pid,
-        wish.argv.front().c_str(),
-        actions.get(),
-        nullptr,
-        ptrs.data(),
-        environ);
-    if (rc != 0) {
-        submission.complete_sync(-rc);
-        return false;
-    }
-
-    auto pidfd = open_pidfd(pid);
-    if (pidfd < 0) {
-        auto saved_errno = errno;
-        ::kill(pid, SIGKILL);
-        (void)::waitpid(pid, nullptr, 0);
-        submission.complete_sync(-saved_errno);
-        return false;
-    }
-
-    write_fd.reset();
-    *wish.child = piped_child{
-        .pid = pid,
-        .pidfd = nxt::unique_fd{pidfd},
-        .output = std::move(read_fd),
-    };
-    submission.complete_sync(0);
+    submission.complete_sync(rc);
     return false;
 }
 
 inline bool stage_uring(uring_submission & submission, op::spawn_pty & wish)
 {
-    if (wish.argv.empty()) {
-        submission.complete_sync(-EINVAL);
-        return false;
+    auto spawned = spawn::spawned{};
+    auto child = pty_child{};
+    auto rc = spawn::pty(wish.argv, wish.columns, wish.rows, spawned);
+    if (rc == 0)
+        rc = adopt_child(spawned, child.handle);
+    if (rc == 0) {
+        child.pid = spawned.pid;
+        child.master = std::move(spawned.fd);
+        *wish.child = std::move(child);
     }
-
-    auto master = nxt::unique_fd{};
-    auto slave = nxt::unique_fd{};
-    try {
-        master = open_pty_master();
-        auto slave_name = pty_slave_name(master.get());
-        slave = nxt::unique_fd{
-            ::open(slave_name.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC)};
-        if (slave.get() < 0) {
-            submission.complete_sync(-errno);
-            return false;
-        }
-        auto ws = winsize_from(wish.columns, wish.rows);
-        if (::ioctl(slave.get(), TIOCSWINSZ, &ws) < 0) {
-            submission.complete_sync(-errno);
-            return false;
-        }
-    } catch (const runtime_error &) {
-        submission.complete_sync(-errno);
-        return false;
-    }
-
-    auto ptrs = argv_ptrs(wish.argv);
-    auto pid = ::fork();
-    if (pid < 0) {
-        submission.complete_sync(-errno);
-        return false;
-    }
-
-    if (pid == 0) {
-        ::close(master.get());
-        if (::setsid() < 0)
-            _exit(126);
-        if (::ioctl(slave.get(), TIOCSCTTY, 0) < 0)
-            _exit(126);
-        ::dup2(slave.get(), STDIN_FILENO);
-        ::dup2(slave.get(), STDOUT_FILENO);
-        ::dup2(slave.get(), STDERR_FILENO);
-        if (slave.get() > STDERR_FILENO)
-            ::close(slave.get());
-        ::execvp(ptrs[0], ptrs.data());
-        _exit(errno == ENOENT ? 127 : 126);
-    }
-
-    slave.reset();
-
-    auto pidfd = open_pidfd(pid);
-    if (pidfd < 0) {
-        auto saved_errno = errno;
-        ::kill(pid, SIGKILL);
-        (void)::waitpid(pid, nullptr, 0);
-        submission.complete_sync(-saved_errno);
-        return false;
-    }
-
-    try {
-        set_cloexec(master.get());
-    } catch (const runtime_error &) {
-        auto saved_errno = errno;
-        ::kill(pid, SIGKILL);
-        (void)::waitpid(pid, nullptr, 0);
-        submission.complete_sync(-saved_errno);
-        return false;
-    }
-
-    *wish.child = pty_child{
-        .pid = pid,
-        .pidfd = nxt::unique_fd{pidfd},
-        .master = std::move(master),
-    };
-    submission.complete_sync(0);
+    submission.complete_sync(rc);
     return false;
 }
 
 inline bool stage_uring(uring_submission & submission, op::wait_child & wish)
 {
-    if (wish.pidfd < 0) {
+    if (wish.child < 0) {
         submission.complete_sync(-EBADF);
         return false;
     }
@@ -1272,19 +1047,19 @@ inline bool stage_uring(uring_submission & submission, op::wait_child & wish)
     // waitid(P_PIDFD) works since Linux 5.4. Reap only on successful,
     // uncancelled completion so a cancelled wait can be retried.
     auto * sqe = submission.get_sqe();
-    io_uring_prep_poll_add(sqe, wish.pidfd, POLLIN);
+    io_uring_prep_poll_add(sqe, wish.child, POLLIN);
     submission.attach(sqe);
     return true;
 }
 
 inline bool stage_uring(uring_submission & submission, op::signal_child & wish)
 {
-    if (wish.pidfd < 0) {
+    if (wish.child < 0) {
         submission.complete_sync(-EBADF);
         return false;
     }
 
-    auto rc = send_pidfd_signal(wish.pidfd, wish.signal);
+    auto rc = send_pidfd_signal(wish.child, wish.signal);
     submission.complete_sync(rc < 0 ? -errno : 0);
     return false;
 }
