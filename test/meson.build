@@ -124,6 +124,10 @@ if get_option('tests')
       suite : 'slow',
       timeout : 120,
     )
+    test('wisp-http-router-tests', find_program('python3'),
+      args : [files('wisp-http-router-test.py'), wisp_tool],
+      timeout : 60,
+    )
     test('wisp-http-client-tests', find_program('python3'),
       args : [files('wisp-http-client-test.py'), wisp_tool],
       suite : 'slow',

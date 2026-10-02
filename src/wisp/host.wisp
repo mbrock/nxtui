@@ -63,6 +63,94 @@
       (fn () (call handler) *response*)
       (fn (value continuation) value))))
 
+;; Routing, adapted from the same web/http.wisp. A pattern is a method
+;; followed by path segments: strings match exactly, _ skips one segment,
+;; other symbols bind one segment, and &REST NAME binds the remaining
+;; segments as a list. A symbol method binds the method. Segments stay
+;; percent-encoded, like the URL pathname they came from.
+;;
+;;   (defroute ("GET" "git" repo "info" "refs") ...)
+;;   (serve-http 8080 #'route-request)
+;;
+;; Deliberate differences from Zig Wisp: routes are tried in definition
+;; order (redefining a pattern replaces its handler in place, so reloading
+;; a file keeps precedence), matching is a pure function, so a handler can
+;; no longer abort into the next route, HEAD falls back to GET routes, and a
+;; path served under other methods answers 405 with Allow.
+(defvar *routes* nil)
+
+(defun %replace-route (routes pattern handler)
+  (cond
+    ((nil? routes) (list (list pattern handler)))
+    ((equal? (head (head routes)) pattern)
+     (cons (list pattern handler) (tail routes)))
+    (t (cons (head routes)
+             (%replace-route (tail routes) pattern handler)))))
+
+(defun install-route (pattern handler)
+  (set! *routes* (%replace-route *routes* pattern handler)))
+
+(defmacro defroute (pattern &rest body)
+  `(install-route ',pattern
+     (fn ,(filter pattern (fn (x) (and (symbol? x) (not (eq? x '_)))))
+       ,@body)))
+
+;; Returns (BINDINGS) on a match, so a match without bindings is not NIL.
+(defun %match-route (pattern parts acc)
+  (cond
+    ((nil? pattern) (when (nil? parts) (list (reverse acc))))
+    ((eq? (head pattern) '&rest) (list (reverse-append acc parts)))
+    ((nil? parts) nil)
+    ((eq? (head pattern) '_)
+     (%match-route (tail pattern) (tail parts) acc))
+    ((symbol? (head pattern))
+     (%match-route (tail pattern) (tail parts) (cons (head parts) acc)))
+    ((equal? (head pattern) (head parts))
+     (%match-route (tail pattern) (tail parts) acc))
+    (t nil)))
+
+;; "/" is (""), "/a/" is ("a" ""), and OPTIONS * is ("*").
+(defun %route-segments (path)
+  (split-string
+   (if (eq? 0 (string-search path "/"))
+       (string-slice path 1 (string-length path))
+     path)
+   "/"))
+
+;; Returns (ROUTE BINDINGS) for the first matching route, or NIL.
+(defun %find-route (method segments)
+  (find-result *routes*
+    (fn (route) (%match-route (head route) (cons method segments) nil))))
+
+(defun %allowed-methods (segments)
+  (reduce
+   (fn (allowed route)
+     (let ((method (head (head route))))
+       (if (and (string? method)
+                (not (includes? allowed method))
+                (%match-route (tail (head route)) segments nil))
+           (append allowed
+                   (if (and (equal? method "GET")
+                            (not (includes? allowed "HEAD")))
+                       (list method "HEAD")
+                     (list method)))
+         allowed)))
+   *routes* nil))
+
+(defun route-request ()
+  (let* ((segments (%route-segments (request-path)))
+         (found (or (%find-route (request-method) segments)
+                    (and (equal? (request-method) "HEAD")
+                         (%find-route "GET" segments)))))
+    (if found
+        (apply (second (head found)) (second found))
+      (let ((allowed (%allowed-methods segments)))
+        (send! :respond
+          (if allowed
+              (response 405 (list (vector "Allow" (join-strings ", " allowed)))
+                        "Method Not Allowed\n")
+            (response 404 nil "Not Found\n")))))))
+
 ;; Await the serving task. Native connection recipes run in a bounded pool;
 ;; callbacks interleave at awaits on the same thread, without guest jobs.
 ;; Plain HTTP on loopback only; TLS belongs to the reverse proxy.

@@ -251,6 +251,21 @@ with `set-response-status!`, `add-header!`, and `set-response-body!`, or exit ea
 with `(send! :respond (response 404 nil "Not Found"))`. Ordinary handler return
 values are ignored, matching the old Wisp web interface.
 
+The demo dispatches with `defroute` and `route-request`, ported from Zig Wisp:
+
+```lisp
+(defroute ("GET" "git" repo "info" "refs") ...) ; REPO binds one segment
+(defroute ("GET" "static" &rest path) ...)      ; PATH binds the rest
+(defroute ("GET" "skip" _ last) ...)            ; _ matches without binding
+(defroute (method "any") ...)                   ; a symbol method binds it
+(serve-http 8080 #'route-request)
+```
+
+Patterns are a method followed by raw path segments (`/` is `("")`). Routes
+are tried in definition order, and redefining a pattern replaces its handler
+in place. HEAD falls back to GET routes; unmatched paths answer 404, and paths
+served only under other methods answer 405 with `Allow`.
+
 The reusable C++ API is [`nxtrt::http::serve`](src/nxtrt/http-server.hpp), with a
 borrowed listener, `task<response>(request)` handler, and bounded server options.
 It supports HTTP/1.1 keep-alive, pipelining, fixed-length/chunked requests, and
