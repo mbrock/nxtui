@@ -255,6 +255,7 @@ nxt_header_install_excludes = {
 }
 
 foreach dir : ['nxt', 'nxtai', 'nxtrt', 'nxtui', 'wisp']
+  # Recursive installation includes implementation headers such as nxtrt/task/.
   install_subdir(dir,
     install_dir : get_option('includedir'),
     exclude_files : nxt_header_install_excludes.get(dir, []),
