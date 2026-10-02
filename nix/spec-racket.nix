@@ -58,8 +58,7 @@ stdenvNoCC.mkDerivation {
     # All dependencies are explicit local inputs. Missing dependencies fail
     # rather than silently fetching from a mutable Racket package catalog.
     raco pkg install --batch --no-setup --deps fail "$out"/sources/*
-    # Parallel setup can vary generated parser bytecode between builds.
-    raco setup --no-docs --avoid-main -j 1 \
+    raco setup --no-docs --avoid-main -j "$NIX_BUILD_CORES" \
       --pkgs ${lib.concatStringsSep " " (builtins.attrNames packages)} forge
     # Something's experimental shells/examples do not compile in this
     # snapshot. Compile the supported DSL modules and their dependencies,

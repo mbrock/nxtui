@@ -455,6 +455,12 @@ The resulting `spec-racket` package is an ordinary cacheable Nix derivation:
 nix build .#spec-racket
 ```
 
+The dependency inputs are reproducibly locked and the output can be shared
+through a normal Nix binary cache. Byte-for-byte rebuild reproducibility is
+not guaranteed: `nix build .#spec-racket --rebuild` found differences in
+Racket-generated `.zo` files and their dependency hashes, even with serial
+compilation. This does not prevent substitution of a cached build.
+
 No catalog resolution or package installation happens when entering the shell
 or running `make spec`. Only bytecode for editable model/DSL sources goes into
 the version-keyed `.racket/` cache; old local package installs there are ignored.
