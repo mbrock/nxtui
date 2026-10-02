@@ -28,6 +28,7 @@ nxt_libvterm_dep = declare_dependency(
   include_directories : nxt_libvterm_inc,
 )
 
+nxt_wisp_profile_args = ['-DNXT_WISP_PROFILE=' + (get_option('wisp_profile') ? '1' : '0')]
 nxt_threads_dep = dependency('threads')
 nxt_core_deps = [
   utf8proc_dep,
@@ -36,6 +37,7 @@ nxt_core_deps = [
   nxt_threads_dep,
   declare_dependency(include_directories : nxt_libvterm_inc),
   declare_dependency(compile_args : nxt_wand_args),
+  declare_dependency(compile_args : nxt_wisp_profile_args),
 ] + nxt_compression_deps
 
 # Wisp sources and the boot tape use #embed as a C++23 extension.
@@ -286,5 +288,5 @@ import('pkgconfig').generate(nxt_core_lib,
   name : 'nxt',
   description : 'nxt coroutine runtime and terminal toolkit',
   subdirs : ['.', 'nxt-vendor'],
-  extra_cflags : nxt_mdspan_args + nxt_compression_args + nxt_stacktrace_cpp_args + nxt_wand_args,
+  extra_cflags : nxt_mdspan_args + nxt_compression_args + nxt_stacktrace_cpp_args + nxt_wand_args + nxt_wisp_profile_args,
 )

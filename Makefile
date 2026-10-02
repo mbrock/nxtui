@@ -3,6 +3,9 @@
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
 BENCH_CPP_ARGS ?=
+WISP_BENCH_BUILD_DIR ?= build/wisp-release
+WISP_PROFILE ?= false
+WISP_BENCH_ARGS ?=
 GCC15_BUILD_DIR ?= build-gcc15
 DEPS_FILE ?=
 DEPS_DEPTH ?= 4
@@ -62,6 +65,21 @@ deps-dot:
 
 freebsd-test:
 	scripts/freebsd-vm test
+
+.PHONY: wisp-bench-build wisp-bench wisp-bench-sweep
+wisp-bench-build:
+	meson setup --reconfigure "$(WISP_BENCH_BUILD_DIR)" \
+		--buildtype=release -Db_ndebug=true -Dbenchmarks=true \
+		-Dwisp_profile=$(WISP_PROFILE) -Dtests=false -Ddemo=false \
+		-Ddev=false -Dllm_tool=false -Dwisp_tool=false $(NXT_MESON_LINK_ARGS)
+	meson compile -C "$(WISP_BENCH_BUILD_DIR)" wisp-bench wisp-native-bench wisp-profile-test
+	meson test -C "$(WISP_BENCH_BUILD_DIR)" --suite benchmarks --print-errorlogs
+
+wisp-bench: wisp-bench-build
+	"$(WISP_BENCH_BUILD_DIR)/bench/wisp-bench" $(WISP_BENCH_ARGS)
+
+wisp-bench-sweep: wisp-bench-build
+	python3 scripts/wisp-bench --build-dir "$(WISP_BENCH_BUILD_DIR)" $(WISP_BENCH_ARGS)
 
 bench-build:
 	@if [ ! -d "$(BENCH_BUILD_DIR)" ]; then \

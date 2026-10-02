@@ -329,6 +329,10 @@ struct eval_step
             if (x != nil && x == slow)
                 fail("CYCLIC-LIST");
         }
+        if (auto * p = h.profiling()) {
+            ++p->lists_scanned;
+            p->list_cells_scanned += xs.size();
+        }
         return xs;
     }
 
@@ -356,6 +360,8 @@ struct eval_step
     void push(word fun, word acc, word arg)
     {
         way = h.make<tag::ktx>({way, env, fun, acc, arg});
+        if (auto * p = h.profiling())
+            ++p->continuation_pushes;
     }
 
     word lookup(word sym, bool assign = false, word value = nil)
@@ -364,26 +370,49 @@ struct eval_step
         if (!assign
             && h.get<tag::sym, field::pkg>(sym) == vm.keywords_.get())
             return sym;
+        auto * p = h.profiling();
+        std::size_t depth = 0;
+        if (p)
+            ++p->lexical_lookups;
         // Explicit lexical binders stay lexical even when the symbol's
         // dynamic declaration changes after a closure captures them.
         for (auto scope : scan(env)) {
+            if (p) {
+                ++p->lexical_frames;
+                ++depth;
+            }
             require(scope, tag::v32);
             const auto xs = h.v32slice(scope);
             if (xs.size() % 2 != 0)
                 fail("INVALID-ENVIRONMENT", {scope});
             for (std::size_t i = 0; i < xs.size(); i += 2) {
+                if (p)
+                    ++p->lexical_comparisons;
                 if (xs[i] == sym) {
+                    if (p)
+                        ++p->lexical_depth[std::min(
+                            depth, std::size_t{16})];
                     if (assign)
                         h.v32set(scope, i + 1, value);
                     return assign ? value : xs[i + 1];
                 }
             }
         }
+        if (p) {
+            ++p->lexical_global_fallbacks;
+            ++p->lexical_depth[std::min(depth, std::size_t{16})];
+        }
         if (h.get<tag::sym, field::dyn>(sym) != nil) {
+            if (p)
+                ++p->dynamic_lookups;
             for (auto cur = meta; cur != top;) {
+                if (p)
+                    ++p->dynamic_hops;
                 const auto [hop, saved_env, fun, name, binding] =
                     h.read<tag::ktx>(cur);
                 if (fun == vm.known("BINDING") && name == sym) {
+                    if (p)
+                        ++p->dynamic_hits;
                     const auto xs = h.v32slice(binding);
                     const auto old = xs[0], segment = xs[1];
                     if (assign) {
@@ -467,6 +496,17 @@ struct eval_step
 
     void call(word fun, std::span<const word> args)
     {
+        if (auto * p = h.profiling()) {
+            ++p->call_arity[std::min(args.size(), std::size_t{16})];
+            if (tag_of(fun) == tag::jet)
+                ++p->jet_calls;
+            if (tag_of(fun) == tag::fun)
+                ++p->function_calls;
+            if (tag_of(fun) == tag::mac)
+                ++p->macro_calls;
+            if (tag_of(fun) == tag::ktx || fun == top)
+                ++p->continuation_calls;
+        }
         if (tag_of(fun) == tag::ktx || fun == top) {
             if (args.size() != 1)
                 fail(
@@ -571,6 +611,8 @@ struct eval_step
                 enter(pair[1]);
             }
         } else if (tag_of(fun) == tag::fun || tag_of(fun) == tag::jet) {
+            if (auto * p = h.profiling())
+                ++p->arguments_accumulated;
             if (acc == nil && arg == nil) {
                 const std::array args{val};
                 way = hop;
@@ -1339,7 +1381,12 @@ struct eval_step
 
     word find_prompt(word source, word prompt_tag)
     {
+        auto * p = h.profiling();
+        if (p)
+            ++p->continuation_searches;
         for (auto cur = source; cur != top;) {
+            if (p)
+                ++p->continuation_boundaries;
             const auto [hop, saved_env, fun, acc, arg] =
                 h.read<tag::ktx>(cur);
             if (fun == vm.known("PROMPT") && acc == prompt_tag)
@@ -1363,6 +1410,8 @@ struct eval_step
             give(fallback);
             return;
         }
+        if (auto * p = h.profiling())
+            ++p->continuation_captures;
         h.freeze_continuations();
         const auto entry = h.read<tag::ktx>(prompt);
         const auto handler =
@@ -1474,6 +1523,8 @@ struct eval_step
 
     void once()
     {
+        if (auto * p = h.profiling())
+            ++p->evaluator_steps;
         if (val != nah) {
             proceed();
             return;

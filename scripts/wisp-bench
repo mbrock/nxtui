@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Run checked upstream workloads; never conflate inner timing and process wall time."""
+import argparse
+import collections
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import random
+import shutil
+import statistics
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+PORTS = ROOT / "bench/wisp/cross-language"
+UPSTREAM = "a282b936867fcf7d5d2926ebee9afbaf3e153f5b"
+# The original cross-language sweep's counts. Microcases use benchmark.zig's.
+PROGRAMS = {"tak": 10, "deriv": 10000, "diviter": 1000, "divrec": 1000,
+            "stdlib-list": 1000, "backquote": 1000, "router-hit": 50, "router-miss": 50}
+
+
+def output(command, cwd=ROOT):
+    return subprocess.check_output(command, cwd=cwd, text=True).strip()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--build-dir", type=Path, default=ROOT / "build/wisp-release")
+    parser.add_argument("--zig-repo", type=Path, help="clone of mbrock/wisp, built with semantic-profile=false")
+    parser.add_argument("--samples", type=int, default=5)
+    parser.add_argument("--benchmarks", default=",".join(PROGRAMS), help="comma-separated names, or all")
+    parser.add_argument("--runtimes", default="cpp,zig,python,node,c,racket,sbcl")
+    parser.add_argument("--output", type=Path, help="JSONL samples + environment (default: build dir/wisp-results.jsonl)")
+    args = parser.parse_args()
+    if args.samples < 1:
+        parser.error("samples must be positive")
+    args.build_dir = args.build_dir.resolve()
+    cpp = args.build_dir / "bench/wisp-bench"
+    available = output([cpp, "--list"]).splitlines()
+    names = available if args.benchmarks == "all" else args.benchmarks.split(",")
+    if set(names) - set(available):
+        parser.error("unknown benchmarks: " + str(set(names) - set(available)))
+    commands = {"cpp": [str(cpp)], "c": [str(args.build_dir / "bench/wisp-native-bench")]}
+    versions = {"cpp": "embedded in each sample", "c": "Meson build compiler; see build metadata"}
+    specs = {"python": ("python3", "python.py", ["--version"]),
+             "node": ("node", "javascript.js", ["--version"]),
+             "racket": ("racket", "racket.rkt", ["--version"]),
+             "sbcl": ("sbcl", "common-lisp.lisp", ["--version"])}
+    for runtime, (exe, filename, version_args) in specs.items():
+        path = shutil.which(exe)
+        if path:
+            commands[runtime] = [path] + (["--script"] if runtime == "sbcl" else []) + [str(PORTS / filename)]
+            versions[runtime] = output([path, *version_args])
+    if args.zig_repo:
+        repo = args.zig_repo.resolve()
+        revision = output(["git", "rev-parse", "HEAD"], repo)
+        if revision != UPSTREAM or output(["git", "status", "--porcelain", "--untracked-files=no"], repo):
+            parser.error("Zig comparison requires the clean pinned upstream revision " + UPSTREAM)
+        commands["zig"] = [str(repo / "core/zig-out/bin/wisp-bench")]
+        versions["zig"] = {"revision": revision, "build": "ReleaseFast, semantic-profile=false (caller builds)",
+                           "gc": "every 100000 evaluator transitions in unlimited evaluation; explicit requests"}
+    requested = args.runtimes.split(",")
+    if set(requested) - {"cpp", "zig", "python", "node", "c", "racket", "sbcl"}:
+        parser.error("unknown runtime")
+    skipped = [r for r in requested if r not in commands or not Path(commands[r][0]).is_file()]
+    for runtime in skipped:
+        print(f"unavailable: {runtime}", file=sys.stderr)
+    runtimes = [r for r in requested if r not in skipped]
+    if not runtimes:
+        parser.error("no available runtimes selected")
+    supports = {"cpp": set(available), "zig": set(available),
+                "racket": set(PROGRAMS), "sbcl": set(PROGRAMS) - {"router-hit", "router-miss"},
+                "python": {"tak", "deriv", "diviter", "divrec"},
+                "node": {"tak", "deriv", "diviter", "divrec"},
+                "c": {"tak", "deriv", "diviter", "divrec"}}
+    metadata = {"kind": "environment", "platform": platform.platform(),
+                "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "source_revision": output(["git", "rev-parse", "HEAD"]),
+                "source_dirty": bool(output(["git", "status", "--porcelain", "--untracked-files=no"])),
+                "reference_revision": UPSTREAM, "samples": args.samples, "versions": versions,
+                "unavailable": skipped, "commands": {r: commands[r] for r in runtimes},
+                "unsupported": {r: sorted(set(names) - supports[r]) for r in runtimes},
+                "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
+                "process_timing": "spawn through exit, includes setup, warmup, evaluation, validation and teardown; NOT pure startup"}
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        metadata["cpu"] = next((line.split(":", 1)[1].strip() for line in cpuinfo.read_text().splitlines()
+                               if line.startswith("model name")), "unknown")
+    metadata["executable_sha256"] = {r: hashlib.sha256(Path(commands[r][0]).read_bytes()).hexdigest()
+                                      for r in runtimes if r in {"cpp", "zig", "c"}}
+    metadata["meson_buildoptions"] = json.loads((args.build_dir / "meson-info/intro-buildoptions.json").read_text())
+    metadata["meson_compilers"] = json.loads((args.build_dir / "meson-info/intro-compilers.json").read_text())
+    jobs = [(sample, name, runtime) for sample in range(args.samples) for name in names
+            for runtime in runtimes if name in supports[runtime]]
+    if not jobs:
+        parser.error("selected runtimes support none of the selected benchmarks")
+    # Fixed shuffle mitigates systematic thermal/order bias; no concurrent benchmarks.
+    random.Random(0).shuffle(jobs)
+    results = collections.defaultdict(list)
+    destination = args.output or args.build_dir / "wisp-results.jsonl"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w") as stream:
+        stream.write(json.dumps(metadata, separators=(",", ":")) + "\n")
+        for sample, name, runtime in jobs:
+            iterations = PROGRAMS.get(name, 1000 if name.startswith("effect-") else 25000)
+            warmup = min(iterations, 3 if name == "tak" else 100)
+            command = commands[runtime] + [name, str(iterations), str(warmup)]
+            print(f"sample {sample + 1}/{args.samples}: {runtime} {name}", file=sys.stderr)
+            start = time.perf_counter_ns()
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=300)
+            wall = time.perf_counter_ns() - start
+            if completed.returncode:
+                raise RuntimeError(f"{command}: exit {completed.returncode}\n{completed.stderr}\n{completed.stdout}")
+            record = json.loads(completed.stdout)
+            if record["benchmark"] != name or record["iterations"] != iterations or record["elapsed_ns"] <= 0:
+                raise RuntimeError("invalid result record: " + completed.stdout)
+            if record.get("profile_enabled") or (runtime == "zig" and record.get("evaluator_steps")):
+                raise RuntimeError("comparison timings require profiling disabled")
+            record.update(kind="sample", runtime=runtime, sample=sample, warmup_iterations=warmup,
+                          process_elapsed_ns=wall, command=command)
+            if name.startswith("router-"):
+                record["router_semantics"] = "guest-continuation-prompts"
+            stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+            stream.flush()
+            results[name, runtime].append(record)
+    print("benchmark/runtime             evaluator median ms/run    process median ms")
+    for (name, runtime), records in sorted(results.items()):
+        inner = statistics.median(r["elapsed_ns"] / r["iterations"] for r in records) / 1e6
+        wall = statistics.median(r["process_elapsed_ns"] for r in records) / 1e6
+        print(f"{name + '/' + runtime:30} {inner:20.6f} {wall:20.3f}")
+    print(f"Raw results: {destination}")
+
+
+if __name__ == "__main__":
+    main()

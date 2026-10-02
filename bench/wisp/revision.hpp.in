@@ -1,0 +1,1 @@
+#define WISP_BENCH_REVISION "@VCS_TAG@"

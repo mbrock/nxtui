@@ -23,6 +23,9 @@ option('dev', type : 'boolean', value : true,
 option('benchmarks', type : 'boolean', value : false,
   description : 'Build benchmark executables')
 
+option('wisp_profile', type : 'boolean', value : false,
+  description : 'Compile opt-in Wisp semantic profiling hooks (not for baseline timings)')
+
 option('cares', type : 'feature', value : 'auto',
   description : 'Use system c-ares for DNS when available')
 

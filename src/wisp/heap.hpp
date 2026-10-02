@@ -3,6 +3,7 @@
 #pragma once
 
 #include "wisp/vat.hpp"
+#include "wisp/profile.hpp"
 
 #include <map>
 #include <vector>
@@ -45,6 +46,21 @@ public:
         return era_;
     }
 
+    /// The caller owns the counters and must detach them before
+    /// destruction. No per-operation recording or pointer test in
+    /// non-profile builds.
+    void profiling(profile * counters) noexcept
+    {
+        profile_ = counters;
+    }
+
+    profile * profiling() const noexcept
+    {
+        if constexpr (profile_enabled)
+            return profile_;
+        return nullptr;
+    }
+
     template<tag T>
     const tab<T> & table() const noexcept
     {
@@ -58,7 +74,10 @@ public:
     word make(row<T> data)
     {
         assert(data[0] != zap);
-        return pointer(T, std::get<tab<T>>(vat_).push(data), era_);
+        auto result = pointer(T, std::get<tab<T>>(vat_).push(data), era_);
+        if (auto * p = profiling())
+            ++p->allocations[std::size_t(T)];
+        return result;
     }
 
     template<tag T>
@@ -178,6 +197,7 @@ private:
     bool era_ = false;
     std::size_t frozen_ktx_ = 0;
     externals host_;
+    profile * profile_ = nullptr;
 };
 
 /// An address-stable host slot rewritten by collection. Nonmovable so its

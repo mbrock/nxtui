@@ -3,6 +3,7 @@
 #include "wisp/heap.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <limits>
 
@@ -57,7 +58,10 @@ word heap::newv08(std::string_view data)
 {
     auto idx = append(bytes_, std::span{data.data(), data.size()});
     try {
-        return make<tag::v08>({idx, static_cast<word>(data.size())});
+        auto result = make<tag::v08>({idx, static_cast<word>(data.size())});
+        if (auto * p = profiling())
+            p->v08_bytes += data.size();
+        return result;
     } catch (...) {
         bytes_.resize(idx);
         throw;
@@ -68,7 +72,10 @@ word heap::newv32(std::span<const word> data)
 {
     auto idx = append(words_, data);
     try {
-        return make<tag::v32>({idx, static_cast<word>(data.size())});
+        auto result = make<tag::v32>({idx, static_cast<word>(data.size())});
+        if (auto * p = profiling())
+            p->v32_words += data.size();
+        return result;
     } catch (...) {
         words_.resize(idx);
         throw;
@@ -80,8 +87,11 @@ word heap::filledv32(std::size_t length, word value)
     auto idx = words_.size();
     words_.resize(pool_size(idx, length), value);
     try {
-        return make<tag::v32>(
+        auto result = make<tag::v32>(
             {static_cast<word>(idx), static_cast<word>(length)});
+        if (auto * p = profiling())
+            p->v32_words += length;
+        return result;
     } catch (...) {
         words_.resize(idx);
         throw;
@@ -223,6 +233,13 @@ struct tidy
         }
         auto & to = std::get<tab<T>>(next);
         auto y = pointer(T, to.push(data), !old.era_);
+        if (auto * p = old.profiling()) {
+            ++p->gc_copies[std::size_t(T)];
+            if constexpr (T == tag::v08)
+                p->gc_v08_bytes += data[column_index<T, field::len>()];
+            if constexpr (T == tag::v32)
+                p->gc_v32_words += data[column_index<T, field::len>()];
+        }
         from.set(i, 0, zap);
         from.set(i, 1, y);
         return y;
@@ -306,7 +323,17 @@ struct tidy
 
 void heap::collect()
 {
+    using clock = std::chrono::steady_clock;
+    auto * p = profiling();
+    const auto started = p ? clock::now() : clock::time_point{};
     tidy{*this}.run();
+    if (p) {
+        ++p->gc_count;
+        p->gc_nanoseconds +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - started)
+                .count();
+    }
 }
 
 } // namespace wisp
