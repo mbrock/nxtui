@@ -13,7 +13,7 @@ namespace {
 
 constexpr std::string_view magic = "NXWISP\r\n";
 constexpr std::string_view compressed_magic = "NXWISPZ\n";
-constexpr word version = 3;
+constexpr word version = 4;
 
 void demand(bool good, const char * message)
 {
@@ -227,7 +227,8 @@ struct tape_codec
                         if (schema<T>::columns[c].kind == field_kind::value)
                             for (auto x : table.col(c))
                                 value(x);
-                    if constexpr (T == tag::v08 || T == tag::v32) {
+                    if constexpr (
+                        T == tag::v08 || heap::word_payload<T>) {
                         const auto size = T == tag::v08 ? h.bytes_.size()
                                                         : h.words_.size();
                         std::uint64_t total = 0;

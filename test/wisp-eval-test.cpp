@@ -74,7 +74,7 @@ struct language
         expect(vm.advance(run.get(), 100) == evaluation::failed);
         expect(h.read<tag::run>(run.get()) == before);
         const auto condition =
-            h.v32slice(h.get<tag::run, field::err>(run.get()));
+            h.words<tag::rec>(h.get<tag::run, field::err>(run.get()));
         expect(condition.size() == 3u);
         expect(condition[0] == s("UNHANDLED-ERROR"));
         expect(condition[1] == s("ERROR"));
@@ -83,8 +83,8 @@ struct language
 
     word cause(word error)
     {
-        while (h.v32slice(error)[0] == s("BUILTIN-FAILURE"))
-            error = h.v32slice(error)[2];
+        while (h.words<tag::rec>(error)[0] == s("BUILTIN-FAILURE"))
+            error = h.words<tag::rec>(error)[2];
         return error;
     }
 
@@ -225,7 +225,7 @@ static suite eval_tests{
                 m.values(m.eval(program, true), {19, 7, 31});
                 // A computed operator is not implicitly FUNCALL in Wisp.
                 auto error = m.error(m.l({m.fn(nil, 3)}));
-                expect(m.h.v32slice(error)[0] == m.s("INVALID-CALLEE"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("INVALID-CALLEE"));
             };
 
         "CALL, APPLY, optional parameters, and rest parameters"_test = [] {
@@ -307,12 +307,12 @@ static suite eval_tests{
                 // Final sum would fit, but the first addition overflows.
                 auto error = m.cause(
                     m.error(m.f("+", {fixnum(max_fixnum), 1, fixnum(-1)})));
-                expect(m.h.v32slice(error)[0] == m.s("FIXNUM-OVERFLOW"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("FIXNUM-OVERFLOW"));
                 error = m.cause(
                     m.error(m.f("*", {fixnum(min_fixnum), fixnum(-1)})));
-                expect(m.h.v32slice(error)[0] == m.s("FIXNUM-OVERFLOW"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("FIXNUM-OVERFLOW"));
                 error = m.cause(m.error(m.f("-", {fixnum(min_fixnum), 1})));
-                expect(m.h.v32slice(error)[0] == m.s("FIXNUM-OVERFLOW"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("FIXNUM-OVERFLOW"));
             };
 
         "failures are inspectable, terminal, and survive collection"_test =
@@ -321,43 +321,43 @@ static suite eval_tests{
                 auto error = m.error(m.s("MISSING"));
                 expect(
                     std::ranges::equal(
-                        m.h.v32slice(error),
+                        m.h.words<tag::rec>(error),
                         std::array{
                             m.s("UNBOUND-VARIABLE"), m.s("MISSING")}));
                 error = m.error(m.f("MISSING"));
-                expect(m.h.v32slice(error)[0] == m.s("UNDEFINED-FUNCTION"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("UNDEFINED-FUNCTION"));
                 error = m.cause(m.error(m.f("HEAD", {3})));
                 expect(
                     std::ranges::equal(
-                        m.h.v32slice(error),
+                        m.h.words<tag::rec>(error),
                         std::array{
                             m.s("TYPE-MISMATCH"), m.s("CONS"), word{3}}));
                 error = m.cause(m.error(m.f("CONS", {1})));
                 expect(
-                    m.h.v32slice(error)[1]
+                    m.h.words<tag::rec>(error)[1]
                     == m.s("INVALID-ARGUMENT-COUNT"));
                 error = m.cause(m.error(m.f("IF", {t, 1})));
                 expect(
-                    m.h.v32slice(error)[1]
+                    m.h.words<tag::rec>(error)[1]
                     == m.s("INVALID-ARGUMENT-COUNT"));
                 error = m.cause(m.error(
                     m.f("CALL", {m.fn(m.l({m.s("X")}), m.s("X")), 1, 2})));
                 expect(
-                    m.h.v32slice(error)[1]
+                    m.h.words<tag::rec>(error)[1]
                     == m.s("INVALID-ARGUMENT-COUNT"));
                 error = m.cause(m.error(
                     m.f("CALL", {m.fn(m.l({m.s("X")}), m.s("X"))})));
                 expect(
-                    m.h.v32slice(error)[1]
+                    m.h.words<tag::rec>(error)[1]
                     == m.s("INVALID-ARGUMENT-COUNT"));
                 error =
                     m.cause(m.error(m.f("%SET!", {m.q(m.s("NEW")), 1})));
-                expect(m.h.v32slice(error)[0] == m.s("UNBOUND-VARIABLE"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("UNBOUND-VARIABLE"));
                 for (auto expression : {top, immediate(tag::chr, 955)}) {
                     error = m.error(expression);
                     expect(
                         std::ranges::equal(
-                            m.h.v32slice(error),
+                            m.h.words<tag::rec>(error),
                             std::array{
                                 m.s("INVALID-EXPRESSION"), expression}));
                 }
@@ -369,17 +369,17 @@ static suite eval_tests{
             [] {
                 language m;
                 auto error = m.error(m.h.cons(m.s("+"), m.h.cons(1, 2)));
-                expect(m.h.v32slice(error)[0] == m.s("TYPE-MISMATCH"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("TYPE-MISMATCH"));
                 auto cycle = m.h.cons(1, nil);
                 m.h.set<tag::duo, field::cdr>(cycle, cycle);
                 error = m.error(m.h.cons(m.s("LIST"), cycle));
-                expect(m.h.v32slice(error)[0] == m.s("CYCLIC-LIST"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("CYCLIC-LIST"));
                 error = m.cause(
                     m.error(m.f("LET", {m.l({m.l({m.s("X")})}), 1})));
-                expect(m.h.v32slice(error)[0] == m.s("INVALID-BINDING"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("INVALID-BINDING"));
                 error = m.cause(
                     m.error(m.f("CALL", {m.fn(m.l({m.s("&REST")}), 1)})));
-                expect(m.h.v32slice(error)[0] == m.s("INVALID-PARAMETERS"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("INVALID-PARAMETERS"));
             };
 
         "bounded turns expose argument state and resume after GC"_test =
@@ -776,7 +776,7 @@ static suite eval_tests{
                 expect(m.eval(m.f("CALL", {m.q(top), 17}), true) == 17u);
                 auto error = m.cause(m.error(m.f("CALL", {m.q(top)})));
                 expect(
-                    m.h.v32slice(error)[1]
+                    m.h.words<tag::rec>(error)[1]
                     == m.s("CONTINUATION-CALL-ERROR"));
                 auto v = m.s("V"), k = m.s("K");
                 auto handler = m.fn(m.l({v, k}), k);
@@ -817,7 +817,7 @@ static suite eval_tests{
                 error = m.cause(
                     m.error(m.f("CALL", {m.q(continuation.get()), 1, 2})));
                 expect(
-                    m.h.v32slice(error)[1]
+                    m.h.words<tag::rec>(error)[1]
                     == m.s("CONTINUATION-CALL-ERROR"));
                 // GET/CC is a snapshot, including dynamic boundaries.
                 // A prompt tag can be an empty vector, with no position.
@@ -1269,7 +1269,7 @@ static suite eval_tests{
                         reader{m.h, m.vm, source}.next().value();
                     const auto error = m.cause(m.error(form));
                     expect(
-                        m.h.v32slice(error)[0] == m.s("UNBOUND-VARIABLE"));
+                        m.h.words<tag::rec>(error)[0] == m.s("UNBOUND-VARIABLE"));
                 }
             };
     }};

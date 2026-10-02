@@ -15,6 +15,7 @@ enum class tag : word {
     sys = 0x11,
     chr = 0x12,
     jet = 0x13,
+    rec = 0x14, // record pointer; an NXT extension, absent from Zig Wisp
     duo = 0x15,
     sym = 0x16,
     fun = 0x17,
@@ -40,7 +41,7 @@ constexpr tag tag_of(word x) noexcept
 
 constexpr bool is_pointer(tag t) noexcept
 {
-    return t >= tag::duo && t <= tag::ext;
+    return t == tag::rec || (t >= tag::duo && t <= tag::ext);
 }
 
 constexpr word fixnum(std::int32_t x) noexcept

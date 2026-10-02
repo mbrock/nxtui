@@ -485,11 +485,19 @@
         (call function value)
         result)))
 
+;; Conditions are records whose type names them. (error 'name details...)
+;; signals #S(NAME details...), (error record) signals that record, such as
+;; a DEFSTRUCT instance, and anything else signals #S(ERROR arguments...).
+(defun %condition (xs)
+  (cond ((and (record? (head xs)) (nil? (tail xs))) (head xs))
+        ((and (head xs) (symbol? (head xs))) (apply #'record xs))
+        (t (apply #'record (cons 'error xs)))))
+
 (defun error (&rest xs)
-  (send-or-invoke 'error xs #'unhandled-error))
+  (send-or-invoke 'error (%condition xs) #'unhandled-error))
 
 (defun nonlocal-error! (continuation &rest xs)
-  (send-to-or-invoke continuation 'error xs #'unhandled-error))
+  (send-to-or-invoke continuation 'error (%condition xs) #'unhandled-error))
 
 (defun call-with-effect-handler (tag thunk handler)
   (call-with-prompt tag thunk
@@ -774,3 +782,70 @@
               (%input-effect it '(read))))))
     (if result (head result)
       (call eof-thunk))))
+
+;;; Structures
+
+;; (defstruct point x (y 0)) defines the descriptor <point>, a constructor
+;; (make-point x &optional y), the predicate point?, accessors point-x and
+;; point-y, and setters set-point-x! and set-point-y!. A slot written as
+;; (name default) and every slot after it are optional; NIL means the
+;; default. Instances are records typed by the descriptor
+;; #S(STRUCT-TYPE POINT (X Y)), so TYPE-OF says POINT and they print as
+;; #S(POINT :X 1 :Y 0). Redefining a struct with the same slots keeps its
+;; descriptor, so instances made before a reload still belong to it.
+
+(defun %struct-symbol (name &rest parts)
+  (intern (apply #'string-append
+                 (map (fn (part) (if (symbol? part) (symbol-name part) part))
+                      parts))
+          (symbol-package name)))
+
+(defun %struct-type (old name slots)
+  (if (and (record? old)
+           (eq? (record-type old) 'struct-type)
+           (equal? (record-get old 1) slots))
+      old
+    (record 'struct-type name slots)))
+
+(defun %struct-check (x type)
+  (if (and (record? x) (eq? (record-type x) type))
+      x
+    (error 'type-mismatch (record-get type 0) x)))
+
+(defun %struct-slot-name (slot)
+  (if (pair? slot) (head slot) slot))
+
+(defun %struct-parameters (slots optional)
+  (cond ((nil? slots) nil)
+        ((and (pair? (head slots)) (not optional))
+         (cons '&optional (%struct-parameters slots t)))
+        (t (cons (%struct-slot-name (head slots))
+                 (%struct-parameters (tail slots) optional)))))
+
+(defun %struct-initial-value (slot)
+  (if (pair? slot)
+      `(if (nil? ,(head slot)) ,(second slot) ,(head slot))
+    slot))
+
+(defun %struct-accessors (name type slots index)
+  (if (nil? slots) nil
+    (let ((slot (%struct-slot-name (head slots))))
+      `((defun ,(%struct-symbol name name "-" slot) (instance)
+          (record-get (%struct-check instance ,type) ,index))
+        (defun ,(%struct-symbol name "SET-" name "-" slot "!") (instance value)
+          (record-set! (%struct-check instance ,type) ,index value))
+        ,@(%struct-accessors name type (tail slots) (+ index 1))))))
+
+(defmacro defstruct (name &rest slots)
+  (let ((type (%struct-symbol name "<" name ">")))
+    `(do
+       (defvar ,type
+         (%struct-type (try ,type (catch (e k) nil))
+                       ',name ',(map #'%struct-slot-name slots)))
+       (defun ,(%struct-symbol name "MAKE-" name)
+           ,(%struct-parameters slots nil)
+         (record ,type ,@(map #'%struct-initial-value slots)))
+       (defun ,(%struct-symbol name name "?") (x)
+         (and (record? x) (eq? (record-type x) ,type)))
+       ,@(%struct-accessors name type slots 0)
+       ',name)))

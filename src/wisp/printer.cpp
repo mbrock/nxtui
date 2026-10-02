@@ -113,6 +113,37 @@ class compact_printer
         out_ += '>';
     }
 
+    // The type word itself, or a type record's first slot (its name).
+    word record_name(word r) const noexcept
+    {
+        const auto type = h_.words<tag::rec>(r)[0];
+        if (tag_of(type) == tag::rec && h_.words<tag::rec>(type).size() > 1)
+            return h_.words<tag::rec>(type)[1];
+        return type;
+    }
+
+    // A type record's second slot may list one symbol per slot, as a
+    // DEFSTRUCT descriptor does; then slots print as :NAME value pairs.
+    word slot_name(word r, std::size_t slot) const noexcept
+    {
+        const auto xs = h_.words<tag::rec>(r);
+        const auto type = xs[0];
+        if (tag_of(type) != tag::rec || h_.words<tag::rec>(type).size() < 3)
+            return nil;
+        auto names = h_.words<tag::rec>(type)[2];
+        std::size_t count = 0;
+        word found = nil;
+        while (tag_of(names) == tag::duo && count < xs.size()) {
+            const auto [name, rest] = h_.read<tag::duo>(names);
+            if (tag_of(name) != tag::sym)
+                return nil;
+            if (++count == slot)
+                found = name;
+            names = rest;
+        }
+        return names == nil && count + 1 == xs.size() ? found : nil;
+    }
+
     template<tag T>
     void fields(word x, std::size_t i)
     {
@@ -164,6 +195,13 @@ class compact_printer
                 out_ += '(';
                 pending_.push_back({action::close_list});
                 cons(x);
+            }
+            break;
+        case tag::rec:
+            if (enter(x)) {
+                out_ += "#S(";
+                pending_.push_back({action::elements, x, 1});
+                pending_.push_back({action::value, record_name(x)});
             }
             break;
         case tag::v32:
@@ -236,7 +274,22 @@ public:
                 }
                 break;
             case action::elements:
-                if (tag_of(y) == tag::v32) {
+                if (tag_of(y) == tag::rec) {
+                    const auto xs = h_.words<tag::rec>(y);
+                    if (next.index != xs.size()) {
+                        out_ += ' ';
+                        if (const auto name = slot_name(y, next.index);
+                            name != nil) {
+                            out_ += ':';
+                            out_ += h_.v08slice(
+                                h_.get<tag::sym, field::str>(name));
+                            out_ += ' ';
+                        }
+                        pending_.push_back(
+                            {action::elements, y, next.index + 1});
+                        pending_.push_back({action::value, xs[next.index]});
+                    }
+                } else if (tag_of(y) == tag::v32) {
                     const auto xs = h_.v32slice(y);
                     if (next.index != xs.size()) {
                         if (next.index != 0)
@@ -253,7 +306,9 @@ public:
                 break;
             case action::leave:
                 active_.erase(y);
-                if (tag_of(y) != tag::duo)
+                if (tag_of(y) == tag::rec)
+                    out_ += ')';
+                else if (tag_of(y) != tag::duo)
                     out_ += '>';
                 break;
             case action::close_list:

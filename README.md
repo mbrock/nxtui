@@ -214,8 +214,9 @@ through the saved pending request's guest error handler instead of performing
 it. Restoring again is a fork, not an exactly-once guarantee: enabling both forks can
 repeat effects. The input tape is never updated implicitly.
 
-Host conditions have shape `[HOST-ERROR operation code message]`, with codes
-such as `:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, `:IO`, and `:CANCELLED`.
+Host conditions are `host-error` structs with `operation`, `code` and
+`message` slots, so `(host-error-code e)` gives codes such as
+`:INVALID-ARGUMENT`, `:UNSUPPORTED-OPERATION`, `:IO`, and `:CANCELLED`.
 `restore --effects --checkpoint OUT` does not save merely because a timer was
 restored: only a newly issued timer requests another checkpoint.
 
@@ -233,8 +234,32 @@ The REPL accepts complete forms on one line and preserves definitions. Console
 hooks include `write`, `print`, `write-error`, `read-line`, and `read-bytes`.
 The executable host uses **image schema `NXT-WISP-4`**:
 `[tag [source path form-start] byte-offset run pending last-result request-serial]`. Old host
-schemas are intentionally rejected; the underlying portable tape format is
-unchanged. Disable the tool with `-Dwisp_tool=false`.
+schemas are intentionally rejected, as are portable tapes before version 4,
+which added records. Disable the tool with `-Dwisp_tool=false`.
+
+### Structs, records and conditions
+
+`(defstruct point x (y 0))` defines `make-point` (positional; a slot written
+`(name default)` and all later slots are optional, and NIL means the default),
+`point?`, accessors `point-x`/`point-y`, setters `set-point-x!`/`set-point-y!`,
+and the descriptor `<point>`. Instances print as `#S(POINT :X 1 :Y 0)`, and
+`type-of` says `POINT`. Redefining a struct with the same slots keeps its
+descriptor, so instances made before a reload still belong to it.
+
+Underneath is a `record` heap type borrowed from Emacs Lisp: a word vector whose
+first word is its type. `(record 'pair 1 2)` prints as `#S(PAIR 1 2)`; a struct
+descriptor is itself a record `#S(STRUCT-TYPE POINT (X Y))`, which supplies the
+type name and slot names. `record?`, `record-type`, `record-length`,
+`record-get` and `record-set!` are the primitives (slot indices exclude the
+type). `equal?` compares records by identity, as it does vectors.
+
+Conditions are records named by their type, so a handler asks `(type-of e)`:
+the evaluator signals `#S(TYPE-MISMATCH CONS 1)`, `(error 'name details...)`
+signals `#S(NAME details...)`, `(error some-struct)` signals that instance, and
+`(error "text")` signals `#S(ERROR "text")`. Host records are structs from
+[`src/wisp/host.wisp`](src/wisp/host.wisp): `http-request`, `http-response`,
+`file-status`, `file-body` and `host-error`. The C++ host finds their slots by
+name through the descriptors, so field order is declared only there.
 
 ### Load local Wisp files with explicit read grants
 
@@ -262,9 +287,11 @@ build/wisp run demo/wisp-http.wisp --dir demo
 
 The demo binds loopback port 8080 and directly awaits the native serving task.
 Each callback calls a zero-argument handler with dynamic `*request*` and
-`*response*`. Use `request-method`,
-`request-path`, `request-query-string`, `request-header` (case-insensitive), and
-`request-text`; paths/query strings are raw, not URL-decoded. Set response state
+`*response*`, an `http-request` and an `http-response` struct. Use
+`request-method`, `request-path`, `request-query-string`, `request-header`
+(case-insensitive), and `request-text`; paths and query strings are raw, while
+`(http-request-segments *request*)` is the path split at `/` and
+percent-decoded. A malformed escape gets 400 before any handler runs. Set response state
 with `set-response-status!`, `add-header!`, and `set-response-body!`, or exit early
 with `(send! :respond (response 404 nil "Not Found"))`. Ordinary handler return
 values are ignored, matching the old Wisp web interface.
@@ -279,7 +306,7 @@ The demo dispatches with `defroute` and `route-request`, ported from Zig Wisp:
 (serve-http 8080 #'route-request)
 ```
 
-Patterns are a method followed by raw path segments (`/` is `("")`). Routes
+Patterns are a method followed by decoded path segments (`/` is `("")`). Routes
 are tried in definition order, and redefining a pattern replaces its handler
 in place. HEAD falls back to GET routes; unmatched paths answer 404, and paths
 served only under other methods answer 405 with `Allow`.
@@ -294,7 +321,7 @@ so a restore must grant them again.
 
 ```lisp
 (read-file "site/notes.txt")     ; binary-safe string, up to 64 MiB
-(file-status "site/index.html")  ; [:file "1234" "1790969925597"] or NIL
+(file-status "site/index.html")  ; #S(FILE-STATUS :KIND :FILE :SIZE "1234" ...)
 (list-directory "site")          ; sorted names
 (serve-file "site/app.wasm")     ; streamed, Content-Type from the extension
 ```
@@ -313,7 +340,7 @@ for listing and reads where the wand would block, they run on a small
 `blocking_pool` started on first use ([`nxtrt::fs::files`](src/nxtrt/fs.hpp)).
 On macOS, listing reads names and attributes in `getattrlistbulk` batches.
 
-A response body may be `[:file path]` instead of a string. The native server
+A response body may be `(make-file-body path)` instead of a string. The native server
 opens it when the handler finishes and streams it with `Content-Length`,
 outside the heap and past the 8 MiB string-body limit. `serve-file` checks the
 path first and answers 404 for anything but a regular file. Each streamed chunk
@@ -342,7 +369,8 @@ future work.
 
 `(fetch-http url &optional method headers body)` uses NXT's existing native
 client stack. The method defaults to `"GET"`, headers to `nil`, and body to
-empty. It returns `[status headers body]`: `vector-get` indices 0, 1, and 2.
+empty. It returns an `http-response`, the struct handlers fill in, so a
+handler can relay it with `send! :respond`.
 Headers are a list of `[name value]` vectors, preserving order and duplicates;
 the body is a binary-safe string, already de-chunked and decompressed. HTTP
 error statuses such as 404 are normal responses, not guest exceptions.
@@ -354,9 +382,9 @@ one line instead:
 ```lisp
 ;; Read a page; PRINT shows metadata, WRITE emits the body bytes.
 (let ((r (fetch-http "http://127.0.0.1:8080/")))
-  (print (vector-get r 0))
-  (print (vector-get r 1))
-  (write (vector-get r 2)))
+  (print (http-response-status r))
+  (print (http-response-headers r))
+  (write (http-response-body r)))
 
 ;; Send a body with application headers.
 (fetch-http "http://127.0.0.1:8080/echo" "POST"
@@ -387,7 +415,7 @@ describe the compressed body, not the returned decoded string.
 
 Request bodies are limited to 1 MiB, request heads to 16 KiB, each response head
 to a 16 KiB reader buffer, and decoded response bodies to 8 MiB. A 30-second
-whole-request deadline raises `[HOST-ERROR :HTTP-FETCH :TIMEOUT message]`.
+whole-request deadline raises a `host-error` with code `:TIMEOUT`.
 Other transport/protocol errors raise `:IO`; argument validation raises
 `:INVALID-ARGUMENT`. Catch these with Wisp's `try` as with other host conditions.
 DNS uses c-ares when available (the libc fallback performs blocking resolution).
@@ -443,7 +471,7 @@ terminal applications and the OpenAI/SSE client.
 ```
 
 An incoming request is parsed and bounded by the native server, copied into
-the Wisp heap as `[method path query headers body]`, then run as a rooted heap
+the Wisp heap as an `http-request` struct, then run as a rooted heap
 activation until it returns or explicitly awaits. `%nxt-http-handle` dynamically
 binds `*request*` and `*response*` for that activation and installs the
 `:respond` prompt. Ordinary handler returns are discarded;

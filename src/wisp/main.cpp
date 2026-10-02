@@ -11,6 +11,7 @@
 #include "nxtrt/net_dns.hpp"
 #include "nxtrt/tls.hpp"
 
+#include <cctype>
 #include <charconv>
 #include <csignal>
 #include <fcntl.h>
@@ -165,6 +166,36 @@ void checkpoint(const std::string & path, const evaluator & vm, word entry)
     }
 }
 
+// The path split at "/" without its leading slash, each segment
+// percent-decoded; nullopt when an escape is malformed. OPTIONS * gives
+// ("*").
+std::optional<std::vector<std::string>> path_segments(std::string_view path)
+{
+    if (path.starts_with('/'))
+        path.remove_prefix(1);
+    std::vector<std::string> segments;
+    for (auto part : std::views::split(path, '/')) {
+        const auto raw = std::string_view{part.begin(), part.end()};
+        std::string segment;
+        for (std::size_t i = 0; i < raw.size(); ++i) {
+            if (raw[i] != '%') {
+                segment += raw[i];
+                continue;
+            }
+            unsigned value = 0;
+            if (raw.size() - i < 3
+                || !std::isxdigit(static_cast<unsigned char>(raw[i + 1]))
+                || !std::isxdigit(static_cast<unsigned char>(raw[i + 2])))
+                return std::nullopt;
+            std::from_chars(raw.data() + i + 1, raw.data() + i + 3, value, 16);
+            segment += static_cast<char>(value);
+            i += 2;
+        }
+        segments.push_back(std::move(segment));
+    }
+    return segments;
+}
+
 // Directories granted on the command line, like WASI preopens. The
 // guest names them by NAME; there is no ambient filesystem authority.
 using directories = std::map<std::string, nxt::unique_fd, std::less<>>;
@@ -251,6 +282,66 @@ struct host
     word quote(word value)
     {
         return h.cons(vm.intern("QUOTE"), h.cons(value, nil));
+    }
+
+    // Host records are DEFSTRUCTs from host.wisp. Their descriptors are
+    // bound to <NAME> and list the slot names, so slot positions are
+    // looked up by name here rather than repeated.
+    word descriptor(std::string_view name)
+    {
+        const auto type = h.get<tag::sym, field::val>(
+            vm.intern("<" + std::string{name} + ">"));
+        require(
+            tag_of(type) == tag::rec && h.words<tag::rec>(type).size() == 3,
+            "missing host struct descriptor");
+        return type;
+    }
+
+    std::vector<word> slot_names(word type)
+    {
+        std::vector<word> names;
+        for (auto list = h.words<tag::rec>(type)[2]; list != nil;) {
+            const auto [name, rest] = h.read<tag::duo>(list);
+            names.push_back(name);
+            list = rest;
+        }
+        return names;
+    }
+
+    std::size_t slot_index(word type, std::string_view slot)
+    {
+        const auto names = slot_names(type);
+        for (std::size_t i = 0; i < names.size(); ++i)
+            if (h.v08slice(h.get<tag::sym, field::str>(names[i])) == slot)
+                return i;
+        throw std::logic_error("host struct has no slot " + std::string{slot});
+    }
+
+    // Unnamed slots are NIL. Values must be allocated before the call.
+    word make_struct(
+        std::string_view name,
+        std::initializer_list<std::pair<std::string_view, word>> slots)
+    {
+        const auto type = descriptor(name);
+        std::vector<word> words(1 + slot_names(type).size(), nil);
+        words[0] = type;
+        for (const auto & [slot, value] : slots)
+            words[1 + slot_index(type, slot)] = value;
+        return h.new_words<tag::rec>(words);
+    }
+
+    bool is_struct(word value, std::string_view name)
+    {
+        return tag_of(value) == tag::rec
+               && h.words<tag::rec>(value)[0] == descriptor(name);
+    }
+
+    word slot(word value, std::string_view name, std::string_view slot)
+    {
+        effect_require(
+            is_struct(value, name),
+            "expected " + std::string{name} + " struct");
+        return h.words<tag::rec>(value)[1 + slot_index(descriptor(name), slot)];
     }
 
     word call(word function, word argument)
@@ -466,8 +557,8 @@ struct host
         result.set(h.newv08(bytes));
     }
 
-    // [kind size modified-unix-ms], or NIL when nothing is there. Numbers
-    // are decimal strings, like timer deadlines: fixnums are only 31 bits.
+    // A FILE-STATUS, or NIL when nothing is there. Numbers are decimal
+    // strings, like timer deadlines: fixnums are only 31 bits.
     nxtrt::task<void> file_status(word argument, root & result)
     {
         const auto path = guest_path(argument, "file-status");
@@ -484,15 +575,16 @@ struct host
             filesystem_failure(std::current_exception());
         }
         using kind = nxtrt::fs::file_kind;
-        result.set(h.newv32(
-            std::array{
-                vm.keyword(
-                    status.kind == kind::regular     ? "FILE"
-                    : status.kind == kind::directory ? "DIRECTORY"
-                    : status.kind == kind::symlink   ? "SYMLINK"
-                                                     : "OTHER"),
-                h.newv08(std::to_string(status.size)),
-                h.newv08(std::to_string(status.modified_ms))}));
+        const auto type = vm.keyword(
+            status.kind == kind::regular     ? "FILE"
+            : status.kind == kind::directory ? "DIRECTORY"
+            : status.kind == kind::symlink   ? "SYMLINK"
+                                             : "OTHER");
+        const auto size = h.newv08(std::to_string(status.size));
+        const auto modified = h.newv08(std::to_string(status.modified_ms));
+        result.set(make_struct(
+            "FILE-STATUS",
+            {{"KIND", type}, {"SIZE", size}, {"MODIFIED", modified}}));
     }
 
     nxtrt::task<void> list_directory(word argument, root & result)
@@ -517,21 +609,33 @@ struct host
     {
         // Copy the native request into heap data before scheduling it.
         // No views or unrooted words survive the first suspension.
-        std::vector<word> headers;
-        for (const auto & header : request.headers)
-            headers.push_back(h.newv32(
-                std::array{h.newv08(header.name), h.newv08(header.value)}));
         const auto query = request.target.find('?');
-        const auto value = h.newv32(
-            std::array{
-                h.newv08(request.method),
-                h.newv08(request.target.substr(0, query)),
-                h.newv08(
-                    query == std::string::npos
-                        ? ""
-                        : request.target.substr(query + 1)),
-                h.newv32(headers),
-                h.newv08(request.body)});
+        const auto path = request.target.substr(0, query);
+        const auto decoded = path_segments(path);
+        if (!decoded)
+            co_return nxtrt::http::response{400, {}, "Bad Request\n"};
+        auto segments = nil;
+        for (const auto & segment : *decoded | std::views::reverse)
+            segments = h.cons(h.newv08(segment), segments);
+        auto headers = nil;
+        for (const auto & header : request.headers | std::views::reverse)
+            headers = h.cons(
+                h.newv32(
+                    std::array{h.newv08(header.name), h.newv08(header.value)}),
+                headers);
+        const auto method = h.newv08(request.method);
+        const auto raw_path = h.newv08(path);
+        const auto raw_query = h.newv08(
+            query == std::string::npos ? "" : request.target.substr(query + 1));
+        const auto request_body = h.newv08(request.body);
+        const auto value = make_struct(
+            "HTTP-REQUEST",
+            {{"METHOD", method},
+             {"PATH", raw_path},
+             {"QUERY", raw_query},
+             {"HEADERS", headers},
+             {"BODY", request_body},
+             {"SEGMENTS", segments}});
         const auto handler = vector(
             h, vector(h, vector(h, pending.get(), 5)[1], 2)[1], 2)[1];
         const auto expression = h.cons(
@@ -546,35 +650,35 @@ struct host
         if (!co_await execute(state))
             co_return nxtrt::http::response{
                 500, {}, "Internal Server Error\n"};
-        const auto result = vector(h, vector(h, state.get(), 7)[5], 3);
-        effect_require(
-            tag_of(result[0]) == tag::integer, "invalid HTTP status");
+        const auto result = vector(h, state.get(), 7)[5];
+        const auto status = slot(result, "HTTP-RESPONSE", "STATUS");
+        effect_require(tag_of(status) == tag::integer, "invalid HTTP status");
         nxtrt::http::response response;
-        response.status = integer(result[0]);
+        response.status = integer(status);
         // Opened only after every heap value is copied: awaiting lets other
         // callbacks run and collect, which invalidates RESULT.
         std::optional<std::string> file;
-        if (tag_of(result[2]) == tag::v32) {
-            const auto body = h.v32slice(result[2]);
+        const auto body = slot(result, "HTTP-RESPONSE", "BODY");
+        if (is_struct(body, "FILE-BODY")) {
+            const auto path = slot(body, "FILE-BODY", "PATH");
             effect_require(
-                body.size() == 2 && body[0] == vm.keyword("FILE")
-                    && tag_of(body[1]) == tag::v08,
-                "HTTP body must be a string or [:file path]");
-            file = text(h, body[1]);
-        } else if (result[2] != nil) {
+                tag_of(path) == tag::v08, "FILE-BODY path must be a string");
+            file = text(h, path);
+        } else if (body != nil) {
             effect_require(
-                tag_of(result[2]) == tag::v08,
-                "HTTP body must be a string or [:file path]");
+                tag_of(body) == tag::v08,
+                "HTTP body must be a string or a FILE-BODY");
             effect_require(
-                h.v08slice(result[2]).size()
+                h.v08slice(body).size()
                     <= nxtrt::http::server_options{}
                            .max_response_body_bytes,
                 "HTTP body too large");
-            response.body = text(h, result[2]);
+            response.body = text(h, body);
         }
         std::set<word> seen;
         std::size_t header_bytes = 0;
-        for (auto list = result[1]; list != nil;) {
+        for (auto list = slot(result, "HTTP-RESPONSE", "HEADERS");
+             list != nil;) {
             effect_require(
                 tag_of(list) == tag::duo && seen.insert(list).second,
                 "HTTP headers must be a proper list");
@@ -774,8 +878,12 @@ struct host
                     std::array{
                         h.newv08(header.name), h.newv08(header.value)}),
                 headers);
-        result.set(h.newv32(
-            std::array{fixnum(head.status), headers, h.newv08(body)}));
+        const auto text = h.newv08(body);
+        result.set(make_struct(
+            "HTTP-RESPONSE",
+            {{"STATUS", fixnum(head.status)},
+             {"HEADERS", headers},
+             {"BODY", text}}));
     }
 
     // Native registrations are temporary. The guest record remains rooted
@@ -810,21 +918,6 @@ struct host
                     seconds{30}, http_fetch(pending, result));
             } catch (const nxtrt::timeout_error &) {
                 throw effect_error{"TIMEOUT", "HTTP request timed out"};
-            }
-            co_return;
-        }
-        if (operation == vm.keyword("REQUEST-HEADER")) {
-            const auto args = vector(h, argument, 2);
-            const auto request = vector(h, args[0], 5);
-            const auto name = text(h, args[1]);
-            effect_require(
-                tag_of(request[3]) == tag::v32, "invalid HTTP headers");
-            for (auto pair : h.v32slice(request[3])) {
-                const auto header = vector(h, pair, 2);
-                if (nxtrt::http::iequals(name, text(h, header[0]))) {
-                    result.set(header[1]);
-                    break;
-                }
             }
             co_return;
         }
@@ -896,12 +989,11 @@ struct host
     failure(word pending, std::string_view code, std::string_view message)
     {
         const auto operation = vector(h, vector(h, pending, 5)[1], 2)[0];
-        return h.newv32(
-            std::array{
-                vm.intern("HOST-ERROR"),
-                operation,
-                vm.keyword(code),
-                h.newv08(message)});
+        const auto keyword = vm.keyword(code);
+        const auto text = h.newv08(message);
+        return make_struct(
+            "HOST-ERROR",
+            {{"OPERATION", operation}, {"CODE", keyword}, {"MESSAGE", text}});
     }
 
     nxtrt::task<bool> execute(root & state, bool decline = false)

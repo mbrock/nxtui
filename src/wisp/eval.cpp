@@ -92,6 +92,8 @@ constexpr std::string_view type_name(tag type)
         return "MACRO";
     case tag::v32:
         return "VECTOR";
+    case tag::rec:
+        return "RECORD";
     case tag::v08:
         return "STRING";
     case tag::pkg:
@@ -297,9 +299,11 @@ struct eval_step
     [[noreturn]] void
     fail(known_name name, std::initializer_list<word> details = {})
     {
+        // Conditions are records typed by their name, so TYPE-OF says
+        // which condition it is: #S(TYPE-MISMATCH VECTOR 42).
         std::vector<word> xs{vm.known(name)};
         xs.insert(xs.end(), details.begin(), details.end());
-        throw condition{h.newv32(xs)};
+        throw condition{h.new_words<tag::rec>(xs)};
     }
 
     // The TYPE-OF symbol for a type tag other than sys.
@@ -846,8 +850,21 @@ struct eval_step
             give(vm.known("CONTINUATION"));
         else if (tag_of(x) == tag::sys)
             fail("INVALID-VALUE", {x});
+        else if (tag_of(x) == tag::rec)
+            give(record_name(x));
         else
             give(type_symbol(tag_of(x)));
+    }
+
+    // As in Emacs Lisp, a record's type is its first word: a symbol names
+    // it directly, and a type record (such as a DEFSTRUCT descriptor) names
+    // it in its own first slot. Anything else is just a RECORD.
+    word record_name(word r)
+    {
+        auto type = h.words<tag::rec>(r)[0];
+        if (tag_of(type) == tag::rec && h.words<tag::rec>(type).size() > 1)
+            type = h.words<tag::rec>(type)[1];
+        return tag_of(type) == tag::sym ? type : vm.known("RECORD");
     }
 
     template<bool Control>
@@ -1026,6 +1043,53 @@ struct eval_step
     {
         const auto index = vector_index(vec, idx);
         h.v32set(vec, index, value);
+        give(value);
+    }
+
+    void record(word type, values slots)
+    {
+        std::vector<word> xs{type};
+        xs.insert(xs.end(), slots.begin(), slots.end());
+        give(h.new_words<tag::rec>(xs));
+    }
+
+    void is_record(word x)
+    {
+        give(tag_of(x) == tag::rec ? t : nil);
+    }
+
+    void record_type(word r)
+    {
+        require(r, tag::rec);
+        give(h.words<tag::rec>(r)[0]);
+    }
+
+    void record_length(word r)
+    {
+        require(r, tag::rec);
+        give_count(h.words<tag::rec>(r).size() - 1);
+    }
+
+    // Slot indices start after the type word.
+    std::size_t record_index(word r, word idx)
+    {
+        require(r, tag::rec);
+        const auto index = number(idx);
+        if (index < 0 || std::size_t(index) + 1 >= h.words<tag::rec>(r).size())
+            fail("TYPE-MISMATCH", {vm.known("INTEGER"), idx});
+        return static_cast<std::size_t>(index) + 1;
+    }
+
+    void record_get(word r, word idx)
+    {
+        const auto index = record_index(r, idx);
+        give(h.words<tag::rec>(r)[index]);
+    }
+
+    void record_set(word r, word idx, word value)
+    {
+        const auto index = record_index(r, idx);
+        h.set_word<tag::rec>(r, index, value);
         give(value);
     }
 
@@ -1645,6 +1709,12 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::length<tag::v32>>("VECTOR-LENGTH"),
         builtin::bind<&eval_step::vector_append>("VECTOR-APPEND"),
         builtin::bind<&eval_step::vector_from_list>("VECTOR-FROM-LIST"),
+        builtin::bind<&eval_step::record>("RECORD"),
+        builtin::bind<&eval_step::is_record>("RECORD?"),
+        builtin::bind<&eval_step::record_type>("RECORD-TYPE"),
+        builtin::bind<&eval_step::record_length>("RECORD-LENGTH"),
+        builtin::bind<&eval_step::record_get>("RECORD-GET"),
+        builtin::bind<&eval_step::record_set>("RECORD-SET!"),
         builtin::bind<&eval_step::length<tag::v08>>("BYTE-SIZE"),
         builtin::bind<&eval_step::length<tag::v08>>("STRING-LENGTH"),
         builtin::bind<&eval_step::string_equal>("STRING-EQUAL?"),

@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-module-") as directory:
     ''')
     out = run('''
       (defvar attempts 0) (defvar dependencies 0) (defvar finished nil)
-      (print (try (load "src/retry.wisp") (catch (e k) (head e))))
+      (print (try (load "src/retry.wisp") (catch (e k) (type-of e))))
       (print (list attempts dependencies finished *loaded-files* *loading-files*))
       (load "src/retry.wisp")
       (print (list attempts dependencies finished *loading-files*))

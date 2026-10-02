@@ -209,7 +209,7 @@ static suite source_tests{
               (call-with-effect-handler 'ask
                 (fn () (send! 'ask nil))
                 (fn (request resume raise) (call raise 'nope)))
-              (catch (error restart) (list 'caught (head error))))
+              (catch (error restart) (list 'caught (type-of error))))
         )",
                 "(CAUGHT NOPE)");
             // Here ERROR is inside the captured slice, not at the
@@ -219,7 +219,7 @@ static suite source_tests{
             (call-with-effect-handler 'ask
               (fn ()
                 (try (+ 19 (send! 'ask nil))
-                  (catch (error restart) (list 'inside (head error)))))
+                  (catch (error restart) (list 'inside (type-of error)))))
               (fn (request resume raise) (call raise 'remote)))
         )",
                 "(INSIDE REMOTE)");
@@ -279,16 +279,106 @@ static suite source_tests{
             m.check(
                 R"(
             (try (eval '(error 'eval-failure))
-              (catch (condition restart) (head condition)))
+              (catch (condition restart) (type-of condition)))
         )",
                 "EVAL-FAILURE");
             m.check(
                 R"(
             (try (write "not silently discarded")
-              (catch (error restart) (list (head error) (second error))))
+              (catch (error restart) (list (type-of error) (record-get error 0))))
         )",
                 "(HOST-IO-UNAVAILABLE :STDOUT)");
         };
+    }};
+
+static suite record_tests{
+    "WISP RECORDS AND STRUCTS", [] {
+        "records are typed word vectors with their own printer"_test = [] {
+            source_machine m{base_image()};
+            m.check(
+                R"(
+            (let ((r (record 'pair 1 "two")))
+              (list (type-of r) (record? r) (record? (vector 1)) (vector? r)
+                    (record-type r) (record-length r) (record-get r 1)
+                    r (record 7 1) (type-of (record 7 1))))
+        )",
+                R"((PAIR T NIL NIL PAIR 2 "two" #S(PAIR 1 "two") #S(7 1) RECORD))");
+            m.check(
+                R"(
+            (let ((r (record 'box nil)))
+              (record-set! r 0 (list 1 r))
+              r)
+        )",
+                "#S(BOX (1 #<CYCLE>))");
+            m.check(
+                "(try (record-get (record 'box) 0) (catch (e k) (type-of e)))",
+                "BUILTIN-FAILURE");
+        };
+        "DEFSTRUCT defines constructors, accessors, setters and predicates"_test =
+            [] {
+                source_machine m{base_image()};
+                m.check(
+                    R"(
+            (defstruct point x (y 0))
+            (let ((p (make-point 1)))
+              (set-point-x! p 5)
+              (list p (point-x p) (point-y p) (point? p) (point? 5)
+                    (type-of p) (make-point 3 4) <point>))
+        )",
+                    "(#S(POINT :X 5 :Y 0) 5 0 T NIL POINT #S(POINT :X 3 :Y 4) "
+                    "#S(STRUCT-TYPE POINT (X Y)))");
+                m.check(
+                    "(try (point-x 7) (catch (e k) e))",
+                    "#S(TYPE-MISMATCH POINT 7)");
+                m.check(
+                    "(try (make-point) (catch (e k) (type-of e)))",
+                    "PROGRAM-ERROR");
+                // Same slots keep the descriptor; new slots make a new type.
+                m.check(
+                    R"(
+            (defvar old (make-point 1 2))
+            (defstruct point x (y 0))
+            (let ((same (point? old)))
+              (defstruct point x y z)
+              (list same (point? old) (make-point 1 2 3)))
+        )",
+                    "(T NIL #S(POINT :X 1 :Y 2 :Z 3))");
+                m.check("(defstruct empty) (make-empty)", "#S(EMPTY)");
+            };
+        "conditions are records named by their type"_test = [] {
+            source_machine m{base_image()};
+            m.check(
+                R"(
+            (defstruct oops reason)
+            (defun caught (thunk) (try (call thunk) (catch (e k) e)))
+            (list (let ((e (caught (fn () (head 1)))))
+                    (list (type-of e) (record-get e 1)))
+                  (type-of (caught (fn () unbound-thing)))
+                  (caught (fn () (error 'custom 1 2)))
+                  (caught (fn () (error "message" 3)))
+                  (caught (fn () (error (make-oops "why"))))
+                  (caught (fn () (error))))
+        )",
+                "((BUILTIN-FAILURE #S(TYPE-MISMATCH CONS 1)) "
+                "UNBOUND-VARIABLE #S(CUSTOM 1 2) #S(ERROR \"message\" 3) "
+                "#S(OOPS :REASON \"why\") #S(ERROR))");
+        };
+        "struct instances survive tapes with their descriptor identity"_test =
+            [] {
+                source_machine m{base_image()};
+                m.load(R"(
+            (defstruct point x (y 0))
+            (defvar saved (list (make-point 1 2) (make-point 3)))
+        )");
+                auto restored = tape::decode(tape::encode(m.vm));
+                source_machine copy{std::move(restored)};
+                copy.check(
+                    R"(
+            (list saved (point? (head saved)) (point-y (second saved))
+                  (eq? (record-type (head saved)) <point>))
+        )",
+                    "((#S(POINT :X 1 :Y 2) #S(POINT :X 3 :Y 0)) T 0 T)");
+            };
     }};
 
 } // namespace

@@ -31,6 +31,19 @@
         (vector nil request nil resume raise))
       nil)))
 
+;; Records the host reads and writes are structs. The host finds their
+;; slots by name through these descriptors, so field order lives only here.
+;; A failed await raises a HOST-ERROR: OPERATION is the request keyword and
+;; CODE a keyword such as :NOT-FOUND or :TIMEOUT.
+(defstruct host-error operation code message)
+
+;; Headers are lists of [name value] vectors; duplicates preserve order.
+;; PATH and QUERY are raw; SEGMENTS is the path split at "/" and
+;; percent-decoded ("/" is ("")). A malformed escape is answered with 400
+;; before any handler runs.
+(defstruct http-request method path query headers body segments)
+(defstruct http-response (status 200) headers body)
+
 ;; Adapted from mbrock/wisp web/http.wisp at
 ;; 223535633179cdf2a49391820bdab16a5db5bf4e (AGPL-3.0-or-later).
 ;; The Deno/JS bridge is replaced by heap records and NXT socket operations.
@@ -38,28 +51,36 @@
 (defparameter *response* nil)
 
 (defun response (status headers &optional body)
-  (vector status headers body))
+  (make-http-response status headers body))
 
 (defun set-response-status! (status)
-  (vector-set! *response* 0 status))
+  (set-http-response-status! *response* status))
 
 (defun set-response-body! (body)
-  (vector-set! *response* 2 body))
+  (set-http-response-body! *response* body))
 
-;; Headers are a list of [name value] vectors; duplicates preserve order.
 (defun add-header! (name value)
-  (vector-set! *response* 1
-    (append (vector-get *response* 1) (list (vector name value)))))
+  (set-http-response-headers! *response*
+    (append (http-response-headers *response*) (list (vector name value)))))
 
-(defun request-method () (vector-get *request* 0))
-(defun request-path () (vector-get *request* 1))
-(defun request-query-string () (vector-get *request* 2))
-(defun request-text () (vector-get *request* 4))
+(defun request-method () (http-request-method *request*))
+(defun request-path () (http-request-path *request*))
+(defun request-query-string () (http-request-query *request*))
+(defun request-text () (http-request-body *request*))
+
+;; The first value of a header, compared case-insensitively, or NIL.
 (defun request-header (name)
-  (await (vector :request-header (vector *request* name))))
+  (let* ((wanted (string-to-uppercase name))
+         (found (find-result (http-request-headers *request*)
+                  (fn (header)
+                    (when (string-equal?
+                           (string-to-uppercase (vector-get header 0))
+                           wanted)
+                      (vector-get header 1))))))
+    (when found (tail found))))
 
 (defun %nxt-http-handle (handler request)
-  (binding ((*request* request) (*response* (response 200 nil nil)))
+  (binding ((*request* request) (*response* (make-http-response)))
     (call-with-prompt :respond
       (fn () (call handler) *response*)
       (fn (value continuation) value))))
@@ -135,9 +156,11 @@
                 (if stream (vector-get stream 4) (string-append path ":1:1"))
                 condition))))))))
 
-;; [kind size modified-unix-ms], kind one of :file :directory :symlink
-;; :other, or NIL when nothing is there. Size and time are decimal strings,
-;; since fixnums are 31 bits.
+;; KIND is one of :file :directory :symlink :other. SIZE and MODIFIED (Unix
+;; milliseconds) are decimal strings, since fixnums are 31 bits.
+(defstruct file-status kind size modified)
+
+;; A FILE-STATUS, or NIL when nothing is there.
 (defun file-status (path)
   (await (vector :file-status path)))
 
@@ -175,23 +198,26 @@
                            (second entry)))))))
     (if found (tail found) "application/octet-stream")))
 
-;; A response body of [:file path] is streamed by the native server with
+;; A FILE-BODY as a response body is streamed by the native server with
 ;; Content-Length, instead of being buffered in the heap. The file is opened
 ;; when the handler finishes; a missing one then fails the request with 500.
 ;; SERVE-FILE checks first and answers 404 for anything but a regular file,
 ;; including invalid and ungranted paths.
+(defstruct file-body path)
+
 (defun serve-file (path &optional type)
   (let ((status (try (file-status path) (catch (e k) nil))))
-    (if (and status (eq? (vector-get status 0) :file))
+    (if (and status (eq? (file-status-kind status) :file))
         (do (add-header! "Content-Type" (or type (content-type path)))
-            (set-response-body! (vector :file path)))
+            (set-response-body! (make-file-body path)))
       (send! :respond (response 404 nil "Not Found\n")))))
 
 ;; Routing, adapted from the same web/http.wisp. A pattern is a method
 ;; followed by path segments: strings match exactly, _ skips one segment,
 ;; other symbols bind one segment, and &REST NAME binds the remaining
-;; segments as a list. A symbol method binds the method. Segments stay
-;; percent-encoded, like the URL pathname they came from.
+;; segments as a list. A symbol method binds the method. Segments are
+;; percent-decoded, so "/a%20b" matches "a b"; "/" is (""), "/a/" is
+;; ("a" ""), and OPTIONS * is ("*").
 ;;
 ;;   (defroute ("GET" "git" repo "info" "refs") ...)
 ;;   (serve-http 8080 #'route-request)
@@ -233,14 +259,6 @@
      (%match-route (tail pattern) (tail parts) acc))
     (t nil)))
 
-;; "/" is (""), "/a/" is ("a" ""), and OPTIONS * is ("*").
-(defun %route-segments (path)
-  (split-string
-   (if (eq? 0 (string-search path "/"))
-       (string-slice path 1 (string-length path))
-     path)
-   "/"))
-
 ;; Returns (ROUTE BINDINGS) for the first matching route, or NIL.
 (defun %find-route (method segments)
   (find-result *routes*
@@ -262,7 +280,7 @@
    *routes* nil))
 
 (defun route-request ()
-  (let* ((segments (%route-segments (request-path)))
+  (let* ((segments (http-request-segments *request*))
          (found (or (%find-route (request-method) segments)
                     (and (equal? (request-method) "HEAD")
                          (%find-route "GET" segments)))))
@@ -282,7 +300,8 @@
   (await (vector :http-serve (vector port handler))))
 
 ;; Await the composite DNS/TCP/TLS/HTTP task in the calling activation.
-;; Returns [status headers body], like RESPONSE. Headers are a list of
-;; [name value] vectors, and the decoded body is a binary-safe string.
+;; Returns an HTTP-RESPONSE, so a handler can relay it with SEND! :RESPOND.
+;; Headers are a list of [name value] vectors, and the decoded body is a
+;; binary-safe string.
 (defun fetch-http (url &optional method headers body)
   (await (vector :http-fetch (vector url (or method "GET") headers body))))

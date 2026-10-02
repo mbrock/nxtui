@@ -119,8 +119,30 @@ public:
         return make<tag::duo>({car, cdr});
     }
 
+    /// Tags whose payload is a slice of the word pool.
+    template<tag T>
+    static constexpr bool word_payload = T == tag::v32 || T == tag::rec;
+
     word newv08(std::string_view data);
-    word newv32(std::span<const word> data);
+    template<tag T>
+        requires word_payload<T>
+    word new_words(std::span<const word> data)
+    {
+        const auto idx = append_words(data);
+        try {
+            auto result = make<T>({idx, static_cast<word>(data.size())});
+            if (auto * p = profiling())
+                p->v32_words += data.size(); // word-pool use, records too
+            return result;
+        } catch (...) {
+            words_.resize(idx);
+            throw;
+        }
+    }
+    word newv32(std::span<const word> data)
+    {
+        return new_words<tag::v32>(data);
+    }
     word filledv32(std::size_t length, word value);
     word clonev32(word x);
     word copy_continuation_frame(word x);
@@ -141,8 +163,31 @@ public:
     /// through operations, not writable spans. Appending a borrowed slice
     /// back into this same heap is supported, including across growth.
     std::string_view v08slice(word x) const noexcept;
-    std::span<const word> v32slice(word x) const noexcept;
-    void v32set(word x, std::size_t i, word value) noexcept;
+    template<tag T>
+        requires word_payload<T>
+    std::span<const word> words(word x) const noexcept
+    {
+        auto [idx, len] = read<T>(x);
+        assert(idx <= words_.size() && len <= words_.size() - idx);
+        return std::span{words_}.subspan(idx, len);
+    }
+    template<tag T>
+        requires word_payload<T>
+    void set_word(word x, std::size_t i, word value) noexcept
+    {
+        auto [idx, len] = read<T>(x);
+        assert(
+            i < len && idx <= words_.size() && len <= words_.size() - idx);
+        words_[idx + i] = value;
+    }
+    std::span<const word> v32slice(word x) const noexcept
+    {
+        return words<tag::v32>(x);
+    }
+    void v32set(word x, std::size_t i, word value) noexcept
+    {
+        set_word<tag::v32>(x, i, value);
+    }
 
     std::size_t byte_count() const noexcept
     {
@@ -173,6 +218,9 @@ public:
     void collect();
 
 private:
+    /// Appends to the word pool, returning the slice's offset.
+    word append_words(std::span<const word> data);
+
     friend class root;
     friend struct tidy;
     friend struct tape_codec;

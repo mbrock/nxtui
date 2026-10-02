@@ -136,7 +136,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
 
     source.write_text('''
       (print (try (do (sleep-ms 10000) 'wrong)
-                  (error (reason continuation) (vector-get (head reason) 2))))
+                  (error (reason continuation) (host-error-code reason))))
       (print 19)
     ''')
     command("run", source, "--checkpoint", tape)
@@ -163,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-host-") as directory:
     source.write_text('''
       (try (write "lost")
            (error (reason continuation)
-             (write-error (print-to-string (vector-get (head reason) 2)))))
+             (write-error (print-to-string (host-error-code reason)))))
     ''')
     read, write = os.pipe()
     os.close(read)

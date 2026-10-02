@@ -79,10 +79,10 @@ struct primitives
             throw std::runtime_error(
                 "Wisp primitive unexpectedly succeeded");
         auto error = h.get<tag::run, field::err>(running.get());
-        expect(h.v32slice(error)[0] == s("UNHANDLED-ERROR"));
-        error = h.v32slice(error)[2];
-        while (h.v32slice(error)[0] == s("BUILTIN-FAILURE"))
-            error = h.v32slice(error)[2];
+        expect(h.words<tag::rec>(error)[0] == s("UNHANDLED-ERROR"));
+        error = h.words<tag::rec>(error)[2];
+        while (h.words<tag::rec>(error)[0] == s("BUILTIN-FAILURE"))
+            error = h.words<tag::rec>(error)[2];
         return error;
     }
 
@@ -92,12 +92,16 @@ struct primitives
         std::string_view condition)
     {
         const auto failure = error(name, xs);
-        expect(h.v32slice(failure)[0] == s(condition));
+        expect(h.words<tag::rec>(failure)[0] == s(condition));
     }
 
+    // Vector elements, or a record's type and slots (as for conditions).
     void words(word vector, std::initializer_list<word> expected)
     {
-        expect(std::ranges::equal(h.v32slice(vector), expected));
+        expect(std::ranges::equal(
+            tag_of(vector) == tag::rec ? h.words<tag::rec>(vector)
+                                       : h.v32slice(vector),
+            expected));
     }
 };
 
@@ -604,9 +608,9 @@ static suite primitive_tests{
                     == "src/bad.wisp:1:1");
                 const auto error =
                     m.error("READ-FROM-STRING-STREAM!", {stream.get()});
-                expect(m.h.v32slice(error)[0] == m.s("READ-ERROR"));
+                expect(m.h.words<tag::rec>(error)[0] == m.s("READ-ERROR"));
                 expect(
-                    m.h.v08slice(m.h.v32slice(error)[1])
+                    m.h.v08slice(m.h.words<tag::rec>(error)[1])
                     == "src/bad.wisp:2:3: unexpected character");
                 expect(m.h.v32slice(stream.get())[1] == 3u);
                 expect(
@@ -759,12 +763,12 @@ static suite primitive_tests{
                             {m.s(duplicate ? "APP" : "REJECTED"),
                              duplicate ? nil : m.l({left.get(), 17})});
                     expect(m.execute(form) == evaluation::failed);
-                    auto error = m.h.v32slice(
+                    auto error = m.h.words<tag::rec>(
                         m.h.get<tag::run, field::err>(m.running.get()))[2];
-                    while (m.h.v32slice(error)[0] == m.s("BUILTIN-FAILURE"))
-                        error = m.h.v32slice(error)[2];
+                    while (m.h.words<tag::rec>(error)[0] == m.s("BUILTIN-FAILURE"))
+                        error = m.h.words<tag::rec>(error)[2];
                     expect(
-                        m.h.v32slice(error)[0]
+                        m.h.words<tag::rec>(error)[0]
                         == m.s(
                             duplicate ? "PACKAGE-EXISTS"
                                       : "TYPE-MISMATCH"));

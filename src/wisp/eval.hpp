@@ -24,8 +24,8 @@ inline constexpr auto known_names = std::to_array<std::string_view>({
     "EXP", "VAL", "ERROR",
     // Types, as TYPE-OF names them.
     "BOOLEAN", "CHARACTER", "CONS", "CONTINUATION", "EVALUATOR",
-    "EXTERNAL", "INTEGER", "MACRO", "NULL", "PACKAGE", "PIN", "STRING",
-    "SYMBOL", "VECTOR",
+    "EXTERNAL", "INTEGER", "MACRO", "NULL", "PACKAGE", "PIN", "RECORD",
+    "STRING", "SYMBOL", "VECTOR",
     // Condition names.
     "ACTIVE-EVALUATOR", "BAD-FIXNUM-DIVISION", "BAD-MODULO",
     "BOUNDS-ERROR", "BUG", "BUILTIN-FAILURE", "CONTINUATION-CALL-ERROR",

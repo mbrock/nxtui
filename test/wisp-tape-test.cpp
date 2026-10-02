@@ -350,13 +350,13 @@ static suite tape_tests{
                     const auto data = tape::encode(vm, entry.get());
                     expect(tape::encode(vm, entry.get()) == data);
                     expect(
-                        get32(data, 8) == 3u
+                        get32(data, 8) == 4u
                         && get32(data, 12) == word(collect_first));
                     expect(
                         get32(data, 16) == 3u
                         && get32(data, 32) == entry.get());
                     expect(
-                        data[8] == std::byte{3} && data[9] == std::byte{0});
+                        data[8] == std::byte{4} && data[9] == std::byte{0});
                     expect(
                         std::string_view(
                             reinterpret_cast<const char *>(data.data()), 8)
@@ -725,7 +725,8 @@ static suite tape_tests{
                 const std::pair<std::size_t, word> corruptions[]{
                     {8, 1}, // Pre-segmentation tapes are not migrated.
                     {8, 2}, // Old variable/EVAL scope is not migrated.
-                    {8, 4},
+                    {8, 3}, // Tapes without the record table neither.
+                    {8, 5},
                     {12, 2},
                     {16, 0},
                     {28, 2},

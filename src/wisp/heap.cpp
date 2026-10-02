@@ -68,18 +68,9 @@ word heap::newv08(std::string_view data)
     }
 }
 
-word heap::newv32(std::span<const word> data)
+word heap::append_words(std::span<const word> data)
 {
-    auto idx = append(words_, data);
-    try {
-        auto result = make<tag::v32>({idx, static_cast<word>(data.size())});
-        if (auto * p = profiling())
-            p->v32_words += data.size();
-        return result;
-    } catch (...) {
-        words_.resize(idx);
-        throw;
-    }
+    return append(words_, data);
 }
 
 word heap::filledv32(std::size_t length, word value)
@@ -123,19 +114,6 @@ std::string_view heap::v08slice(word x) const noexcept
     return {slice.data(), slice.size()};
 }
 
-std::span<const word> heap::v32slice(word x) const noexcept
-{
-    auto [idx, len] = read<tag::v32>(x);
-    assert(idx <= words_.size() && len <= words_.size() - idx);
-    return std::span{words_}.subspan(idx, len);
-}
-
-void heap::v32set(word x, std::size_t i, word value) noexcept
-{
-    auto [idx, len] = read<tag::v32>(x);
-    assert(i < len && idx <= words_.size() && len <= words_.size() - idx);
-    words_[idx + i] = value;
-}
 
 word heap::make_pin(word value)
 {
@@ -202,6 +180,9 @@ struct tidy
         for (word len : old.table<tag::v32>().col(
                  column_index<tag::v32, field::len>()))
             total = pool_size(total, len);
+        for (word len : old.table<tag::rec>().col(
+                 column_index<tag::rec, field::len>()))
+            total = pool_size(total, len);
         words.reserve(total);
         total = 0;
         for (word len : old.table<tag::v08>().col(
@@ -220,8 +201,8 @@ struct tidy
         if (from.get(i, 0) == zap)
             return from.get(i, 1);
         auto data = from.read(i);
-        if constexpr (T == tag::v32) {
-            auto payload = old.v32slice(x);
+        if constexpr (heap::word_payload<T>) {
+            auto payload = old.words<T>(x);
             data[column_index<T, field::idx>()] =
                 static_cast<word>(words.size());
             words.insert(words.end(), payload.begin(), payload.end());
@@ -237,7 +218,7 @@ struct tidy
             ++p->gc_copies[std::size_t(T)];
             if constexpr (T == tag::v08)
                 p->gc_v08_bytes += data[column_index<T, field::len>()];
-            if constexpr (T == tag::v32)
+            if constexpr (heap::word_payload<T>)
                 p->gc_v32_words += data[column_index<T, field::len>()];
         }
         from.set(i, 0, zap);
@@ -268,6 +249,8 @@ struct tidy
             return push<tag::ktx>(x);
         case tag::ext:
             return push<tag::ext>(x);
+        case tag::rec:
+            return push<tag::rec>(x);
         default:
             return x;
         }
@@ -276,7 +259,7 @@ struct tidy
     template<tag T>
     bool pull(tab<T> & table) noexcept
     {
-        auto & cursor = scan[word(T) - word(tag::duo)];
+        auto & cursor = scan[vat_index<T>()];
         auto changed = cursor < table.size();
         while (cursor < table.size()) {
             for (std::size_t c = 0; c < tab<T>::width; ++c) {

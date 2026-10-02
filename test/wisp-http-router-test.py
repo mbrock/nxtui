@@ -62,19 +62,23 @@ with tempfile.TemporaryDirectory(prefix="wisp-router-") as directory:
         ("PUT", "/git/abc/git-upload-pack", "405 Allow=POST, GET, HEAD"),
         ("GET", "/only-head", "405 Allow=HEAD"),
     ]
+    # The host splits and decodes segments; these paths need no decoding.
+    def segments(path):
+        parts = path[1:].split("/") if path.startswith("/") else [path]
+        return "(list " + " ".join(f'"{x}"' for x in parts) + ")"
     checks = "\n".join(
-        f'(show (%nxt-http-handle #\'route-request '
-        f'(vector "{m}" "{p}" "" (vector) "body")))'
+        f'(show (%nxt-http-handle #\'route-request (make-http-request '
+        f'"{m}" "{p}" "" nil "body" {segments(p)})))'
         for m, p, _ in cases)
     source.write_text(ROUTES + '''
       (defun show (r)
-        (write (print-to-string (vector-get r 0)) " "
-          (if (vector-get r 1)
+        (write (print-to-string (http-response-status r)) " "
+          (if (http-response-headers r)
               (join-strings ","
                 (map (fn (h) (string-append (vector-get h 0) "="
                                             (vector-get h 1)))
-                     (vector-get r 1)))
-            (or (vector-get r 2) ""))
+                     (http-response-headers r)))
+            (or (http-response-body r) ""))
           "|"))
     ''' + checks)
     result = subprocess.run([binary, "run", str(source)],
@@ -116,8 +120,13 @@ with tempfile.TemporaryDirectory(prefix="wisp-router-") as directory:
         assert request("DELETE", "/git/r/info/refs") == (
             405, "GET, HEAD", b"Method Not Allowed\n")
         assert request("GET", "/nope") == (404, None, b"Not Found\n")
+        # The host percent-decodes segments after splitting at "/".
+        assert request("GET", "/static/a/b%20c") == (200, None, b"static,a,b c")
+        assert request("GET", "/static/a%2Fb") == (200, None, b"static,a/b")
+        assert request("GET", "/hello%zz")[0] == 400
+        assert request("GET", "/static/%4")[0] == 400
     finally:
         server.terminate()
         server.communicate(timeout=5)
 
-print("Wisp HTTP router: patterns, precedence, redefinition, HEAD, 404/405 passed")
+print("Wisp HTTP router: patterns, precedence, redefinition, HEAD, 404/405, percent-decoding passed")

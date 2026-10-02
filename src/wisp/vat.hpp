@@ -101,6 +101,12 @@ template<>
 struct schema<tag::v32> : schema<tag::v08>
 {};
 
+// A record is a word vector whose first element is its type: a symbol, or
+// a type record whose first slot names it (as in Emacs Lisp records).
+template<>
+struct schema<tag::rec> : schema<tag::v08>
+{};
+
 template<>
 struct schema<tag::pkg>
 {
@@ -288,6 +294,18 @@ using vat = std::tuple<
     tab<tag::pkg>,
     tab<tag::run>,
     tab<tag::ktx>,
-    tab<tag::ext>>;
+    tab<tag::ext>,
+    tab<tag::rec>>;
+
+// Position of tag T's table in the vat.
+template<tag T>
+consteval std::size_t vat_index()
+{
+    return []<std::size_t... I>(std::index_sequence<I...>) {
+        std::size_t found = sizeof...(I);
+        ((std::tuple_element_t<I, vat>::type == T ? (found = I) : 0), ...);
+        return found;
+    }(std::make_index_sequence<std::tuple_size_v<vat>>{});
+}
 
 } // namespace wisp

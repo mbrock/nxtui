@@ -35,12 +35,12 @@ with tempfile.TemporaryDirectory(prefix="wisp-file-") as directory:
 
     source.write_text('''
       (defun code (thunk)
-        (try (call thunk) (catch (e k) (vector-get (head e) 2))))
+        (try (call thunk) (catch (e k) (host-error-code e))))
       (write (read-file "site/a.txt") "|")
-      (print (vector-get (file-status "site/a.txt") 0))
-      (print (vector-get (file-status "site/a.txt") 1))
-      (print (vector-get (file-status "site") 0))
-      (print (vector-get (file-status "site/up") 0))
+      (print (file-status-kind (file-status "site/a.txt")))
+      (print (file-status-size (file-status "site/a.txt")))
+      (print (file-status-kind (file-status "site")))
+      (print (file-status-kind (file-status "site/up")))
       (print (file-status "site/missing"))
       (print (list-directory "site"))
       (print (list-directory "site/sub"))

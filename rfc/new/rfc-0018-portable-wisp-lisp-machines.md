@@ -752,7 +752,7 @@ evaluator constructor does not install primitives over saved definitions.
 `encode` and `write` optionally accept `tape::compression::zlib` as their
 last argument. The compression envelope is eight bytes `NXWISPZ\n`, a
 32-bit little-endian expanded byte count, and exactly one zlib stream
-containing the complete version-3 tape, including its SHA-256 digest.
+containing the complete version-4 tape, including its SHA-256 digest.
 `decode` and `read` recognize raw and compressed tapes automatically. The
 configured byte limit applies to both the envelope and its expanded tape;
 the expanded count is checked before allocation. Wrong lengths, truncated
@@ -779,21 +779,23 @@ Any external row causes rejection, including an unreachable row until the host
 explicitly collects it. Rebinding external capabilities is deliberately absent
 in this version; saving a numeric host handle would not save its resource.
 
-### Tape version 3 has an explicit byte encoding
+### Tape version 4 has an explicit byte encoding
 
 This is **not** the Zig `wisp tape v0.9.0` format. Version 2 added `run.meta` and
 segmented contexts. Version 3 retains that layout but changes variable lookup
-and public `EVAL` scope. Versions 1 and 2 are explicitly rejected, without
-migration, rather than silently resuming code with different language semantics.
-This semantic version bump is a deliberate difference from Zig, which keeps
-its tape version unchanged for the scope change.
+and public `EVAL` scope. Version 4 adds the record table (tag `0x14`) and
+represents conditions as records. Versions 1 to 3 are explicitly rejected,
+without migration, rather than silently resuming code with different language
+semantics. These semantic version bumps are deliberate differences from Zig,
+which keeps its tape version unchanged for the scope change and has no
+records.
 All integers below are unsigned
 32-bit little-endian unless specified otherwise. Text is a byte length followed
 by exactly that many bytes, without a terminator or alignment padding.
 
 | Order | Encoding |
 | --- | --- |
-| Header | Eight bytes `NXWISP\r\n`, version `3`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
+| Header | Eight bytes `NXWISP\r\n`, version `4`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
 | Evaluator roots | Count, then `(text name, word value)` for each saved root |
 | Builtins | Count, then `(text name, control-kind 0/1)`; ordinal is the saved jet payload |
 | Byte pool | Byte count, then raw bytes |
@@ -1079,10 +1081,15 @@ headers have no trusted meaning here.
 Wisp's `serve-http` directly awaits the native serving task and returns no job
 handle. Each request gets an independent rooted guest activation and dynamic
 `*request*`/`*response*` bindings, preserving the old
-zero-argument web-handler convention. Request records contain method, raw path,
-raw query string, header pairs, and binary body. `request-header` compares names
-case-insensitively and returns the first matching value. Responses are
-`[status headers body]`, with headers a list of `[name value]` vectors. Handler
+zero-argument web-handler convention. Requests are `http-request` structs with
+method, raw path, raw query string, header pairs, binary body, and the path's
+percent-decoded segments; a malformed escape is answered with 400 before the
+guest runs. `request-header` compares names case-insensitively in Wisp and
+returns the first matching value. Responses are `http-response` structs, with
+headers a list of `[name value]` vectors and a body that is a string or a
+`file-body` the server streams from a granted directory. Zig Wisp's
+`defroute`/`route-request` router is ported with definition-order precedence,
+HEAD fallback to GET, and 405 with `Allow`. Handler
 return values are ignored; mutate the response or use `send! :respond` to exit
 early. Guest failures become `500 Internal Server Error\n`. HTTP handler
 timeout cancels and drains the activation's actual pending native wait, including
@@ -1098,8 +1105,36 @@ cleanup, and more than 4,096 requests/connections. The Linux orb does not execut
 native kqueue tests. [`test/wisp-http-test.py`](../../test/wisp-http-test.py)
 tests overlapping guest handlers, GC while requests wait, dynamic isolation,
 binary/chunked requests, response policy, timeout cleanup and checkpoint refusal.
-Streaming bodies, WebSockets, filesystem-backed sites, and the old JS/CGI bridge
-are not part of this interface.
+Streaming other than file bodies, WebSockets, and the old JS/CGI bridge are not
+part of this interface yet.
+
+### Records, structs and conditions
+
+Zig Wisp represents structured data as vectors whose first element is a
+symbol, and conditions the same way. The port adds a `record` heap type
+instead, following Emacs Lisp: a word-pool vector (tag `0x14`, its own vat
+table) whose first word is its type. `TYPE-OF` returns that type when it is a
+symbol, or the first slot of a type record, so a record names its own type.
+The printer writes `#S(NAME slot...)`, and `:SLOT value` pairs when the type
+record's second slot lists one symbol per slot. The collector and tape treat
+the record payload exactly like a vector's.
+
+`DEFSTRUCT` in the base library builds on this. A descriptor
+`#S(STRUCT-TYPE NAME (SLOT...))` is bound to `<NAME>`, and positional
+constructors, predicates, checked accessors and setters are generated around
+`RECORD-GET`/`RECORD-SET!`. Redefinition with identical slots keeps the
+descriptor. Host code finds host struct slots by name through these
+descriptors rather than repeating layouts in C++.
+
+Deliberate differences from Zig: the new tag and builtins (`RECORD`,
+`RECORD?`, `RECORD-TYPE`, `RECORD-LENGTH`, `RECORD-GET`, `RECORD-SET!`);
+evaluator conditions are records such as `#S(TYPE-MISMATCH CONS 1)` rather than
+vectors; and `ERROR` signals one record (`(error 'name ...)` gives
+`#S(NAME ...)`, a record argument is signalled as is, anything else is wrapped
+as `#S(ERROR ...)`) rather than its argument list. Handlers therefore use
+`TYPE-OF` and accessors instead of `HEAD` or `VECTOR-GET`. The host's own
+control records (entry, pending requests, await descriptors) are still
+vectors.
 
 ## Open design choices
 

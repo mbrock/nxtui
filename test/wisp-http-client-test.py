@@ -104,8 +104,8 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
         decoded = run('''
           (let ((r (fetch-http "URL/chunked")))
             (gc)
-            (print (vector-get r 0)) (print (vector-get r 1))
-            (write (vector-get r 2)))
+            (print (http-response-status r)) (print (http-response-headers r))
+            (write (http-response-body r)))
         ''')
         assert decoded.stdout == (
             b'207\n(#<"Set-Cookie" "a=1"> #<"Set-Cookie" "b=2"> '
@@ -114,13 +114,13 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
         direct = run('''
           (let ((r (await (vector :HTTP-FETCH
                          (vector "URL/echo" "POST" nil "direct-await")))))
-            (write (vector-get r 2)))
+            (write (http-response-body r)))
         ''')
         assert direct.stdout == b"direct-await", direct.stdout
         echoed = run('''
-          (write (vector-get (fetch-http "URL/echo" "POST"
+          (write (http-response-body (fetch-http "URL/echo" "POST"
             (list (vector "X-Test" "first")
-                  (vector "X-Test" "second")) (read-bytes 9)) 2))
+                  (vector "X-Test" "second")) (read-bytes 9))))
         ''', input=b"before\0\xff!")
         assert echoed.stdout == b"before\0\xff!", echoed.stdout
         sent = next(r for r in requests if r[0] == "/echo" and r[3] == b"before\0\xff!")
@@ -131,19 +131,19 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
         assert sent[2]["Accept-Encoding"] == "gzip, deflate"
 
         semantics = run('''
-          (print (vector-get (fetch-http "URL/echo" "HEAD") 2))
-          (print (vector-get (fetch-http "URL/empty") 2))
-          (print (vector-get (fetch-http "URL/missing") 0))
-          (print (vector-get (fetch-http "URL/redirect") 0))
-          (write (vector-get (fetch-http "URL/interim") 2))
+          (print (http-response-body (fetch-http "URL/echo" "HEAD")))
+          (print (http-response-body (fetch-http "URL/empty")))
+          (print (http-response-status (fetch-http "URL/missing")))
+          (print (http-response-status (fetch-http "URL/redirect")))
+          (write (http-response-body (fetch-http "URL/interim")))
         ''')
         assert semantics.stdout == b'""\n""\n404\n302\n' + payload, semantics.stdout
 
-        limit = run('(write (vector-get (fetch-http "URL/limit") 2))')
+        limit = run('(write (http-response-body (fetch-http "URL/limit")))')
         assert limit.stdout == b"x" * (8 * 1024 * 1024), len(limit.stdout)
         rejected = run('''
           (defun code (thunk)
-            (try (call thunk) (error (why k) (vector-get (head why) 2))))
+            (try (call thunk) (error (why k) (host-error-code why))))
           (print (code (fn () (fetch-http "URL/echo" (read-bytes 13)))))
           (print (code (fn () (fetch-http "URL/echo" "GET"
                               (list (vector "X-Test" (read-bytes 17)))))))
@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
             url = f"https://localhost:{peer.server_port}"
             rejected_program = '''
               (print (try (fetch-http "URL/echo")
-                          (error (why k) (vector-get (head why) 2))))
+                          (error (why k) (host-error-code why))))
             '''
             request_count = len(requests)
             untrusted = run(rejected_program)
@@ -214,8 +214,8 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
             client_env["SSL_CERT_FILE"] = str(ca)
             large = b"TLS:\0\xff" * 5000
             secure = run('''
-              (write (vector-get (fetch-http "URL/echo" "POST" nil
-                                    (read-bytes 30000)) 2))
+              (write (http-response-body (fetch-http "URL/echo" "POST" nil
+                                    (read-bytes 30000))))
             ''', input=large)
             assert secure.stdout == large, (len(secure.stdout), secure.stderr)
             assert server_names[-1] == "localhost", server_names
@@ -235,8 +235,8 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
         # usable. The peer observes EOF, rather than an abandoned socket.
         timeout = run('''
           (print (try (fetch-http "URL/stall")
-                      (error (why k) (vector-get (head why) 2))))
-          (print (vector-get (fetch-http "URL/echo") 0))
+                      (error (why k) (host-error-code why))))
+          (print (http-response-status (fetch-http "URL/echo")))
         ''', timeout=40)
         assert timed_out.is_set() and timeout.stdout == b":TIMEOUT\n200\n", timeout.stdout
         assert closed.wait(5), "timed-out request left its socket open"
