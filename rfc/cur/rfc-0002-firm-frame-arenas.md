@@ -11,11 +11,19 @@ using top retraction and size-class free lists, as described below.
 
 Firm bookkeeping is now ordinary growable nursery bookkeeping, not the bounded
 storage bundles proposed in this RFC's original plan. Separate deed and
-completion ledgers and exact-N tuple firms have been removed; join traverses
-child records. See the [RFC 0005 supersession
-note](rfc-0005-firm-bookkeeping-without-heap-vectors.md).
-Pool jobs now own their task handles directly while using ambient firm frame
-land. Allocation scope is not structured child ownership. See
+completion ledgers and exact-N firm-child tuple bookkeeping have been removed;
+join traverses child records. Fixed heterogeneous tuple composition is now
+lowered to finite indexed `task<void>` recipes in the existing pool. Each
+recipe stores its typed expected outcome in tuple order; no main-work child
+records or deeds are created. Pool-owned work and dynamic children share the
+firm's `completed(task_id, exception_ptr)` hook. This unifies their cancellation
+and drain policy without converting nested explicit forks into bounded work.
+See the [RFC 0005 supersession note](rfc-0005-firm-bookkeeping-without-heap-vectors.md).
+Pool jobs own their task handles directly while using ambient firm frame land.
+Allocation scope is not structured child ownership. The firm still supplies
+frames and stop policy, with a growable nursery for explicit nested ambient
+forks; those forks are outside the tuple's finite batch bound. This is not a
+strict transitive static team or an allocation-free guarantee. See
 [Recipes, pools, and structured async](../../docs/rt-concurrency-direction.md)
 for the direction toward separating those responsibilities.
 

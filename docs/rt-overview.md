@@ -69,13 +69,21 @@ Higher-level helpers such as `when_all`, `wait_any`, and `with_timeout` are
 written in terms of firms. They are not separate schedulers; they are
 composition patterns over the same task and deck machinery.
 
-For a batch of children, pass a tuple of tasks or nullary task factories:
+For a fixed heterogeneous batch, pass a tuple of tasks or nullary task
+factories:
 `when_all(std::tuple{f, g})`, `wait_any(std::tuple{f, g})`, or
-`with_firm<Policy>(std::tuple{f, g})`. These are ordinary growable nurseries,
-not exact-size teams: children can fork into their ambient firm. Owned
-factories stay alive until all children have drained. See the
-[implemented tuple contract](../rfc/new/rfc-0014-idea-algebra.md#implemented-task-tuples)
-for results and cancellation policies.
+`with_firm<Policy>(std::tuple{f, g})`. The firm around this work is not an
+exact-size nursery: the fixed main-work batch is lowered to finite indexed
+`task<void>` recipes in the existing pool, with typed settled outcomes stored
+at their tuple positions and no child records or deeds for that main work.
+Explicit nested ambient forks still use the firm's growable nursery and are
+outside the tuple's fixed bound. The firm supplies frames and stop policy.
+`with_firm<Policy>(tuple)` returns `expected<T, exception_ptr>` outcomes
+(including `expected<void, ...>`), not `catching_deed` handles. `when_all` and
+`wait_any` preserve their value, cancellation/drain, and input-order selection
+contracts; variadic forms delegate to tuple forms. `with_timeout` and
+`poll_until_after` use the same route. See the
+[implemented tuple contract](../rfc/new/rfc-0014-idea-algebra.md#implemented-task-tuples).
 
 `nxtrt/idea.hpp` names the broader recipe constraint: `idea<Fn>` is a
 move-constructible callable invoked as a mutable stored lvalue, returning
@@ -112,7 +120,9 @@ the appropriate point.
 
 `deed<T>` rethrows child failure when read. Moving it through `.cope()` explicitly
 selects `catching_deed<T>`, whose `get()` returns an expected-like outcome so
-helpers can collect child outcomes before deciding what to return or throw.
+dynamic-fork users can collect child outcomes before deciding what to return
+or throw. Fixed tuple composition instead returns settled expected outcomes
+directly; it does not make deeds for its pool-owned main work.
 
 Concrete API:
 

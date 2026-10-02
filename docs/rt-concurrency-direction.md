@@ -17,11 +17,11 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Firm bookkeeping | Growable nursery records; bounded ledgers and exact-N tuple admission were removed |
-| Tuple concurrency helpers | Implemented over ordinary nurseries, not static teams |
+| Firm bookkeeping | Growable nursery records for explicit forks; bounded ledgers and exact-N nursery admission were removed |
+| Tuple concurrency helpers | Fixed heterogeneous work lowers to finite indexed `task<void>` recipes in the ordinary pool; nested ambient forks still use the growable nursery |
 | Frame provision | Still supplied by the ambient firm, including for pool jobs |
 | Idea-level `cope`, generic feed mapping, lifetime-aware terminal consumers | Design direction; no APIs are specified here as already available |
-| Static heterogeneous teams | Design direction, not a revived bounded-firm implementation |
+| Strict transitive static teams | Design direction; tuple lowering bounds only its own fixed batch, not nested ambient forks |
 | Wisp without permanent evaluation workers | Implemented explicit-await bridge and pool-based HTTP; guest structured-concurrency semantics remain open |
 
 See @ref rt_pool "the pool guide" for the current API and executable example.
@@ -38,9 +38,16 @@ Several relationships previously hid behind “this task belongs to a firm”:
 6. **Scheduling:** what makes a runnable continuation run again?
 
 These often have the same surrounding scope, but they are not the same
-relationship. A pool now owns pending task handles without registering them
-as firm children; their allocations still come from ambient firm frame land.
-The deck identifies and schedules those tasks without owning their frames.
+relationship. A pool now owns pending task handles without registering them as
+firm children; their allocations still come from ambient firm frame land. The
+deck identifies and schedules those tasks without owning their frames. Fixed
+tuple composition uses this existing pool: each finite indexed recipe starts
+one task and writes its typed `expected<T, exception_ptr>` into the matching
+tuple position. It allocates no main-work child records or deeds. The policy's
+`firm::completed(task_id, exception_ptr)` hook is shared with dynamically forked
+children, so cancellation policy does not require a second ownership system.
+The firm still provides frames, stop policy, and a growable nursery for
+explicit nested ambient forks; those forks are outside the fixed batch bound.
 
 The goal is shared lifetime rules, not one universal container or a configurable
 holder with a policy parameter for every difference. The useful questions from
@@ -139,15 +146,15 @@ and consumption so that releasing capacity does not require acquiring more.
 Detecting that no queued or active work can discover more URLs is a property of
 that feedback composition, not ordinary temporary emptiness of a feed.
 
-## Teams and pools describe different shapes
+## Fixed tuple lowering and pools describe different shapes
 
-| | Team direction | Implemented pool |
+| | Fixed tuple batch | Stream pool |
 | --- | --- | --- |
 | Membership | Fixed heterogeneous positions | Changing occupants of bounded slots |
 | Result shape | Typed product of named/positional results | One homogeneous output type |
-| Storage geometry | Tuple/product | Slots plus completion order and output ring |
+| Storage geometry | Typed outcome tuple, populated by indexed recipes | Slots plus completion order and output ring |
 | Typical use | Capture plus monitor; fixed sample fields | Requests, tool calls, connection attempts |
-| Observation | Selected positional results or aggregate | Consuming a result stream |
+| Observation | Settled positional outcomes or aggregate | Consuming a result stream |
 
 Both can have known non-frame storage and downward borrowing. This does not
 make compiler-generated coroutine frame sizes known, nor promise allocation-free
@@ -155,10 +162,13 @@ execution. The existing frame allocator uses nonmoving chunks or explicit
 borrowed land; a ring with prefix retirement was rejected because long-lived
 frames pin the prefix.
 
-The current tuple helpers are not an implementation of static teams: they
-permit further ambient forks. A future team must express an actual fixed work
-shape and sound lifetimes, not just allocate N bookkeeping slots and call the
-result structured.
+The tuple helpers now use a finite batch in the pool, rather than allocating
+firm child records for the main work. This unifies ownership and drain
+machinery with pool jobs, but is not a strict transitive static team: recipes
+can explicitly fork into the ambient firm's growable nursery. Nor is it an
+allocation-free claim; task frames and result values retain their ordinary
+allocation behavior. A stronger static-team guarantee would have to account
+for nested work and sound lifetimes, not merely the fixed tuple shape.
 
 ## Failure is exceptional unless explicitly coped with
 
@@ -184,10 +194,11 @@ upstream producer; independently owned upstream work needs its own teardown
 boundary. The pool does not collect every failure during close, and successful
 unconsumed outputs from the same pump may be discarded.
 
-By contrast, firm policies such as `stop_on_failure` react at final suspension
-even when nobody is currently reading results. Do not describe those as
-identical semantics. A future policy requiring prompt completion-time action
-must account for this distinction rather than hiding a monitor behind a feed.
+The tuple path invokes the shared `firm::completed(task_id, exception_ptr)` hook
+for pool-owned task outcomes just as dynamic children do. Policy-driven
+cancellation therefore works without allocating main-work child records.
+This unifies ownership and drain machinery for fixed batches, but does not
+change the general pool's consumer-driven error handling described above.
 
 ## Selection can be a feed operation; lifetime must accompany it
 
@@ -197,14 +208,18 @@ The intended expression of “first successful connection” is conceptually:
 addresses → connection ideas → explicit coping → pool → first success
 ```
 
-That is a design sketch, not current callable syntax. Filtering and selection
-need not be special pool policies. The terminal consumer can select the useful
-outcome and finish the computation's extent, which stops and drains losers
-before their borrowed storage is released.
+That is a sketch for a stream pipeline, not current callable syntax. The fixed
+tuple `wait_any` already preserves the established behavior: it stops on a
+success, drains the batch, then selects the first successful outcome in input
+order (not completion order); when all fail it groups the failures. Filtering
+and selection need not be special pool policies. A future stream terminal
+consumer can select useful outcomes and finish the computation's extent, which
+stops and drains losers before borrowed storage is released.
 
-If every attempt fails, the terminal operation must decide how to report no
-success or aggregate the failure values. Filtering out failures alone does not
-preserve the existing `wait_any` helpers' all-failed diagnostics.
+If every attempt fails, a future stream terminal operation must decide how to
+report no success or aggregate the failure values. Filtering out failures
+alone does not preserve the existing tuple `wait_any` helper's all-failed
+diagnostics.
 
 However, raw `take()` on a borrowed feed must remain a read: the caller may want
 another value later. It cannot silently close the source. We need an explicit
@@ -277,7 +292,7 @@ migration targets, not reports of completed work:
 | [Directory metadata][directory-metadata] | Bounded stat ideas; results are sorted afterward, so completion-order production is natural. |
 | [Connection racing][connection-racing] | Coped attempts and first-success consumption. Existing range selection chooses an input-order success after drain; distinguish that from first published success. |
 | [HTTP serving][http-serving] | Migrated to one accept feed and a bounded connection pool, preserving connection-local error containment. |
-| [Process capture][process-capture] and [shell supervision][shell-supervision] | Heterogeneous resource lifetimes; express a team or primary activity with companions, not an artificial uniform job stream. |
+| [Process capture][process-capture] and [shell supervision][shell-supervision] | Process capture now uses a tuple for primary capture plus its monitor; only primary completion stops the scope. Other heterogeneous resource lifetimes may need a team or companions. |
 | [Wisp host][wisp-host] | Migrated to explicit native-task awaiting; old guest-job identities are no longer a prerequisite for I/O. |
 
 These source links pin the inventory to the implemented baseline, so the

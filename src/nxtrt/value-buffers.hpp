@@ -3,7 +3,7 @@
 #include "nxtrt/buffer-core.hpp"
 #include "nxtrt/land.hpp"
 #include "nxtrt/deck.hpp"
-#include "nxtrt/task.hpp"
+#include "nxtrt/task/root.hpp"
 #include "nxtrt/alloc_trace.hpp"
 
 #include <algorithm>

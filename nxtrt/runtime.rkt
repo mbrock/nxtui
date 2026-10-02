@@ -54,10 +54,13 @@ model runtime-model
   // HTTP connection tasks use the bounded pool below; Wisp callbacks await
   // native tasks directly. Guest continuations stay in the Wisp heap, not
   // in this deck. Neither layer needs permanent evaluator/connection workers.
-  // Firms are ordinary nurseries with growable child bookkeeping. Tuple
-  // combinators use these same nurseries; tuple arity is not an admission
-  // bound. Child records remain until nursery destruction, independently
-  // of task-frame evacuation. Storage specialization is not modeled here.
+  // Firms provide frame memory and ordinary ambient-fork ownership. The
+  // concurrent tuple combinator instead admits its finite input of N indexed
+  // void recipes into an N-slot ordinary pool: outcomes are written to their
+  // typed tuple positions, with no main-work firm child/deed records. An
+  // explicit nested ambient fork still belongs to its firm. This runtime
+  // model describes the existing pool ownership and close/drain lifecycle;
+  // tuple value types and positional writes are intentionally not modeled.
   signature firm
     spawned set task
     issued set deed
@@ -234,6 +237,45 @@ model runtime-model
     pools-start-free
     always pool-transitions
     pool-reuse
+
+  // Two indexed tuple jobs occupy distinct ordinary-pool slots. At close
+  // start one result is ready while the other job is still running; close
+  // then discards both results as they become ready and returns both slots.
+  // This witnesses early policy completion using the same pool drain, not a
+  // second tuple/nursery ownership mechanism. It makes no fairness or general
+  // cancellation-liveness claim.
+  predicate tuple-close-drains
+    some ([p pool] [s1 (p slots)] [s2 (p slots)] [a (p admitted)] [b (p admitted)])
+      no (intersect s1 s2)
+      no (intersect a b)
+      == (p free-slots) (p slots)
+      no (p closing)
+      next-state
+        in s1 (p running-slots)
+        in s2 (p running-slots)
+        == (s1 job) a
+        == (s2 job) b
+        next-state
+          in s1 (p ready-slots)
+          in s2 (p running-slots)
+          some (p closing)
+          next-state
+            in s1 (p ready-slots)
+            in s2 (p running-slots)
+            in s1 (p discarding)
+            next-state
+              in s1 (p free-slots)
+              in s2 (p ready-slots)
+              in s2 (p discarding)
+              next-state
+                in s1 (p free-slots)
+                in s2 (p free-slots)
+
+  run tuple-close-drains-witness :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 6
+    always structural-invariants
+    always pool-shape
+    always pool-transitions
+    tuple-close-drains
 
   // Bounded safety checks: at most two slots/jobs, eight steps; ownership
   // and slot shape are premises, as are the transition rules under test.

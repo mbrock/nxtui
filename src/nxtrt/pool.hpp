@@ -2,6 +2,7 @@
 
 #include "nxtrt/farm.hpp"
 #include "nxtrt/idea.hpp"
+#include "nxtrt/task/compose.hpp"
 
 namespace nxtrt {
 

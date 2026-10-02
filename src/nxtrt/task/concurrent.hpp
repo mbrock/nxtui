@@ -5,6 +5,7 @@
 
 #include "nxtrt/task/compose.hpp"
 #include "nxtrt/task/scope.hpp"
+#include "nxtrt/pool.hpp"
 
 namespace nxtrt {
 
@@ -21,10 +22,7 @@ public:
         return first_failure_;
     }
 
-private:
-    void child_finished(
-        detail::child_record_base &,
-        std::exception_ptr failure) noexcept override
+    void completed(task_id, std::exception_ptr failure) noexcept override
     {
         if (!failure)
             return;
@@ -33,6 +31,7 @@ private:
         stop();
     }
 
+private:
     std::exception_ptr first_failure_;
 };
 
@@ -49,10 +48,7 @@ public:
         return succeeded_;
     }
 
-private:
-    void child_finished(
-        detail::child_record_base &,
-        std::exception_ptr failure) noexcept override
+    void completed(task_id, std::exception_ptr failure) noexcept override
     {
         if (failure)
             return;
@@ -60,6 +56,7 @@ private:
         stop();
     }
 
+private:
     bool succeeded_ = false;
 };
 
@@ -70,9 +67,7 @@ class stop_on_completion : public firm
 public:
     using firm::firm;
 
-private:
-    void child_finished(
-        detail::child_record_base &, std::exception_ptr) noexcept override
+    void completed(task_id, std::exception_ptr) noexcept override
     {
         stop();
     }
@@ -117,33 +112,122 @@ template<typename Work>
 using firm_work_result_t =
     task_result_t<decltype(start_firm_work(std::declval<Work &>()))>;
 
+template<typename T>
+using outcome = std::expected<T, std::exception_ptr>;
+
+// Heterogeneity lives in the result tuple, not the execution owner. Every
+// indexed recipe produces void work for the same ordinary pool.
 template<typename Policy, typename... Work>
-task<std::tuple<catching_deed<firm_work_result_t<Work>>...>>
-run_firm_work(Policy & policy, std::tuple<Work...> & work)
+struct tuple_work
 {
-    using deeds_type =
-        std::tuple<catching_deed<firm_work_result_t<Work>>...>;
-    if (policy.stop_requested())
-        throw operation_cancelled{};
-    // Braced initialization admits work left to right. The owning
-    // coroutine keeps factories alive even if a later factory throws.
-    auto deeds = std::apply(
-        [&policy](auto &... work) {
-            return deeds_type{
-                policy.fork(start_firm_work(work)).cope()...};
-        },
-        work);
-    co_await policy.join();
-    co_return deeds;
+    Policy & policy;
+    std::tuple<Work...> & work;
+    std::tuple<std::optional<outcome<firm_work_result_t<Work>>>...> results;
+
+    template<std::size_t I, typename T>
+    static task<void> run(tuple_work & batch, task<T> child)
+    {
+        auto & result = std::get<I>(batch.results);
+        try {
+            if constexpr (std::is_void_v<T>) {
+                co_await child;
+                result.emplace(std::in_place);
+            } else {
+                result.emplace(std::in_place, co_await child);
+            }
+        } catch (...) {
+            result.emplace(std::unexpected{std::current_exception()});
+        }
+        batch.policy.completed(
+            child.id(), *result ? std::exception_ptr{} : result->error());
+    }
+
+    template<std::size_t I>
+    static task<void> start(tuple_work & batch)
+    {
+        auto child = start_firm_work(std::get<I>(batch.work));
+        if (!child.handle())
+            throw runtime_error{
+                "nxtrt tuple recipe returned an empty task"};
+        return run<I>(batch, std::move(child));
+    }
+
+    struct recipe
+    {
+        tuple_work * batch;
+        task<void> (*invoke)(tuple_work &);
+
+        task<void> operator()() &
+        {
+            return invoke(*batch);
+        }
+    };
+
+    template<std::size_t... Is>
+    auto recipes(std::index_sequence<Is...>)
+    {
+        return std::array<recipe, sizeof...(Is)>{
+            recipe{this, start<Is>}...};
+    }
+};
+
+template<typename Recipe>
+task<void> consume_work(pool<Recipe> & work)
+{
+    while (co_await work.take())
+        ;
 }
 
-template<typename, typename T>
-using repeat_type = T;
+template<typename Policy, typename... Work>
+task<std::tuple<outcome<firm_work_result_t<Work>>...>>
+run_firm_work(Policy & policy, std::tuple<Work...> & work)
+{
+    if (policy.stop_requested())
+        throw operation_cancelled{};
+    auto batch = tuple_work<Policy, Work...>{policy, work, {}};
+    if constexpr (sizeof...(Work) != 0) {
+        auto recipes = batch.recipes(std::index_sequence_for<Work...>{});
+        using recipe = typename decltype(batch)::recipe;
+        auto input_land = static_value_storage<recipe, 1>{};
+        auto input = value_range_source{recipes, input_land.ref()};
+        auto slots = std::array<pool_slot<recipe>, sizeof...(Work)>{};
+        auto available = farm<pool_slot<recipe>, sizeof...(Work)>{&slots};
+        auto output =
+            static_value_storage<std::monostate, sizeof...(Work)>{};
+        auto pending = pool<recipe>{input, available, output.ref()};
+        auto stop_pool = [&pending] { pending.stop(); };
+        auto on_stop = std::stop_callback{policy.stop_token(), stop_pool};
+        try {
+            co_await finally(consume_work(pending), [&pending] {
+                return pending.close();
+            });
+        } catch (const operation_cancelled &) {
+            // A policy-selected finish is normal; external cancellation is
+            // not. In both cases finally has already drained the pool.
+            if (!policy.stop_requested() || task_stop_requested())
+                throw;
+        }
+    }
+    // Nested ambient forks remain nursery work, outside the fixed batch.
+    co_await policy.join();
+    if (task_stop_requested())
+        throw operation_cancelled{};
+    co_return std::apply(
+        []<typename... T>(std::optional<T> &... result) {
+            // A factory may stop the scope before its task or later recipes
+            // start. Those positions settle as cancellation, not missing
+            // values.
+            return std::tuple{
+                (result ? std::move(*result)
+                        : T{std::unexpected{std::make_exception_ptr(
+                              operation_cancelled{})}})...};
+        },
+        batch.results);
+}
 
 template<typename T, typename Tuple, std::size_t... Is>
-[[nodiscard]] T take_first_success_or_throw(
-    Tuple & deeds,
-    std::index_sequence<Is...>)
+[[nodiscard]] T
+take_first_success_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
 {
     auto exceptions = std::vector<std::exception_ptr>{};
     auto result = std::optional<T>{};
@@ -152,7 +236,7 @@ template<typename T, typename Tuple, std::size_t... Is>
         if (result)
             return;
 
-        auto value = std::move(std::get<index>(deeds)).get();
+        auto value = std::move(std::get<index>(outcomes));
         if (value) {
             result.emplace(std::move(*value));
         } else {
@@ -169,8 +253,7 @@ template<typename T, typename Tuple, std::size_t... Is>
 
 template<typename Tuple, std::size_t... Is>
 void take_first_void_success_or_throw(
-    Tuple & deeds,
-    std::index_sequence<Is...>)
+    Tuple & outcomes, std::index_sequence<Is...>)
 {
     auto exceptions = std::vector<std::exception_ptr>{};
     auto succeeded = false;
@@ -179,7 +262,7 @@ void take_first_void_success_or_throw(
         if (succeeded)
             return;
 
-        auto value = std::move(std::get<index>(deeds)).get();
+        auto value = std::move(std::get<index>(outcomes));
         if (value) {
             succeeded = true;
         } else {
@@ -194,6 +277,8 @@ void take_first_void_success_or_throw(
     throw_exceptions("wait_any tasks failed", std::move(exceptions));
 }
 
+// A primary activity may stop companions without making every companion
+// completion a winner (unlike stop_on_completion).
 template<typename T>
 task<T> stop_firm_on_completion(task<T> child)
 {
@@ -215,47 +300,46 @@ task<T> stop_firm_on_completion(task<T> child)
 }
 
 template<typename T>
-[[nodiscard]] T take_deed_result(catching_deed<T> deed)
+[[nodiscard]] auto take_outcome(outcome<T> value)
 {
-    auto value = std::move(deed).get();
-    if (value)
+    if (!value)
+        rethrow(value.error());
+    if constexpr (std::is_void_v<T>)
+        return std::monostate{};
+    else
         return std::move(*value);
-    rethrow(value.error());
 }
 
-inline std::monostate take_deed_result(catching_deed<void> deed)
+template<typename T>
+[[nodiscard]] auto take_deed_result(catching_deed<T> deed)
 {
-    auto value = std::move(deed).get();
-    if (value)
-        return {};
-    rethrow(value.error());
+    return take_outcome(std::move(deed).get());
 }
 
 template<typename Tuple, std::size_t... Is>
-[[nodiscard]] auto take_all_or_throw(
-    Tuple & deeds,
-    std::index_sequence<Is...>)
+[[nodiscard]] auto
+take_all_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
 {
     return std::tuple{
-        take_deed_result(std::move(std::get<Is>(deeds)))...,
+        take_outcome(std::move(std::get<Is>(outcomes)))...,
     };
 }
 
 } // namespace detail
 
-/// Start tuple elements in an ordinary nursery.
+/// Execute a fixed heterogeneous batch through a finite indexed pool.
 /// Elements are tasks or owned nullary task factories. Factories run once,
 /// under the new firm, and survive all child settlement (including
 /// failure). Preconstructed tasks retain their original frame allocation;
 /// both forms run under this firm's environment and may fork more children.
-/// Returns settled catching deeds; the policy controls sibling cancellation,
-/// not result extraction.
+/// Main work is pool-owned, without child records/deeds. Returns a tuple of
+/// settled expected outcomes; the policy controls sibling cancellation.
 template<typename Policy = firm, typename... Work>
     requires std::derived_from<Policy, firm>
              && std::default_initializable<Policy>
              && ((is_task_v<Work> || stored_task_factory<Work>) && ...)
 [[nodiscard]] task<
-    std::tuple<catching_deed<detail::firm_work_result_t<Work>>...>>
+    std::tuple<detail::outcome<detail::firm_work_result_t<Work>>...>>
 with_firm(std::tuple<Work...> work)
 {
     co_return co_await detail::make_firm_body<Policy>(
@@ -273,9 +357,9 @@ template<typename... Work>
         std::monostate,
         detail::firm_work_result_t<Work>>...>>
 {
-    auto deeds = co_await with_firm<stop_on_failure>(std::move(work));
+    auto outcomes = co_await with_firm<stop_on_failure>(std::move(work));
     co_return detail::take_all_or_throw(
-        deeds, std::index_sequence_for<Work...>{});
+        outcomes, std::index_sequence_for<Work...>{});
 }
 
 /// Tuple first success, not first completion; all failures are grouped.
@@ -290,37 +374,21 @@ template<typename First, typename... Rest>
 wait_any(std::tuple<First, Rest...> work)
 {
     using result_type = detail::firm_work_result_t<First>;
-    auto deeds = co_await with_firm<stop_on_success>(std::move(work));
+    auto outcomes = co_await with_firm<stop_on_success>(std::move(work));
     if constexpr (std::is_void_v<result_type>) {
         detail::take_first_void_success_or_throw(
-            deeds, std::index_sequence_for<First, Rest...>{});
+            outcomes, std::index_sequence_for<First, Rest...>{});
     } else {
         co_return detail::take_first_success_or_throw<result_type>(
-            deeds, std::index_sequence_for<First, Rest...>{});
+            outcomes, std::index_sequence_for<First, Rest...>{});
     }
 }
 
 template<typename... Tasks>
     requires(sizeof...(Tasks) > 0) && (is_task_v<Tasks> && ...)
-[[nodiscard]] task<std::tuple<task_result_t<Tasks>...>>
-when_all(Tasks... tasks)
+[[nodiscard]] auto when_all(Tasks... tasks)
 {
-    using deeds_type = std::tuple<catching_deed<task_result_t<Tasks>>...>;
-    constexpr auto count = sizeof...(Tasks);
-
-    auto deeds = co_await detail::make_firm_body<stop_on_failure>(
-        [... tasks = std::move(tasks)](
-            auto & policy) mutable -> task<deeds_type> {
-            auto deeds = deeds_type{
-                policy.fork(std::move(tasks)).cope()...,
-            };
-            co_await policy.join();
-            co_return deeds;
-        });
-
-    co_return detail::take_all_or_throw(
-        deeds,
-        std::make_index_sequence<count>{});
+    return when_all(std::tuple{std::move(tasks)...});
 }
 
 template<std::ranges::input_range Range>
@@ -402,33 +470,7 @@ template<typename T, typename... Rest>
     requires (std::same_as<task<T>, std::remove_cvref_t<Rest>> && ...)
 [[nodiscard]] task<T> wait_any(task<T> first, Rest... rest)
 {
-    using deeds_type =
-        std::tuple<
-            catching_deed<T>,
-            detail::repeat_type<Rest, catching_deed<T>>...>;
-    constexpr auto count = std::size_t{1 + sizeof...(Rest)};
-
-    auto deeds = co_await detail::make_firm_body<stop_on_success>(
-        [first = std::move(first),
-         ... rest = std::move(rest)](
-            auto & policy) mutable -> task<deeds_type> {
-            auto deeds = deeds_type{
-                policy.fork(std::move(first)).cope(),
-                policy.fork(std::move(rest)).cope()...,
-            };
-            co_await policy.join();
-            co_return deeds;
-        });
-
-    if constexpr (std::is_void_v<T>) {
-        detail::take_first_void_success_or_throw(
-            deeds,
-            std::make_index_sequence<count>{});
-    } else {
-        co_return detail::take_first_success_or_throw<T>(
-            deeds,
-            std::make_index_sequence<count>{});
-    }
+    return wait_any(std::tuple{std::move(first), std::move(rest)...});
 }
 
 [[nodiscard]] inline task<void> timeout_after(
@@ -443,31 +485,9 @@ template<typename T>
     std::chrono::nanoseconds duration,
     task<T> body)
 {
-    using deeds_type =
-        std::tuple<catching_deed<T>, catching_deed<void>>;
-
-    auto deeds = co_await with_firm(
-        [duration, body = std::move(body)]() mutable
-            -> task<deeds_type> {
-            // Parent cancellation can reach the scope before this body
-            // gets its first turn. A stopped firm cannot accept forks.
-            if (current_firm()->stop_requested())
-                throw operation_cancelled{};
-            auto body_deed =
-                fork(detail::stop_firm_on_completion(std::move(body)))
-                    .cope();
-            auto timeout_deed =
-                fork(detail::stop_firm_on_completion(
-                    timeout_after(duration))).cope();
-            auto deeds = deeds_type{
-                std::move(body_deed),
-                std::move(timeout_deed),
-            };
-            co_await join();
-            co_return deeds;
-        });
-
-    auto body_result = std::move(std::get<0>(deeds)).get();
+    auto outcomes = co_await with_firm<stop_on_completion>(std::tuple{
+        std::move(body), [duration] { return timeout_after(duration); }});
+    auto body_result = std::move(std::get<0>(outcomes));
     if (body_result) {
         if constexpr (std::is_void_v<T>) {
             co_return;
@@ -476,7 +496,7 @@ template<typename T>
         }
     }
 
-    auto timeout_result = std::move(std::get<1>(deeds)).get();
+    auto timeout_result = std::move(std::get<1>(outcomes));
     // An ordinary body failure cancels the timer; do not replace that
     // failure with the timer's cancellation. A real deadline wins over
     // cancellation of the body, while external stop remains cancellation.

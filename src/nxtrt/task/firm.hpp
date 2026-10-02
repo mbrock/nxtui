@@ -199,11 +199,9 @@ public:
         debug_update();
     }
 
-protected:
-    virtual void child_finished(
-        detail::child_record_base &,
-        std::exception_ptr) noexcept
-    {}
+    // Shared policy boundary for nursery children and pool-owned work.
+    // Notification neither transfers ownership nor retains a child record.
+    virtual void completed(task_id, std::exception_ptr) noexcept {}
 
 private:
     friend struct detail::child_record_base;
@@ -217,9 +215,7 @@ private:
         child.firm_record.completion_reported = true;
         auto failure =
             known_failure ? known_failure : child.completion_failure();
-        child_finished(
-            child,
-            failure);
+        completed(child.firm_record.task, failure);
     }
 
     void debug_update() const

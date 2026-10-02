@@ -1330,8 +1330,11 @@ nxtrt::task<int> throw_int_after_yield()
     throw nxtrt::runtime_error{"firm child int boom"};
 }
 
-nxtrt::task<int> tuple_wait_for_stop(std::vector<int> & events, int value)
+nxtrt::task<int> tuple_wait_for_stop(
+    std::vector<int> & events, int value, int * starts = nullptr)
 {
+    if (starts != nullptr)
+        ++*starts;
     while (!nxtrt::stop_requested())
         co_await nxtrt::yield();
     events.push_back(value);
@@ -3184,12 +3187,11 @@ static suite runtime_tests{
                         co_await nxtrt::join();
                     }
 
-                protected:
-                    void child_finished(
-                        nxtrt::detail::child_record_base & child,
+                    void completed(
+                        nxtrt::task_id child,
                         std::exception_ptr) noexcept override
                     {
-                        completed_ids->push_back(child.firm_record.task);
+                        completed_ids->push_back(child);
                     }
 
                 private:
@@ -3955,7 +3957,9 @@ static suite runtime_tests{
                                     -> nxtrt::task<std::unique_ptr<int>> {
                                     ++calls;
                                     auto & scope = *nxtrt::current_firm();
-                                    expect(scope.child_count() == 3);
+                                    // Main tuple work is pool-owned: no
+                                    // nursery child/deed records.
+                                    expect(scope.child_count() == 0);
                                     co_await nxtrt::yield();
                                     co_return std::make_unique<int>(*value);
                                 },
@@ -4064,8 +4068,8 @@ static suite runtime_tests{
                             [&] { return tuple_wait_for_stop(events, 23); },
                         });
                 });
-                auto first = std::move(std::get<0>(deeds)).get();
-                auto second = std::move(std::get<1>(deeds)).get();
+                auto first = std::move(std::get<0>(deeds));
+                auto second = std::move(std::get<1>(deeds));
                 expect(!first && !second);
                 expect(!nxtrt::is_operation_cancelled(first.error()));
                 expect(nxtrt::is_operation_cancelled(second.error()));
@@ -4133,17 +4137,110 @@ static suite runtime_tests{
                     expect(events == std::vector<int>{31, 32});
                 };
 
+            "tuple outcomes retain positions and individual failures"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto events = std::vector<int>{};
+                    auto outcomes = deck.sync_wait([&] {
+                        return nxtrt::with_firm(
+                            std::tuple{
+                                [&] {
+                                    return value_after_two_yields_or_stop(
+                                        events, 43);
+                                },
+                                [] { return value_after_yield(7); },
+                                throw_int_after_yield,
+                                returned_deeds_firm::empty_child,
+                            });
+                    });
+                    static_assert(
+                        std::same_as<
+                            decltype(outcomes),
+                            std::tuple<
+                                std::expected<int, std::exception_ptr>,
+                                std::expected<int, std::exception_ptr>,
+                                std::expected<int, std::exception_ptr>,
+                                std::expected<void, std::exception_ptr>>>);
+                    expect(std::get<0>(outcomes).value() == -43);
+                    expect(std::get<1>(outcomes).value() == 7);
+                    expect(!std::get<2>(outcomes));
+                    expect(!nxtrt::is_operation_cancelled(
+                        std::get<2>(outcomes).error()));
+                    expect(std::get<3>(outcomes).has_value());
+                    expect(events.empty());
+                    auto values = deck.sync_wait([&] {
+                        return nxtrt::when_all(
+                            record_after_yield(events, 9),
+                            value_after_yield(31));
+                    });
+                    static_assert(std::same_as<
+                                  decltype(values),
+                                  std::tuple<std::monostate, int>>);
+                    expect(std::get<1>(values) == 31);
+                    expect(events == std::vector<int>{91, 92});
+                };
+
+            "stopping during a tuple factory settles unstarted positions"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto skipped = 0;
+                    auto outcomes = deck.sync_wait([&] {
+                        return nxtrt::with_firm(
+                            std::tuple{
+                                [] {
+                                    nxtrt::current_firm()->stop();
+                                    return value_after_yield(17);
+                                },
+                                [&] {
+                                    ++skipped;
+                                    return value_after_yield(29);
+                                },
+                            });
+                    });
+                    expect(skipped == 0);
+                    expect(
+                        !std::get<0>(outcomes) && !std::get<1>(outcomes));
+                    expect(
+                        nxtrt::is_operation_cancelled(
+                            std::get<0>(outcomes).error()));
+                    expect(
+                        nxtrt::is_operation_cancelled(
+                            std::get<1>(outcomes).error()));
+                };
+
+            "tuple recipes reject empty tasks before awaiting them"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto rejected = false;
+                    try {
+                        (void) deck.sync_wait([] {
+                            return nxtrt::when_all(std::tuple{[] {
+                                return nxtrt::task<int>{};
+                            }});
+                        });
+                    } catch (const nxtrt::runtime_error & error) {
+                        rejected =
+                            std::string_view{error.what()}
+                            == "nxtrt tuple recipe returned an empty task";
+                    }
+                    expect(rejected);
+                };
+
             "tuple all accepts cancellation at every startup turn"_test =
                 [] {
-                    for (int turns = 0; turns < 20; ++turns) {
+                    auto saw_prepared = false;
+                    auto saw_started = false;
+                    for (int turns = 0; turns < 40; ++turns) {
                         auto deck = nxtrt::deck{};
                         auto events = std::vector<int>{};
                         auto calls = 0;
+                        auto starts = 0;
                         auto root = nxtrt::root_task{
                             deck, [&] {
                                 return nxtrt::when_all(std::tuple{[&] {
                                     ++calls;
-                                    return tuple_wait_for_stop(events, 61);
+                                    return tuple_wait_for_stop(
+                                        events, 61, &starts);
                                 }});
                             }};
                         root.start();
@@ -4162,11 +4259,15 @@ static suite runtime_tests{
                         if (turns == 0)
                             expect(calls == 0);
                         expect(calls <= 1);
+                        expect(starts <= calls);
+                        saw_prepared |= calls != 0 && starts == 0;
+                        saw_started |= starts != 0;
                         expect(
                             events
-                            == (calls ? std::vector<int>{61}
-                                      : std::vector<int>{}));
+                            == (starts ? std::vector<int>{61}
+                                       : std::vector<int>{}));
                     }
+                    expect(saw_prepared && saw_started);
                 };
         };
 

@@ -122,34 +122,45 @@ auto outcomes = co_await with_firm<stop_on_completion>(std::tuple{
 ```
 
 Each tuple element can be a task or an owned nullary task factory. Factories
-are invoked once, left to right, under the receiving firm. Their storage stays
-alive through settlement, including cancellation or an exception while invoking
-a later factory. This also keeps a capturing coroutine factory's closure alive;
-ordinary `fork(temporary_coroutine_lambda)` does **not** gain that guarantee.
-Preconstructed tasks retain their original frame allocation.
+are invoked once from finite indexed recipes in the existing pool. Their
+storage stays alive through settlement, including cancellation or an exception
+while invoking a later factory. This also keeps a capturing coroutine
+factory's closure alive; ordinary `fork(temporary_coroutine_lambda)` does
+**not** gain that guarantee. Preconstructed tasks retain their original frame
+allocation.
 
-`with_firm<Policy>(tuple)` returns a tuple of settled `catching_deed<T>` values;
-the policy controls sibling cancellation, and the caller selects outcomes.
+The lowering produces `task<void>` pool jobs; each writes its typed
+`expected<T, exception_ptr>` outcome to its matching tuple position. The main
+work creates no firm child records or deeds. Policies receive
+`firm::completed(task_id, exception_ptr)` notifications for pool-owned work, sharing
+the completion policy hook used by dynamic firm children.
+`with_firm<Policy>(tuple)` therefore returns a tuple of settled expected
+outcomes, not `catching_deed<T>` handles. The policy controls sibling
+cancellation, and the caller selects outcomes. This is a return-type change:
+read each expected directly instead of calling a deed's `.get()`. Custom firm
+policies now override `completed(task_id, exception_ptr)` rather than depending
+on the nursery-specific child-record callback.
 `when_all(tuple)` stops siblings on failure and returns values in tuple order,
 using `std::monostate` for void positions. The empty tuple succeeds.
 `wait_any(tuple)` requires a nonempty tuple of matching result types (including
-void), returns the first successful result selected in tuple order after drain,
-and groups failures if none succeeds. Failure alone does not win this race.
-`stop_on_completion` instead stops siblings on either success or failure; it is
-used by the fixed readiness/deadline pair in `poll_until_after`.
+void), stops after success, drains the batch, then returns the first successful
+result in tuple order (not completion order); it groups failures if none
+succeeds. Failure alone does not win this race. `stop_on_completion` instead
+stops siblings on either success or failure; `with_timeout` and
+`poll_until_after` use this tuple path. Variadic forms delegate to tuples.
 
-Tuple composition now uses an ordinary growable firm nursery, just like
-callable firms and variadic/range combinators. The tuple sizes the initial
-batch; it does not promise exactly N bookkeeping slots, a fixed 4 MiB frame
-budget, or allocation-free execution. Bookkeeping and frame storage follow
-the ordinary nursery implementation rather than a tuple-specific capacity
-contract.
+The finite indexed pool batch does not make the firm an exact-size nursery or
+promise exactly N records, a fixed frame-byte budget, or allocation-free
+execution. The firm still supplies frames and stop policy, and its growable
+nursery accepts explicit nested ambient forks; those forks remain outside the
+fixed pool bound. This is a real unification of ownership and drain machinery,
+not a strict transitive static team.
 
 Admission remains open: a child can fork into its ambient firm without opening
 a nested firm. Readiness/deadline races and the cgroup sampling batch use the
-tuple syntax for composition, not as a capacity boundary. The tuple helpers
-currently accept task values and task factories; the broader `idea` concept
-does not by itself add hope-producing factories to those helpers.
+tuple syntax for composition, not as a transitive capacity boundary. The tuple
+helpers currently accept task values and task factories; the broader `idea`
+concept does not by itself add hope-producing factories to those helpers.
 
 Settlement records retain their bidirectional deed link after evacuating a task
 frame. Moving a joined deed retargets the record; destroying either side detaches
@@ -187,22 +198,27 @@ discipline and deck-local completion wakeups.
 ## Future: teams, outcomes, and terminal consumers
 
 The proposed distinction is a heterogeneous static **team** versus a
-homogeneous **pool** with circulating capacity. Today's tuple helpers still
-use the ordinary growable firm nursery; a tuple is not an exact-N admission or
-frame-budget contract. The `idea` concept is shared recipe vocabulary, not an
-owning wrapper or an admission policy.
+homogeneous **pool** with circulating capacity. Fixed tuple helpers now lower
+to finite indexed jobs in the existing pool and return typed settled outcomes;
+they do not allocate main-work child records. They are not strict transitive
+static teams: nested explicit ambient forks remain in the firm's growable
+nursery and are outside the tuple batch bound. Nor is this an allocation-free
+or frame-budget contract. The `idea` concept is shared recipe vocabulary, not
+an owning wrapper or an admission policy.
 
 An unhandled pool job failure stops admission and causes cancellation/drain
 of the pending upstream read and admitted jobs when the consumer encounters it.
 That is not generic closure of a borrowed upstream producer.
-Final-suspend notification does not itself
-apply a fail-fast policy. Planned idea-level `cope` would turn acceptable
-per-job failures into expected outcome values before they reach the pool.
+For the general stream pool, final-suspend notification does not itself apply
+a fail-fast policy. Fixed tuple jobs instead report through the shared
+`firm::completed(task_id, exception_ptr)` hook; their typed expected outcomes
+are stored separately from that notification. Planned idea-level `cope` would
+turn acceptable per-job failures into expected outcome values before the pool.
 That preserves the distinction between a successful outcome describing a
 failed attempt and a failure of the stream itself. Neither that adaptor nor
 generic feed `map` is implemented yet.
 
-First-success, collect, and drain should be lifetime-aware terminal feed
+Stream first-success, collect, and drain should be lifetime-aware terminal feed
 operations: they must close and drain upstream work before releasing borrowed
 state, including on early success or cancellation. They are not a reason for
 raw borrowed `take()` to auto-close a source. Today explicit cleanup is
@@ -275,7 +291,7 @@ but it should not pretend that every idea can be inspected like a wish.
 - Which operators are genuinely readable enough to keep?
 - How do time budgets compose through `all`, `race`, and `then`?
 - Should future static teams use named composition helpers or a distinct owner
-  API, alongside the implemented tuple nursery helpers?
+  API, alongside the implemented tuple-to-pool helpers?
 - How should failures be reported for composed ideas: first error,
   `exception_group`, or policy-specific result?
 

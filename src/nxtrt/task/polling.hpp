@@ -27,15 +27,14 @@ inline task<poll_until_result> poll_deadline(
     };
 }
 
-using poll_until_deeds =
-    std::tuple<
-        catching_deed<poll_until_result>,
-        catching_deed<poll_until_result>>;
+using poll_until_outcomes =
+    std::tuple<outcome<poll_until_result>, outcome<poll_until_result>>;
 
-inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
+inline poll_until_result
+take_poll_until_result(poll_until_outcomes & outcomes)
 {
-    auto ready_result = std::move(std::get<0>(deeds)).get();
-    auto deadline_result = std::move(std::get<1>(deeds)).get();
+    auto ready_result = std::move(std::get<0>(outcomes));
+    auto deadline_result = std::move(std::get<1>(outcomes));
 
     if (ready_result)
         return std::move(*ready_result);
@@ -53,19 +52,19 @@ inline poll_until_result take_poll_until_result(poll_until_deeds & deeds)
 
 /// Wait until an fd is ready or a timeout expires.
 ///
-/// This composes ordinary `op::poll` and `op::timeout` wishes in a child firm.
-/// The winning child stops the firm, so the losing wish is cancelled through
-/// the same path as any other task race.
+/// This composes ordinary `op::poll` and `op::timeout` wishes in a fixed
+/// pool-backed batch. Completion stops the scope; pool close drains the
+/// losing wish before the outcome is returned.
 [[nodiscard]] inline task<poll_until_result> poll_until_after(
     int fd,
     short events,
     std::chrono::nanoseconds timeout)
 {
-    auto deeds = co_await with_firm<stop_on_completion>(std::tuple{
+    auto outcomes = co_await with_firm<stop_on_completion>(std::tuple{
         [fd, events] { return detail::poll_ready(op::poll{fd, events}); },
         [timeout] { return detail::poll_deadline(timeout); },
     });
-    co_return detail::take_poll_until_result(deeds);
+    co_return detail::take_poll_until_result(outcomes);
 }
 
 } // namespace nxtrt

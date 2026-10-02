@@ -125,34 +125,27 @@ capture(
     state->child = std::move(child.child);
     state->observed = std::move(child.observed);
 
-    auto capture = nxtrt::catching_deed<void>{};
-    auto monitor = nxtrt::catching_deed<void>{};
-    co_await nxtrt::with_firm([&]() -> nxtrt::task<void> {
-        capture =
-            nxtrt::fork(
-                nxtrt::detail::stop_firm_on_completion(
+    auto outcomes = co_await nxtrt::with_firm(
+        std::tuple{
+            [&] {
+                return nxtrt::detail::stop_firm_on_completion(
                     nxtrt::finally(
                         capture_output(state, options.max_capture_bytes),
-                        [state]() {
-                            return finish_child(state);
-                        })))
-                .cope();
-        monitor =
-            nxtrt::fork(
-                nxtrt::scoped_process::monitor_until_done(
+                        [state] { return finish_child(state); }));
+            },
+            [&] {
+                return nxtrt::scoped_process::monitor_until_done(
                     state->observed,
                     state->done,
                     options.scope.sample_interval,
-                    options.scope.max_samples))
-                .cope();
-        co_await nxtrt::join();
-        co_return;
-    });
+                    options.scope.max_samples);
+            },
+        });
 
-    auto capture_done = std::move(capture).get();
+    auto capture_done = std::move(std::get<0>(outcomes));
     if (!capture_done)
         nxtrt::rethrow(capture_done.error());
-    auto monitor_done = std::move(monitor).get();
+    auto monitor_done = std::move(std::get<1>(outcomes));
     if (!monitor_done)
         nxtrt::rethrow(monitor_done.error());
 

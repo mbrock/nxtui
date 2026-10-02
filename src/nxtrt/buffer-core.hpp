@@ -1,7 +1,7 @@
 #pragma once
 
 #include "nxtrt/land.hpp"
-#include "nxtrt/task.hpp"
+#include "nxtrt/exceptions.hpp"
 
 #include <algorithm>
 #include <array>

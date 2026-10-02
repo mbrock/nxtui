@@ -154,16 +154,27 @@ storage. Reading after close is not supported.
 
 ## Relation to firms and future work
 
-Firms remain general structured-concurrency nurseries. A pool is an independent
-bounded circulation of homogeneous recipes and results, sharing only the
-runtime's task, deck, and frame machinery. It does not add tuple constructors
-or a second scheduler.
+Firms retain a growable nursery for explicit forks, while the pool is also the
+execution owner for fixed heterogeneous tuple batches. Tuple composition
+lowers each indexed position to a finite `task<void>` recipe in this existing
+pool; that recipe stores its typed `expected<T, exception_ptr>` outcome at the
+matching tuple position. No main-work child records or deeds are allocated.
+The same `firm::completed(task_id, exception_ptr)` hook is used for pool-owned
+work and dynamically forked children, allowing policies to stop and drain the
+fixed batch through shared cancellation machinery.
+
+This is a real unification of ownership and drain, not a strict transitive
+static team or an allocation-free guarantee. The firm still provides frames,
+stop policy, and its growable nursery for explicit nested ambient forks; those
+forks are outside the tuple batch's finite bound. The homogeneous stream pool
+remains a distinct API shape with slots, completion-order output, and borrowed
+feed/land contracts described above.
 
 The slot lifecycle is modeled in `nxtrt/runtime.rkt`, including consumption,
 close/discard, and reuse. The model abstracts frame bytes and cancellation
 progress; tests exercise the concrete feed and coroutine lifetimes.
 
 Generic feed mapping, feedback channels for crawlers, per-item error values,
-and heterogeneous static teams are separate follow-up work. The first pool
-provides a concrete place to evaluate those designs without changing firm
-semantics.
+and strict transitive static teams are separate follow-up work. The existing
+fixed tuple lowering provides a concrete heterogeneous batch without claiming
+that nested ambient work is bounded by its tuple size.
