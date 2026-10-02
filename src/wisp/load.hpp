@@ -18,7 +18,11 @@ std::string_view base_library() noexcept;
 class loader
 {
 public:
-    loader(heap & storage, evaluator & machine, std::string_view source);
+    loader(
+        heap & storage,
+        evaluator & machine,
+        std::string_view source,
+        std::string_view path = "<string>");
 
     /// A turn counts reading a form or advancing one evaluator transition.
     /// Zero only polls; exhaustion returns runnable. Parsing/allocation in
@@ -36,6 +40,12 @@ public:
     std::size_t position() const noexcept
     {
         return input_.position();
+    }
+
+    /// Enclosing top-level form, not a subexpression or function backtrace.
+    std::string location() const
+    {
+        return input_.location(input_.form_position());
     }
 
 private:

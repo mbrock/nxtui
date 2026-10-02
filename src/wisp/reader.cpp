@@ -42,20 +42,41 @@ bool constituent(char32_t c)
 
 } // namespace
 
+std::string source_location(
+    std::string_view source, std::string_view path, std::size_t offset)
+{
+    if (offset > source.size())
+        throw std::out_of_range("source offset");
+    const auto prefix = source.substr(0, offset);
+    const auto line = 1 + std::count(prefix.begin(), prefix.end(), '\n');
+    const auto newline = prefix.find_last_of('\n');
+    const auto column =
+        newline == prefix.npos ? offset + 1 : offset - newline;
+    return std::string{path} + ":" + std::to_string(line) + ":"
+           + std::to_string(column);
+}
+
 read_error::read_error(std::size_t at, std::string_view message)
-    : std::runtime_error(
-          "Wisp read at byte " + std::to_string(at) + ": "
-          + std::string(message))
+    : std::runtime_error(std::string{message})
     , offset(at)
 {
 }
 
 reader::reader(
-    heap & storage, evaluator & language, std::string_view source)
+    heap & storage,
+    evaluator & language,
+    std::string_view source,
+    std::string_view path,
+    std::size_t offset)
     : heap_(storage)
     , evaluator_(language)
     , source_(source)
+    , path_(path)
+    , position_(offset)
+    , form_position_(offset)
 {
+    if (offset > source_.size())
+        throw std::out_of_range("source offset");
 }
 
 char32_t reader::peek() const
@@ -196,6 +217,18 @@ word reader::string()
 }
 
 std::optional<word> reader::next()
+{
+    try {
+        space();
+        form_position_ = position_;
+        return form();
+    } catch (const read_error & error) {
+        throw read_error(
+            error.offset, location(error.offset) + ": " + error.what());
+    }
+}
+
+std::optional<word> reader::form()
 {
     enum class kind { list, vector, quote, tail, close };
 

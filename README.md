@@ -231,10 +231,28 @@ Wisp structured concurrency is deliberately deferred.
 
 The REPL accepts complete forms on one line and preserves definitions. Console
 hooks include `write`, `print`, `write-error`, `read-line`, and `read-bytes`.
-The executable host uses **image schema `NXT-WISP-3`**:
-`[tag source byte-offset run pending last-result request-serial]`. Old host
+The executable host uses **image schema `NXT-WISP-4`**:
+`[tag [source path form-start] byte-offset run pending last-result request-serial]`. Old host
 schemas are intentionally rejected; the underlying portable tape format is
 unchanged. Disable the tool with `-Dwisp_tool=false`.
+
+### Load local Wisp files with explicit read grants
+
+With `build/wisp run entry.wisp --dir src=./project`, the entry can call
+`(load "src/main.wisp")`. Loaded files may use `(load "./lib/helper.wisp")` or
+`(load "../shared.wisp")`; relative paths follow the innermost active load,
+not the host working directory. The CLI entry grants no filesystem authority.
+Paths cannot escape their grant root or follow symlinks.
+
+`load` reads and evaluates one form at a time, so macros and package changes
+affect later forms. Success caches the normalized path; repeat loads return
+NIL, and cycles raise `LOAD-CYCLE`. Failed loads retain earlier effects but
+are not cached. Package selection is shared, not restored after loading.
+Reader errors carry `path:line:column` (one-based byte columns); evaluation
+errors identify the enclosing top-level form. Timers inside loaded code can
+be checkpointed without retaining native loader state. See the
+[loading contracts and runnable example](rfc/new/rfc-0018-portable-wisp-lisp-machines.md#local-source-loading-uses-existing-read-grants)
+for retries, overlapping loads, and restore authority.
 
 ### Serve plain HTTP behind a reverse proxy
 

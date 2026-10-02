@@ -751,8 +751,12 @@
   (%input-effect (or stream *standard-input*)
                  (list 'read-bytes n)))
 
-(defun string-input-stream (string)
-  (vector 'string-input-stream 0 string))
+;; Named streams additionally retain a source path and the last form's
+;; location for loader diagnostics. Existing three-field streams still work.
+(defun string-input-stream (string &optional path)
+  (if path
+      (vector 'string-input-stream 0 string path (string-append path ":1:1"))
+    (vector 'string-input-stream 0 string)))
 
 (defun string-input-stream? (x)
   (and (vector? x)

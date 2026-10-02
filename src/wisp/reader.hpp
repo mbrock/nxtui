@@ -16,13 +16,22 @@ struct read_error : std::runtime_error
     const std::size_t offset;
 };
 
+/// One-based line and byte column; offsets remain zero-based UTF-8 bytes.
+std::string source_location(
+    std::string_view source, std::string_view path, std::size_t offset);
+
 /// An owning UTF-8 source reader. Copying input before any guest allocation
 /// permits construction from a borrowed heap string. The heap and evaluator
 /// must belong together and outlive the reader. Names fold ASCII case only.
 class reader
 {
 public:
-    reader(heap & storage, evaluator & language, std::string_view source);
+    reader(
+        heap & storage,
+        evaluator & language,
+        std::string_view source,
+        std::string_view path = "<string>",
+        std::size_t offset = 0);
 
     /// EOF is nullopt, distinct from NIL. Never collects; returned words
     /// are unrooted. No guest values survive between calls, so callers may
@@ -37,9 +46,21 @@ public:
         return position_;
     }
 
+    /// Start of the last top-level form, after whitespace and comments.
+    std::size_t form_position() const noexcept
+    {
+        return form_position_;
+    }
+
+    std::string location(std::size_t offset) const
+    {
+        return source_location(source_, path_, offset);
+    }
+
 private:
     static constexpr char32_t eof = 0x110000;
 
+    std::optional<word> form();
     char32_t peek() const;
     char32_t take();
     void space();
@@ -51,7 +72,9 @@ private:
     heap & heap_;
     evaluator & evaluator_;
     std::string source_;
+    std::string path_;
     std::size_t position_ = 0;
+    std::size_t form_position_ = 0;
 };
 
 } // namespace wisp

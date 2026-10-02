@@ -134,6 +134,10 @@ if get_option('tests')
       args : [files('wisp-file-test.py'), wisp_tool],
       timeout : 60,
     )
+    test('wisp-module-tests', find_program('python3'),
+      args : [files('wisp-module-test.py'), wisp_tool],
+      timeout : 60,
+    )
     test('wisp-http-client-tests', find_program('python3'),
       args : [files('wisp-http-client-test.py'), wisp_tool],
       suite : 'slow',

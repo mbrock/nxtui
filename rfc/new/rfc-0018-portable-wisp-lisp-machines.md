@@ -657,13 +657,19 @@ Additional deliberate differences and boundaries are:
   `READ-MANY-FROM-STRING` returns a proper list. String streams are validated
   `[STRING-INPUT-STREAM, byte-offset, string]` vectors, returning `(value)` or NIL
   at EOF. Parse failures become READ-ERROR conditions and do not advance a
-  stream cursor; allocation and interning are not rolled back.
+  stream cursor; allocation and interning are not rolled back. Supplying a
+  second argument to `(string-input-stream text path)` creates a five-field
+  stream with trailing `path` and `location` strings. Reading updates the
+  location to the top-level form's start, or the exact reader-error position.
 
 [`wisp::loader`](../../src/wisp/load.hpp) reads and evaluates top-level forms
 in order. Reading one form or stepping one transition consumes a unit of its
 budget. Zero only polls; a read or evaluation failure stops before later forms.
 The loader owns the source and roots its current run, permitting collection
 between calls. Its source/cursor are host state, not portable image data.
+An optional source path labels reader errors; `location()` reports the enclosing
+top-level form. The executable's guest `load`, described below, instead keeps
+its loading state in the heap.
 
 `base_library()` exposes the embedded [`base.wisp`](../../src/wisp/base.wisp),
 ported from the pinned reference. Loading is explicit, not an evaluator
@@ -871,10 +877,10 @@ Guest GC does not yield to sibling callbacks. CPU-bound code blocks the event
 loop until it returns or awaits, as in Node/browser JS; Wisp structured
 concurrency is deliberately deferred.
 
-The v3 executable-host schema is separate from the portable tape format:
+The v4 executable-host schema is separate from the portable tape format:
 
 ```
-[:NXT-WISP-3 source byte-offset run pending last-result request-serial]
+[:NXT-WISP-4 [source path form-start] byte-offset run pending last-result request-serial]
 pending = NIL | [id request deadline resume raise]
 request = [operation argument]
 ```
@@ -941,7 +947,8 @@ rename reports uncertain durability; it cannot roll the rename back. No timer
 means no checkpoint, reported as a CLI error. Saving does not retain an OS task.
 
 Restore requires `--effects` before dispatching any operation. `inspect` prints
-the pending request, ID, deadline, and source offset without running the guest.
+the pending request, ID, deadline, entry source location, and source offset
+without running the guest.
 Neither command implicitly updates the input tape. Enabling effects in multiple
 forks can duplicate output: there is no exactly-once promise or result ledger,
 and request sequence IDs are not globally unique across forks.
@@ -951,10 +958,90 @@ exit/restart, deletion of the original source, future and expired deadlines,
 effect gating, cancellation/error handlers, binary input, REPL recovery, console
 I/O, direct timer await, chained timer checkpoints, and timer continuation.
 There is no Lisp-form stdin reader,
-file capability, debugger, external-resource rebinding, or guest checkpoint
+debugger, external-resource rebinding, or guest checkpoint
 effect. Network effects are intentionally not checkpointable; add reconciliation
 before enabling network-resource restore. Journaling remains separate work.
 `drive` itself still supplies only scheduling, not this host's effect policy.
+
+### Local source loading uses existing read grants
+
+The executable's `(load "src/main.wisp")` reads through `read-file` and evaluates
+one form at a time with guest `eval`. This follows
+[`web/deno-base.wisp`](https://github.com/mbrock/wisp/blob/223535633179cdf2a49391820bdab16a5db5bf4e/web/deno-base.wisp),
+not a new module-object system: definitions enter existing packages, the caller's
+dynamic context and effects remain active, and caller lexical locals are not
+implicitly visible. Macros and `in-package` take effect before the next read.
+Package changes remain in effect on success **and failure**, as in the reference;
+files should select their intended package explicitly. Loading does not attach
+a defining-file directory to functions later called outside a load.
+
+The local contracts deliberately tighten or clarify the reference:
+
+- **Authority and paths:** `--dir src=PATH` grants read access. The CLI entry file
+  is host-selected and grants nothing by itself. A plain `src/file.wisp` is
+  grant-qualified; only a leading `./` or `../` means relative to the innermost
+  active `load`. Relative loads outside a load fail, including in the CLI entry
+  file and REPL. Dot segments normalize lexically; `..` may not remove the grant
+  name. Empty segments, absolute paths, and URLs are rejected. Actual reads
+  still use the confined filesystem backend and never follow symlinks. There
+  are no search paths, implicit extensions, network imports, or host-CWD fallback.
+- **Identity and repetition:** the normalized, case-sensitive grant path is the
+  cache key. Success returns that path and adds it to `wisp:*loaded-files*`;
+  later calls return NIL without reading or evaluating. Different grant names
+  or hard links are different identities. There is no automatic invalidation.
+  For an explicit development reload, remove that path from `*loaded-files*`
+  first; this does not undo its definitions or unload dependencies.
+- **Cycles and overlap:** a dynamically bound heap stack detects a repeated path
+  in the current loading chain and raises `LOAD-CYCLE` with that chain. The stack
+  unwinds on errors and nonlocal exits, so no abandoned global in-progress lock
+  remains. Independently suspended activations can both load the same uncached
+  path, executing it twice; there is no cross-activation promise sharing or lock.
+  Load shared definitions before starting an HTTP listener when once-only
+  initialization matters.
+- **Failures:** stop at the first escaping reader/evaluator/I/O error. The file
+  is not cached, but earlier definitions, package changes, side effects, and
+  successfully loaded dependencies remain. Retrying repeats the failed file's
+  earlier effects. `LOAD-ERROR` carries a location and the original condition;
+  nested loads retain their enclosing locations. Invalid path syntax raises
+  `LOAD-PATH-ERROR`. Catching a load failure does not roll back the machine.
+- **Await and checkpoints:** source reads explicitly await `:read-file`; forms
+  run until completion or an explicit guest await. The loader adds no scheduler
+  quantum, worker job, retained native loader frame, or checkpoint boundary. A timer
+  inside loaded code **can be checkpointed**: source strings, cursors, cache,
+  dynamic path stack, and continuations are all heap data. Restore resumes that
+  form and subsequent buffered forms without reopening those files. A later
+  previously unloaded dependency needs fresh `--dir` grants; no directory
+  descriptor or authority is saved. An in-flight file read is not checkpointed.
+
+Reader errors report `path:line:column`, using one-based lines and **byte**
+columns; offsets remain zero-based UTF-8 bytes. Unnamed readers use `<string>`.
+CLI evaluation errors name the enclosing top-level form, including after tape
+restore; loaded evaluation errors retain that form's location in `LOAD-ERROR`.
+These are not function-definition locations, subexpression spans, macro source
+maps, or a backtrace. No per-cons source metadata is maintained. CLI diagnostics
+use the supplied host path, while loaded files use their logical grant path.
+The host schema is now v4 to retain the CLI source name and form start; v3 host
+checkpoints are rejected, with no change to the portable tape format.
+
+Runnable two-file example from the repository root:
+
+```sh
+mkdir -p build/wisp-example/lib
+printf '(load "src/lib/answer.wisp")\n(print answer)\n' > build/wisp-example/entry.wisp
+printf '(defvar answer 42)\n' > build/wisp-example/lib/answer.wisp
+build/wisp run build/wisp-example/entry.wisp --dir src=build/wisp-example
+```
+
+A loaded `src/main.wisp` can use `(load "./lib/answer.wisp")`, and a file in
+`src/lib/` can use `(load "../shared.wisp")`. To checkpoint during loading, add
+`(sleep-ms 1)` between two forms in the loaded file, run with `--checkpoint
+build/loading.tape`, and resume with `build/wisp restore build/loading.tape
+--effects --dir src=build/wisp-example`.
+
+[`test/wisp-module-test.py`](../../test/wisp-module-test.py) checks packages and
+macros across reads, normalized cache hits, cycles, retries and partial effects,
+nonlocal exits, caller effect handling, filesystem denial, exact diagnostics,
+and process restart inside nested loads after deleting already-buffered files.
 
 ### C++ HTTP owns protocol policy; Wisp owns request handlers
 

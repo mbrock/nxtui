@@ -1133,25 +1133,40 @@ struct eval_step
         require(stream, tag::v32);
         const auto marker = vm.known("STRING-INPUT-STREAM");
         const auto fields = h.v32slice(stream);
-        if (fields.size() != 3 || fields[0] != marker)
+        const bool named = fields.size() == 5;
+        if ((!named && fields.size() != 3) || fields[0] != marker)
             fail("INVALID-STRING-INPUT-STREAM", {stream});
         const auto offset_word = fields[1], text = fields[2];
         const auto offset = number(offset_word);
         const auto bytes = string(text);
         if (offset < 0 || std::size_t(offset) > bytes.size())
             fail("BOUNDS-ERROR", {text, offset_word});
-        // Own the suffix before parsing can grow the byte/word pools.
-        reader input{h, vm, bytes.substr(offset)};
+        // Own source/name before parsing can grow the byte/word pools.
+        // The full source keeps diagnostics absolute across successive
+        // reads.
+        reader input{
+            h,
+            vm,
+            bytes,
+            named ? string(fields[3]) : "<string>",
+            std::size_t(offset)};
         try {
             const auto form = input.next();
-            const auto end = std::size_t(offset) + input.position();
+            const auto end = input.position();
             if (end > std::size_t(max_fixnum))
                 fail("FIXNUM-OVERFLOW");
             h.v32set(stream, 1, fixnum(static_cast<std::int32_t>(end)));
+            if (named)
+                h.v32set(
+                    stream,
+                    4,
+                    h.newv08(input.location(input.form_position())));
             give(form ? h.cons(*form, nil) : nil);
         } catch (const read_error & error) {
-            // On failure leave the cursor untouched. The source reader's
-            // diagnostic offset is relative to this suffix.
+            // On failure leave the cursor untouched; the error identifies
+            // its exact source location rather than the preceding form.
+            if (named)
+                h.v32set(stream, 4, h.newv08(input.location(error.offset)));
             fail("READ-ERROR", {h.newv08(error.what())});
         }
     }

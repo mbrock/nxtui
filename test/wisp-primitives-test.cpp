@@ -582,6 +582,38 @@ static suite primitive_tests{
                     "INVALID-STRING-INPUT-STREAM");
             };
 
+        "named stream diagnostics preserve cursor on error across collection"_test =
+            [] {
+                primitives m;
+                root stream{
+                    m.h,
+                    m.h.newv32(
+                        std::array{
+                            m.s("STRING-INPUT-STREAM"),
+                            word{0},
+                            m.h.newv08("nil\n  )"),
+                            m.h.newv08("src/bad.wisp"),
+                            nil})};
+                const auto value =
+                    m.call("READ-FROM-STRING-STREAM!", {stream.get()});
+                expect(
+                    (m.h.read<tag::duo>(value) == row<tag::duo>{nil, nil}));
+                expect(m.h.v32slice(stream.get())[1] == 3u);
+                expect(
+                    m.h.v08slice(m.h.v32slice(stream.get())[4])
+                    == "src/bad.wisp:1:1");
+                const auto error =
+                    m.error("READ-FROM-STRING-STREAM!", {stream.get()});
+                expect(m.h.v32slice(error)[0] == m.s("READ-ERROR"));
+                expect(
+                    m.h.v08slice(m.h.v32slice(error)[1])
+                    == "src/bad.wisp:2:3: unexpected character");
+                expect(m.h.v32slice(stream.get())[1] == 3u);
+                expect(
+                    m.h.v08slice(m.h.v32slice(stream.get())[4])
+                    == "src/bad.wisp:2:3");
+            };
+
         "division floors at each step and MOD accepts only positive divisors"_test =
             [] {
                 primitives m;

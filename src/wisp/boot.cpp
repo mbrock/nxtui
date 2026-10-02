@@ -28,17 +28,21 @@ int main(int argc, char ** argv)
         if (format != "none" && format != "zlib")
             throw std::runtime_error("expected compression none|zlib");
         auto booted = image::fresh();
-        for (auto source : {base_library(), host_source}) {
+        for (auto [source, path] :
+             {std::pair{base_library(), "base.wisp"},
+              std::pair{host_source, "host.wisp"}}) {
             {
-                loader load{booted->storage, booted->machine, source};
+                loader load{booted->storage, booted->machine, source, path};
                 auto state = evaluation::runnable;
                 while (state == evaluation::runnable)
                     state = load.advance(2048);
                 if (state == evaluation::failed)
-                    throw std::runtime_error(print(
-                        booted->storage,
-                        booted->storage.get<tag::run, field::err>(
-                            load.run())));
+                    throw std::runtime_error(
+                        load.location() + ": "
+                        + print(
+                            booted->storage,
+                            booted->storage.get<tag::run, field::err>(
+                                load.run())));
             }
             booted->machine.collect();
         }
