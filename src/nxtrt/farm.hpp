@@ -109,6 +109,16 @@ public:
         return this->buffered_size() == 0 && cold_.empty();
     }
 
+    /// Synchronous admission for a bounded owner which handles waiting itself.
+    /// Exhaustion is not end-of-input for that owner: released slots can be
+    /// allocated again. Like alloc(), this never constructs the slot object.
+    [[nodiscard]] value_type * try_alloc()
+    {
+        if (auto index = this->take_buffered_for_derived())
+            return at(*index);
+        return cold_.empty() ? nullptr : at(cold_.take());
+    }
+
     /// The next free slot, or null when every slot is handed out.
     [[nodiscard]] hope<value_type *> alloc()
     {

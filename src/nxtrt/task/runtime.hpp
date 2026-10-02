@@ -9,14 +9,7 @@ namespace nxtrt {
 
 namespace detail {
 
-inline void promise_base::run_completion_callback() noexcept
-{
-    if (completion_child == nullptr)
-        return;
-    completion_child->report_finished_from_promise();
-}
-
-inline void child_record_base::report_finished_from_promise() noexcept
+inline void child_record_base::task_completed() noexcept
 {
     if (firm_record.owner != nullptr)
         firm_record.owner->report_child_finished(*this);

@@ -4,6 +4,9 @@ ontology nxt "https://swa.sh/nxt#"
   class deck
   class firm
   class task
+  class pool
+  class pool-slot
+  class pool-close
   class wish
   class exec
   class exec-state :abstract
@@ -29,6 +32,16 @@ ontology nxt "https://swa.sh/nxt#"
   property observes
   property has-continuation
   property realizes
+  property admitted
+  property frame-source
+  property slots
+  property free-slots
+  property running-slots
+  property ready-slots
+  property consuming
+  property discarding
+  property closing
+  property job
 
 model runtime-model
   signature deck
@@ -47,6 +60,27 @@ model runtime-model
   signature firm
     spawned set task
     issued set deed
+  // Admission ownership is separate from frame allocation: pool jobs use
+  // the ambient firm's frame storage, but have no firm child/deed record.
+  // slots is fixed capacity; consuming/discarding are events on this step.
+  // admitted records job provenance, not current occupancy; slot.job is the
+  // live/result identity. Frame bytes, result values, cancellation delivery,
+  // and eventual completion/close progress are intentionally abstracted out.
+  // Upstream input reservation is folded into admission here; C++ reserves
+  // capacity before reading an idea, and tests cover that additional wait.
+  signature pool
+    admitted set task
+    frame-source one firm
+    slots set pool-slot
+    free-slots var set pool-slot
+    running-slots var set pool-slot
+    ready-slots var set pool-slot
+    consuming var set pool-slot
+    discarding var set pool-slot
+    closing var lone pool-close
+  signature pool-slot
+    job var lone task
+  signature pool-close
   signature task
     has-continuation lone task
   signature wish
@@ -77,8 +111,14 @@ model runtime-model
 
   predicate structural-invariants
     all ([t task])
-      some ([z firm])
-        in t (z spawned)
+      (either
+        (some ([z firm]) (in t (z spawned)))
+        (some ([p pool]) (in t (p admitted))))
+    all ([p pool] [t (p admitted)])
+      no (matching spawned t)
+      one (matching admitted t)
+    all ([s pool-slot])
+      one (matching slots s)
     all ([z firm] [t (z spawned)])
       some ([d (z issued)])
         == (d observes) t
@@ -101,6 +141,123 @@ model runtime-model
       no (a has-settled-phase)
     all ([a exec] [s (intersect (a has-lifecycle) parked-state)])
       no (matching has-ready (a (has-continuation (task exec))))
+
+  predicate pool-shape
+    all ([p pool])
+      == (p slots) (union (p free-slots) (union (p running-slots) (p ready-slots)))
+      no (intersect (p free-slots) (p running-slots))
+      no (intersect (p free-slots) (p ready-slots))
+      no (intersect (p running-slots) (p ready-slots))
+      in (p consuming) (p ready-slots)
+      in (p discarding) (p ready-slots)
+      no (intersect (p consuming) (p discarding))
+      (=> (some (p discarding)) (some (p closing)))
+      all ([s (p free-slots)])
+        no (s job)
+      all ([s (union (p running-slots) (p ready-slots))])
+        one (s job)
+        in (s job) (p admitted)
+    all ([t task])
+      lone (matching job t)
+
+  predicate pools-start-free
+    all ([p pool])
+      == (p free-slots) (p slots)
+      no (p closing)
+
+  predicate pool-transitions
+    all ([p pool])
+      // Close is explicit and terminal; it drains rather than admits.
+      (=> (some (p closing)) (next-state (some (p closing))))
+      all ([s (p free-slots)])
+        (=> (some (p closing)) (next-state (in s (p free-slots))))
+      // Free slots may admit either an asynchronous job (running) or an
+      // immediately settled hope (ready). Completion never returns capacity.
+      all ([s (p running-slots)])
+        next-state
+          in s (union (p running-slots) (p ready-slots))
+        == (s job) (s (prime job))
+      all ([s (p ready-slots)])
+        (either
+          (block (in s (union (p consuming) (p discarding)))
+              (next-state (in s (p free-slots))))
+          (block (no (intersect s (union (p consuming) (p discarding))))
+              (next-state (in s (p ready-slots)))
+              (== (s job) (s (prime job)))))
+
+  predicate pool-capacity-returned-only-by-release
+    all ([p pool] [s (union (p running-slots) (p ready-slots))])
+      (=> (next-state (in s (p free-slots)))
+          (in s (union (p consuming) (p discarding))))
+
+  predicate pool-ready-cannot-be-readmitted
+    all ([p pool] [s (p ready-slots)])
+      no (intersect s (p (prime running-slots)))
+      (=> (next-state (in s (p ready-slots)))
+          (== (s job) (s (prime job))))
+
+  predicate pool-release-retires-result
+    all ([p pool] [s (union (p consuming) (p discarding))])
+      next-state
+        in s (p free-slots)
+        no (s job)
+
+  // One slot is used asynchronously, held ready, consumed, reused for an
+  // immediate result, then discarded by explicit close. Both release paths
+  // and the capacity-boundary states occur in this satisfiable witness.
+  predicate pool-reuse
+    some ([p pool] [s (p slots)] [a (p admitted)] [b (p admitted)])
+      no (intersect a b)
+      next-state
+        in s (p running-slots)
+        == (s job) a
+        next-state
+          in s (p ready-slots)
+          no (p consuming)
+          no (p discarding)
+          next-state
+            in s (p consuming)
+            next-state
+              in s (p free-slots)
+              next-state
+                in s (p ready-slots)
+                == (s job) b
+                some (p closing)
+                in s (p discarding)
+                next-state
+                  in s (p free-slots)
+
+  run pool-reuse-witness :for ([1 pool pool-slot pool-close firm] [2 task] [0 deck deed wish exec]) :trace-length 8
+    always structural-invariants
+    always pool-shape
+    pools-start-free
+    always pool-transitions
+    pool-reuse
+
+  // Bounded safety checks: at most two slots/jobs, eight steps; ownership
+  // and slot shape are premises, as are the transition rules under test.
+  // The pool-only scopes contain one pool/ambient firm and no execs/deeds.
+  // Exec retirement is independent and checked below, not assumed here.
+  check pool-capacity-only-after-release :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 8
+    assume always structural-invariants
+    assume always pool-shape
+    assume pools-start-free
+    assume always pool-transitions
+    show always pool-capacity-returned-only-by-release
+
+  check pool-ready-not-readmitted :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 8
+    assume always structural-invariants
+    assume always pool-shape
+    assume pools-start-free
+    assume always pool-transitions
+    show always pool-ready-cannot-be-readmitted
+
+  check pool-release-retires :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 8
+    assume always structural-invariants
+    assume always pool-shape
+    assume pools-start-free
+    assume always pool-transitions
+    show always pool-release-retires-result
 
   predicate lifecycle-transitions
     all ([a exec] [s (intersect (a has-lifecycle) prepared-state)])

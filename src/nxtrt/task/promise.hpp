@@ -57,6 +57,16 @@ void deallocate_task_frame(void * ptr, std::size_t size) noexcept;
 struct promise_base;
 struct child_record_base;
 struct deed_result_state_base;
+
+/// A stable, non-owning observer of final suspension. Notification must not
+/// destroy the completing frame: final_suspend still has work to do.
+struct completion_observer
+{
+    virtual void task_completed() noexcept = 0;
+protected:
+    ~completion_observer() = default;
+};
+
 struct parent_stop_callback_fn
 {
     promise_base * child = nullptr;
@@ -209,11 +219,15 @@ struct promise_base
             current->current_deck->enqueue(continuation, continuation_promise);
     }
 
-    void run_completion_callback() noexcept;
-
-    void observe_completion_of(child_record_base & child) noexcept
+    void run_completion_callback() noexcept
     {
-        completion_child = &child;
+        if (completion != nullptr)
+            completion->task_completed();
+    }
+
+    void observe_completion_of(completion_observer & observer) noexcept
+    {
+        completion = &observer;
     }
 
     void enqueue_self(std::coroutine_handle<> handle)
@@ -241,8 +255,8 @@ struct promise_base
     std::optional<parent_stop_callback_type> parent_stop_callback;
     /// Cancels the current parked wish when this task is stopped.
     std::optional<wait_stop_callback_type> wait_stop_callback;
-    /// Optional firm child record to notify when this task reaches final suspend.
-    child_record_base * completion_child = nullptr;
+    /// Optional owner to notify when this task reaches final suspend.
+    completion_observer * completion = nullptr;
 
 private:
     std::stop_source stop_;

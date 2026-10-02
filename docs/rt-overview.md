@@ -69,18 +69,35 @@ Higher-level helpers such as `when_all`, `wait_any`, and `with_timeout` are
 written in terms of firms. They are not separate schedulers; they are
 composition patterns over the same task and deck machinery.
 
-For a closed set of children, pass a tuple of tasks or nullary task factories:
+For a batch of children, pass a tuple of tasks or nullary task factories:
 `when_all(std::tuple{f, g})`, `wait_any(std::tuple{f, g})`, or
-`with_firm<Policy>(std::tuple{f, g})`. Bookkeeping has exactly two slots in this
-example, and owned factories stay alive until all children have drained. Further
-forks need a nested firm. Callable firms and variadic/range helpers retain open
-admission; the tuple form does not change them. See the
-[implemented tuple contract](../rfc/new/rfc-0014-idea-algebra.md#implemented-closed-task-tuples)
-for results, cancellation policies, and the separate frame-byte budget.
+`with_firm<Policy>(std::tuple{f, g})`. These are ordinary growable nurseries,
+not exact-size teams: children can fork into their ambient firm. Owned
+factories stay alive until all children have drained. See the
+[implemented tuple contract](../rfc/new/rfc-0014-idea-algebra.md#implemented-task-tuples)
+for results and cancellation policies.
+
+`nxtrt/idea.hpp` names the broader recipe constraint: `idea<Fn>` is a
+move-constructible callable invoked as a mutable stored lvalue, returning
+`task<T>` or `hope<T>` by value. `idea_result_t<Fn>` names `T`, and
+`idea_of<Fn, T>` checks it. An idea is not a `std::function` or an erased owning
+wrapper. Consumers invoke each admitted recipe once and preserve its storage
+through settlement, including failure and cancellation; the concept itself
+cannot enforce those obligations. Hope-producing ideas may complete without
+allocating a coroutine. This does not extend the tuple helpers' task-only
+factory contract or turn firms into the future fixed-team/pool abstraction.
 
 Concrete API:
 
 - @ref nxtrt::firm "nxtrt::firm"
+
+## Pools {#rt_pool_overview}
+
+A [bounded idea pool](rt-pool.md) turns a homogeneous feed of recipes into a
+completion-order result feed. It borrows farm slots and output land; consuming
+results returns admission capacity. Pool jobs are owned directly, not retained
+as firm child records. Ready hopes stay synchronous, while pending tasks use
+the existing deck and frame provider.
 
 ## Deeds {#rt_deed}
 

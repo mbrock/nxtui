@@ -4,31 +4,42 @@ Status: new
 
 ## Summary
 
-Task composition should mostly operate on task factories, not on already-born
-`task<T>` values.
+Task composition should mostly operate on recipes, not on already-born
+`task<T>` values. A recipe may also return a `hope<T>`, keeping a synchronous
+ready result free of coroutine allocation.
 
-This RFC introduces the working word `idea<T>` for a callable that can produce
-a fresh `task<T>` inside the current firm:
+The implemented `nxtrt/idea.hpp` API names that recipe with a concept, not an
+erased owning wrapper:
 
 ```cpp
-template<typename F, typename T>
-concept idea_of =
-    std::invocable<F &>
-    && std::same_as<std::invoke_result_t<F &>, task<T>>;
+idea<Fn>             // movable callable: Fn& -> task<T> or hope<T>, by value
+idea_result_t<Fn>     // T
+idea_of<Fn, T>        // idea<Fn> with exactly this eventual value type
 ```
 
-The exact spelling may be a concept, alias family, or wrapper type. The
-important distinction is:
+`Fn` must be move-constructible and callable without arguments as a mutable
+stored lvalue. Move-only and mutable closures qualify; rvalue-only call
+operators do not. References to tasks/hopes, const-qualified return values,
+other awaitables, and merely convertible result types do not qualify.
+Invalid callable/result types fail the constraint rather than producing hard
+trait errors. The distinction is:
 
 ```text
 wish      = analyzable value recipe for outside work
-idea<T>   = opaque callable recipe for a task<T>
+idea<Fn>  = opaque callable recipe for a task<T> or hope<T>
 task<T>   = already-born coroutine frame
 ```
 
 An idea is a degenerate wish in one sense: it is a desire to compute `T`. But
 unlike a wish, it is opaque. The runtime cannot inspect it until it is invoked
-and the task frame is born.
+and a task or hope is produced.
+
+Consumers invoke each admitted idea once and keep its stored callable alive
+through settlement of the produced work, including failure and cancellation.
+These are consumer lifetime obligations, not properties a concept can prove.
+There is no `std::function` storage or copyability requirement. Prefer named
+coroutine helpers with explicit parameters; invoking a temporary capturing
+coroutine lambda does not transfer its closure into its coroutine frame.
 
 ## Motivation
 
@@ -78,7 +89,7 @@ Names such as `all`, `race`, and `then` may be clearer than symbolic operators
 for the first implementation. Operators can be added only where the meaning is
 pleasant and unsurprising.
 
-## Implemented: closed task tuples
+## Implemented: task tuples
 
 The first concrete API uses the existing names and an explicit tuple, rather
 than new operators or a type-erased `idea` wrapper:
@@ -117,25 +128,34 @@ and groups failures if none succeeds. Failure alone does not win this race.
 `stop_on_completion` instead stops siblings on either success or failure; it is
 used by the fixed readiness/deadline pair in `poll_until_after`.
 
-For N tuple elements, child, deed, completion and join-failure bookkeeping each
-have exactly N inline slots, rather than four default allocations sized for
-4,096 children. The backing lives in the owning coroutine frame; the movable
-policy borrows it. The existing 4 MiB frame arena remains separately allocated:
-task count does not bound the bytes used by nested coroutine calls, so this is
-not an allocation-free API.
+Tuple composition now uses an ordinary growable firm nursery, just like
+callable firms and variadic/range combinators. The tuple sizes the initial
+batch; it does not promise exactly N bookkeeping slots, a fixed 4 MiB frame
+budget, or allocation-free execution. Bookkeeping and frame storage follow
+the ordinary nursery implementation rather than a tuple-specific capacity
+contract.
 
-The tuple explicitly closes admission. A child that wants more forks must open
-a nested firm. Existing callable firms, variadic/range combinators, and
-`with_timeout` keep their open admission behavior: arbitrary tasks, especially
-HTTP handlers, may already fork into their ambient firm. Only known closed
-sets have migrated: readiness/deadline races and the cgroup sampling batch.
+Admission remains open: a child can fork into its ambient firm without opening
+a nested firm. Readiness/deadline races and the cgroup sampling batch use the
+tuple syntax for composition, not as a capacity boundary. The tuple helpers
+currently accept task values and task factories; the broader `idea` concept
+does not by itself add hope-producing factories to those helpers.
 
 Settlement records retain their bidirectional deed link after evacuating a task
 frame. Moving a joined deed retargets the record; destroying either side detaches
 the other. Clearing only the deed's link at evacuation left a stale pointer in
-borrowed bookkeeping, exposed when returning fixed-set outcomes. Records also
+bookkeeping, exposed when returning tuple outcomes. Records also
 retain observation when a deed is released, so a later join does not report an
 already handled failure again.
+
+## Future: teams and pools
+
+A fixed team or a capacity-limited pool can consume ideas and define its own
+admission, ownership, and scheduling contract. That is distinct from the
+ordinary growable tuple nursery. The `idea` concept is the shared recipe
+vocabulary, not an implementation of those owners: it adds neither a queue nor
+a frame budget. Any future owner must keep admitted recipe storage stable
+through settlement and account for a hope being ready without a task frame.
 
 ## Time As Territory
 
@@ -177,11 +197,14 @@ Wishes remain analyzable values:
 op::recv_some{fd, max}
 ```
 
-Ideas are opaque callable task recipes:
+Ideas are opaque callable recipes:
 
 ```cpp
-auto receive_loop = [&] -> task<void> { ... };
+auto receive_loop = [&] { return run_receive_loop(socket); };
 ```
+
+Here `run_receive_loop` is a named coroutine helper; the closure itself is
+not a coroutine.
 
 The algebra may lift wishes into ideas:
 
@@ -193,7 +216,6 @@ but it should not pretend that every idea can be inspected like a wish.
 
 ## Open Questions
 
-- Is `idea<T>` only a concept, or should there be an owning type-erased wrapper?
 - Which operators are genuinely readable enough to keep?
 - How do time budgets compose through `all`, `race`, and `then`?
 - Should `firm::of(f, g)` be the first concrete API before symbolic operators?

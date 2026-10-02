@@ -1401,6 +1401,19 @@ protected:
         return discard_more_slow(limit);
     }
 
+protected:
+    /// Optional source-credit notification, after buffered values are consumed.
+    /// A derived source may return admission capacity here, but must not refill:
+    /// a span-taking caller may still be using the consumed bytes. Ordinary
+    /// feeds pay no virtual call on the buffered hot path.
+    void observe_consumption(
+        void * context,
+        void (*notify)(void *, std::size_t) noexcept) noexcept
+    {
+        consumption_context_ = context;
+        consumption_notify_ = notify;
+    }
+
 private:
     void toss(std::size_t n)
     {
@@ -1408,6 +1421,8 @@ private:
             throw value_buffer_error{"value source consumed past buffer"};
         ring_.destroy_prefix(n);
         reset_if_empty();
+        if (consumption_notify_ != nullptr)
+            consumption_notify_(consumption_context_, n);
     }
 
     std::optional<value_type> take_buffered()
@@ -1843,6 +1858,8 @@ private:
 
     rack<value_type> owned_buffer_{0};
     ring_region<value_type> ring_;
+    void * consumption_context_ = nullptr;
+    void (*consumption_notify_)(void *, std::size_t) noexcept = nullptr;
 };
 
 namespace detail {

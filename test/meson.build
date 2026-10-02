@@ -5,6 +5,8 @@ if get_option('tests')
     'crypto-test.cpp',
     'include-test.cpp',
     'http-server-test.cpp',
+    'idea-test.cpp',
+    'pool-test.cpp',
     'runtime-test.cpp',
     'terminal-test.cpp',
     'mtproto-test.cpp',

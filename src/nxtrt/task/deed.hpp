@@ -164,7 +164,7 @@ struct firm_child_record_header
     bool result_observed = false;
 };
 
-struct child_record_base
+struct child_record_base : completion_observer
 {
     child_record_base() = default;
     child_record_base(const child_record_base &) = delete;
@@ -190,7 +190,7 @@ struct child_record_base
         deed_result_state_base * new_result) noexcept = 0;
     virtual void request_stop() noexcept = 0;
 
-    void report_finished_from_promise() noexcept;
+    void task_completed() noexcept override;
 
     firm_child_record_header firm_record;
 };

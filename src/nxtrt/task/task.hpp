@@ -267,6 +267,15 @@ public:
         throw runtime_error{"nxtrt hope is not ready"};
     }
 
+    /// Transfer pending execution to an owner that supplies its own scheduling,
+    /// completion and cancellation protocol (rather than awaiting this hope).
+    [[nodiscard]] task<T> take_pending() &&
+    {
+        if (is_ready())
+            throw runtime_error{"nxtrt hope is not pending"};
+        return std::move(std::get<task<T>>(state_));
+    }
+
     void await_suspend(std::coroutine_handle<> awaiting)
     {
         std::get<task<T>>(state_).splice_onto(awaiting, follow_stop_);
@@ -319,6 +328,13 @@ public:
     {
         if (!is_ready())
             throw runtime_error{"nxtrt hope is not ready"};
+    }
+
+    [[nodiscard]] task<void> take_pending() &&
+    {
+        if (is_ready())
+            throw runtime_error{"nxtrt hope is not pending"};
+        return std::move(std::get<task<void>>(state_));
     }
 
     void await_suspend(std::coroutine_handle<> awaiting)
