@@ -445,11 +445,34 @@ enter `nix develop .#spec` or run:
 nix develop .#spec -c make spec
 ```
 
-Racket and Java come from Nix. The first `make spec` still installs the Racket
-library packages from their catalogs into the project-local
-`.racket/<racket-version>/`, compiled code included; those libraries are not
-Nix derivations. Later runs reuse them, nothing touches your global Racket
-setup, and a Racket upgrade triggers a fresh setup on the next `make spec`.
+Racket, Java, and the compiled Racket libraries all come from Nix.
+`nix/racket-sources.json` pins the external package closure to source revisions
+and Nix content hashes; `nix/spec-racket.nix` installs and compiles those inputs
+offline, including the patched Forge and Something sources in `vendor/racket/`.
+The resulting `spec-racket` package is an ordinary cacheable Nix derivation:
+
+```sh
+nix build .#spec-racket
+```
+
+No catalog resolution or package installation happens when entering the shell
+or running `make spec`. Only bytecode for editable model/DSL sources goes into
+the version-keyed `.racket/` cache; old local package installs there are ignored.
+Editing a model does not rebuild the dependency package. `nix flake check`
+also runs the specs in a clean Nix build sandbox.
+
+To deliberately refresh the dependency lock from the Racket catalog (this is
+the networked update step, not part of normal builds):
+
+```sh
+nix develop .#spec -c racket nix/update-racket-sources.rkt > nix/racket-sources.json.new &&
+  mv nix/racket-sources.json.new nix/racket-sources.json
+nix build .#checks.x86_64-linux.spec # use your system's check attribute
+```
+
+Review and commit the lock changes. The updater derives the closure from the
+vendored packages' dependency declarations, excluding libraries already
+provided by the Racket distribution pinned in `flake.lock`.
 
 Regenerate local API docs (poxy + Doxygen) with:
 

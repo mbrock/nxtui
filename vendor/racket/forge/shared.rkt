@@ -88,7 +88,8 @@
     (define git-exe (find-executable-path (if windows? "git.exe" "git")))
     (define forge-dir forge-source-dir)
     (if (not git-exe)
-        (raise "Could not find Forge package installed on the system.")
+        ; Git metadata is optional, e.g. in an offline Nix runtime closure.
+        (void)
         (parameterize ([current-directory forge-dir])
           (map
             string-trim

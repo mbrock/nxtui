@@ -17,6 +17,7 @@
     {
       packages = forAllSystems (pkgs: rec {
         nxt = pkgs.callPackage ./nix/package.nix { };
+        spec-racket = pkgs.callPackage ./nix/spec-racket.nix { };
         default = nxt;
       });
 
@@ -46,20 +47,19 @@
               ];
           };
 
-          # Opt-in model development; basic orbs do not realize these tools
-          # or install the project-local Racket packages.
+          # Opt-in model development; basic orbs do not realize these tools.
           spec = pkgs.mkShell {
-            packages = with pkgs; [
-              racket
-              jdk21_headless
-              gnumake
+            packages = [
+              self.packages.${stdenv.hostPlatform.system}.spec-racket
+              pkgs.gnumake
             ];
 
             shellHook = ''
-              # Same project-local Racket package and compiled-code dirs the
-              # Makefile uses, so plain `racket nxtrt/model.rkt` works here too.
-              export PLTADDONDIR="$PWD/.racket"
-              export PLTCOMPILEDROOTS="$PLTADDONDIR/$(racket -e '(display (version))')/compiled:same"
+              # Only editable model/DSL bytecode is local. Dependencies and
+              # their compiled code come from the immutable Nix package.
+              export PLTCOLLECTS="$PWD:"
+              # The empty suffix preserves Racket's installed bytecode roots.
+              export PLTCOMPILEDROOTS="$PWD/.racket/$(racket -e '(display (version))')/compiled:"
             '';
           };
         }
@@ -68,10 +68,36 @@
       checks = forAllSystems (
         pkgs:
         let
-          nxt = self.packages.${pkgs.stdenv.hostPlatform.system}.nxt;
+          inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) nxt spec-racket;
+          specSource = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./Makefile
+              ./nxtrt
+              ./rdf-forge
+            ];
+          };
         in
         {
           inherit nxt;
+
+          spec =
+            pkgs.runCommand "nxt-spec-check"
+              {
+                nativeBuildInputs = [
+                  spec-racket
+                  pkgs.gnumake
+                ];
+              }
+              ''
+                export HOME="$TMPDIR/home"
+                mkdir -p "$HOME"
+                cp -R ${specSource} source
+                chmod -R u+w source
+                cd source
+                make spec
+                touch "$out"
+              '';
 
           consumer =
             pkgs.runCommandCC "nxt-consumer-check"

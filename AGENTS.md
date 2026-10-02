@@ -99,16 +99,18 @@ vacuously true when the exec has no settled phase. Test phase membership with
 check that it can fail: delete the rule it depends on and confirm `make spec`
 reports it.
 
-or, inside `nix develop .#spec` after one `make spec` has set up `.racket/`,
-directly with:
+or, inside `nix develop .#spec`, directly with:
 
 ```sh
 racket nxtrt/model.rkt --run-all
 ```
 
-Racket packages and compiled code for the spec live in the project-local,
-version-keyed `.racket/` dir (see `NXT_RACKET_ADDON_DIR` in the Makefile),
-never in the user's global Racket setup.
+Racket packages and their compiled code live in the cacheable Nix
+`spec-racket` derivation, never in the user's global Racket setup. Only
+bytecode for editable repo sources lives in the version-keyed `.racket/`
+cache (see `NXT_RACKET_CACHE_DIR` in the Makefile). Normal builds do not
+resolve catalog packages; `nix/update-racket-sources.rkt` is the explicit
+networked updater for `nix/racket-sources.json`.
 
 ## Build And Nix
 
@@ -117,8 +119,9 @@ only wraps it. `nix develop` gives the C++ and docs toolchain, including AWS-LC
 for the crypto cross-check tests. Racket and Forge's JDK are opt-in via
 `nix develop .#spec`; basic orb setup does not install spec dependencies.
 `nix build` builds the installable package with tests, and `nix flake check`
-also builds a small pkg-config consumer (`nix/consumer.cpp`) against the
-install. When adding a public header directory or a `.cpp` file under `src/`,
+also checks the runtime specs offline and builds a small pkg-config consumer
+(`nix/consumer.cpp`) against the install. When adding a public header
+directory or a `.cpp` file under `src/`,
 keep the header install excludes in `src/meson.build` in sync.
 
 For wand bugs, first map the concrete operation to the model vocabulary:

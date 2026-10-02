@@ -13,17 +13,19 @@ single `#lang rdf-forge` source file.
 - `ontology-next.rkt` and `model-next.rkt` are matching entrypoints for the
   next model.
 
-On a fresh machine, install the ordinary Racket catalog dependencies and link
-the vendored Racket packages once:
+On a fresh machine, enter the reproducible spec environment:
 
 ```sh
-make setup-racket
+nix develop .#spec
 ```
 
 The `forge` and `something` packages used by this model are vendored under
 `vendor/racket/` because this repo depends on small local patches to both.
-`make spec` prepends the vendored collections to `PLTCOLLECTS`, so it does not
-depend on sibling checkouts in `~/src`.
+Nix builds them and their hash-pinned dependencies into a cached package,
+including compiled bytecode. No `raco pkg install` is needed in the checkout,
+and no sibling checkouts or user-level Racket packages are used. The shell
+exposes the editable `rdf-forge` collection from this repo; its bytecode cache
+lives under `.racket/<racket-version>/compiled/`.
 
 Generate a basic Turtle/RDFS/OWL view of the ontology:
 

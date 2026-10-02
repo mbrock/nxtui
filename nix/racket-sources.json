@@ -1,0 +1,178 @@
+[
+  {
+    "hash": "sha256-LV0GyGOP5N8iJQ9DdspDJbgKs9xcVI612Q2paNXzxK8=",
+    "packages": {
+      "tabular": "."
+    },
+    "url": "https://git.leastfixedpoint.com/tonyg/racket-tabular/archive/b0440d5443f4f0e81dcd7eba4f5709c91b873a3b.tar.gz"
+  },
+  {
+    "hash": "sha256-p6XFkvzwgrUDOXHz9rcmFvu9mfi/rIYYNXiwW4ysr64=",
+    "packages": {
+      "debug": "."
+    },
+    "url": "https://github.com/AlexKnauth/debug/archive/2d089fcfb76c4e0524669ef7ce8efeef489d1243.tar.gz"
+  },
+  {
+    "hash": "sha256-0LENO8OBd4cwAzSLf4KnWaGRSB/F3sMDXoAnpR7xf1Y=",
+    "packages": {
+      "pretty-format": "."
+    },
+    "url": "https://github.com/AlexKnauth/pretty-format/archive/59c03bb6123fcd898e5143b451e6c9a8b89f7f8b.tar.gz"
+  },
+  {
+    "hash": "sha256-b0Q++FnbQQCHqDS3JIGqGm/M08KG+VxHv8+mSBdq9vA=",
+    "packages": {
+      "actor-lib": "actor-lib"
+    },
+    "url": "https://github.com/Bogdanp/racket-actor/archive/0d46e1f039bbc22372171a077884f28ccd283c93.tar.gz"
+  },
+  {
+    "hash": "sha256-5fYrV79nQDnvDXIpPO3EUPVwRZFIUOdi4i0wXnjTkKw=",
+    "packages": {
+      "http-easy": "http-easy",
+      "http-easy-lib": "http-easy-lib"
+    },
+    "url": "https://github.com/Bogdanp/racket-http-easy/archive/d099f4025f93b5938b7a66db821aa4888e2a2afc.tar.gz"
+  },
+  {
+    "hash": "sha256-EwkoTDzhle0WtdyCfaJGo5F7xWFN2c+LHXJhjZ9A6RI=",
+    "packages": {
+      "resource-pool-lib": "resource-pool-lib"
+    },
+    "url": "https://github.com/Bogdanp/racket-resource-pool/archive/323ca977ab55f526582f322f148cf684b79896c3.tar.gz"
+  },
+  {
+    "hash": "sha256-L8TP8BnA9LhqFia2mIrIk3TPAfVRwDv+HeKgLWaTe5Y=",
+    "packages": {
+      "mischief": "."
+    },
+    "url": "https://github.com/carl-eastlund/mischief/archive/c6f95a774b60950cabd7238e639f7e5f0d8737cd.tar.gz"
+  },
+  {
+    "hash": "sha256-FgQbcKnG67DZeU0Owa4mP7pwGmnW4J8fozd5etZbsxQ=",
+    "packages": {
+      "sha": "."
+    },
+    "url": "https://github.com/greghendershott/sha/archive/f9472bea67e05e8c11dc915e943038d3a7276a9b.tar.gz"
+  },
+  {
+    "hash": "sha256-8bGjhNs8LQOmZysv/GvNKAahKfgnP9V9HECg0IYEGpM=",
+    "packages": {
+      "predicates": "."
+    },
+    "url": "https://github.com/jackfirth/predicates/archive/0c0baa3c6871ae39c9b94af1591331d30fced968.tar.gz"
+  },
+  {
+    "hash": "sha256-E5FjZ8amw1MfFNBIq1Hkm3emnlF5mgmWSzt6bfhgq+U=",
+    "packages": {
+      "request": "."
+    },
+    "url": "https://github.com/jackfirth/racket-request/archive/d010a60ad227a540f40b4707cd570d101d5530b3.tar.gz"
+  },
+  {
+    "hash": "sha256-00A4fPrg/Mv8OljC8JvghB/scd7xFAP0d/tvBMUcDgo=",
+    "packages": {
+      "syntax-classes": "syntax-classes",
+      "syntax-classes-doc": "syntax-classes-doc",
+      "syntax-classes-lib": "syntax-classes-lib"
+    },
+    "url": "https://github.com/lexi-lambda/syntax-classes/archive/4d64d35259d69ee8d5c90f475fe777c66d54c8fd.tar.gz"
+  },
+  {
+    "hash": "sha256-aNYtnW/usIbqebWXIsWZKylfo83oXUGGJCbLhoaXoJ8=",
+    "packages": {
+      "asn1-lib": "asn1-lib"
+    },
+    "url": "https://github.com/rmculpepper/asn1/archive/3cd32b61a68b40ec03bed98cd0c4d4d4f72cacf2.tar.gz"
+  },
+  {
+    "hash": "sha256-wxEqfbAcnZNhB2YXiMTadpilHWcaGBfXtDjYYQ/VtbQ=",
+    "packages": {
+      "binaryio-lib": "binaryio-lib"
+    },
+    "url": "https://github.com/rmculpepper/binaryio/archive/e949401e3acd7aa51ffe044cb75288128ce64c61.tar.gz"
+  },
+  {
+    "hash": "sha256-6Y4WZ494vNxY3/WOq7Dmi7SpfYqMsqVvG8SyqXUTU7g=",
+    "packages": {
+      "crypto-lib": "crypto-lib"
+    },
+    "url": "https://github.com/rmculpepper/crypto/archive/713eaaf45a5e6c55bd3e97a32b2a90f61ef13c4f.tar.gz"
+  },
+  {
+    "hash": "sha256-SKoi5GD3bHL0ktxEtC7wpzu6epjIEnc7zMtJ2rGe5zU=",
+    "packages": {
+      "base64-lib": "base64-lib"
+    },
+    "url": "https://github.com/rmculpepper/racket-base64/archive/f783f42743b158173c5775b90b5cadcc41f700b3.tar.gz"
+  },
+  {
+    "hash": "sha256-Z09YdkD6nzwF51CjF7405cf4ZGR/OGAnYJrVvbXidEU=",
+    "packages": {
+      "gmp-lib": "gmp-lib"
+    },
+    "url": "https://github.com/rmculpepper/racket-gmp/archive/768c33615a1c2414ccaf1a1e4ea1064bd5dd46af.tar.gz"
+  },
+  {
+    "hash": "sha256-pKp/sVd/xNOIbZsRwg1yRi5Xr+7V5DJqr3QxsM6MLhI=",
+    "packages": {
+      "hash-view-lib": "hash-view-lib"
+    },
+    "url": "https://github.com/rmculpepper/racket-hash-view/archive/7a9b31d1715c40c205a065d666fcc74d840a8a5e.tar.gz"
+  },
+  {
+    "hash": "sha256-GbniMHYktaaXLbc/CHNRxQvzisc2u5NAsUH2E4ZLYeY=",
+    "packages": {
+      "scramble-lib": "scramble-lib"
+    },
+    "url": "https://github.com/rmculpepper/racket-scramble/archive/a2d1dfd8d249c63059bed2958e71dbb6e9098319.tar.gz"
+  },
+  {
+    "hash": "sha256-2DdngIyocn+CrLf4A4yO9+XJQjIxzKVpmvGiNuM7mTQ=",
+    "packages": {
+      "fancy-app": "."
+    },
+    "url": "https://github.com/samth/fancy-app/archive/f451852164ee67e3e122f25b4bce45001a557045.tar.gz"
+  },
+  {
+    "hash": "sha256-Ia+wFnUSKMfhot0f8I8TFCPtGEdwy9gnnrnBEgNvSt0=",
+    "packages": {
+      "basedir": "."
+    },
+    "url": "https://github.com/willghatch/racket-basedir/archive/487dfc49ff3268b76dea9aa2011ddfe585da2672.tar.gz"
+  },
+  {
+    "hash": "sha256-aVbv49pLV53gj67a1kWOW41k19QBRwOjP5eMv3Levlg=",
+    "packages": {
+      "beautiful-racket": "beautiful-racket",
+      "beautiful-racket-demo": "beautiful-racket-demo",
+      "beautiful-racket-lib": "beautiful-racket-lib",
+      "beautiful-racket-macro": "beautiful-racket-macro"
+    },
+    "url": "https://gitlab.com/mbutterick/beautiful-racket/-/archive/7d41a489c6ec6e1f35fdd5b7ee1861cc11ccde19/beautiful-racket-7d41a489c6ec6e1f35fdd5b7ee1861cc11ccde19.tar.gz"
+  },
+  {
+    "hash": "sha256-and0y3rBjXwmgaEwwXzJOTgX/wCSY0uUfB3+U4JLTrk=",
+    "packages": {
+      "br-parser-tools-doc": "br-parser-tools-doc",
+      "br-parser-tools-lib": "br-parser-tools-lib"
+    },
+    "url": "https://gitlab.com/mbutterick/br-parser-tools/-/archive/95b7c69cf9d660a51abf4742378b9adb7100d25a/br-parser-tools-95b7c69cf9d660a51abf4742378b9adb7100d25a.tar.gz"
+  },
+  {
+    "hash": "sha256-NJctskWDoBNRdBMDklALkMAPKT4A7on8pu6X3Q6NheE=",
+    "packages": {
+      "brag": "brag",
+      "brag-lib": "brag-lib"
+    },
+    "url": "https://gitlab.com/mbutterick/brag/-/archive/30cbf95e6a717e71fb8bda6b15a7253aed36115a/brag-30cbf95e6a717e71fb8bda6b15a7253aed36115a.tar.gz"
+  },
+  {
+    "hash": "sha256-hXcKYCxOBpj5TMU2h25UI9QDBB9MvLuODwUvirRlQro=",
+    "packages": {
+      "sugar": "."
+    },
+    "url": "https://gitlab.com/mbutterick/sugar/-/archive/c90834b77afad07f9b02986fc8e157ccf30b753c/sugar-c90834b77afad07f9b02986fc8e157ccf30b753c.tar.gz"
+  }
+]
