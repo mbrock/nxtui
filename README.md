@@ -277,6 +277,16 @@ meson compile -C build
 build/nxt-tests
 ```
 
+New build directories default to `debugoptimized`: optimization and debug
+symbols, with assertions enabled. Use `meson setup build --buildtype=debug`
+for an unoptimized build, or `meson configure build -Dbuildtype=debugoptimized`
+to update an existing debug build.
+
+The Wisp tool boots its base and host libraries once at build time and embeds
+the resulting tape. Fresh runs and REPLs decode a private copy; restores still
+use only the selected checkpoint. Library source, evaluator, or tape-codec
+changes regenerate the embedded image automatically.
+
 The default build produces `nxt-tests`, `nxtllm`, `nxtmt`, `wisp`, the shared
 `libnxt-core`, the demo programs, and the `nxt-dev` developer command bundle.
 Try the small TUI demo with:
@@ -293,6 +303,16 @@ Boost headers and `-std=c++23`.
 The tests that cross-check crypto against a reference `libcrypto` (RSA/ECDSA
 fixtures and ML-KEM-768) expect AWS-LC's headers; with OpenSSL or no
 `libcrypto` they are skipped at configure time.
+
+Meson keeps allocator poisoning enabled for everyday tests. The repeated HTTP
+stress tier opts out: poisoning each timeout scope's mostly unused 4 MiB firm
+arena dominates its timing. This avoids harness overhead, not the runtime's
+large per-scope reservations; reusing or lazily allocating that backing remains
+a runtime optimization. To run the stress cases with poisoning explicitly:
+
+```sh
+MALLOC_PERTURB_=17 build/nxt-tests --only-slow
+```
 
 ### Continuous integration
 

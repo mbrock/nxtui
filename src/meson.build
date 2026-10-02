@@ -160,7 +160,20 @@ if get_option('wisp_tool')
     output : 'wisp-host.hpp',
     configuration : wisp_host_config,
   )
-  wisp_tool = executable('wisp', 'wisp/main.cpp',
+  wisp_boot = executable('wisp-boot', 'wisp/boot.cpp',
+    include_directories : nxt_inc,
+    dependencies : [nxt_core_dep],
+  )
+  wisp_boot_header = custom_target('wisp-boot-tape',
+    output : 'wisp-boot.hpp',
+    input : files('wisp/base.wisp', 'wisp/host.wisp'),
+    command : [wisp_boot, '@OUTPUT@'],
+    # The generator uses the embedded sources and the current evaluator
+    # and tape codec. Regenerate when any of those change, even if the
+    # shared library's exported symbols remain the same.
+    depends : [nxt_core_lib],
+  )
+  wisp_tool = executable('wisp', ['wisp/main.cpp', wisp_boot_header],
     include_directories : nxt_inc,
     dependencies : [nxt_core_dep, nxt_stacktrace_dep],
     install : true,
@@ -235,6 +248,7 @@ nxt_header_install_excludes = {
     'tape.cpp',
     'base.wisp',
     'base.hpp.in',
+    'boot.cpp',
     'main.cpp',
     'host.wisp',
     'host.hpp.in',

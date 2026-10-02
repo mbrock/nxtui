@@ -92,9 +92,15 @@ if get_option('tests')
   # runs both, as CI does; `meson test --no-suite slow` skips the slow tier.
   # Each test keeps its own deadline.
   test('nxt-tests', nxt_tests, timeout : 180)
+  # Meson's malloc poisoning fills each timeout's mostly unused 4 MiB
+  # firm arena thousands of times. Keep poisoning in the everyday lifetime
+  # tests, but not this capacity/recycling stress tier. Remove the override
+  # when firm backing is reused or allocated lazily. To stress with poison:
+  # MALLOC_PERTURB_=17 build/nxt-tests --only-slow
   test('nxt-slow-tests', nxt_tests,
     args : ['--only-slow'],
     suite : 'slow',
+    env : {'MALLOC_PERTURB_' : '0'},
     timeout : 180,
   )
 
@@ -108,7 +114,7 @@ if get_option('tests')
   test('wisp-alloc-tests', wisp_alloc_tests)
 
   if get_option('wisp_tool')
-    # Many independent interpreter bootstraps plus the 4100-job stress
+    # Independent host processes plus the 4100-job stress
     # case (90s process deadline); keep each process's own timeout active.
     test('wisp-host-tests', find_program('python3'),
       args : [files('wisp-host-test.py'), wisp_tool],

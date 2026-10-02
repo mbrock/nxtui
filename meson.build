@@ -3,7 +3,7 @@ project('nxtui', 'cpp', 'c',
   default_options : [
     'cpp_std=c++23',
     'warning_level=2',
-    'buildtype=debug',
+    'buildtype=debugoptimized',
     'default_library=shared',
   ],
   meson_version : '>= 1.1',

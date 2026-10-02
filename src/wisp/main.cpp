@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#include "wisp/load.hpp"
+#include "wisp/reader.hpp"
 #include "wisp/nxt.hpp"
 #include "wisp/printer.hpp"
 #include "wisp/tape.hpp"
@@ -21,7 +21,7 @@
 namespace wisp {
 namespace {
 
-#include "wisp-host.hpp"
+#include "wisp-boot.hpp"
 
 using namespace std::chrono;
 
@@ -294,23 +294,6 @@ struct host
         if (value.empty())
             co_return std::nullopt;
         co_return value;
-    }
-
-    nxtrt::task<void> boot()
-    {
-        for (auto source : {base_library(), host_source}) {
-            loader load{h, vm, source};
-            while (true) {
-                const auto state = load.advance(256);
-                if (state == evaluation::failed)
-                    throw std::runtime_error(
-                        print(h, h.get<tag::run, field::err>(load.run())));
-                if (state == evaluation::done)
-                    break;
-                co_await nxtrt::yield();
-            }
-            vm.collect();
-        }
     }
 
     void source(std::string_view value)
@@ -1009,7 +992,6 @@ struct host
 
     nxtrt::task<void> repl()
     {
-        co_await boot();
         while (true) {
             if (::isatty(STDIN_FILENO))
                 co_await write(output, "wisp> ");
@@ -1037,7 +1019,6 @@ struct host
 
 nxtrt::task<bool> execute(host & app, std::string source, std::string save)
 {
-    co_await app.boot();
     app.source(source);
     co_return co_await app.run(true, save);
 }
@@ -1061,10 +1042,9 @@ int main(int argc, char ** argv)
         }
         if (command == "repl") {
             require(argc <= 2, "repl takes no arguments");
-            heap h;
-            evaluator vm{h};
-            root entry{h};
-            host app{h, vm, entry};
+            auto image = tape::decode(std::as_bytes(
+                std::span{boot_tape, sizeof(boot_tape) - 1}));
+            host app{image->storage, image->machine, image->entry};
             nxtrt::runtime runtime;
             runtime.run([&] { return app.repl(); });
             return 0;
@@ -1092,10 +1072,9 @@ int main(int argc, char ** argv)
                 throw std::runtime_error("invalid command option");
         }
         if (command == "run") {
-            heap h;
-            evaluator vm{h};
-            root entry{h};
-            host app{h, vm, entry};
+            auto image = tape::decode(std::as_bytes(
+                std::span{boot_tape, sizeof(boot_tape) - 1}));
+            host app{image->storage, image->machine, image->entry};
             nxtrt::runtime runtime;
             const auto source = read_file(argv[2]);
             const bool done =
