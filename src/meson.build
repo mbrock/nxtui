@@ -28,10 +28,12 @@ nxt_libvterm_dep = declare_dependency(
   include_directories : nxt_libvterm_inc,
 )
 
+nxt_threads_dep = dependency('threads')
 nxt_core_deps = [
   utf8proc_dep,
   boost_dep,
   dependency('libcrypto'),
+  nxt_threads_dep,
   declare_dependency(include_directories : nxt_libvterm_inc),
   declare_dependency(compile_args : nxt_wand_args),
 ] + nxt_compression_deps
@@ -280,7 +282,7 @@ install_subdir('../vendor/hub/include/boost',
 )
 
 import('pkgconfig').generate(nxt_core_lib,
-  libraries : [nxt_stacktrace_lib] + nxt_stacktrace_deps,
+  libraries : [nxt_stacktrace_lib, nxt_threads_dep] + nxt_stacktrace_deps,
   name : 'nxt',
   description : 'nxt coroutine runtime and terminal toolkit',
   subdirs : ['.', 'nxt-vendor'],

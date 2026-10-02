@@ -7,6 +7,9 @@ ontology nxt "https://swa.sh/nxt#"
   class pool
   class pool-slot
   class pool-close
+  class blocking-work
+  class blocking-worker
+  class blocking-stop
   class wish
   class exec
   class exec-state :abstract
@@ -42,6 +45,9 @@ ontology nxt "https://swa.sh/nxt#"
   property discarding
   property closing
   property job
+  property blocking-lifecycle
+  property worker-access
+  property blocking-stopped
 
 model runtime-model
   signature deck
@@ -90,6 +96,17 @@ model runtime-model
   signature pool-slot
     job var lone task
   signature pool-close
+  // Blocking work has ordinary heap-owned input, not a migrating task.
+  // prepared = waiting for credit; parked = admitted/queued or running;
+  // settled = publication complete; retired = owner delivered/discarded.
+  // A stop makes the result unwanted, but does not revoke worker access.
+  // The fd poll exec is separate and resumes only on the original deck.
+  signature blocking-work
+    blocking-lifecycle var one exec-state
+    worker-access var lone blocking-worker
+    blocking-stopped var lone blocking-stop
+  signature blocking-worker
+  signature blocking-stop
   signature task
     has-continuation lone task
   signature wish
@@ -122,6 +139,79 @@ model runtime-model
     all ([t task])
       (=> (some (matching spawned t))
           (== (count (matching spawned t)) 1))
+
+  predicate blocking-starts
+    all ([b blocking-work])
+      in (b blocking-lifecycle) prepared-state
+      no (b worker-access)
+      no (b blocking-stopped)
+
+  predicate blocking-transitions
+    all ([b blocking-work])
+      (=> (some (b blocking-stopped))
+          (next-state (some (b blocking-stopped))))
+      (=> (in (b blocking-lifecycle) prepared-state)
+          (block
+            (next-state (no (b worker-access)))
+            (either
+              (next-state (in (b blocking-lifecycle) prepared-state))
+              (block (no (b blocking-stopped))
+                     (next-state (in (b blocking-lifecycle) parked-state)))
+              (block (some (b blocking-stopped))
+                     (next-state (in (b blocking-lifecycle) settled-state))))))
+      (=> (in (b blocking-lifecycle) parked-state)
+          (either
+            (block (next-state (in (b blocking-lifecycle) parked-state))
+              // Only uncancelled queued work may acquire a worker. Already
+              // running work retains access even after stop is requested.
+              (=> (no (b worker-access))
+                  (either
+                    (next-state (no (b worker-access)))
+                    (no (b blocking-stopped))))
+              (=> (some (b worker-access))
+                  (== (b worker-access) (b (prime worker-access)))))
+            (block
+              (either (some (b worker-access)) (some (b blocking-stopped)))
+              (next-state (block
+                (in (b blocking-lifecycle) settled-state)
+                (no (b worker-access)))))))
+      (=> (in (b blocking-lifecycle) settled-state)
+          (next-state (block
+            (no (b worker-access))
+            (in (b blocking-lifecycle) (union settled-state retired-state)))))
+      (=> (in (b blocking-lifecycle) retired-state)
+          (next-state (block
+            (no (b worker-access))
+            (in (b blocking-lifecycle) retired-state))))
+
+  predicate blocking-release-only-after-settlement
+    all ([b blocking-work])
+      (=> (next-state (in (b blocking-lifecycle) retired-state))
+          (in (b blocking-lifecycle) (union settled-state retired-state)))
+
+  predicate stopped-queue-never-starts
+    all ([b blocking-work])
+      (=> (block (some (b blocking-stopped)) (no (b worker-access)))
+          (next-state (no (b worker-access))))
+
+  check blocking-storage-retained-until-settlement :for ([1 blocking-work blocking-worker blocking-stop prepared-state parked-state settled-state retired-state]) :trace-length 6
+    assume blocking-starts
+    assume always blocking-transitions
+    show always blocking-release-only-after-settlement
+
+  check blocking-queued-stop-prevents-start :for ([1 blocking-work blocking-worker blocking-stop prepared-state parked-state settled-state retired-state]) :trace-length 6
+    assume blocking-starts
+    assume always blocking-transitions
+    show always stopped-queue-never-starts
+
+  run blocking-running-stop-settles-witness :for ([1 blocking-work blocking-worker blocking-stop prepared-state parked-state settled-state retired-state]) :trace-length 6
+    blocking-starts
+    always blocking-transitions
+    some ([b blocking-work])
+      eventually
+        some (b worker-access)
+        some (b blocking-stopped)
+      eventually (in (b blocking-lifecycle) retired-state)
 
   predicate structural-invariants
     all ([t task])

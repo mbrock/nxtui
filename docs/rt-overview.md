@@ -21,6 +21,10 @@ their coroutine handle on its ready queue and later resumes that handle.
 Completion also returns to the deck: a task that finishes wakes its
 continuation by enqueueing it, rather than by resuming it inline.
 
+Ordinary blocking C++ can run off the deck through @ref rt_blocking
+"blocking pools". Only owned callables and outcomes cross that boundary;
+tasks, firms, and continuations remain confined to the original deck.
+
 ## Decks {#rt_deck}
 
 A deck is the cooperative scheduler for the runtime. It owns a ready queue and

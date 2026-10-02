@@ -5,6 +5,7 @@
 
 #include "nxtrt/app.hpp"
 #include "nxtrt/bell.hpp"
+#include "nxtrt/blocking.hpp"
 #include "nxtrt/buffers.hpp"
 #include "nxtrt/cgroup.hpp"
 #include "nxtrt/debug.hpp"
