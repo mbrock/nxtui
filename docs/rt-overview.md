@@ -12,9 +12,9 @@ remain the exact reference for the corresponding C++ declarations.
 
 ## Execution model {#rt_execution_model}
 
-The core value is @ref nxtrt::task "task<T>": a lazy coroutine frame that
-uniquely owns its state until it is moved into another task, awaited by a
-parent task, forked into a firm, or driven by a deck.
+The core value is @ref nxtrt::task "task<T>": a movable owning handle to a
+lazy coroutine frame. Awaiting or scheduling it does not itself transfer
+ownership; moving or releasing the handle does.
 
 Tasks do not run on construction. They run when a @ref nxtrt::deck "deck" puts
 their coroutine handle on its ready queue and later resumes that handle.
@@ -85,7 +85,7 @@ wrapper. Consumers invoke each admitted recipe once and preserve its storage
 through settlement, including failure and cancellation; the concept itself
 cannot enforce those obligations. Hope-producing ideas may complete without
 allocating a coroutine. This does not extend the tuple helpers' task-only
-factory contract or turn firms into the future fixed-team/pool abstraction.
+factory contract or turn firms into a future fixed-team abstraction.
 
 Concrete API:
 
@@ -99,6 +99,10 @@ results returns admission capacity. Pool jobs are owned directly, not retained
 as firm child records. Ready hopes stay synchronous, while pending tasks use
 the existing deck and frame provider.
 
+See [Recipes, pools, and structured async](rt-concurrency-direction.md) for
+the design direction: teams versus pools, explicit coping, lifetime-aware
+terminal consumption, and the separate Wisp operation-awaiting bridge.
+
 ## Deeds {#rt_deed}
 
 A deed is the caller's handle to a task forked into a firm. It is deliberately
@@ -106,9 +110,9 @@ not the same thing as a task: the firm owns and joins the child work, while
 the deed lets user code recover the child's result after the firm has reached
 the appropriate point.
 
-`deed<T>` rethrows child failure when read. `catching_deed<T>` carries an
-expected-like result so helpers can collect multiple child outcomes before
-deciding what to return or throw.
+`deed<T>` rethrows child failure when read. Moving it through `.cope()` explicitly
+selects `catching_deed<T>`, whose `get()` returns an expected-like outcome so
+helpers can collect child outcomes before deciding what to return or throw.
 
 Concrete API:
 
@@ -163,7 +167,7 @@ primitives.
 
 Concrete API:
 
-- @ref nxtrt::byte_reader "nxtrt::byte_reader"
-- @ref nxtrt::byte_writer "nxtrt::byte_writer"
+- @ref nxtrt::bytefeed "nxtrt::bytefeed"
+- @ref nxtrt::bytesink "nxtrt::bytesink"
 - @ref nxtrt::fs "nxtrt::fs"
 - @ref nxtrt::http "nxtrt::http"

@@ -2,15 +2,28 @@
 
 Status: new
 
+## Implementation status
+
+Firm-owned I/O buffer groups and storage-selecting wishes remain proposals.
+The [bounded pool](../../docs/rt-pool.md) adds explicit borrowed admission and
+result land, not an I/O buffer group or a total memory budget. Its known slot
+capacity is distinct from coroutine frame allocation, upstream recipe storage,
+and response-body bytes. Frames still use the ambient firm's frame provider;
+pool-owned tasks are not firm children.
+
+The [concurrency direction](../../docs/rt-concurrency-direction.md) keeps
+those separate budgets visible. Wisp/HTTP simplification is work in progress,
+not evidence that the buffer-loan or async-resource APIs below exist.
+
 ## Summary
 
 A firm may own or be granted I/O buffer territory in addition to coroutine
 frame territory.
 
 The wand owns backend machinery: io_uring, kqueue, epoll, submission policy,
-and completion pumping. The firm owns the buffer groups, quotas, and regions
-that its wishes may use, even when a wand registers those buffers with a
-platform backend.
+and completion pumping. In this proposal the firm would own the buffer groups,
+quotas, and regions that its wishes may use, even when a wand registers those
+buffers with a platform backend.
 
 This mirrors the split from [RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) and
 [RFC 0003](../cur/rfc-0003-deck-task-registry.md):
@@ -39,8 +52,10 @@ from [RFC 0009](rfc-0009-wishes-urges-and-provided-buffers.md) need a visible
 place to choose from. If `recv_some(fd, max)` does not carry a span, the
 runtime must know which byte land the task is allowed to use.
 
-The firm is the natural scope for that land. It already bounds child work. It
-should also bound the I/O buffers consumed by that work.
+The firm is a natural scope for that land. It already contains child lifetimes,
+but its growable nursery does not impose a fixed child-admission limit.
+An explicit I/O budget would be a separate contract, not a consequence of
+structured ownership or of a bounded pool's slot count.
 
 ## Proposal
 

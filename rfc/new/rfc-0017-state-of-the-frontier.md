@@ -7,6 +7,15 @@ that does or does not yet realize it. Two halves: a **said-vs-built ledger**
 **glossary** of the terms, ontologies, and metaphors that have earned their
 place.
 
+**Scope/status note:** this is a historical design snapshot, including the
+conversation transcript and analogies below, not a specification of today's
+API. The ledger has targeted status updates for ideas and pools; other
+historical claims and test counts are not current guarantees. Consult
+[Runtime concurrency direction](../../docs/rt-concurrency-direction.md)
+for the main current synthesis and the [pool guide](../../docs/rt-pool.md)
+for its implemented lifecycle. In particular, storage residence is not
+structured child ownership, and stop requests are not completed drain.
+
 The framing that organizes all of it: the runtime is a small world of things
 that exist and change in time. Continuants persist (and can be read, paused,
 copied, rendered); occurrents happen (and are opaque while hot, gone when
@@ -86,9 +95,14 @@ at rest. The verbs run and vanish; the nouns persist and can be inspected.
   runtime-selects-territory path is RFC.
 - **multishot wishes as feeds** (RFC 0011), **splice/sendfile zero-copy fast
   paths** (RFC 0012), **provided buffer groups / io land** (RFC 0010),
-  **join-as-a-completion-feed** (RFC 0006), **pushfeed channels** (RFC 0008),
-  **idea algebra** `idea<T> = () -> task<T>` (RFC 0014). All written, all
-  pointing at the same picture, mostly not realized in code.
+  **join-as-a-completion-feed** (RFC 0006), **pushfeed channels** (RFC 0008).
+  These remain proposals, not descriptions of the pool implementation.
+- **idea algebra** (RFC 0014): the `idea<Fn>` constraint is now implemented in
+  [idea.hpp](../../src/nxtrt/idea.hpp): a movable recipe invoked as `Fn&`,
+  returning exactly `task<T>` or `hope<T>` by value. The bounded streaming
+  [pool](../../docs/rt-pool.md) is also implemented, with directly owned jobs,
+  output-consumption credit, and explicit early close/drain. The larger
+  algebra and generic asynchronous-resource machinery remain future work.
 
 ### Conversation-only (minted vocabulary, no code)
 

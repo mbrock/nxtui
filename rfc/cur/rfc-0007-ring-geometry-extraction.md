@@ -2,6 +2,18 @@
 
 Status: current
 
+## Implementation status
+
+The core extraction is implemented: `ring_region<T>` in
+[buffer-core.hpp](../../src/nxtrt/buffer-core.hpp) is the synchronous borrowed
+storage/cursor layer beneath feeds and sinks. It tracks constructed values and
+raw capacity, exposes two-span views, and does not allocate or suspend.
+The motivation and API sketch below record the original proposal, not a
+currently missing component or an exact declaration of today's API. The wider
+list of prospective users is not a claim that each integration has landed.
+See [Runtime concurrency direction](../../docs/rt-concurrency-direction.md)
+for the current cross-RFC synthesis.
+
 ## Summary
 
 Extract the pure ring-buffer machinery from `feed<T>` and `sink<T>` into a
@@ -12,9 +24,9 @@ unconstructed regions, two-span chunk views, capacity, rebase, and overflow. It
 should not know about virtual functions, tasks, hopes, wands, feeds, sinks, or
 protocol parsing.
 
-## Motivation
+## Original Motivation
 
-The current buffer stack already contains the geometry this RFC wants to make
+The buffer stack at proposal time already contained the geometry to make
 reusable:
 
 - [buffer-core.hpp](../../src/nxtrt/buffer-core.hpp) defines
@@ -26,12 +38,12 @@ reusable:
 - [buffers.hpp](../../src/nxtrt/buffers.hpp) builds byte feeds, byte sinks,
   `chop_view`, and `reel` on top of that value-buffer layer.
 
-The current helpers are useful but not yet a component. Reusing the same
+Those helpers were useful but not yet a component. Reusing the same
 geometry for deck ready queues, firm completion feeds, channel buffers,
-provided-buffer bookkeeping, and raw uring ring views currently means either
+provided-buffer bookkeeping, and raw uring ring views then meant either
 copying patterns or depending on the coroutine feed/sink layer.
 
-## Proposal
+## Original Proposal
 
 Introduce a pure ring geometry type. The exact name is open, but the shape is:
 

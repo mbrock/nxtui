@@ -2,6 +2,20 @@
 
 Status: new
 
+## Implementation status
+
+The pushfeed/channel API and general removal of bell/wire remain proposals.
+The implemented [bounded pool](../../docs/rt-pool.md) demonstrates deck-local
+coordination without a bell: a generic task completion observer queues slot
+readiness and wakes the consumer directly on the deck. It is not a generic
+channel or a firm join feed. Existing `wire` and fd-backed `bell` remain in
+use; the proposed replacement below has not happened.
+
+See the [concurrency direction](../../docs/rt-concurrency-direction.md) for
+the intended feed/idea pipeline, including future mapping, error adaptation,
+and feedback channels. `farm::try_alloc()` is synchronous: a bounded owner
+such as the pool supplies waiting and wakeups, not the farm itself.
+
 ## Summary
 
 Replace fd-backed internal synchronization with deck-local feed and sink
@@ -98,9 +112,9 @@ task boundary is introduced.
 
 This preserves backpressure and avoids creating hidden queues.
 
-## Bells
+## Proposed Bell Migration
 
-A bell becomes one of:
+A future deck-local replacement for a bell could be:
 
 ```text
 pushfeed<std::monostate>

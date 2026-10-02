@@ -26,6 +26,13 @@ and establish sound lifetime and capacity rules before exposing a constrained
 shape. The proposal and implementation history below are retained as historical
 context, not descriptions of the current API.
 
+The separate [bounded pool](../../docs/rt-pool.md) now supplies a different
+semantic bound: outstanding admitted work, with consumption returning capacity.
+It is not a restoration of the ledgers below. See
+[Recipes, pools, and structured async](../../docs/rt-concurrency-direction.md)
+for the proposed team/pool distinction and the separation of frame provision,
+work ownership, and observation.
+
 ## Summary
 
 After firms own frame land and decks own task identity, firm bookkeeping should
@@ -274,7 +281,7 @@ Future helpers should apply the same distinction. A helper that merely creates
 a structured scope can keep its body as the firm manager. A helper that races,
 times out, streams, or otherwise lets one sibling stop another should fork the
 main work as an explicit child. Channel pumps and pushfeed coordination belong
-to [RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md), and
+to [RFC 0008](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md), and
 higher-level value composition belongs to [RFC 0014](../new/rfc-0014-idea-algebra.md);
 they should reuse this rule rather than adding new firm bookkeeping machinery.
 
@@ -340,7 +347,7 @@ children and no live deed can name the records being reclaimed.
 
 [RFC 0003](rfc-0003-deck-task-registry.md) provides durable task IDs.
 
-[RFC 0006](rfc-0006-join-as-a-completion-feed.md) describes the join
+[RFC 0006](../new/rfc-0006-join-as-a-completion-feed.md) describes the join
 side of the same bookkeeping as a feed of child completions.
 
 [RFC 0007](rfc-0007-ring-geometry-extraction.md) provides reusable bounded
@@ -357,7 +364,7 @@ storage machinery for queues and free lists.
 ## References
 
 - [RFC 0002: Firm Frame Arenas](rfc-0002-firm-frame-arenas.md)
-- [RFC 0006: Join as a Completion Feed](rfc-0006-join-as-a-completion-feed.md)
+- [RFC 0006: Join as a Completion Feed](../new/rfc-0006-join-as-a-completion-feed.md)
 - [RFC 0014: Idea Algebra](../new/rfc-0014-idea-algebra.md)
 - [Runtime Overview / Firms and Deeds](../../docs/rt-overview.md)
 - [The nxtrt runtime, as a story about holding work](../../docs/rt-holding.md)

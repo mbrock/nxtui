@@ -58,6 +58,13 @@ Current environment pieces:
 This works, but it makes hot runtime state a mixture of direct fields,
 promise fields, deck fields, and generic env entries.
 
+Ambient frame provision is not structured child ownership. The implemented
+[pool](../../docs/rt-pool.md) owns its pending jobs directly rather than
+forking them into a firm, but their frames still use the ambient frame
+provider. This RFC does not imply that pools rebind that provider today.
+Any future core-field design must preserve the distinction; see
+[Runtime concurrency direction](../../docs/rt-concurrency-direction.md).
+
 ## Proposal
 
 Extend `runtime_env` with core fields:

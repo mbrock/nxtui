@@ -33,6 +33,9 @@ The accounting rule is:
 free + reserved for input + running + completed/unconsumed = capacity
 ```
 
+“Running” here includes admitted pending work that is prepared but not yet
+scheduled, as well as tasks suspended on an await.
+
 Completed jobs continue to occupy admission capacity. Their results move into
 the output ring, and their task frames can then be destroyed. The slot returns
 to the farm only when the output leaves this source, or close discards it.
@@ -126,8 +129,9 @@ results in its own feed ring; existing feed/sink transfer paths then consume
 batches without an extra message allocation per result.
 
 When reading encounters an input, invocation, or result-extraction failure, it
-stops admission, cancels and drains pending input/jobs, discards remaining
-outcomes, and rethrows. Previously consumed outputs are not rolled back.
+stops admission, cancels and drains the pending upstream read and admitted
+jobs, discards remaining outcomes, and rethrows. Previously consumed outputs
+are not rolled back.
 Failures are not individual output items in this first API. Buffered hot-path
 consumption and downstream sink errors follow ordinary feed rules: use
 `finally` as above to guarantee close even if those operations throw.
@@ -136,6 +140,10 @@ consumption and downstream sink errors follow ordinary feed rules: use
 unconsumed outcomes. It does not require a consumer to make room, and caller
 cancellation does not interrupt its drain. Stop is cooperative: a task that
 does not settle after cancellation can keep close waiting.
+
+The input feed is borrowed: close drains the pool's pending read, not an
+arbitrary producer behind that source. If upstream owns independent work,
+the surrounding pipeline must also arrange that producer's teardown.
 
 Do not overlap reads or close operations, or call close while a read is
 outstanding. Stop may be requested while a read waits; await that reader before

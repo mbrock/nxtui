@@ -11,6 +11,16 @@ still drives cancellation policies directly. Any future completion feed should
 replace that traversal with an actual consumer, rather than add a parallel
 ledger or impose a fixed child-admission bound.
 
+The implemented [bounded pool](../../docs/rt-pool.md) is a separate
+completion-order feed of homogeneous idea results, not a replacement firm
+join. It owns tasks directly, without firm child records or deeds. Its slots
+remain occupied until output consumption (or close/discard), even though a
+completed task's frame can be released earlier. Unhandled job errors fail the
+pool when the consumer encounters them, not through a completion-time sibling
+cancellation policy. See the [concurrency direction](../../docs/rt-concurrency-direction.md)
+for the distinction between a growable nursery, bounded circulation, and
+proposed static teams.
+
 ## Summary
 
 Firm join should be modeled as a feed of child completions.
@@ -37,18 +47,21 @@ consumer: join policy
 item: child_completion
 ```
 
-The current `firm` has a completion callback hook:
+The current promise has a generic completion observer hook, shared by firm
+child records and pool slots:
 
 ```cpp
-promise.completion_callback = ...
+promise.observe_completion_of(observer);
 ```
 
-That callback is exactly the place where a child becomes a completion item.
-This RFC makes that hidden callback path into an explicit feed.
+That notification is a possible place to publish a completion item. This RFC
+proposes making firm join consume those items; the observer alone does not
+implement that feed.
 
 ## Proposal
 
-A firm owns a bounded completion feed:
+A firm would own a completion feed, with storage following admitted children
+rather than imposing a fixed bound on the growable nursery:
 
 ```cpp
 struct child_completion {
@@ -95,24 +108,27 @@ consumers:
 This is also the natural base for `when_all`, `wait_any`, `with_timeout`, and
 game-style coordination helpers.
 
-## Backpressure
+## Historical Bounded-Feed Alternatives
 
-A bounded join feed can fill. That is not merely a nuisance; it is a useful
-design pressure.
+The original proposal considered a bounded join feed. The alternatives below
+remain design questions for a bounded owner, not the current firm's capacity
+contract. The bounded ledger was removed; it must not be reintroduced without
+a consumer and a demonstrated need.
 
 If final suspend cannot publish a completion item because the firm completion
-feed is full, the child cannot fully settle yet. It is reasonable for that path
-to suspend or otherwise cooperate with the scheduler; this is ordinary
-backpressure, not a bug. The runtime must decide one of:
+feed is full, publication needs an explicit protocol. Parking final suspend is
+one speculative alternative, not a supported operation today:
 
 - make completion feed capacity at least the maximum child count;
 - let final suspend park until the join feed has space;
 - reserve one completion slot per child record;
 - treat completion overflow as a firm storage error.
 
-The first implementation should probably reserve enough completion storage for
-the child capacity. Later versions can use a true feed if result streaming
-needs finer backpressure.
+The pool instead reserves a slot before reading and invoking an idea. Final
+suspend only queues readiness and wakes the consumer through the deck; it
+does not wait for result storage or destroy its own frame. Consumption returns
+admission credit. This keeps bounded backpressure at admission and consumption,
+without giving the ordinary firm a fixed child capacity.
 
 This also hints at a larger rule beyond this RFC: time should become as
 explicitly rationed as space. A suspension is not free just because it has no
@@ -138,14 +154,14 @@ where the child history becomes available to the parent scope.
 ## Relationship To Other RFCs
 
 [RFC 0005](../cur/rfc-0005-firm-bookkeeping-without-heap-vectors.md) defines the
-firm-local storage where child and completion records live.
+history of firm bookkeeping and the removal of its bounded completion ledger.
 
 [RFC 0007](../cur/rfc-0007-ring-geometry-extraction.md) can provide the bounded queue
 geometry for the completion feed.
 
-[RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md) provides the
-deck-local producer/consumer machinery that this completion feed should
-resemble.
+[RFC 0008](rfc-0008-pushfeed-channels-and-removing-bell-wire.md) proposes
+deck-local producer/consumer machinery that this completion feed could
+resemble; the generic channel is not implemented.
 
 [RFC 0011](rfc-0011-multishot-wishes-as-feeds.md) applies the same feed reading
 to platform operations that produce more than one completion.

@@ -1,30 +1,51 @@
 # RFC 0003: Deck Task Registry and Task IDs {#rfc_deck_task_registry}
 
-Status: current
+Status: core registry implemented; broader routing/metadata changes remain
+proposals
+
+## Implemented boundary
+
+The [deck](../../src/nxtrt/deck.hpp) has a task table with owned default backing
+or explicit borrowed backing. Its ready queue is a `std::deque<task_id>`.
+Registration and resolution live in [task/runtime.hpp](../../src/nxtrt/task/runtime.hpp).
+IDs use a 24-bit one-based index and an 8-bit era; unregistration frees a row
+and advances its era. The finite era is not protection against indefinitely
+retained references across arbitrary reuse.
+
+Registry rows contain identity, handle, promise pointer, live/vacant state and
+era. They do not yet own the entire lifecycle described in the original proposal
+below. Continuations, stop state, environment and completion observers still
+live in promises; wands still retain backend exec records and `need` continuations.
+
+Firms and pools use the same registry. A pool slot can own a task whose frame
+comes from an ambient firm, without that task being a forked firm child. Task
+identity, frame provision and structured ownership must not be conflated; see
+[Recipes, pools, and structured async](../../docs/rt-concurrency-direction.md).
 
 ## Summary
 
-The deck should own a registry of all tasks known to it, and the hot scheduling
-identity should be a compact `task_id`, not a raw coroutine handle.
+The deck owns a registry of tasks scheduled through it, and the hot scheduling
+identity is a compact `task_id`, not a raw coroutine handle.
 
-The coroutine frame still belongs to firm land, as proposed in
-[RFC 0002](rfc-0002-firm-frame-arenas.md). The deck owns the civic registry:
-which tasks exist, which are ready, which are parked, which firm owns them, and
-which continuation should be resumed when they settle.
+The coroutine frame still occupies firm-provided land as described in
+[RFC 0002](rfc-0002-firm-frame-arenas.md). The deck owns identity and ready
+scheduling, not the task handle or frame memory. Recording all parked,
+continuation and ownership metadata there was a broader proposal, not the
+current registry's responsibility.
 
-Ready queues should contain `task_id` values. Backend completions and internal
-synchronization should route to `task_id` values. Raw coroutine handles become
-registry data, not public scheduling currency.
+Ready queues contain `task_id` values. Routing backend completions and internal
+synchronization directly by identity remains further work, rather than an
+implemented elimination of handle/promise pairs.
 
 ## Motivation
 
-The current deck is intentionally small. It owns a `std::deque<ready_item>`;
-each `ready_item` contains a coroutine handle plus a promise pointer. That is a
-good seed runtime, and it makes the one-round pump rule very clear. See
+The original deck owned a `std::deque<ready_item>`; each `ready_item` contained
+a coroutine handle plus a promise pointer. That seed runtime made the
+one-round pump rule clear, and motivated moving identity into a registry. See
 [Runtime Overview](../../docs/rt-overview.md) and
 [rt-holding / deck](../../docs/rt-holding.md).
 
-But several upcoming changes want a durable task identity:
+Several uses motivated a registry identity:
 
 - direct one-shot wand completion routing;
 - deck-local channel wait slots;
@@ -33,14 +54,13 @@ But several upcoming changes want a durable task identity:
 - task metadata that does not live in every coroutine promise;
 - generation checks when stale completions or stale handles arrive.
 
-`task_id` already exists in [ids.hpp](../../src/nxtrt/ids.hpp), and current
-promises already receive an id from a process-global `task_id_source` in
-[task.hpp](../../src/nxtrt/task.hpp). This RFC makes that identity deck-owned
-and operational.
+Before the registry, promises received observational IDs from a process-global
+source. The [current `task_id`](../../src/nxtrt/ids.hpp) is instead a deck table
+identity assigned when execution is registered.
 
-## Current Shape
+## Original starting point (historical)
 
-Current task identity is mostly observational:
+Originally task identity was mostly observational:
 
 - `detail::promise_base` stores `task_id id`.
 - `deck::current_task_id()` reads the current promise id from the ambient
@@ -49,7 +69,7 @@ Current task identity is mostly observational:
   promise pointers.
 - `debug::park_task()` records parked wishes by task id.
 
-Current scheduling is handle-based:
+Scheduling was handle-based:
 
 ```cpp
 struct ready_item {
@@ -58,15 +78,19 @@ struct ready_item {
 };
 ```
 
-This is simple, but it means the deck does not have an authoritative table of
-task state. A wand completion cannot simply say "task 17 is ready"; it must
-hold or recover a continuation handle through an exec record.
+That representation had no authoritative registry row. Backend completions
+still hold or recover continuations through exec records today; implementing
+the registry alone did not replace backend lifecycle ownership.
 
-## Proposal
+## Original broader proposal
 
-Introduce a deck-owned task table over explicit borrowed storage. The task
-table is runtime royalty: bounded, prominent, and declared by the caller or
-root runtime instead of grown accidentally from the heap.
+The implemented task table supports explicit borrowed storage or a bounded
+owned default. Its capacity is a runtime budget distinct from pool admission,
+which does not count every nested await or controller coroutine.
+
+The following layouts and completion-target types are design sketches, not
+current API declarations. Further metadata migration should demonstrate a
+concrete need rather than duplicate ownership or lifecycle state.
 
 A `task_id` is an index plus a small era/generation, or another compact
 representation with equivalent stale-reference protection.
@@ -94,7 +118,7 @@ ring_queue<task_id> ready;
 The deck resumes a task by looking up its registry row, restoring that task's
 runtime environment, and resuming the frame pointer recorded there.
 
-The registry row, not the promise, should eventually own hot lifecycle state:
+The original proposal considered moving these fields from promises into rows:
 
 - ready, running, parked, completed, destroyed;
 - current firm;
@@ -104,8 +128,9 @@ The registry row, not the promise, should eventually own hot lifecycle state:
 - parked debug description;
 - frame pointer and promise pointer.
 
-The promise can still own type-specific result storage and compiler-required
-customization points. It stops being the general task metadata record.
+The promise necessarily provides compiler customization points and typed
+results. Whether moving more control metadata out of it simplifies the runtime
+remains open; it has not been required for direct pool task ownership.
 
 The table API should use small named types rather than raw integers wherever
 the type system can carry intent:
@@ -122,9 +147,7 @@ and completion-target concepts from collapsing into anonymous integers.
 
 ## Task ID Shape
 
-A task id should be small enough to pack comfortably into backend tickets while
-still protecting against stale completions. The attractive target is a 32-bit
-id:
+A task id is a compact 32-bit index/era pair. Conceptually:
 
 ```cpp
 struct task_id {
@@ -145,39 +168,40 @@ u32 task_id
 u32 slot / operation / flags
 ```
 
-The exact bit split is still not binding. The important property is that a
-completion, deed, or channel waiter can name a task without owning a coroutine
-handle and can be rejected if the table slot has been reused.
+The implementation uses this split behind packing helpers. A stale identity
+can be rejected while its era differs from the current row; an eight-bit era
+eventually wraps. Durable guest identity or arbitrarily retained result handles
+must not assume this is a globally unique, everlasting identifier.
 
-Forked tasks should probably not be encoded as negative IDs or special index
-ranges, even though that is a tempting bit trick. A forked child is still a
-task. What differs is its completion target: an awaited task resumes an
-awaiting task, while a forked task publishes into its firm. That can be modeled
-as a typed field:
+Forked tasks and pool jobs are ordinary registry tasks, not special index
+ranges. Their completion observers differ. A historical routing sketch was:
 
 ```cpp
 using completion_target = std::variant<task_id, firm_completion_port>;
 ```
 
-If `completion_target` names the owning firm's completion port, the task is
-background child work in that firm. The id can stay purely about table identity.
+There is no implemented `firm_completion_port` or variant of this shape. The
+current generic promise completion observer notifies either a firm child record
+or a pool owner; awaiting continuations remain separately represented. The id
+stays purely about table identity.
 
 ## Invariants
 
 At most one live task occupies a given `(index, generation)` identity.
 
-A ready queue item is valid only if its `task_id` still resolves to a live
-task in a ready-compatible state.
+A ready queue item is actionable only if its `task_id` still resolves to a live
+row with a resumable handle. The current row state is live/vacant, not a full
+ready/running/parked lifecycle enum.
 
 A parked task is not also ready. This mirrors the existing runtime model
 invariant in [runtime.rkt](../../nxtrt/runtime.rkt): an exec in parked state
 does not have its continuation task in the deck's ready set.
 
 The deck registry does not own coroutine frame memory. It names frames located
-in firm-owned frame land. The registry storage itself is explicit deck land,
-normally borrowed by the deck from its root runtime or caller.
+in firm-owned or firm-borrowed frame land. Registry backing can itself be owned
+by the deck or explicitly borrowed from its caller.
 
-## Migration Sketch
+## Original migration sketch
 
 1. Add a deck task table over borrowed storage while still keeping
    handle-based `ready_item`.
@@ -187,8 +211,8 @@ normally borrowed by the deck from its root runtime or caller.
 5. Move completion-target and parked metadata from promises into table rows.
 6. Teach wands and internal synchronization objects to enqueue `task_id`.
 
-This can be incremental because the first table row can simply mirror the
-handle and promise pointer already carried by `ready_item`.
+Registration, ID-based ready queuing, and ready-ID diagnostics are implemented.
+The later metadata and backend-routing stages remain proposals.
 
 ## Relationship To Other RFCs
 
@@ -201,18 +225,18 @@ one-shot CQEs can wake a task directly.
 [RFC 0008](../new/rfc-0008-pushfeed-channels-and-removing-bell-wire.md) uses task IDs
 for deck-local producer and consumer wait slots.
 
-[RFC 0013](rfc-0013-runtime-env-core-fields.md) moves `current_task_id` into
-the hot runtime environment path.
+[RFC 0013](rfc-0013-runtime-env-core-fields.md) describes direct environment
+fields. Current task identity is read through the current promise.
 
 ## Open Questions
 
-- What borrowed storage shape should the task table use, and how should a root
-  runtime declare its capacity?
+- Is the current owned/borrowed table capacity API sufficient for composition
+  controllers as well as application jobs?
 - Which fields remain in `promise_base`, and which move into the task table?
-- Is `u24 index + u8 era` enough for the first generation, and how should the
-  helpers hide the bit packing?
-- Do root tasks and forked tasks occupy the same table, or do root tasks get a
-  distinguished firm/root row?
+- How should very long-lived references be handled beyond the current finite
+  era check?
+- Can completion routing be simplified without creating parallel ownership
+  state for firms, pools, and backend operations?
 - What small types make the registry API hard to misuse without turning it
   into ceremony?
 

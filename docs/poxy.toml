@@ -15,6 +15,7 @@ paths = [
     'rfcs.md',
     'rt-overview.md',
     'rt-pool.md',
+    'rt-concurrency-direction.md',
     'rt-holding.md',
     'rt-game.md',
     'rt-occurrents.md',

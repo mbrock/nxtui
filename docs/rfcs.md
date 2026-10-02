@@ -4,6 +4,15 @@ The RFCs are design notes for the runtime vocabulary, current experiments, and
 future implementation paths. Some describe code that already exists; some are
 speculative scaffolding.
 
+## Current synthesis
+
+[Recipes, pools, and structured async](rt-concurrency-direction.md) connects
+the implemented idea/pool work with the next composition and Wisp effect-bridge
+decisions. It distinguishes current behavior from proposed teams, coping and
+terminal consumers, and records the migration targets to reconcile with the
+parallel Wisp/HTTP work. For the concrete pool API, see
+[Bounded idea pools](rt-pool.md).
+
 ## Current RFCs
 
 - [RFC 0002: Firm Frame Arenas](../rfc/cur/rfc-0002-firm-frame-arenas.md)

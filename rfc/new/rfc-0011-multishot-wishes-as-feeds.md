@@ -2,6 +2,12 @@
 
 Status: new
 
+This remains a proposal, including its multishot feed lifecycle; no generic
+feed close API is implemented. The pool's explicit close/drain contract is a
+concrete example, not such a generic API. See
+[Runtime concurrency direction](../../docs/rt-concurrency-direction.md)
+for the current synthesis.
+
 ## Summary
 
 One-shot wishes produce one completion. Multishot wishes produce feeds.
@@ -22,7 +28,8 @@ settlement.
 
 The current wish vocabulary is one-shot. `op::accept` returns one file
 descriptor. `op::recv_some` receives into one buffer. The wand's exec lifecycle
-settles a task after one operation CQE.
+settles the operation with one result, not the whole task; cancellation can
+still require backend drain before the exec retires.
 
 io_uring and other backends can produce more than one completion for a single
 submitted operation. Linux exposes this through flags such as
@@ -64,8 +71,17 @@ Unlike a one-shot wish, producing one item does not settle the realization. It
 publishes one feed item and remains live if the backend says more completions
 may arrive.
 
-The final backend signal closes the feed or records an error. Cancelling the
-firm cancels the multishot realization and wakes any feed consumers.
+The final backend signal records terminal producer status (EOF or error).
+It does not imply that already-buffered items have been consumed or their
+loans released. Consumers must still drain visible stock according to the
+feed's rules.
+
+Early consumer close is a separate proposed operation: request cancellation
+of a live producer, drain backend completions before reclaiming its records
+and storage, and resolve outstanding items under an explicit discard/release
+policy. Cancelling the owning firm must likewise request stop and wake
+consumers, not pretend producer notification or buffer consumption completes
+backend drain. The generic API and error-after-buffer policy remain open.
 
 ## Feed Items
 
@@ -110,7 +126,7 @@ buffer group.
 
 ## Relationship To exec Records
 
-[RFC 0004](rfc-0004-wand-completion-routing.md) removes the universal exec hub
+[RFC 0004](rfc-0004-wand-completion-routing.md) proposes removing the universal exec hub
 from ordinary one-shot wishes. Multishot wishes are the main case where a
 wand-owned realization record still makes sense.
 
@@ -130,7 +146,8 @@ one-shot parking record.
 Every non-final backend completion either publishes one feed item, records an
 error, or is explicitly discarded by a documented policy.
 
-A final completion closes or errors the feed exactly once.
+A final completion publishes terminal producer status exactly once, separately
+from consumption of buffered items and retirement after backend drain.
 
 Cancelling the owning firm eventually cancels the live backend producer and
 wakes all consumers.

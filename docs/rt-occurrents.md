@@ -16,6 +16,10 @@ boundaries, children, dependencies, and an end. These are two entities, not
 one wearing two hats — and almost every noun below is really such a pair, a
 continuant handle onto a happening.
 
+For the current implementation boundaries behind this ontology, see
+[Runtime concurrency direction](rt-concurrency-direction.md). The metaphors
+below do not identify physical frame allocation with structured child ownership.
+
 That makes behavioral programming feel less like an extra coordination API and
 more like a visible fragment of the runtime's ontology. A b-thread is an
 occurrent whose public behavior is a sequence of sync points. A game is a
@@ -41,7 +45,7 @@ onto. Some words are purely one or the other (a `—` marks the absent side):
 | forked child task | the child `task` value | an occurrent part of the parent process |
 | `wish` | a **realizable** — a disposition to do I/O | — (not an occurrent; it is *realized in* an exec) |
 | `exec` | the backend record and its lifecycle state | the process that realizes the wish |
-| cancellation | — | a control happening forcing a terminating subhistory |
+| cancellation | — | a stop request followed by cooperative termination and any required drain |
 | `game<Event>` | the game coordinator object | the processual context the b-threads share |
 | b-thread | the `task` value | an occurrent part of the game-process |
 | selected event | — | a shared happening admitted by the context |
@@ -83,10 +87,11 @@ parts of the process at all; they `participate-in` it, which is why
 
 That distinction matters for the runtime. Structured concurrency is a claim
 about **ownership of occurrent parts**, not just about start and stop times.
-When a firm exits, its child deeds are not allowed to drift away because those
-child tasks are occurrent parts of the firm's **history**. But the firm itself
-is not that history — it is the *place* the history happens, which turns out to
-matter enough to take up its own section below.
+When a firm exits, its child executions must settle because those
+child tasks are occurrent parts of the firm's **history**. Deeds are observation
+handles, not the executions; a deed and its result may survive settlement.
+But the firm itself is not that history — it is the *place* the history
+happens, which turns out to matter enough to take up its own section below.
 
 Behavioral threads sharpen the same point. A game super-step is not one
 b-thread's private next moment. It is a shared event selected from many
@@ -109,8 +114,8 @@ the runtime treats them differently:
 - a **suspension boundary** — an interior edge; the task-process pauses at a
   `co_await` and *continues* afterward, so the boundary sits between two parts
   of one ongoing history;
-- a **terminal boundary** — cancellation; the history is forced to end early,
-  before it ever reaches its completion boundary.
+- a **terminal boundary** — eventual termination after cancellation; a stop
+  request alone is not that boundary.
 
 Now the sharp part, and the reason to take synchronous phase transitions
 seriously. A `hope<T>` that is already `ready`, an `exec` stepping `prepared →
@@ -123,16 +128,12 @@ interior, that really take up trace-time — are the **waits**: a live I/O wait,
 a timer, a task parked for an event that has not arrived. Everything else is
 edges between edges.
 
-Cancellation is the cleanest case, and it is why "boundary" has to mean more
-than "instant." When a firm stops, that is one terminal boundary in the firm's
-history — but because the children are occurrent parts of that history, it
-imposes a terminal boundary on each child's history as well. The
-`operation_cancelled` that propagates up the stack *is* that boundary sweeping
-along the `occurrent-part-of` relation, synchronously, with no trace-time
-between the links. So a terminal-boundary cascade (cancellation) and a
-synchronous phase-transition cascade (the hot path) are the *same shape*: a
-chain of process-boundaries with no process between them. Cancellation is just
-the cascade whose links are endings.
+Cancellation exposes the limit of the boundary metaphor. A firm's stop
+request propagates synchronously to its children, but their actual completion
+is cooperative. Observing stop, unwinding with `operation_cancelled`, and
+draining backend operations can require later deck turns and backend events.
+The request cascade is not a cascade of completed histories: stop is control,
+settlement is an outcome, and backend retirement may still require drain.
 
 This even reframes efficiency in occurrent terms, and ties the note to
 @ref rt_holding. A genuine process — a wait — costs a deck round-trip and a
@@ -166,15 +167,15 @@ occupies a spatiotemporal region. The history — the structured unfolding of it
 children — is the occurrent. The firm is not that history; it is the place the
 history happens.
 
-This is the stronger reading of structured concurrency. The firm is a container
-(a place); its children are sub-objects located within it; and the single rule
-that makes it *structured* is a constraint binding the **continuant** to its
-**occurrent**: the firm's storage may not be reclaimed — the place may not be
-torn down — until every child's history has reached a terminal boundary
-(settled, joined, or cancelled). RAII gives you the place and the moment of its
-destruction; structured concurrency forbids that destruction until the
-histories inside the place have closed. The scope is spatial; the discipline is
-the leash between the space and the time.
+The useful structured-concurrency rule is about owned child executions: they
+must settle before the firm exits. Cancellation requests do not satisfy that
+rule by themselves. Physical frame residence is a separate relationship:
+a frame can use the ambient firm's land without becoming a firm child.
+The [pool](rt-pool.md), for example, owns pending jobs directly, without firm
+child records, while their frames use the ambient frame provider. That land
+must remain live until those frames are released. The spatial metaphor helps
+describe storage lifetime, but allocation alone does not establish structured
+parenthood.
 
 ## What this suggests for the model {#rt_occurrents_model}
 
@@ -198,8 +199,8 @@ For runtime semantics, the same split suggests a path:
 - treat lifecycle states and sync points as boundaries or phases rather than
   as ordinary object fields;
 - express structured concurrency as closure over occurrent parts: child work
-  owned by a scope must settle, be cancelled, or be joined before the scope can
-  retire;
+  owned by a scope must settle before the scope can retire, including completion
+  of cancellation and any required backend drain;
 - express behavioral programming as a temporal logic over a processual
   context: every super-step chooses one event that is requested and not
   blocked, and only matching b-threads advance.

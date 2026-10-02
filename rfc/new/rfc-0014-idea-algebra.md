@@ -2,6 +2,14 @@
 
 Status: new
 
+## Implementation status
+
+The idea concept, task-tuple helpers, and bounded idea pool are implemented.
+The general algebra, generic feed mapping, idea-level `cope`, channels, and
+heterogeneous static teams remain proposals. The
+[concurrency direction](../../docs/rt-concurrency-direction.md) connects these
+pieces without treating the sketches below as shipped APIs.
+
 ## Summary
 
 Task composition should mostly operate on recipes, not on already-born
@@ -43,9 +51,10 @@ coroutine lambda does not transfer its closure into its coroutine frame.
 
 ## Motivation
 
-[RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) requires tasks to be born inside a
-firm so their frames land in firm territory. That means APIs should prefer
-recipes:
+[RFC 0002](../cur/rfc-0002-firm-frame-arenas.md) separates frame provision from
+task execution. Recipes defer frame allocation until the receiving context is
+established and admission has been reserved. Historically this motivated the
+following proposed spelling (not an implemented API):
 
 ```cpp
 firm::of(f, g)
@@ -59,8 +68,9 @@ auto b = g();
 firm::of(std::move(a), std::move(b));
 ```
 
-The latter has already made the frame allocation decision. The former lets the
-firm create each child in the right place.
+The latter has already made the frame allocation decision. A recipe lets an
+owner invoke it in the right place. That owner need not be a firm: the pool
+owns direct tasks, while still using the ambient firm's frame provider.
 
 ## Algebra Direction
 
@@ -148,20 +158,62 @@ bookkeeping, exposed when returning tuple outcomes. Records also
 retain observation when a deed is released, so a later join does not report an
 already handled failure again.
 
-## Future: teams and pools
+## Implemented: bounded pools
 
-A fixed team or a capacity-limited pool can consume ideas and define its own
-admission, ownership, and scheduling contract. That is distinct from the
-ordinary growable tuple nursery. The `idea` concept is the shared recipe
-vocabulary, not an implementation of those owners: it adds neither a queue nor
-a frame budget. Any future owner must keep admitted recipe storage stable
-through settlement and account for a hope being ready without a task frame.
+A [pool](../../docs/rt-pool.md) turns `feed<Idea>` into a completion-order
+`feed<pool_result_t<Idea>>` (`T` for ordinary value results, `std::monostate`
+for void). It borrows a fixed farm of stable slots and output storage, and
+reserves admission before reading and invoking another recipe. The accounting
+is:
+
+```text
+free + reserved for input + running + completed/unconsumed = capacity
+```
+
+Here “running” includes admitted pending tasks not yet scheduled, not only
+tasks currently executing.
+
+Consumption returns credit; merely finishing a job does not. A completed
+task's frame may be destroyed after its result is moved into output storage,
+before the consumer returns the slot. Recipes remain alive through settlement
+and output consumption. A ready hope needs no coroutine frame.
+
+Pool jobs are directly owned tasks, not firm children or permanent workers.
+The pool still uses the ambient firm's frame provider, which must outlive
+drain. Known slot and result land is not a frame-byte, response-body, or global
+memory bound. `farm::try_alloc()` does not wait: the pool provides the waiting
+discipline and deck-local completion wakeups.
+
+## Future: teams, outcomes, and terminal consumers
+
+The proposed distinction is a heterogeneous static **team** versus a
+homogeneous **pool** with circulating capacity. Today's tuple helpers still
+use the ordinary growable firm nursery; a tuple is not an exact-N admission or
+frame-budget contract. The `idea` concept is shared recipe vocabulary, not an
+owning wrapper or an admission policy.
+
+An unhandled pool job failure stops admission and causes cancellation/drain
+of the pending upstream read and admitted jobs when the consumer encounters it.
+That is not generic closure of a borrowed upstream producer.
+Final-suspend notification does not itself
+apply a fail-fast policy. Planned idea-level `cope` would turn acceptable
+per-job failures into expected outcome values before they reach the pool.
+That preserves the distinction between a successful outcome describing a
+failed attempt and a failure of the stream itself. Neither that adaptor nor
+generic feed `map` is implemented yet.
+
+First-success, collect, and drain should be lifetime-aware terminal feed
+operations: they must close and drain upstream work before releasing borrowed
+state, including on early success or cancellation. They are not a reason for
+raw borrowed `take()` to auto-close a source. Today explicit cleanup is
+required, as shown in the pool guide; the terminal combinator API remains open.
 
 ## Time As Territory
 
-The runtime is already moving toward explicit space budgets: frame arenas,
-task tables, feeds, and buffer groups all have visible capacity. Time should
-eventually receive the same treatment.
+The runtime is moving toward explicit space budgets through frame arenas,
+feeds, and pool slots, with I/O buffer groups still proposed. These are
+separate capacities, not a claim that all task bookkeeping or memory is
+bounded. Time should eventually receive similarly explicit treatment.
 
 There should be no implicit unbounded suspension in high-level composition. An
 idea algebra should make waiting policies visible:
@@ -178,13 +230,17 @@ start.
 
 ## Relationship To Firms
 
-The algebra lowers through firms:
+One proposed lowering for fixed compositions uses firms:
 
 - `all(f, g)` creates a firm, forks both ideas, joins both, and combines deeds.
 - `race(f, g)` creates a firm, forks both ideas, stops siblings when one wins,
   and joins the rest.
 - `then(f, g)` awaits the first result, then invokes the second idea in a
   firm-visible context.
+
+This is not the only lowering: homogeneous streams already use the pool's
+direct task ownership. Structured lifetime does not require adding firm child
+records to every owner.
 
 Fork failure is a synchronous allocation/bookkeeping error and should initially
 throw with a structured diagnostic.
@@ -218,7 +274,8 @@ but it should not pretend that every idea can be inspected like a wish.
 
 - Which operators are genuinely readable enough to keep?
 - How do time budgets compose through `all`, `race`, and `then`?
-- Should `firm::of(f, g)` be the first concrete API before symbolic operators?
+- Should future static teams use named composition helpers or a distinct owner
+  API, alongside the implemented tuple nursery helpers?
 - How should failures be reported for composed ideas: first error,
   `exception_group`, or policy-specific result?
 

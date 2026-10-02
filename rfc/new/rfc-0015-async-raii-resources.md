@@ -2,6 +2,20 @@
 
 Status: new
 
+## Implementation status
+
+This is a resource-lifetime design, not an implemented generic resource handle.
+The readiness and buffer-group APIs below are sketches. A firm remains a
+growable nursery for scoped children; it is not the required owner of every
+concurrent stream stage.
+
+The implemented [bounded pool](../../docs/rt-pool.md) owns pending tasks
+directly and requires drain to EOF or asynchronous `close()` before destruction.
+Its borrowed slots, output storage, input, and ambient frame provider must
+outlive that drain. This is a concrete close/drain obligation, not an
+implementation of `resource_port` or `bg.ready()`.
+See the [concurrency direction](../../docs/rt-concurrency-direction.md).
+
 ## Summary
 
 A task forked into a firm can represent an async RAII resource.
@@ -104,9 +118,25 @@ This overlaps with [RFC 0011](rfc-0011-multishot-wishes-as-feeds.md). The
 difference is emphasis: RFC 0011 describes the multishot operation as a feed,
 while this RFC describes the whole producer as a scoped resource in a firm.
 
+### Terminal consumers and lifetime
+
+First-success, collection, and draining are proposed terminal feed operations
+that should own the responsibility to close and drain their upstream work on
+success, failure, and cancellation. An ordinary borrowed `take()` must not
+silently close its source: the caller may intend to read again.
+
+Today the pool requires explicit cleanup, for example the `finally` pattern
+in the [pool guide](../../docs/rt-pool.md). Stopping admission is not settlement:
+pending work must finish cancellation before borrowed storage or its frame
+provider can disappear. A slot/result bound also does not bound byte loans,
+coroutine frames, or all memory retained by the resource.
+
 ## Invariants
 
-An async resource belongs to one firm.
+In the firm-backed sketch above, an async resource belongs to one firm.
+More generally it needs a structured owner responsible for settlement; a
+pool or another scoped producer need not acquire a firm child record merely
+to satisfy that obligation.
 
 The firm may not finish destruction until the resource has either completed
 normally or completed its cancellation/teardown path.

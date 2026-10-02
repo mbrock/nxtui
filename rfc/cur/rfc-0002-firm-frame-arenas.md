@@ -1,6 +1,7 @@
 # RFC 0002: Firm Frame Arenas {#rfc_firm_frame_arenas}
 
-Status: current
+Status: implemented frame allocation; original ring/bookkeeping plans retained
+as history
 
 ## Current implementation note
 
@@ -13,21 +14,21 @@ storage bundles proposed in this RFC's original plan. Separate deed and
 completion ledgers and exact-N tuple firms have been removed; join traverses
 child records. See the [RFC 0005 supersession
 note](rfc-0005-firm-bookkeeping-without-heap-vectors.md).
-The historical plan and sketches below should not be read as current API
-signatures or as a guarantee that default firms never allocate from the heap.
+Pool jobs now own their task handles directly while using ambient firm frame
+land. Allocation scope is not structured child ownership. See
+[Recipes, pools, and structured async](../../docs/rt-concurrency-direction.md)
+for the direction toward separating those responsibilities.
 
 ## Summary
 
-A firm should become the required allocation scope for coroutine frames.
+A firm is currently the required allocation scope for coroutine frames.
+Coroutine promise allocation consults the ambient firm; frame destruction
+returns the block to that firm's arena. The task handle may be owned by an
+awaiting task, a firm child record, or a pool slot.
 
-Today a `task<T>` coroutine frame is owned by the `task<T>` object and
-allocated through the compiler's ordinary coroutine allocation path. A firm
-owns the structured lifetime of forked children, but not yet the memory land
-their frames occupy.
-
-This RFC proposes that every task belongs to a firm and every task frame is
-allocated from firm-owned or firm-borrowed frame land. Ordinary recursion
-consumes vertical stack space; concurrent breadth consumes firm frame space. In
+Every task frame is allocated from firm-owned or firm-borrowed frame land,
+but not every task is a forked child of that firm. Nested coroutine calls as
+well as concurrent breadth consume frame space. In
 the language of [RFC 0000](../new/rfc-0000-prolegomena.md), the firm becomes the
 visible territory for held async work, not only the object that later joins it.
 
@@ -59,9 +60,9 @@ The most important immediate pair is still this RFC and
 [RFC 0003](rfc-0003-deck-task-registry.md): the firm owns frame land, while the
 deck owns task identity.
 
-## Initial Implementation Plan
+## Original implementation plan (historical)
 
-The first implementation plan should stay narrow:
+The original sequence was:
 
 1. Extract the pure ring geometry from [RFC 0007](rfc-0007-ring-geometry-extraction.md).
 2. Add root-firm entrypoints and make task construction require a current firm.
@@ -74,9 +75,11 @@ The first implementation plan should stay narrow:
 7. Replace `wire`/`bell` internal coordination with a `pushfeed<T>` subclass
    using single producer/consumer wait slots.
 
-Only after that should the wand-routing and provided-buffer RFCs become the
-main implementation focus. They need the firm/deck/channel substrate to stop
-being speculative.
+The ring allocator was rejected after measurement. Bounded nursery bookkeeping
+was implemented and then removed; result evacuation remains. Firm join still
+traverses records, while the separate pool now supplies a bounded result feed.
+Generic pushfeed channels and direct wand completion routing remain proposals,
+not prerequisites that have all been completed.
 
 ## Motivation
 
@@ -86,15 +89,14 @@ and [Behavioral threads as occurrent structure](../../docs/rt-occurrents.md).
 The occurrent note is especially direct: a firm is a place, and the child task
 histories happen inside that place.
 
-The current C++ code has the lifetime half of that idea. `firm::fork()` stores
-child records and joins or stops children before the firm is allowed to finish.
-But the child coroutine frame itself still comes from the ordinary coroutine
-allocator, and the firm bookkeeping uses heap objects. That leaves the most
-important land invisible.
+Before this change, firms held child records but task frames used the ordinary
+coroutine allocation path. The lifetime structure did not make frame territory
+visible. Explicit frame provision addresses that gap independently of the
+representation chosen for child bookkeeping.
 
 Making the frame arena explicit gives us:
 
-- bounded memory for concurrent breadth;
+- explicit, optionally bounded frame memory;
 - diagnostics for frame pressure;
 - a direct correspondence between structured concurrency and memory ownership;
 - a path to avoiding accidental heap growth in hot async paths;
@@ -102,54 +104,52 @@ Making the frame arena explicit gives us:
 
 ## Current Shape
 
-The current frame and firm pieces live mostly in
-[task.hpp](../../src/nxtrt/task.hpp):
+The public umbrella is [task.hpp](../../src/nxtrt/task.hpp); implementation
+pieces are in [task/](../../src/nxtrt/task):
 
-- `detail::promise_base` owns per-task control state, result storage,
-  continuation, stop callbacks, and the task's ambient `runtime_env`.
-- `task<T>` uniquely owns the coroutine handle until it is awaited, started,
-  or forked.
-- `firm::fork(task<T>)` releases a task handle, stores a shared child record,
-  installs a completion callback, and enqueues the child on the active deck.
-- `deed<T>` and `catching_deed<T>` are shared-pointer handles to child records.
+- `detail::promise_base` owns per-task control state, continuation, stop
+  callbacks, and the task's ambient `runtime_env`; typed promises hold results.
+- `task<T>` uniquely owns its handle until ownership is explicitly transferred.
+  Starting or awaiting it does not itself transfer ownership.
+- `firm::fork(task<T>)` transfers the handle to an individually owned stable
+  child record, installs a completion observer, and enqueues the child.
+- `deed<T>` and `catching_deed<T>` contain movable result state, linked
+  non-owningly to the child record; they are not shared owners of the frame.
+- `pool<Idea>` instead retains task handles in borrowed slots and observes their
+  completion directly, without creating firm child records.
 
-The current conceptual model in [runtime.rkt](../../nxtrt/runtime.rkt) already
-distinguishes firms, tasks, deeds, wishes, and execs. The model files are still
-an experiment, so this RFC should not require model work before implementation;
-it is enough to keep the vocabulary in mind when the model is next revised.
+The executable model in [runtime.rkt](../../nxtrt/runtime.rkt) distinguishes
+firms, pool slots, tasks, deeds, wishes, and execs. Runtime lifecycle changes
+must keep that model aligned with the intended semantics; frame-byte details
+remain an implementation concern.
 
-## Proposal
+## Allocation API and the original ring proposal
 
-A firm has a frame arena:
+A firm can borrow explicit frame land:
 
 ```cpp
 class firm {
 public:
-    explicit firm(frame_arena_ref frames, firm_storage_ref bookkeeping);
+    explicit firm(frame_storage_ref frames);
 };
 ```
 
-The first implementation should be deliberately plain and borrowed: a bounded
-frame region over caller-provided bytes, with alignment support and explicit
-overflow diagnostics. Because [RFC 0007](rfc-0007-ring-geometry-extraction.md)
-already extracts ring geometry, the likely first allocator is ring-shaped: task
-frames are allocated at the tail, and contiguous retired prefixes can be tossed
-when every frame in that prefix is free.
+The default constructor instead provides lazy owned chunks. Both modes keep
+live frame addresses stable and support individual frame reclamation.
 
-That is not a general heap. It is closer to a feed of frame land: allocate from
-the back, retire from the front when structured settlement makes the prefix
-dead, and report pressure when the ring cannot fit the next frame. Later
-implementations can add slabs, per-size classes, or debug poisoning if the ring
-shape is too restrictive.
+The original borrowed implementation sketch proposed ring-shaped allocation:
+allocate at the tail and retire dead prefixes. That geometry was attractive
+because buffers already needed it, but it does not match ordinary coroutine
+lifetimes. The measurements below explain the replacement.
 
-Coroutine promise allocation should consult the current firm through the hot
+Coroutine promise allocation consults the current firm through the hot
 runtime environment. A task that is born without a current firm is a runtime
 error. Root execution creates or receives a root firm before the root task is
 constructed; there is no compatibility mode where ordinary task creation falls
 back to the heap.
 
-Frame allocation is bounded and fallible. Allocation failure should report at
-least:
+Borrowed frame allocation is bounded and fallible. Its exhaustion diagnostic
+includes:
 
 - requested frame size;
 - requested alignment;
@@ -158,8 +158,8 @@ least:
 - frame arena high-water mark;
 - current task id when available.
 
-This should be a structured runtime diagnostic, not an unexplained
-`std::bad_alloc`. It should use the existing exception and stacktrace path in
+Owned chunk growth can throw `std::bad_alloc`. Borrowed exhaustion uses the
+existing runtime diagnostic and exception path in
 [exceptions.hpp](../../src/nxtrt/exceptions.hpp) and
 [stacktrace.hpp](../../src/nxt/stacktrace.hpp) where that helps explain where
 the frame allocation was attempted.
@@ -183,9 +183,9 @@ at the head and pin it: no prefix ever retires, and the ring cannot wrap past
 them. That is not a bench quirk but the ordinary shape of structured work, a
 long-lived child that keeps awaiting short ones.
 
-[`firm_frame_arena`](../../src/nxtrt/task.hpp) is therefore:
+[`firm_frame_arena`](../../src/nxtrt/task/frame_arena.hpp) is therefore:
 
-- bump allocation from the top of the firm's borrowed bytes;
+- bump allocation from the top of borrowed land or nonmoving owned chunks;
 - a freed frame on top retracts the top (stack discipline for inline awaits);
 - any other freed frame joins a free list for its exact block size, and the
   next frame of that size reuses it. Coroutine frames come in very few sizes,
@@ -195,8 +195,9 @@ long-lived child that keeps awaiting short ones.
   reset and reported as such;
 - the whole arena resets when its last frame dies.
 
-Allocation never suspends and never falls back to the heap. Exhaustion throws
-a `runtime_error` naming the firm, the frame and block size, alignment, live
+Allocation never suspends. Borrowed land never falls back to heap growth;
+owned mode deliberately acquires chunks as needed. Borrowed exhaustion throws
+a `runtime_error` naming the firm, frame and block size, alignment, live
 bytes and frames, top, high-water mark, free-listed and stranded bytes, and
 the task that was creating the frame. With reuse, 240k frames in the bench run
 fit in 13.9 KB.
@@ -208,17 +209,19 @@ name their arena; the firm move constructor aborts if that happens.
 
 A task frame allocated from firm land may not outlive that firm.
 
-A firm may not release or reuse frame land until every child history located in
-that land has settled, been joined, or been cancelled. This is the memory-side
-version of structured concurrency.
+A block can be reused after its frame is safely destroyed, independently of
+other live frames. The arena as a whole cannot disappear while any frame still
+uses it. That includes directly awaited tasks and pool jobs, not only forked
+firm children. Cancellation is a request, not proof of settlement: outstanding
+backend references must be drained before their storage can be released.
 
 A frame pointer stored in the deck task registry names memory owned by a firm,
 not memory owned by the deck. The deck can identify and schedule the task, but
 it does not become the allocator for the frame.
 
 Tasks created outside a firm are invalid. If a caller wants root work, it must
-enter a root firm first. This makes the rule simple enough to trust: a task
-belongs to a firm.
+enter a root firm first. This establishes a frame provider, not automatically a
+firm child record for every coroutine.
 
 ## API Direction
 
@@ -234,21 +237,22 @@ instead of only:
 auto child = fork(fn(args...));
 ```
 
-That lets task construction happen inside the target firm. It also avoids the
-dangerous pattern of creating a coroutine lambda that captures state and then
-letting the returned task outlive the lambda closure.
+That postpones allocation until invocation in an ambient frame scope. The
+current member `firm::fork(fn, args...)` does not itself rebind the ambient
+firm or retain the callable. Merely passing a factory therefore does not cure
+the capturing-coroutine-lambda lifetime hazard.
 
-The current `fork(task<T>)` overload can remain only as a temporary migration
-primitive while the implementation changes. The target API is firm-local
-construction, because a preconstructed task has already missed the allocator
-decision.
+Tuple helpers retain their factories, and pools put ideas in stable slots
+before invoking them. A preconstructed task retains its original allocation
+home regardless of which owner later admits it. Recipe-based APIs make this
+decision explicit without claiming that every callable lifetime is automatic.
 
 ## Relationship To Other RFCs
 
-[RFC 0003](rfc-0003-deck-task-registry.md) moves hot task metadata out of
-promises and into a deck registry. This RFC does the complementary move for
-memory: the promise/frame remains in firm land, while the deck records compact
-identity and scheduling state.
+[RFC 0003](rfc-0003-deck-task-registry.md) gives tasks deck-owned identities
+and registry rows. Much control state remains in promises. This RFC supplies
+the memory side: frame residence is independent of registry identity and of
+the owner that holds the task handle.
 
 [RFC 0013](rfc-0013-runtime-env-core-fields.md) provides the hot `current_firm`
 field needed by promise allocation.
@@ -263,13 +267,14 @@ territory idea from coroutine frames to I/O buffers.
   lifetimes; see the implementation section.
 - ~~Do completed child frames get reused before firm settlement?~~ Yes: a
   frame's land is reusable as soon as that frame is destroyed.
-- Should frame exhaustion become backpressure instead of an error? With task
-  factories, a firm could make `fork(fn, args...)` wait for frame land the way
-  `farm::alloc()` waits for a slot, before constructing the frame.
-- What does the root-firm entrypoint look like when task construction itself
-  requires a firm?
-- What debugging hooks should expose frame high-water marks and allocation
-  failures?
+- Should frame exhaustion become backpressure instead of an error? Recipes
+  allow waiting before frame construction, but pool slot admission does not
+  currently implement a frame-byte budget. `farm::alloc()` reports exhaustion;
+  it does not wait for a slot.
+- How should frame provision be separated from nursery ownership? Root entry
+  currently installs a firm; pools still rely on that allocation scope.
+- Which additional pressure metrics are useful beyond the current live-frame,
+  high-water, free-listed and stranded-byte diagnostics?
 - Which parts of coroutine promise allocation work cleanly on the modern
   compiler floor we care about: roughly GCC 14+ and Clang 20+, without relying
   on unimplemented C++26 features?

@@ -6,6 +6,11 @@ page is a map; this one is the reasoning the map flattens. It builds the
 concepts up from intuition, as nouns and verbs, and is honest about where
 the code is still a seed.
 
+For the current ownership and completion distinctions, see
+[Runtime concurrency direction](rt-concurrency-direction.md); for bounded
+streaming work, see the [pool guide](rt-pool.md). The sketches below explain
+the holding metaphor, not a replacement for the current API reference.
+
 There is one idea underneath everything here, and it is worth saying before
 any of the types: **concurrency is the art of holding work that is not
 running right now.** A single thread does one thing, top to bottom. The
@@ -156,7 +161,7 @@ desires:
 ```cpp
 virtual coin_t prep(deck &, promise_base &, prepared_wish) = 0; // stage
 virtual void   suspend(coin_t token, need task)            = 0; // hold
-virtual void   cancel(coin_t token)                        = 0; // drop
+virtual void   cancel(coin_t token)                        = 0; // request stop
 virtual void   wave(deck & d)                              = 0; // flush
 ```
 
@@ -168,9 +173,10 @@ as a batch, in whatever order the backend likes.
 
 So the wand is a buffer too. But notice its drain got clever where the
 deck's was dumb. It coalesces (`wave` flushes a round's worth of wishes at
-once). It cancels (`cancel` drops held work that is no longer wanted). It
-completes out of order (a coin done by the kernel wakes its one need, not
-the others). Same producer/consumer-with-a-holding-tank as the deck, with a
+once). `cancel` requests cancellation; held backend state remains until the
+operation can safely retire. It completes out of order (a coin done by the
+kernel wakes its one need, not the others). Same
+producer/consumer-with-a-holding-tank as the deck, with a
 smarter release decision bolted on. The deck was a buffer with a trivial
 scheduler; the wand is a buffer with a real one. And the held thing is just
 "work" again — last time resumptions, this time desires.
@@ -201,8 +207,15 @@ A @ref nxtrt::deed "deed" is the caller's handle to a forked child. It is
 deliberately **not** a task: the firm owns and joins the work; the deed is
 just the ticket you redeem for the child's result once the firm has reached
 its join point. `deed<T>` rethrows a child's failure when you read it;
-`catching_deed<T>` carries an expected-like value so a helper can collect
-several outcomes before deciding what to throw.
+`std::move(deed).cope()` explicitly chooses catching observation, yielding a
+`catching_deed<T>` with an expected-like outcome. This lets a helper collect
+several outcomes before deciding what to throw; ordinary dropped deeds do not
+hide child failures.
+
+Join settles the child executions and evacuates their coroutine frames.
+It does not remove the nursery's child records: those remain until firm
+destruction, and result storage may survive through a deed. Frame reuse,
+child-record lifetime, and result consumption are separate events.
 
 `when_all`, `wait_any`, `with_timeout` are not new schedulers. They are
 composition patterns written over firms — which are written over tasks and
