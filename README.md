@@ -293,6 +293,34 @@ The tests that cross-check crypto against a reference `libcrypto` (RSA/ECDSA
 fixtures and ML-KEM-768) expect AWS-LC's headers; with OpenSSL or no
 `libcrypto` they are skipped at configure time.
 
+### Wisp coverage (GCC)
+
+Use a separate instrumented build, inside `nix develop` or with a matching
+GCC/Meson toolchain. This does not change the normal build's flags:
+
+```sh
+meson setup build/coverage -Db_coverage=true -Ddemo=false -Ddev=false -Dllm_tool=false
+meson compile -C build/coverage nxt-tests wisp-alloc-tests wisp-root-link
+find build/coverage -name '*.gcda' -delete  # reset counters before each comparison
+build/coverage/test/nxt-tests 14 15 16 17 18 19 20 21
+build/coverage/test/wisp-alloc-tests
+gcov --json-format -b -c --stdout build/coverage/src/libnxt-core.so.p/wisp_*.gcno \
+  build/coverage/test/wisp-alloc-tests.p/.._src_wisp_heap.cpp.gcno \
+  > build/coverage/wisp-coverage.jsonl
+```
+
+The selectors above cover the Wisp suites in the nested test report. The
+JSON-lines report includes line counts and branch outcomes for the core, not
+the console host; add `meson test -C build/coverage wisp-host-tests wisp-http-tests`
+to exercise host integration as well. Include both heap objects: allocation
+fault injection runs in its own executable. Template instantiations and
+separate objects can repeat source lines, so sum their execution counts by file
+and line before computing line coverage. Uncovered exception paths and
+compiler-generated branches are not necessarily missing language tests: use
+the report to find contracts worth testing, not as a percentage target. Compare
+the same workload with fresh counters, and assert results and snapshot
+isolation, not just successful execution.
+
 ### With Nix
 
 The flake is optional and wraps the same Meson build:

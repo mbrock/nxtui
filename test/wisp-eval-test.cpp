@@ -353,6 +353,14 @@ static suite eval_tests{
                 error =
                     m.cause(m.error(m.f("%SET!", {m.q(m.s("NEW")), 1})));
                 expect(m.h.v32slice(error)[0] == m.s("UNBOUND-VARIABLE"));
+                for (auto expression : {top, immediate(tag::chr, 955)}) {
+                    error = m.error(expression);
+                    expect(
+                        std::ranges::equal(
+                            m.h.v32slice(error),
+                            std::array{
+                                m.s("INVALID-EXPRESSION"), expression}));
+                }
                 m.h.collect();
                 expect(m.vm.status(m.run.get()) == evaluation::failed);
             };
@@ -916,6 +924,141 @@ static suite eval_tests{
                         == 7u);
             }
         };
+
+        "public continuation fields preserve lexical environments and frozen argument progress"_test =
+            [] {
+                for (bool collect : {false, true}) {
+                    language m;
+                    root captured{
+                        m.h,
+                        m.eval(
+                            reader{m.h, m.vm, R"((let ((outside 13))
+                          (set-symbol-value! 'prompt-env (env))
+                          (call-with-prompt 'inspect (%fn nil ()
+                            (let ((inside 29))
+                              (set-symbol-value! 'binding-env (env))
+                              (call-with-binding 'dyn 41 (%fn nil () (get/cc)))))
+                            nil)))"}
+                                .next()
+                                .value(),
+                            collect)};
+                    auto part = m.eval(
+                        m.f("KTX-ENV", {m.q(captured.get())}), collect);
+                    expect(
+                        part
+                        == m.h.get<tag::sym, field::val>(
+                            m.s("BINDING-ENV")));
+                    part = m.eval(
+                        m.f("KTX-FUN", {m.q(captured.get())}), collect);
+                    expect(part == m.s("BINDING"));
+                    part = m.eval(
+                        m.f("KTX-ACC", {m.q(captured.get())}), collect);
+                    expect(part == m.s("DYN"));
+                    expect(
+                        m.eval(
+                            m.f("KTX-ARG", {m.q(captured.get())}), collect)
+                        == 41u);
+                    root prompt{
+                        m.h,
+                        m.eval(
+                            m.f("KTX-HOP", {m.q(captured.get())}),
+                            collect)};
+                    part = m.eval(
+                        m.f("KTX-ENV", {m.q(prompt.get())}), collect);
+                    expect(
+                        part
+                        == m.h.get<tag::sym, field::val>(
+                            m.s("PROMPT-ENV")));
+                    part = m.eval(
+                        m.f("KTX-FUN", {m.q(prompt.get())}), collect);
+                    expect(part == m.s("PROMPT"));
+                    part = m.eval(
+                        m.f("KTX-ACC", {m.q(prompt.get())}), collect);
+                    expect(part == m.s("INSPECT"));
+                    expect(
+                        m.eval(m.f("KTX-ARG", {m.q(prompt.get())}), collect)
+                        == nil);
+                    expect(
+                        m.eval(m.f("KTX-HOP", {m.q(prompt.get())}), collect)
+                        == top);
+
+                    const auto result = m.eval(
+                        reader{m.h, m.vm, R"((let ((x 37))
+                      (set-symbol-value! 'application-env (env))
+                      (list 7 (get/cc) 11)))"}
+                            .next()
+                            .value(),
+                        collect);
+                    captured.set(m.h.get<tag::duo, field::car>(
+                        m.h.get<tag::duo, field::cdr>(result)));
+                    part = m.eval(
+                        m.f("KTX-ENV", {m.q(captured.get())}), collect);
+                    expect(
+                        part
+                        == m.h.get<tag::sym, field::val>(
+                            m.s("APPLICATION-ENV")));
+                    root progress{
+                        m.h,
+                        m.eval(
+                            m.f("KTX-ACC", {m.q(captured.get())}),
+                            collect)};
+                    // Capture precedes filling the GET/CC slot. Advancing
+                    // the original run must not fill the snapshot's vector.
+                    expect(
+                        std::ranges::equal(
+                            m.h.v32slice(progress.get()),
+                            std::array{1u, 7u, nil, nil}));
+                    expect(
+                        print(
+                            m.h,
+                            m.eval(
+                                m.f("KTX-ARG", {m.q(captured.get())}),
+                                collect))
+                        == "(11)");
+                    for (auto value : {19u, 23u}) {
+                        m.values(
+                            m.eval(
+                                m.f("CALL", {m.q(captured.get()), value}),
+                                collect),
+                            {7, value, 11});
+                        expect(
+                            std::ranges::equal(
+                                m.h.v32slice(progress.get()),
+                                std::array{1u, 7u, nil, nil}));
+                    }
+                }
+            };
+
+        "dynamic assignment copies crossed boundaries without changing saved or caller bindings"_test =
+            [] {
+                for (bool collect : {false, true}) {
+                    language m;
+                    const auto form = reader{m.h, m.vm, R"((do
+                      (set-symbol-dynamic! 'dyn t) (set-symbol-value! 'dyn 100)
+                      (set-symbol-dynamic! 'other t) (set-symbol-value! 'other 200)
+                      (let ((saved (call-with-prompt 'park
+                        (%fn nil () (call-with-binding 'dyn 10 (%fn nil ()
+                          (call-with-prompt 'inner (%fn nil ()
+                            (call-with-binding 'other 20 (%fn nil ()
+                              (do (send-with-default! 'park nil nil)
+                                (%set! 'dyn (+ dyn 1)) (list dyn other)))))
+                            (%fn nil (v k) 999)))))
+                        (%fn nil (v k) k))))
+                        (list
+                          (call-with-binding 'dyn 30 (%fn nil ()
+                            (list (call saved nil) dyn other)))
+                          (call-with-binding 'dyn 40 (%fn nil ()
+                            (list (call saved nil) dyn other)))
+                          dyn other)))))"}
+                                          .next()
+                                          .value();
+                    const auto result = print(m.h, m.eval(form, collect));
+                    expect(
+                        result
+                        == "(((11 20) 30 200) ((11 20) 40 200) 100 200)")
+                        << result;
+                }
+            };
 
         "capture and composition share deep segments and copy only meta entries"_test =
             [] {

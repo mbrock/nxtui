@@ -694,6 +694,56 @@ static suite primitive_tests{
                 m.fails("SYMBOL-NAME", {7}, "TYPE-MISMATCH");
             };
 
+        "primitive DEFPACKAGE keeps raw names and ordered imports, rejecting partial declarations"_test =
+            [] {
+                primitives m;
+                root left{m.h, m.call("%DEFPACKAGE", {m.h.newv08("LEFT")})};
+                root right{
+                    m.h, m.call("%DEFPACKAGE", {m.h.newv08("RIGHT")})};
+                root left_name{m.h, m.vm.intern("SHARED", left.get())};
+                root right_name{m.h, m.vm.intern("SHARED", right.get())};
+                root imports{m.h, m.l({right.get(), left.get()})};
+                root app{
+                    m.h,
+                    m.eval(m.f("DEFPACKAGE", {m.s("APP"), imports.get()}))};
+                expect(app.get() == m.vm.find_package("APP"));
+                expect(
+                    m.h.get<tag::pkg, field::use>(app.get())
+                    == imports.get());
+                // APP is unbound: this control builtin must not evaluate
+                // its name or import list, and the first import wins.
+                expect(
+                    m.vm.intern("SHARED", app.get()) == right_name.get());
+                expect(left_name.get() != right_name.get());
+                const auto selected =
+                    m.eval(m.f("IN-PACKAGE", {m.s("APP")}));
+                expect(selected == app.get());
+                expect(m.vm.current_package() == app.get());
+                expect(m.vm.intern("LOCAL", app.get()) != m.s("LOCAL"));
+
+                for (bool duplicate : {false, true}) {
+                    const auto form =
+                        m.f("DEFPACKAGE",
+                            {m.s(duplicate ? "APP" : "REJECTED"),
+                             duplicate ? nil : m.l({left.get(), 17})});
+                    expect(m.execute(form) == evaluation::failed);
+                    auto error = m.h.v32slice(
+                        m.h.get<tag::run, field::err>(m.running.get()))[2];
+                    while (m.h.v32slice(error)[0] == m.s("BUILTIN-FAILURE"))
+                        error = m.h.v32slice(error)[2];
+                    expect(
+                        m.h.v32slice(error)[0]
+                        == m.s(
+                            duplicate ? "PACKAGE-EXISTS"
+                                      : "TYPE-MISMATCH"));
+                    expect(m.vm.find_package("REJECTED") == nil);
+                    expect(m.vm.find_package("APP") == app.get());
+                    expect(
+                        m.h.get<tag::pkg, field::use>(app.get())
+                        == imports.get());
+                }
+            };
+
         "fresh keys skip interned serials and self-evaluate across turns"_test =
             [] {
                 primitives m;
