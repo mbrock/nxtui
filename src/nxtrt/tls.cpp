@@ -55,61 +55,92 @@ tls13_client_session::tls13_client_session(
     : tls13_client_session(socket.input(), socket.output(), buffer_size)
 {}
 
-task<> tls13_client_session::handshake(std::string_view host)
+task<> tls13_client_session::handshake(
+    std::string_view host, std::string_view ca_file)
 {
+    handshaken_ = false;
     auto hello = nxt::tls::make_tls13_client_hello(host);
     co_await nxtrt::write_all(writer_, hello.record);
 
     auto record = co_await nxt::tls::read_tls_record(reader_);
     auto server_hello = nxt::tls::parse_tls13_server_hello(record);
-    auto shared_secret = nxt::crypto::x25519_dh(
-        hello.key_pair.secret_key,
-        server_hello.key_share);
     nxt::tls::require_tls(
-        shared_secret.has_value(),
-        "X25519 shared secret failed");
+        server_hello.legacy_session_id == hello.legacy_session_id,
+        "server did not echo the legacy session ID");
+    auto shared_secret = nxt::crypto::x25519_dh(
+        hello.key_pair.secret_key, server_hello.key_share);
+    nxt::tls::require_tls(
+        shared_secret.has_value(), "X25519 shared secret failed");
 
     auto transcript =
         nxt::tls::join_bytes(hello.handshake, server_hello.handshake);
-    auto handshake_keys = nxt::tls::derive_tls13_handshake_keys(
-        *shared_secret,
-        transcript);
+    auto handshake_keys =
+        nxt::tls::derive_tls13_handshake_keys(*shared_secret, transcript);
 
     auto leaf_public_key = std::optional<nxt::tls::leaf_public_key>{};
-    auto saw_server_finished = false;
-    while (!saw_server_finished) {
+    // This client offers neither PSK nor client authentication. Require the
+    // full server-authentication flight, in order, before accepting
+    // Finished.
+    constexpr auto expected_types = std::array{8, 11, 15, 20};
+    auto next_message = std::size_t{0};
+    auto flight = nxt::tls::bytes{};
+    while (next_message < expected_types.size()) {
         co_await read_record_into_storage();
-        if (record_type_ == 20)
+        if (record_type_ == 20) {
+            nxt::tls::require_tls(
+                record_version_ == 0x0303 && record_payload().size() == 1
+                    && record_payload()[0] == std::byte{1},
+                "invalid change_cipher_spec");
             continue;
+        }
 
         auto plaintext = nxt::tls::open_tls13_record_in_place(
             handshake_keys.server,
             record_type_,
             record_version_,
             record_payload());
-        if (plaintext.inner_type != 22)
-            continue;
+        nxt::tls::require_tls(
+            plaintext.inner_type == 22,
+            "expected server handshake, received alert or application data");
 
-        for (auto const & message :
-             nxt::tls::split_handshake_messages(plaintext.content)) {
+        // Certificate chains routinely span records. Only process complete
+        // messages, with a bound on retained handshake data.
+        constexpr auto max_flight_size = std::size_t{1024 * 1024};
+        nxt::tls::require_tls(
+            plaintext.content.size() <= max_flight_size - flight.size(),
+            "TLS handshake is too large");
+        nxt::tls::put_bytes(flight, plaintext.content);
+        auto consumed = std::size_t{0};
+        while (flight.size() - consumed >= 4) {
+            auto remaining = std::span{flight}.subspan(consumed);
+            auto size = std::size_t{4}
+                        + nxt::tls::parse_u24(remaining.subspan(1, 3));
+            nxt::tls::require_tls(
+                size <= max_flight_size, "TLS handshake is too large");
+            if (remaining.size() < size)
+                break;
+            auto message = remaining.first(size);
             auto type = std::to_integer<std::uint8_t>(message[0]);
+            nxt::tls::require_tls(
+                next_message < expected_types.size()
+                    && type == expected_types[next_message],
+                "unexpected server handshake message or missing authentication");
             if (type == 11) {
                 auto cert = nxt::tls::parse_tls13_certificate(message);
+                nxt::tls::verify_server_certificate(cert, host, ca_file);
                 leaf_public_key =
                     nxt::tls::extract_leaf_public_key(cert.leaf_der);
             } else if (type == 15) {
-                nxt::tls::require_tls(
-                    leaf_public_key.has_value(),
-                    "certificate_verify arrived before certificate");
                 auto cert_verify =
                     nxt::tls::parse_tls13_certificate_verify(message);
-                auto ok = nxt::tls::verify_certificate_verify(
-                    *leaf_public_key,
-                    transcript,
-                    cert_verify);
                 nxt::tls::require_tls(
-                    ok,
-                    "CertificateVerify signature failed");
+                    cert_verify.scheme == 0x0403
+                        || cert_verify.scheme == 0x0804,
+                    "server used an unoffered CertificateVerify scheme");
+                auto ok = nxt::tls::verify_certificate_verify(
+                    *leaf_public_key, transcript, cert_verify);
+                nxt::tls::require_tls(
+                    ok, "CertificateVerify signature failed");
             } else if (type == 20) {
                 auto received = nxt::tls::parse_tls13_finished(message);
                 auto ok = nxt::tls::verify_finished(
@@ -117,22 +148,23 @@ task<> tls13_client_session::handshake(std::string_view host)
                     transcript,
                     received);
                 nxt::tls::require_tls(ok, "server Finished failed");
-                saw_server_finished = true;
             }
             nxt::tls::put_bytes(transcript, message);
+            consumed += size;
+            ++next_message;
         }
+        flight.erase(flight.begin(), flight.begin() + consumed);
+        nxt::tls::require_tls(
+            next_message < expected_types.size() || flight.empty(),
+            "unexpected handshake bytes after server Finished");
     }
 
     application_keys_ = nxt::tls::derive_tls13_application_keys(
-        handshake_keys.secret,
-        transcript);
+        handshake_keys.secret, transcript);
     auto client_finished = nxt::tls::make_finished_message(
-        handshake_keys.client.traffic_secret,
-        transcript);
+        handshake_keys.client.traffic_secret, transcript);
     auto finished_record = nxt::tls::seal_tls13_record(
-        handshake_keys.client,
-        22,
-        client_finished);
+        handshake_keys.client, 22, client_finished);
     co_await nxtrt::write_all(writer_, finished_record);
 
     nxt::tls::put_bytes(transcript, client_finished);

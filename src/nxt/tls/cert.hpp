@@ -10,6 +10,14 @@ struct tls13_certificate
     std::vector<bytes> chain_der;
 };
 
+// Validates the chain for TLS server authentication and SAN identity at the
+// current time. An explicit PEM CA file replaces the default trust store.
+// Throws on any verification or trust-store loading failure.
+void verify_server_certificate(
+    tls13_certificate const & certificate,
+    std::string_view host,
+    std::string_view ca_file = {});
+
 struct tls13_certificate_verify
 {
     std::uint16_t scheme = 0;
@@ -143,8 +151,9 @@ parse_tls13_certificate(std::span<const std::byte> message)
     require_tls(
         cursor.empty(), "unexpected bytes after certificate message");
 
-    auto request_context_len = body.take_u8();
-    body.take(request_context_len);
+    require_tls(
+        body.take_u8() == 0,
+        "server certificate request context must be empty");
 
     auto entries = byte_cursor{body.take(body.take_u24())};
     require_tls(body.empty(), "unexpected bytes after certificate list");

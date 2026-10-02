@@ -66,14 +66,38 @@ inline void put_extension(bytes & out, std::uint16_t type, bytes body)
     put_bytes(out, body);
 }
 
+inline void require_tls(bool ok, const char * message)
+{
+    if (!ok)
+        throw nxtrt::runtime_error{message};
+}
+
+inline void validate_tls_host(std::string_view host)
+{
+    // DNS identities are ASCII (international names must use A-labels).
+    // IP literals are unbracketed, without a port or scope identifier.
+    require_tls(
+        !host.empty() && host.size() <= 253
+            && std::ranges::all_of(host, [](unsigned char ch) {
+                   return (ch >= 'a' && ch <= 'z')
+                       || (ch >= 'A' && ch <= 'Z')
+                       || (ch >= '0' && ch <= '9') || ch == '-'
+                       || ch == '.' || ch == ':';
+               }),
+        "invalid TLS server identity");
+}
+
+bool is_ip_address(std::string_view host);
+
 inline tls13_client_hello make_tls13_client_hello(std::string_view host)
 {
+    validate_tls_host(host);
     auto x25519 = nxt::crypto::x25519_keygen();
     auto random = nxt::crypto::random(32);
     auto session_id = nxt::crypto::random(32);
 
     auto extensions = bytes{};
-    {
+    if (!is_ip_address(host)) {
         auto names = bytes{};
         put_u8(names, 0); // host_name
         put_u16(names, static_cast<std::uint16_t>(host.size()));
@@ -377,12 +401,6 @@ inline nxtrt::task<tls_record> read_tls_record(Reader & reader)
         .version = version,
         .payload = bytes{payload.begin(), payload.end()},
     };
-}
-
-inline void require_tls(bool ok, const char * message)
-{
-    if (!ok)
-        throw nxtrt::runtime_error{message};
 }
 
 inline tls13_server_hello

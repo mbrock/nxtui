@@ -317,12 +317,24 @@ DNS uses c-ares when available (the libc fallback performs blocking resolution).
 Both `serve-http` and `fetch-http` reject `--checkpoint` with `:NOT-REPLAYABLE`:
 there is no effect-result log or restoration of live sockets.
 
-**HTTPS is experimental, not authenticated HTTPS.** It uses NXT's handmade
-TLS 1.3 client, which checks CertificateVerify and Finished but does **not**
-validate certificate-chain trust, validity dates, or hostname identity. Do not
-use it to send secrets to untrusted networks as if it provided browser/curl
-certificate verification. That limitation belongs to the existing TLS stack,
-not to Wisp, and exposing the client does not fix it.
+**HTTPS authenticates the server.** NXT's handmade TLS 1.3 client uses
+libcrypto's X.509 verifier (AWS-LC in Nix) to check chain trust, signatures,
+validity dates, CA constraints, critical extensions, and TLS server usage.
+The URL host must match a subject alternative name: DNS names allow only
+whole-label wildcards; IP literals require an IP SAN. Common-name fallback is
+disabled. DNS connections send SNI for virtual-host selection; IP connections
+do not. CertificateVerify and Finished are both required and verified before
+any HTTP request is sent.
+
+Trust comes from libcrypto's default CA paths, configurable with
+`SSL_CERT_FILE` (PEM bundle) and `SSL_CERT_DIR` (hashed CA directory). Native
+clients can instead call `handshake(host, ca_file)` to use only an explicit
+PEM bundle. For private servers, configure trust in a local CA and use a
+server certificate signed by it (AWS-LC does not treat a self-signed non-CA
+leaf in a CA bundle as a trust anchor). There is no verification-disable
+option. The TLS implementation remains experimental: it does not perform
+online revocation (OCSP/CRL) or Certificate Transparency checks and is not a
+browser-equivalent or audited TLS stack.
 
 ### How the web server fits into NXT
 
@@ -450,9 +462,10 @@ public headers (with the vendored libvterm/mdspan/hub headers under
 `include/nxt-vendor`), and an `nxt.pc` for pkg-config. Consumers also need
 Boost headers and `-std=c++23`.
 
-The tests that cross-check crypto against a reference `libcrypto` (RSA/ECDSA
-fixtures and ML-KEM-768) expect AWS-LC's headers; with OpenSSL or no
-`libcrypto` they are skipped at configure time.
+`libcrypto` is required for certificate verification; AWS-LC is provided by
+Nix, and OpenSSL is also supported for X.509 verification. The crypto
+cross-check tests (RSA/ECDSA fixtures and ML-KEM-768) expect AWS-LC's headers;
+with OpenSSL those optional cross-checks are skipped at configure time.
 
 Default firms acquire frame land lazily in non-relocating chunks rather than
 reserving 4 MiB per scope. Chunks are reused until the firm is destroyed;

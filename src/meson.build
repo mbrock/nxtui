@@ -31,6 +31,7 @@ nxt_libvterm_dep = declare_dependency(
 nxt_core_deps = [
   utf8proc_dep,
   boost_dep,
+  dependency('libcrypto'),
   declare_dependency(include_directories : nxt_libvterm_inc),
   declare_dependency(compile_args : nxt_wand_args),
 ] + nxt_compression_deps
@@ -59,6 +60,7 @@ nxt_core_sources = files(
   'nxt/crypto/sha1.cpp',
   'nxt/crypto/sha256.cpp',
   'nxt/crypto/x25519.cpp',
+  'nxt/tls/cert.cpp',
   'nxtui/glyph-table.cpp',
   'nxtui/input.cpp',
   'nxtui/raster.cpp',
@@ -218,6 +220,7 @@ nxt_header_install_excludes = {
     'crypto/x25519.cpp',
     'png.cpp',
     'stacktrace.cpp',
+    'tls/cert.cpp',
   ],
   'nxtai' : [
     'nxtllm.cpp',

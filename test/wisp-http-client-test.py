@@ -2,6 +2,7 @@
 """Wisp outbound HTTP using independent HTTP/TLS peers, real waits and GC."""
 import gzip
 import http.server
+import os
 import pathlib
 import shutil
 import ssl
@@ -85,13 +86,15 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
     thread = threading.Thread(target=peer.serve_forever, daemon=True)
     thread.start()
     url = f"http://localhost:{peer.server_port}"
+    client_env = os.environ.copy()
 
     def run(program, input=b"", ok=True, timeout=20, checkpoint=False):
         source.write_text(program.replace("URL", url))
         args = [binary, "run", str(source)]
         if checkpoint:
             args += ["--checkpoint", str(directory / "network.tape")]
-        result = subprocess.run(args, input=input, capture_output=True, timeout=timeout)
+        result = subprocess.run(args, input=input, capture_output=True,
+                                timeout=timeout, env=client_env)
         assert (result.returncode == 0) == ok, (result.returncode, result.stderr)
         if ok:
             assert result.stderr == b"", result.stderr
@@ -160,22 +163,71 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-client-") as directory:
         openssl = shutil.which("openssl")
         if openssl:
             key, cert = directory / "key.pem", directory / "cert.pem"
+            ca_key, ca = directory / "ca-key.pem", directory / "ca.pem"
+            csr = directory / "request.pem"
+            config = directory / "cert.cnf"
+            config.write_text('''
+              [req]
+              distinguished_name = subject
+              x509_extensions = extensions
+              [subject]
+              [extensions]
+              basicConstraints = critical,CA:FALSE
+              keyUsage = critical,digitalSignature
+              extendedKeyUsage = serverAuth
+              subjectAltName = DNS:localhost
+              [ca]
+              basicConstraints = critical,CA:TRUE
+              keyUsage = critical,keyCertSign,cRLSign
+            ''')
             subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048",
+                            "-nodes", "-keyout", str(ca_key),
+                            "-out", str(ca), "-subj", "/CN=Test Root", "-days", "1",
+                            "-config", str(config), "-extensions", "ca"],
+                           check=True, capture_output=True, timeout=20)
+            subprocess.run([openssl, "req", "-new", "-newkey", "rsa:2048",
                             "-nodes", "-keyout", str(key),
-                            "-out", str(cert), "-subj", "/CN=localhost", "-days", "1"],
+                            "-out", str(csr), "-subj", "/CN=localhost",
+                            "-config", str(config)],
+                           check=True, capture_output=True, timeout=20)
+            subprocess.run([openssl, "x509", "-req", "-in", str(csr),
+                            "-CA", str(ca), "-CAkey", str(ca_key),
+                            "-out", str(cert), "-days", "1",
+                            "-extfile", str(config), "-extensions", "extensions"],
                            check=True, capture_output=True, timeout=20)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_3
             context.load_cert_chain(cert, key)
+            server_names = []
+            context.set_servername_callback(lambda socket, name, ctx: server_names.append(name))
             peer.socket = context.wrap_socket(peer.socket, server_side=True)
             url = f"https://localhost:{peer.server_port}"
+            rejected_program = '''
+              (print (try (fetch-http "URL/echo")
+                          (error (why k) (vector-get (head why) 2))))
+            '''
+            request_count = len(requests)
+            untrusted = run(rejected_program)
+            assert untrusted.stdout == b":IO\n", untrusted.stdout
+            assert len(requests) == request_count, "sent HTTP before authenticating peer"
+            # Explicitly trust the test CA, not certificates supplied by peers.
+            client_env["SSL_CERT_FILE"] = str(ca)
             large = b"TLS:\0\xff" * 5000
             secure = run('''
               (write (vector-get (fetch-http "URL/echo" "POST" nil
                                     (read-bytes 30000)) 2))
             ''', input=large)
             assert secure.stdout == large, (len(secure.stdout), secure.stderr)
-            print("Wisp HTTP client TLS: 30 KB binary POST passed")
+            assert server_names[-1] == "localhost", server_names
+            # Connecting to the same trusted peer by IP must not use a DNS SAN.
+            url = f"https://127.0.0.1:{peer.server_port}"
+            request_count = len(requests)
+            mismatch = run(rejected_program)
+            assert mismatch.stdout == b":IO\n", mismatch.stdout
+            assert len(requests) == request_count, "sent HTTP to wrong virtual host"
+            assert server_names[-1] is None, "IP literal was sent as DNS SNI"
+            url = f"https://localhost:{peer.server_port}"
+            print("Wisp HTTP client TLS: trusted 30 KB POST, SNI, untrusted and wrong-host rejection passed")
         else:
             print("Wisp HTTP client TLS: skipped (openssl fixture tool unavailable)")
 

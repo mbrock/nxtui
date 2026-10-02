@@ -50,11 +50,11 @@ stdenv.mkDerivation {
     brotli
     zstd
     c-ares
+    aws-lc
   ];
 
-  # Test fixtures and ML-KEM-768 cross-checks use AWS-LC's libcrypto
-  # (they rely on BoringSSL-style headers like <openssl/nid.h>).
-  checkInputs = [ aws-lc ];
+  # AWS-LC's libcrypto validates TLS certificates and also supplies the
+  # crypto test fixtures and ML-KEM-768 cross-checks.
   nativeCheckInputs = [ python3 ];
 
   mesonBuildType = "release";

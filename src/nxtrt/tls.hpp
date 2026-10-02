@@ -53,7 +53,9 @@ public:
         net::socket & socket,
         std::size_t buffer_size = 4096);
 
-    task<> handshake(std::string_view host);
+    // Authenticates the peer against host (DNS SAN or unbracketed IP SAN).
+    // ca_file is an optional PEM bundle replacing the default trust store.
+    task<> handshake(std::string_view host, std::string_view ca_file = {});
     task<> write_all(std::span<const std::byte> bytes);
     task<> write_all(std::string_view text);
     task<nxt::tls::tls13_plaintext> read();

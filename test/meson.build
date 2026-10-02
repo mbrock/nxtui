@@ -3,6 +3,7 @@ if get_option('tests')
     'input-test.cpp',
     'json-test.cpp',
     'crypto-test.cpp',
+    'tls-test.cpp',
     'include-test.cpp',
     'http-server-test.cpp',
     'idea-test.cpp',
