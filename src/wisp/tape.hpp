@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Logical heap images inspired by mbrock/wisp core/tape.zig, revision
-// e1c9a96f6c543c858aeafb0dac26bafd649f82a7. Not the Zig tape byte format.
+// a282b936867fcf7d5d2926ebee9afbaf3e153f5b. Not the Zig tape byte format.
 #pragma once
 
 #include "wisp/eval.hpp"
@@ -44,7 +44,8 @@ inline constexpr std::size_t default_limit = 64 * 1024 * 1024;
 /// saved. Any ext row is rejected. Collect explicitly first if desired.
 /// The format is versioned, little-endian, schema-checked, and relocates
 /// builtin IDs by name. SHA-256 detects corruption, not authenticity.
-/// Version 2 adds segmented control state; version 1 tapes are rejected.
+/// Version 3 uses lexical-first lookup and isolated public EVAL scope;
+/// versions 1 and 2 are rejected rather than changing saved code semantics.
 std::vector<std::byte> encode(const evaluator &, word entry = nil);
 
 /// Restore into a separate owner or throw error; never changes a live

@@ -336,6 +336,15 @@ struct eval_step
         val = nah;
     }
 
+    void eval(word x)
+    {
+        // Public source evaluation excludes implicit caller locals, but
+        // retains dynamic bindings, effects, and the continuation. Macro
+        // results use enter() with their restored call-site environment.
+        env = nil;
+        enter(x);
+    }
+
     void push(word fun, word acc, word arg)
     {
         way = h.make<tag::ktx>({way, env, fun, acc, arg});
@@ -347,6 +356,21 @@ struct eval_step
         if (!assign
             && h.get<tag::sym, field::pkg>(sym) == vm.keywords_.get())
             return sym;
+        // Explicit lexical binders stay lexical even when the symbol's
+        // dynamic declaration changes after a closure captures them.
+        for (auto scope : scan(env)) {
+            require(scope, tag::v32, "VECTOR");
+            const auto xs = h.v32slice(scope);
+            if (xs.size() % 2 != 0)
+                fail("INVALID-ENVIRONMENT", {scope});
+            for (std::size_t i = 0; i < xs.size(); i += 2) {
+                if (xs[i] == sym) {
+                    if (assign)
+                        h.v32set(scope, i + 1, value);
+                    return assign ? value : xs[i + 1];
+                }
+            }
+        }
         if (h.get<tag::sym, field::dyn>(sym) != nil) {
             for (auto cur = meta; cur != top;) {
                 const auto [hop, saved_env, fun, name, binding] =
@@ -364,19 +388,6 @@ struct eval_step
                     return assign ? value : old;
                 }
                 cur = hop;
-            }
-        }
-        for (auto scope : scan(env)) {
-            require(scope, tag::v32, "VECTOR");
-            const auto xs = h.v32slice(scope);
-            if (xs.size() % 2 != 0)
-                fail("INVALID-ENVIRONMENT", {scope});
-            for (std::size_t i = 0; i < xs.size(); i += 2) {
-                if (xs[i] == sym) {
-                    if (assign)
-                        h.v32set(scope, i + 1, value);
-                    return assign ? value : xs[i + 1];
-                }
             }
         }
         const auto old = h.get<tag::sym, field::val>(sym);
@@ -1530,7 +1541,7 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::ktx_part<field::arg>>("KTX-ARG"),
         builtin::bind<&eval_step::ktx_position>("KTX-POS"),
         builtin::bind<&eval_step::is_top>("TOP?"),
-        builtin::bind<&eval_step::enter>("EVAL"),
+        builtin::bind<&eval_step::eval>("EVAL"),
         builtin::bind<&eval_step::divide>("/"),
         builtin::bind<&eval_step::mod>("MOD"),
         builtin::bind<&eval_step::type_of>("TYPE-OF"),

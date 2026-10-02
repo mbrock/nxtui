@@ -11,7 +11,7 @@ namespace wisp {
 namespace {
 
 constexpr std::string_view magic = "NXWISP\r\n";
-constexpr word version = 2;
+constexpr word version = 3;
 
 void demand(bool good, const char * message)
 {

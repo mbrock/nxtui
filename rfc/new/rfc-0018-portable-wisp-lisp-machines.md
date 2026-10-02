@@ -514,9 +514,9 @@ it uses neither erased function-pointer casts nor C++26 reflection.
 The evaluator now also implements:
 
 - `SET-SYMBOL-DYNAMIC!` and `CALL-WITH-BINDING`. Marked symbols search the
-  meta chain's nearest `BINDING` entry before lexical/global lookup or
-  assignment. Unmarked symbols ignore those frames. Exiting a binding restores
-  the previous scope.
+  meta chain's nearest `BINDING` entry after lexical lookup and before global
+  lookup or assignment. Unmarked symbols ignore those frames. Exiting a binding
+  restores the previous scope.
 - `CALL-WITH-PROMPT` and `SEND-WITH-DEFAULT!`. Tags match by identity. Sending
   captures the frames inside the nearest matching prompt, excludes the prompt
   itself, and calls its handler with the request and captured continuation in
@@ -532,8 +532,8 @@ The evaluator now also implements:
   composing the captured outside context with the current caller's context.
 - `GET/CC`, `COMPOSE-CONTINUATION`, `KTX-*`, `TOP?`, and `EVAL`. As in Zig,
   `GET/CC` exposes an immutable control snapshot. Composition shares its argument's
-  segments and attaches the caller context. `EVAL` evaluates
-  the supplied form in the current environment.
+  segments and attaches the caller context. Public `EVAL` evaluates the supplied
+  form without caller locals, retaining the dynamic and control context.
 - Resumable language failures via the nearest `ERROR` prompt. Its handler can
   supply a replacement by calling the captured continuation. With no handler,
   `run.err` becomes `[UNHANDLED-ERROR, ERROR, condition]`. An error during a guest
@@ -573,6 +573,31 @@ checkout produced `((11 1) (11 2))` for shared lexical versus
 copied dynamic mutation, 27 for shallow resumption, 1038 for composing both
 outside contexts when sending into a continuation, and `(5 42 7)` for supplying
 an unbound variable's replacement. The C++ deep-resumption test produces 50.
+
+### Lexical scope and public evaluation
+
+The scope port follows upstream
+[`a282b93`](https://github.com/mbrock/wisp/commit/a282b936867fcf7d5d2926ebee9afbaf3e153f5b).
+Reads and `%SET!` first resolve the nearest lexical binding, then an active
+dynamic binding for a currently dynamic symbol, then its global value.
+Parameters, `LET`, and captured locals remain lexical even if the symbol's
+dynamic declaration changes. Free-variable lookup still consults the current
+declaration at runtime. Assignment to an otherwise unbound name still fails.
+Closures and repeated continuation resumptions share captured lexical store.
+
+Public `EVAL` cannot implicitly read, assign, or capture caller locals. Its
+dynamic bindings, effect handlers, and continuation remain active; returning
+or resuming restores caller scope. Internal macro-result evaluation still
+uses the call-site lexical environment. `ENV`, `KTX-ENV`, and `RUN` remain
+explicit reflection; ordinary `EVAL` is not debugger frame evaluation.
+
+Ordinary calls select the live symbol function cell before evaluating
+arguments. New calls see redefinitions, but saved function objects and
+already-started calls retain their callee, including multi-shot resumptions.
+Tests mirror upstream scope, declaration-toggle, effect, and redefinition
+fixtures, including both uninterrupted and per-step-collected evaluation.
+Code relying on dynamic bindings overriding locals must remove or rename those
+locals; code relying on implicit caller-local `EVAL` must use explicit scope.
 
 ## C++ source loading and guest library
 
@@ -735,17 +760,21 @@ Any external row causes rejection, including an unreachable row until the host
 explicitly collects it. Rebinding external capabilities is deliberately absent
 in this version; saving a numeric host handle would not save its resource.
 
-### Tape version 2 has an explicit byte encoding
+### Tape version 3 has an explicit byte encoding
 
-This is **not** the Zig `wisp tape v0.9.0` format. Version 2 adds `run.meta` and
-segmented contexts; version 1 tapes are explicitly rejected, without migration.
+This is **not** the Zig `wisp tape v0.9.0` format. Version 2 added `run.meta` and
+segmented contexts. Version 3 retains that layout but changes variable lookup
+and public `EVAL` scope. Versions 1 and 2 are explicitly rejected, without
+migration, rather than silently resuming code with different language semantics.
+This semantic version bump is a deliberate difference from Zig, which keeps
+its tape version unchanged for the scope change.
 All integers below are unsigned
 32-bit little-endian unless specified otherwise. Text is a byte length followed
 by exactly that many bytes, without a terminator or alignment padding.
 
 | Order | Encoding |
 | --- | --- |
-| Header | Eight bytes `NXWISP\r\n`, version `2`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
+| Header | Eight bytes `NXWISP\r\n`, version `3`, era `0/1`, next pin ID, 64-bit little-endian fresh-key serial, GC-request `0/1`, entry word |
 | Evaluator roots | Count, then `(text name, word value)` for each saved root |
 | Builtins | Count, then `(text name, control-kind 0/1)`; ordinal is the saved jet payload |
 | Byte pool | Byte count, then raw bytes |

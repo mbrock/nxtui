@@ -439,7 +439,7 @@ static suite eval_tests{
             expect(maximum <= 3u);
         };
 
-        "dynamic bindings shadow lexical scope only for marked symbols"_test =
+        "dynamic bindings affect free marked symbols, not captured locals"_test =
             [] {
                 language m;
                 auto x = m.s("X");
@@ -475,9 +475,9 @@ static suite eval_tests{
                 const auto bound = m.h.get<tag::duo, field::car>(result);
                 expect((m.h.get<tag::duo, field::car>(bound) == 10u));
                 const auto rest = m.h.get<tag::duo, field::cdr>(bound);
-                m.values(m.h.get<tag::duo, field::car>(rest), {20, 23});
-                m.values(m.h.get<tag::duo, field::cdr>(rest), {10, 14});
-                m.values(m.h.get<tag::duo, field::cdr>(result), {2});
+                m.values(m.h.get<tag::duo, field::car>(rest), {2, 23});
+                m.values(m.h.get<tag::duo, field::cdr>(rest), {23, 14});
+                m.values(m.h.get<tag::duo, field::cdr>(result), {14});
                 expect(m.eval(m.s("X"), true) == 7u);
                 x = m.s("X");
                 expect(
@@ -1038,15 +1038,96 @@ static suite eval_tests{
             expect(m.h.table<tag::ktx>().size() == before + 256);
         };
 
-        "EVAL evaluates a computed form in the current lexical environment"_test =
+        "lexical bindings remain authoritative across declarations and resumption"_test =
             [] {
+                const std::pair<std::string_view, std::string_view> cases[] = {
+                    {R"((do (set-symbol-value! 'x 100) (set-symbol-dynamic! 'x t)
+                      (call-with-binding 'x 10 (%fn nil ()
+                        (list
+                          (let ((x 1)) (%set! 'x 2) x)
+                          (call (%fn nil (x) (do (%set! 'x (+ x 1)) x)) 3)
+                          x (let ((x 1)) (let ((x 2) (seen x)) seen)))))))",
+                     "(2 4 10 1)"},
+                    {R"((do (set-symbol-value! 'x 100)
+                      (let ((closed (let ((x 1))
+                              (%fn nil () (do (%set! 'x (+ x 1)) x))))
+                            (free (%fn nil () x)))
+                        (call-with-binding 'x 10 (%fn nil ()
+                          (list (call closed) (call free)
+                            (do (set-symbol-dynamic! 'x t)
+                              (list (call closed) (let ((x 777)) (call free)) x))
+                            (do (set-symbol-dynamic! 'x nil)
+                              (list (call closed) (call free) x))))))))",
+                     "(2 100 (3 10 10) (4 100 100))"},
+                    {R"((do (set-symbol-value! 'x 100) (set-symbol-dynamic! 'x t)
+                      (let ((saved nil) (free (%fn nil () x)))
+                        (let ((initial (call-with-prompt 'save
+                          (%fn nil () (let ((x 1))
+                            (call-with-binding 'x 10 (%fn nil ()
+                              (do (send-with-default! 'save 'pause nil)
+                                (%set! 'x (+ x 1)) (list x (call free)))))))
+                          (%fn nil (v k) (do (%set! 'saved k) v)))))
+                          (list initial (call saved nil) (call saved nil) x)))))",
+                     "(PAUSE (2 10) (3 10) 100)"},
+                };
+                for (auto [source, want] : cases)
+                    for (bool collect : {false, true}) {
+                        language m;
+                        const auto form =
+                            reader{m.h, m.vm, source}.next().value();
+                        const auto result =
+                            print(m.h, m.eval(form, collect));
+                        expect(result == want) << result << " != " << want;
+                    }
+            };
+
+        "public EVAL excludes caller locals but retains dynamic and effect contexts"_test =
+            [] {
+                const std::pair<std::string_view, std::string_view> cases[] = {
+                    {R"((do (set-symbol-value! 'x 100)
+                      (let ((x 1))
+                        (list (eval 'x) (eval '(%set! 'x 101)) x
+                          (call (eval '(%fn nil () x)))
+                          (eval '(let ((x 7)) (%set! 'x 8) x)) x))))",
+                     "(100 101 1 101 8 1)"},
+                    {R"((do (set-symbol-value! 'x 100) (set-symbol-dynamic! 'x t)
+                      (let ((x 1))
+                        (call-with-binding 'x 10 (%fn nil ()
+                          (list (eval 'x) (eval '(%set! 'x 11)) x
+                            (call (eval '(%fn nil () x))) x))))))",
+                     "(10 11 1 11 1)"},
+                    {R"((let ((saved nil))
+                      (let ((initial (call-with-prompt 'eval-request
+                        (%fn nil () (let ((local 37))
+                          (list (eval '(+ 100 (send-with-default! 'eval-request 2 nil))) local)))
+                        (%fn nil (v k) (do (%set! 'saved k) v)))))
+                        (list initial (call saved 5) (call saved 9)))))",
+                     "(2 (105 37) (109 37))"},
+                    {R"((do (set-symbol-function! 'scope-macro (%macro-fn () 'local))
+                      (let ((local 37)) (scope-macro))))",
+                     "37"},
+                };
+                for (auto [source, want] : cases)
+                    for (bool collect : {false, true}) {
+                        language m;
+                        const auto form =
+                            reader{m.h, m.vm, source}.next().value();
+                        const auto result =
+                            print(m.h, m.eval(form, collect));
+                        expect(result == want) << result << " != " << want;
+                    }
+                // No global fallback: caller locals cannot be read or
+                // assigned.
                 language m;
-                auto x = m.s("X");
-                auto program =
-                    m.f("LET",
-                        {m.l({m.l({x, 19})}),
-                         m.f("EVAL", {m.q(m.f("+", {x, 23}))})});
-                expect(m.eval(program, true) == 42u);
+                for (auto source :
+                     {"(let ((local 19)) (eval 'local))",
+                      "(let ((local 19)) (eval '(%set! 'local 23)))"}) {
+                    const auto form =
+                        reader{m.h, m.vm, source}.next().value();
+                    const auto error = m.cause(m.error(form));
+                    expect(
+                        m.h.v32slice(error)[0] == m.s("UNBOUND-VARIABLE"));
+                }
             };
     }};
 

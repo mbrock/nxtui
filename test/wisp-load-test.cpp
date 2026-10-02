@@ -152,6 +152,24 @@ static suite source_tests{
                       *macroexpand-budget*)))
         )",
                 "(7 T NIL)");
+            m.check(
+                R"(
+            (defun live-target (x) (+ x 1))
+            (defun live-caller (x) (live-target x))
+            (let ((old #'live-target) (saved nil))
+              (let ((initial
+                      (call-with-prompt 'save-call
+                        (fn () (live-target (send! 'save-call 'paused)))
+                        (fn (v k) (do (set! saved k) v)))))
+                (defun live-target (x) (+ x 100))
+                (list initial (live-caller 2) (call old 2)
+                      (call saved 5) (call saved 9)
+                      (live-target
+                        (do (set-symbol-function! 'live-target (fn (x) (+ x 1000)))
+                            3))
+                      (live-caller 3))))
+        )",
+                "(PAUSED 102 3 6 10 103 1003)");
         };
 
         "deep effects resume and raise through the guest library across collection"_test
@@ -231,6 +249,23 @@ static suite source_tests{
                                (call resume nil))))
         )",
                 "\"hello WORLD\\n\"");
+            m.check(
+                R"(
+            (call-with-effect-handler 'capture
+              (fn ()
+                (binding ((*standard-output* 'capture))
+                  (eval '(do (write "eval ") (print 'world) ""))))
+              (fn (request resume raise)
+                (string-append (apply #'string-append (tail request))
+                               (call resume nil))))
+        )",
+                "\"eval WORLD\\n\"");
+            m.check(
+                R"(
+            (try (eval '(error 'eval-failure))
+              (catch (condition restart) (head condition)))
+        )",
+                "EVAL-FAILURE");
             m.check(
                 R"(
             (try (write "not silently discarded")
