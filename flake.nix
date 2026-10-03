@@ -25,6 +25,7 @@
         pkgs:
         let
           inherit (pkgs) lib stdenv;
+          gccStdenv = pkgs.overrideCC stdenv pkgs.gcc15;
         in
         {
           default = pkgs.mkShell {
@@ -45,6 +46,16 @@
                 mold
                 gdb
               ];
+          };
+
+          # Keep GCC's libstdc++ separate from the default Darwin libc++ shell.
+          gcc = (pkgs.mkShell.override { stdenv = gccStdenv; }) {
+            inputsFrom = [
+              (self.packages.${stdenv.hostPlatform.system}.nxt.override {
+                stdenv = gccStdenv;
+              })
+            ];
+            packages = [ pkgs.gnumake ] ++ lib.optionals stdenv.hostPlatform.isLinux [ pkgs.mold ];
           };
 
           # Opt-in model development; basic orbs do not realize these tools.

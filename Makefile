@@ -7,6 +7,7 @@ WISP_BENCH_BUILD_DIR ?= build/wisp-release
 WISP_PROFILE ?= false
 WISP_BENCH_ARGS ?=
 GCC15_BUILD_DIR ?= build-gcc15
+GCC_BUILD_DIR ?= build/gcc
 DEPS_FILE ?=
 DEPS_DEPTH ?= 4
 DEPS_FLAGS ?=
@@ -54,6 +55,27 @@ test-gcc15: build-gcc15
 	meson test -C "$(GCC15_BUILD_DIR)"
 
 gcc15: test-gcc15
+
+# One-command entry points also work outside a Nix development shell.
+.PHONY: gcc gcc-test setup-gcc build-gcc test-gcc
+gcc:
+	nix develop .#gcc -c make build-gcc GCC_BUILD_DIR="$(GCC_BUILD_DIR)"
+
+gcc-test:
+	nix develop .#gcc -c make test-gcc GCC_BUILD_DIR="$(GCC_BUILD_DIR)"
+
+setup-gcc:
+	meson setup "$(GCC_BUILD_DIR)" $(NXT_MESON_LINK_ARGS)
+
+build-gcc:
+	@if [ ! -f "$(GCC_BUILD_DIR)/build.ninja" ]; then \
+		meson setup "$(GCC_BUILD_DIR)" $(NXT_MESON_LINK_ARGS); \
+	fi
+	meson compile -C "$(GCC_BUILD_DIR)" nxt-dev
+
+test-gcc: build-gcc
+	meson compile -C "$(GCC_BUILD_DIR)" nxt-tests
+	meson test -C "$(GCC_BUILD_DIR)"
 
 deps:
 	@scripts/include-graph --summary --depth "$(DEPS_DEPTH)" $(DEPS_FLAGS) $(DEPS_FILE)

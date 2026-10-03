@@ -91,9 +91,13 @@ task<bool> wait_until_stopped(int child)
 task<std::vector<int>> wait_for_many(int count)
 {
     auto children = std::vector<subprocess::piped_child>{};
-    for (auto i = 0; i < count; ++i)
-        children.push_back(co_await subprocess::spawn_piped(
-            {"/bin/sh", "-c", "exit " + std::to_string(i)}));
+    for (auto i = 0; i < count; ++i) {
+        // GCC 15 ICEs when the initializer and await are inside push_back.
+        auto argv = std::vector<std::string>{
+            "/bin/sh", "-c", "exit " + std::to_string(i)};
+        auto child = co_await subprocess::spawn_piped(std::move(argv));
+        children.push_back(std::move(child));
+    }
     auto codes = std::vector<int>{};
     for (auto & child : children)
         codes.push_back((co_await subprocess::wait_child(child)).exit_code);

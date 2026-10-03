@@ -666,12 +666,26 @@ The flake is optional and wraps the same Meson build:
 nix build            # ./result: libnxt-core, headers, nxt.pc, nxtllm, demos
 nix flake check      # the package (with tests) plus a pkg-config consumer build
 nix develop          # compilers, Meson, AWS-LC, clangd, docs tools
+nix develop .#gcc    # GCC 15 and libstdc++ from the pinned Nixpkgs
 nix develop .#spec   # optional Racket + JDK environment for the runtime model
 ```
 
 Inside `nix develop`, the plain C++ build/test and docs commands above work
 as-is. The independent `spec` shell shares the same `flake.lock` but is not
 part of the default development environment.
+
+To try the GCC build without entering a shell manually:
+
+```sh
+make gcc       # configure build/gcc if needed, then build nxt-dev
+make gcc-test  # build and run the tests, including slow suites
+```
+
+These commands use `nix develop .#gcc` and a separate `build/gcc` directory.
+Inside that shell, `make build-gcc` and `make test-gcc` run the same workflow.
+Override the directory with `GCC_BUILD_DIR=...` if needed. The older
+`build-gcc15` / `test-gcc15` targets are for separately installed compilers
+named `gcc-15` / `g++-15`.
 
 For editors launched outside the development shell, use `scripts/clangd` as
 the language-server executable. It enters the pinned Nix shell so clangd sees
