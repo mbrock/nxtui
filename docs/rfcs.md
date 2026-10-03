@@ -42,3 +42,4 @@ parallel Wisp/HTTP work. For the concrete pool API, see
 - [RFC 0016: Temporal Algebras](../rfc/new/rfc-0016-temporal-algebras.md)
 - [State of the Frontier](../rfc/new/rfc-0017-state-of-the-frontier.md)
 - [RFC 0018: Portable Wisp Lisp Machines](../rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
+- [RFC 0019: Firms Without Bodies](../rfc/new/rfc-0019-firms-without-bodies.md)
