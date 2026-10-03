@@ -143,8 +143,8 @@ group's tasks and drains them before propagating cancellation.
 
 The usual helpers are written over `settle`. `when_all(tuple)` /
 `when_all(tasks...)` and `when_all_range` return every value in order (void
-positions are `std::monostate`), stopping the rest and rethrowing on the first
-failure. `wait_any(tuple)` / `wait_any(tasks...)` and `wait_any_range` return
+positions are `std::monostate`), stopping the rest and rethrowing the first
+failure to complete, never the `operation_cancelled` of a task it stopped. `wait_any(tuple)` / `wait_any(tasks...)` and `wait_any_range` return
 the first success in input order, not first completion, stop the rest on
 success, and group the failures if none succeeds. `with_timeout` and
 `poll_until_after` use the same route. See the

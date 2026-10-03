@@ -251,6 +251,30 @@ take_all_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
     };
 }
 
+/// `fail_fast_group` that remembers which job failed first, in completion
+/// order. The policy stops being consulted once it returns true, so the
+/// recorded job is the one whose failure stopped the others.
+struct first_failure_group
+{
+    std::optional<std::size_t> & first;
+
+    bool operator()(std::size_t index, bool failed) const noexcept
+    {
+        if (failed)
+            first = index;
+        return failed;
+    }
+};
+
+/// Rethrow the error of the job that triggered the stop, so a sibling's
+/// `operation_cancelled` caused by that stop never masks the real failure.
+template<typename Tuple, std::size_t... Is>
+void rethrow_first_failure(
+    Tuple & outcomes, std::size_t first, std::index_sequence<Is...>)
+{
+    ((Is == first ? rethrow(std::get<Is>(outcomes).error()) : void()), ...);
+}
+
 template<typename T, typename Tuple, std::size_t... Is>
 [[nodiscard]] T
 take_first_success_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
@@ -344,13 +368,19 @@ template<
 }
 
 /// All results in tuple order; void positions are monostate. The first
-/// failure stops the rest and is rethrown.
+/// failure to complete stops the rest and is rethrown, not the
+/// cancellations it causes.
 template<typename... Ts>
 [[nodiscard]] auto when_all(std::tuple<task<Ts>...> tasks)
     -> task<std::tuple<
         std::conditional_t<std::is_void_v<Ts>, std::monostate, Ts>...>>
 {
-    auto outcomes = co_await settle(std::move(tasks), fail_fast_group{});
+    auto first = std::optional<std::size_t>{};
+    auto outcomes = co_await settle(
+        std::move(tasks), detail::first_failure_group{first});
+    if (first)
+        detail::rethrow_first_failure(
+            outcomes, *first, std::index_sequence_for<Ts...>{});
     co_return detail::take_all_or_throw(
         outcomes, std::index_sequence_for<Ts...>{});
 }
@@ -396,7 +426,11 @@ template<std::ranges::input_range Range>
 when_all_range(Range tasks)
 {
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
-    auto outcomes = co_await settle_range(std::move(tasks), fail_fast_group{});
+    auto first = std::optional<std::size_t>{};
+    auto outcomes = co_await settle_range(
+        std::move(tasks), detail::first_failure_group{first});
+    if (first)
+        rethrow(outcomes[*first].error());
     auto out = std::vector<result_type>{};
     out.reserve(outcomes.size());
     for (auto & outcome : outcomes)

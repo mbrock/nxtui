@@ -373,6 +373,33 @@ void declare_runtime_group_tests()
             expect(events == std::vector<int>{11, 23});
         };
 
+        "when_all rethrows the failure that stopped the others"_test =
+            []() -> nxtrt::task<void> {
+            auto events = std::vector<int>{};
+            auto message = std::string{};
+            try {
+                (void)co_await nxtrt::when_all(
+                    tuple_wait_for_stop(events, 11), throw_int_after_yield());
+            } catch (const nxtrt::runtime_error & error) {
+                message = error.what();
+            }
+            expect(message == "firm child int boom");
+            expect(events == std::vector<int>{11});
+
+            message.clear();
+            auto tasks = std::vector<nxtrt::task<int>>{};
+            tasks.push_back(tuple_wait_for_stop(events, 12));
+            tasks.push_back(tuple_wait_for_stop(events, 13));
+            tasks.push_back(throw_int_after_yield());
+            try {
+                (void)co_await nxtrt::when_all_range(std::move(tasks));
+            } catch (const nxtrt::runtime_error & error) {
+                message = error.what();
+            }
+            expect(message == "firm child int boom");
+            expect(events == std::vector<int>{11, 12, 13});
+        };
+
         "when_all owns tasks and collects mixed results"_test =
             [] {
                 auto deck = nxtrt::deck{};
