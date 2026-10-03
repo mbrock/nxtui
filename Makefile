@@ -1,5 +1,7 @@
 .PHONY: all setup setup-unity build dev full test setup-gcc15 build-gcc15 test-gcc15 gcc15 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec spec-witnesses docs docs-publish clean
 
+POXY_VERSION ?= 0.27.1
+
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
 BENCH_CPP_ARGS ?=
@@ -195,13 +197,11 @@ spec-witnesses:
 docs:
 	rm -rf docs/html
 	mkdir -p docs/html
-	uvx poxy --output-dir docs docs/poxy.toml
+	uvx --from 'poxy==$(POXY_VERSION)' poxy --output-dir docs docs/poxy.toml
 	chmod -R a+rX docs/html
 
-docs-publish: docs
-	@if [ "$$(readlink /var/www/nxt 2>/dev/null)" != "$(CURDIR)/docs/html" ]; then \
-		sudo ln -sfnT $(CURDIR)/docs/html /var/www/nxt; \
-	fi
+docs-publish:
+	gh workflow run docs.yml --ref main
 
 clean:
 	rm -rf build "$(BENCH_BUILD_DIR)"

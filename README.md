@@ -116,8 +116,8 @@ conceptual spine of the project:
   and drains its own jobs before it returns.
 - [`pool<Idea>`][nxtrt-pool] — the bounded evaluator under every group: a feed
   of ideas in, completion-ordered results out, at most one job per slot.
-- [`channel<T>`][nxtrt-channel] and [`event`][nxtrt-event] — coordination
-  primitives; low-level awaitables live under [`nxtrt::op`][nxtrt-op].
+- [`nxtrt::op`][nxtrt-op] — low-level I/O and coordination awaitables
+  staged by a wand.
 
 Above the scheduler core sit byte streams (Zig-`std.Io`-shaped feeds and sinks
 with a `hope<T>` hot path — see [the holding essay][rt-holding]) and protocol
@@ -518,7 +518,7 @@ Useful source entry points:
   [`net_dns.hpp`](src/nxtrt/net_dns.hpp), and [`tls.hpp`](src/nxtrt/tls.hpp): the
   client serializer, response/body readers, connection and TLS layers also
   composed by [`demo/http_client_demo.cpp`](demo/http_client_demo.cpp).
-- [`src/nxt`](src/nxt): scheduler-independent protocol/crypto utilities;
+- [`src/nxt`](https://github.com/mbrock/nxtui/tree/main/src/nxt): scheduler-independent protocol/crypto utilities;
   `nxtrt` adds asynchronous runtime integration, and `nxtui` builds UI on top.
 
 ## Repository map
@@ -829,11 +829,20 @@ To change an upstream revision or a backend patch, edit `nix/spec-sources.nix`
 or `nix/patches/`, regenerate the lock with the command above if dependencies
 changed, and run `nix develop -c make spec` plus the sandboxed spec check.
 
-Regenerate local API docs (poxy + Doxygen) with:
+API docs are published automatically to [mbrock.github.io/nxtui](https://mbrock.github.io/nxtui/)
+on every push to `main` by `.github/workflows/docs.yml`. The workflow builds
+with the docs-only Nix shell, the Poxy version pinned in the Makefile, and
+Doxygen from `flake.lock`, then deploys the generated HTML through GitHub Pages.
+
+Regenerate local API docs with:
 
 ```sh
-make docs
+nix develop .#docs -c make docs
 ```
+
+To request another publication of the committed `main` branch, run
+`make docs-publish` with an authenticated GitHub CLI, or use the workflow's
+**Run workflow** button on GitHub.
 
 Run the portable test subset on a FreeBSD VM with:
 
@@ -849,41 +858,39 @@ The guest installs GCC 15 and uses `gcc15`/`g++15` for the test build. The host
 needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 
 <!-- Concept pages -->
-[rt-overview]: https://swa.sh/nxt/rt_overview.html
-[rt-holding]: https://swa.sh/nxt/rt_holding.html
-[rt-occurrents]: https://swa.sh/nxt/rt_occurrents.html
-[runtime-rfcs]: https://swa.sh/nxt/runtime_rfcs.html
-[rfc-reels]: https://swa.sh/nxt/rfc_reels.html
+[rt-overview]: https://mbrock.github.io/nxtui/rt_overview.html
+[rt-holding]: https://mbrock.github.io/nxtui/rt_holding.html
+[rt-occurrents]: https://mbrock.github.io/nxtui/rt_occurrents.html
+[runtime-rfcs]: https://mbrock.github.io/nxtui/runtime_rfcs.html
+[rfc-reels]: https://mbrock.github.io/nxtui/rfc_reels.html
 
 <!-- nxtrt -->
-[nxtrt]: https://swa.sh/nxt/namespacenxtrt.html
-[nxtrt-task]: https://swa.sh/nxt/classnxtrt_1_1task.html
-[nxtrt-deck]: https://swa.sh/nxt/classnxtrt_1_1deck.html
-[nxtrt-wand]: https://swa.sh/nxt/classnxtrt_1_1wand.html
-[nxtrt-pool]: https://swa.sh/nxt/classnxtrt_1_1pool.html
-[nxtrt-channel]: https://swa.sh/nxt/classnxtrt_1_1channel.html
-[nxtrt-event]: https://swa.sh/nxt/classnxtrt_1_1event.html
-[nxtrt-op]: https://swa.sh/nxt/namespacenxtrt_1_1op.html
-[nxtrt-fs]: https://swa.sh/nxt/namespacenxtrt_1_1fs.html
-[nxtrt-http]: https://swa.sh/nxt/namespacenxtrt_1_1http.html
-[nxtrt-tls]: https://swa.sh/nxt/namespacenxtrt_1_1tls.html
-[nxtrt-subprocess]: https://swa.sh/nxt/namespacenxtrt_1_1subprocess.html
-[nxtrt-pty]: https://swa.sh/nxt/namespacenxtrt_1_1pty.html
-[nxtrt-terminal-app]: https://swa.sh/nxt/classnxtrt_1_1terminal__app.html
+[nxtrt]: https://mbrock.github.io/nxtui/namespacenxtrt.html
+[nxtrt-task]: https://mbrock.github.io/nxtui/classnxtrt_1_1task.html
+[nxtrt-deck]: https://mbrock.github.io/nxtui/classnxtrt_1_1deck.html
+[nxtrt-wand]: https://mbrock.github.io/nxtui/classnxtrt_1_1wand.html
+[nxtrt-pool]: https://mbrock.github.io/nxtui/classnxtrt_1_1pool.html
+[nxtrt-op]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1op.html
+[nxtrt-fs]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1fs.html
+[nxtrt-http]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1http.html
+[nxtrt-tls]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1tls.html
+[nxtrt-subprocess]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1subprocess.html
+[nxtrt-pty]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1pty.html
+[nxtrt-terminal-app]: https://mbrock.github.io/nxtui/classnxtrt_1_1terminal__app.html
 
 <!-- nxtui -->
-[nxtui]: https://swa.sh/nxt/namespacenxtui.html
-[nxtui-size]: https://swa.sh/nxt/structnxtui_1_1_size.html
-[nxtui-pos]: https://swa.sh/nxt/structnxtui_1_1_pos.html
-[nxtui-rgba]: https://swa.sh/nxt/structnxtui_1_1_rgba8.html
-[nxtui-raster]: https://swa.sh/nxt/classnxtui_1_1_raster.html
-[nxtui-raster-view]: https://swa.sh/nxt/classnxtui_1_1_raster_view.html
-[nxtui-glyph-table]: https://swa.sh/nxt/classnxtui_1_1_glyph_table.html
-[nxtui-tui]: https://swa.sh/nxt/namespacenxtui_1_1tui.html
-[nxtui-terminal-compositor]: https://swa.sh/nxt/classnxtui_1_1tui_1_1_terminal_compositor.html
+[nxtui]: https://mbrock.github.io/nxtui/namespacenxtui.html
+[nxtui-size]: https://mbrock.github.io/nxtui/structnxtui_1_1_size.html
+[nxtui-pos]: https://mbrock.github.io/nxtui/structnxtui_1_1_pos.html
+[nxtui-rgba]: https://mbrock.github.io/nxtui/structnxtui_1_1_rgba8.html
+[nxtui-raster]: https://mbrock.github.io/nxtui/classnxtui_1_1_raster.html
+[nxtui-raster-view]: https://mbrock.github.io/nxtui/classnxtui_1_1_raster_view.html
+[nxtui-glyph-table]: https://mbrock.github.io/nxtui/classnxtui_1_1_glyph_table.html
+[nxtui-tui]: https://mbrock.github.io/nxtui/namespacenxtui_1_1tui.html
+[nxtui-terminal-compositor]: https://mbrock.github.io/nxtui/classnxtui_1_1tui_1_1_terminal_compositor.html
 
 <!-- nxtai -->
-[nxtai]: https://swa.sh/nxt/namespacenxtai.html
-[nxtai-request]: https://swa.sh/nxt/structnxtai_1_1responses_1_1openai__responses__request.html
-[nxtai-tool-registry]: https://swa.sh/nxt/structnxtai_1_1tools_1_1tool__registry.html
-[nxtai-openai]: https://swa.sh/nxt/namespacenxtai_1_1openai.html
+[nxtai]: https://mbrock.github.io/nxtui/namespacenxtai.html
+[nxtai-request]: https://mbrock.github.io/nxtui/structnxtai_1_1responses_1_1openai__responses__request.html
+[nxtai-tool-registry]: https://mbrock.github.io/nxtui/structnxtai_1_1tools_1_1tool__registry.html
+[nxtai-openai]: https://mbrock.github.io/nxtui/namespacenxtai_1_1openai.html

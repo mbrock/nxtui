@@ -67,6 +67,10 @@
         rec {
           default = clang;
           clang = mkDevShell clangStdenv;
+          # Publishing docs does not need the C++ or Racket toolchains.
+          docs = pkgs.mkShellNoCC {
+            packages = with pkgs; [ gnumake uv doxygen python3 ];
+          };
           # Keep GCC's libstdc++ separate from Clang's toolchain.
           gcc = mkDevShell gccStdenv;
         }
