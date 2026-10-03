@@ -665,23 +665,32 @@ The flake is optional and wraps the same Meson build:
 ```sh
 nix build            # ./result: libnxt-core, headers, nxt.pc, nxtllm, demos
 nix flake check      # the package (with tests) plus a pkg-config consumer build
-nix develop          # compilers, Meson, AWS-LC, clangd, docs tools
-nix develop .#gcc    # GCC 15 and libstdc++ from the pinned Nixpkgs
+nix develop          # Clang, Meson, AWS-LC, clangd, docs tools
+nix develop .#clang  # explicit Clang shell (also the default on Linux and macOS)
+nix develop .#gcc    # GCC 16 and libstdc++ from the pinned Nixpkgs
 nix develop .#spec   # optional Racket + JDK environment for the runtime model
 ```
 
 Inside `nix develop`, the plain C++ build/test and docs commands above work
-as-is. The independent `spec` shell shares the same `flake.lock` but is not
-part of the default development environment.
+as-is. `.envrc` uses this flake through direnv and then loads `.env` if present.
+Meson keeps the compiler chosen at setup time; use a new build directory when
+switching toolchains. The independent `spec` shell shares the same `flake.lock`
+but is not part of the default development environment.
 
-To try the GCC build without entering a shell manually:
+To try either compiler without entering a shell manually:
 
 ```sh
-make gcc       # configure build/gcc if needed, then build nxt-dev
-make gcc-test  # build and run the tests, including slow suites
+make clang      # configure build/clang if needed, then build nxt-dev
+make clang-test # build and run the tests, including slow suites
+make gcc        # configure build/gcc if needed, then build nxt-dev
+make gcc-test   # build and run the tests, including slow suites
 ```
 
-These commands use `nix develop .#gcc` and a separate `build/gcc` directory.
+The Clang commands use `nix develop .#clang` and a separate `build/clang`
+directory; override it with `CLANG_BUILD_DIR=...`. Inside that shell,
+`make build-clang` and `make test-clang` run the same workflow.
+
+The GCC commands use `nix develop .#gcc` and a separate `build/gcc` directory.
 Inside that shell, `make build-gcc` and `make test-gcc` run the same workflow.
 Override the directory with `GCC_BUILD_DIR=...` if needed. The older
 `build-gcc15` / `test-gcc15` targets are for separately installed compilers

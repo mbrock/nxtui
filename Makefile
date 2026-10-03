@@ -8,6 +8,7 @@ WISP_PROFILE ?= false
 WISP_BENCH_ARGS ?=
 GCC15_BUILD_DIR ?= build-gcc15
 GCC_BUILD_DIR ?= build/gcc
+CLANG_BUILD_DIR ?= build/clang
 DEPS_FILE ?=
 DEPS_DEPTH ?= 4
 DEPS_FLAGS ?=
@@ -76,6 +77,26 @@ build-gcc:
 test-gcc: build-gcc
 	meson compile -C "$(GCC_BUILD_DIR)" nxt-tests
 	meson test -C "$(GCC_BUILD_DIR)"
+
+.PHONY: clang clang-test setup-clang build-clang test-clang
+clang:
+	nix develop .#clang -c make build-clang CLANG_BUILD_DIR="$(CLANG_BUILD_DIR)"
+
+clang-test:
+	nix develop .#clang -c make test-clang CLANG_BUILD_DIR="$(CLANG_BUILD_DIR)"
+
+setup-clang:
+	meson setup "$(CLANG_BUILD_DIR)" $(NXT_MESON_LINK_ARGS)
+
+build-clang:
+	@if [ ! -f "$(CLANG_BUILD_DIR)/build.ninja" ]; then \
+		meson setup "$(CLANG_BUILD_DIR)" $(NXT_MESON_LINK_ARGS); \
+	fi
+	meson compile -C "$(CLANG_BUILD_DIR)" nxt-dev
+
+test-clang: build-clang
+	meson compile -C "$(CLANG_BUILD_DIR)" nxt-tests
+	meson test -C "$(CLANG_BUILD_DIR)"
 
 deps:
 	@scripts/include-graph --summary --depth "$(DEPS_DEPTH)" $(DEPS_FLAGS) $(DEPS_FILE)

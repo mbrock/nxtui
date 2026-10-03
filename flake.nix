@@ -1,14 +1,13 @@
 {
   description = "nxt: C++23 coroutine runtime, terminal toolkit, and LLM tooling";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
     { self, nixpkgs }:
     let
       systems = [
         "aarch64-darwin"
-        "x86_64-darwin"
         "aarch64-linux"
         "x86_64-linux"
       ];
@@ -25,38 +24,39 @@
         pkgs:
         let
           inherit (pkgs) lib stdenv;
-          gccStdenv = pkgs.overrideCC stdenv pkgs.gcc15;
-        in
-        {
-          default = pkgs.mkShell {
-            inputsFrom = [ self.packages.${stdenv.hostPlatform.system}.nxt ];
-
-            packages =
-              with pkgs;
-              [
-                aws-lc
-                clang-tools
-                gnumake
-
-                # `make docs`
-                uv
-                doxygen
-              ]
-              ++ lib.optionals stdenv.hostPlatform.isLinux [
-                mold
-                gdb
+          clangStdenv = pkgs.llvmPackages.stdenv;
+          gccStdenv = pkgs.gcc16Stdenv;
+          mkDevShell =
+            toolchainStdenv:
+            (pkgs.mkShell.override { stdenv = toolchainStdenv; }) {
+              inputsFrom = [
+                (self.packages.${stdenv.hostPlatform.system}.nxt.override {
+                  stdenv = toolchainStdenv;
+                })
               ];
-          };
 
-          # Keep GCC's libstdc++ separate from the default Darwin libc++ shell.
-          gcc = (pkgs.mkShell.override { stdenv = gccStdenv; }) {
-            inputsFrom = [
-              (self.packages.${stdenv.hostPlatform.system}.nxt.override {
-                stdenv = gccStdenv;
-              })
-            ];
-            packages = [ pkgs.gnumake ] ++ lib.optionals stdenv.hostPlatform.isLinux [ pkgs.mold ];
-          };
+              packages =
+                with pkgs;
+                [
+                  aws-lc
+                  llvmPackages.clang-tools
+                  gnumake
+
+                  # `make docs`
+                  uv
+                  doxygen
+                ]
+                ++ lib.optionals stdenv.hostPlatform.isLinux [
+                  mold
+                  gdb
+                ];
+            };
+        in
+        rec {
+          default = clang;
+          clang = mkDevShell clangStdenv;
+          # Keep GCC's libstdc++ separate from Clang's toolchain.
+          gcc = mkDevShell gccStdenv;
 
           # Opt-in model development; basic orbs do not realize these tools.
           spec = pkgs.mkShell {
