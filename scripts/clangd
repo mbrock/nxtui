@@ -1,0 +1,8 @@
+#!/bin/sh
+# Use the same compiler, standard library, and dependency headers as the build.
+# Nix's clang-tools wrapper supplies the include paths hidden in compiler wrappers
+# that Meson's compile_commands.json does not record.
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec nix develop "$repo_dir" -c clangd "$@"

@@ -673,6 +673,33 @@ Inside `nix develop`, the plain C++ build/test and docs commands above work
 as-is. The independent `spec` shell shares the same `flake.lock` but is not
 part of the default development environment.
 
+For editors launched outside the development shell, use `scripts/clangd` as
+the language-server executable. It enters the pinned Nix shell so clangd sees
+the same compiler version, standard library, and dependency headers as the
+build. `.clangd` already points to Meson's `build/compile_commands.json`;
+the database alone does not include every header path supplied by Nix's
+compiler wrappers.
+
+In Zed, add this to the project's `.zed/settings.json`, replacing the path
+with the absolute path to your checkout (keep this machine-specific setting
+local):
+
+```json
+{
+  "lsp": {
+    "clangd": {
+      "binary": {
+        "path": "/absolute/path/to/nxtui/scripts/clangd",
+        "arguments": []
+      }
+    }
+  }
+}
+```
+
+Then run `editor: restart language server` from Zed's command palette.
+Keep a configured Meson `build` directory, as with the normal build workflow.
+
 ### In Amp orbs
 
 `.agents/setup` installs Nix, realizes the development shell from `flake.lock`,
