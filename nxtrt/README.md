@@ -4,14 +4,10 @@ This directory is a small experiment in making the `nxtrt` domain a
 single `#lang rdf-forge` source file.
 
 - `runtime.rkt` declares the baseline ontology and model together.
-- `runtime-next.rkt` is the double-buffered rewrite lane for reshaping the
-  ontology/model while comparing against the baseline.
 - `ontology.rkt` is a compatibility entrypoint that prints the ontology as
   Turtle/RDFS/OWL.
 - `model.rkt` is a compatibility entrypoint that runs the model through
   Forge's functional API without generating `.frg` text.
-- `ontology-next.rkt` and `model-next.rkt` are matching entrypoints for the
-  next model.
 
 On a fresh machine, enter the reproducible spec environment:
 
@@ -310,18 +306,12 @@ run R2:
   show P3
 ```
 
-The next model also sketches the basic bthreads game semantics: a `GAME`
-chooses a `CARD` only when some current `SYNC` asks for it and no current sync
-blocks it; bthreads whose current sync asks or waits for that card advance to
-the sync's `then` target in the next state.
-
-These are equivalent to the prefix forms:
+The Unicode forms above are equivalent to these prefix forms:
 
 ```racket
 in c (d holds)
 == (c tries) t
 && (in (c feels) noon) (== (d picks) c)
-no (intersect (matching halts c) (g runs awaits))
 ```
 
 Field declarations resolve overloaded properties from the enclosing signature

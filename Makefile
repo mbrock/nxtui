@@ -18,7 +18,7 @@ NXT_RACKET_VERSION_DIR = $(NXT_RACKET_CACHE_DIR)/$(shell racket -e '(display (ve
 # Empty suffixes retain the installed collection and bytecode search paths.
 NXT_RACKET_ENV = PLTCOMPILEDROOTS="$(NXT_RACKET_VERSION_DIR)/compiled:" PLTCOLLECTS="$(CURDIR):"
 NXT_RACKET = $(NXT_RACKET_ENV) racket
-NXT_SPEC_SOURCES := rdf-forge/tests/bfo-sketch-test.rkt nxtrt/model.rkt nxtrt/model-next.rkt
+NXT_SPEC_SOURCES := rdf-forge/tests/bfo-sketch-test.rkt nxtrt/model.rkt
 
 all: build
 
@@ -143,15 +143,11 @@ spec:
 	@echo
 	@echo "== baseline runtime spec =="
 	$(NXT_RACKET) nxtrt/model.rkt --check
-	@echo
-	@echo "== next runtime spec =="
-	$(NXT_RACKET) nxtrt/model-next.rkt --check
 
 # Print the example traces from every run block instead of checking.
 spec-witnesses:
 	$(NXT_RACKET_ENV) raco make -j 4 $(NXT_SPEC_SOURCES)
 	$(NXT_RACKET) nxtrt/model.rkt --run-all
-	$(NXT_RACKET) nxtrt/model-next.rkt --run-all
 
 docs:
 	rm -rf docs/html
