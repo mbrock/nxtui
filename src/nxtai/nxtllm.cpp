@@ -26,7 +26,7 @@ constexpr auto openai_sse_body_buffer_size = std::size_t{1024 * 1024};
 
 struct cli_options
 {
-    std::string model = "gpt-5.4-mini";
+    std::string model = "gpt-6-luna";
     std::size_t max_output_tokens = 20000;
     bool store = false;
     bool dump_request = false;
@@ -87,7 +87,7 @@ struct openai_unexpected_event : nxtrt::runtime_error
         << "usage: nxtllm [options] [prompt...]\n"
            "  streams one OpenAI Responses request over nxtrt\n"
            "\n"
-           "  -m, --model MODEL                 (default: gpt-5-mini)\n"
+           "  -m, --model MODEL                 (default: gpt-6-luna)\n"
            "  --max-output-tokens N\n"
            "  --store                           ask OpenAI to store the response\n"
            "  --dump-request                    print serialized Responses JSON\n";
