@@ -98,6 +98,13 @@ static suite epoll_wand_tests{
             };
 
             root.start();
+#ifdef __FILC__
+            // The hub must keep parked execs alive independently of the weak
+            // pointer table used for integer tokens and kernel event data.
+            deck.run_ready();
+            wand.wave(deck);
+            zgc_request_and_wait();
+#endif
             epoll_pump_until_done(deck, wand, root.inner());
 
             expect(root.inner().done());

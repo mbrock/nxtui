@@ -33,6 +33,8 @@
 
 using namespace std::chrono_literals;
 
+#if NXT_RT_HAS_URING
+
 namespace nxt::test {
 
 using namespace nxtui;
@@ -1065,3 +1067,5 @@ static suite uring_wand_tests{
     }};
 
 } // namespace nxt::test
+
+#endif // NXT_RT_HAS_URING

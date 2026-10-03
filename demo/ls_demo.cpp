@@ -2,11 +2,7 @@
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/fs.hpp>
 
-#if defined(__linux__)
-#include <nxtrt/wand/uring.hpp>
-#else
-#include <nxtrt/wand/kqueue.hpp>
-#endif
+#include <nxtrt/app.hpp>
 
 #include <array>
 #include <format>
@@ -94,13 +90,8 @@ int nxt_ls_demo_main(int argc, char ** argv)
 try {
     auto path = argc > 1 ? std::string{argv[1]} : std::string{"."};
 
-#if defined(__linux__)
-    nxtrt::run(list_path_to_stdout(std::move(path)));
-#elif NXT_RT_HAS_KQUEUE
-    nxtrt::run_with_kqueue(list_path_to_stdout(std::move(path)));
-#else
-    static_assert(NXT_RT_HAS_KQUEUE, "ls demo needs a runtime wand");
-#endif
+    auto runtime = nxtrt::runtime{};
+    runtime.run(list_path_to_stdout, std::move(path));
 
     return 0;
 } catch (std::exception const & error) {

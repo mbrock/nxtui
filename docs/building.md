@@ -158,13 +158,12 @@ The shell uses Fil-C's linker and contains the C++ build tools; use the
 default shell for docs and runtime model work. `nix build .#nxt-filc` attempts
 the installable package with tests.
 
-At pinned Filnix revision `0e32960446f8`, `make filc` builds and links
-`nxt-dev` on x86_64 Linux. The crypto and TLS authentication suites pass with
-`build/filc/nxt-dev test 3 4` (29 tests). The uring suite (`test 38`) stops at
-`filc user error: unsupported syscall: 425`: Fil-C's syscall dispatcher does
-not support `io_uring_setup`. The epoll suite (`test 37`) also stops, with
-`filc safety error: cannot read pointer with null object` in
-`epoll_wand::suspend`. The full test suite is therefore not yet passing.
+Fil-C always defaults to epoll: its runtime does not support the io_uring
+syscalls. Meson rejects `-Ddefault_wand=uring` with Fil-C, the uring backend
+is unavailable in public headers, and uring-specific tests are excluded.
+The demos and DNS tests use the selected backend. Epoll preserves pointer
+capabilities across integer wait tokens and kernel event data using Fil-C's
+weak exact pointer table; the exec hub remains responsible for live storage.
 
 For editors launched outside the development shell, use `scripts/clangd` as
 the language-server executable. It enters the pinned Nix shell so clangd sees

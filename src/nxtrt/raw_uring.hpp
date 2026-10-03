@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef __FILC__
+#error "Fil-C does not support io_uring; use the epoll wand"
+#endif
+
 #include <linux/io_uring.h>
 #include <linux/openat2.h>
 

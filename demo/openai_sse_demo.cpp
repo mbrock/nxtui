@@ -12,11 +12,7 @@
 #include <nxtrt/tls.hpp>
 #include <nxt/json.hpp>
 
-#if defined(__linux__)
-#  include <nxtrt/wand/uring.hpp>
-#else
-#  include <nxtrt/wand/kqueue.hpp>
-#endif
+#include <nxtrt/app.hpp>
 
 #include <charconv>
 #include <cstdlib>
@@ -241,19 +237,11 @@ try {
     if (api_key == nullptr || std::string_view{api_key}.empty())
         throw nxtrt::runtime_error{"OPENAI_API_KEY is not set"};
 
-#if defined(__linux__)
-    nxtrt::run(
+    auto runtime = nxtrt::runtime{};
+    runtime.run(
         [options = std::move(options), api_key = std::string{api_key}]() mutable {
             return stream_openai_sse(std::move(options), std::move(api_key));
         });
-#elif NXT_RT_HAS_KQUEUE
-    nxtrt::run_with_kqueue(
-        [options = std::move(options), api_key = std::string{api_key}]() mutable {
-            return stream_openai_sse(std::move(options), std::move(api_key));
-        });
-#else
-    static_assert(NXT_RT_HAS_KQUEUE, "OpenAI SSE demo needs a runtime wand");
-#endif
 
     return 0;
 } catch (const std::exception & error) {

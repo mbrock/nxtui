@@ -218,8 +218,10 @@ void process_tests()
 #if defined(__linux__)
 static suite process_epoll_tests{
     "processes on epoll", process_tests<nxtrt::epoll_wand>};
+#if NXT_RT_HAS_URING
 static suite process_uring_tests{
     "processes on uring", process_tests<nxtrt::uring_wand>};
+#endif
 #else
 static suite process_kqueue_tests{
     "processes on kqueue", process_tests<nxtrt::kqueue_wand>};

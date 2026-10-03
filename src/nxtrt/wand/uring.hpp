@@ -1,16 +1,19 @@
 #pragma once
 
 #include "nxtrt/exec_lifecycle.hpp"
-#include "nxtrt/raw_uring.hpp"
 #include "nxtrt/spawn.hpp"
 #include "nxtrt/task.hpp"
 
 #include <boost/container/hub.hpp>
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__FILC__)
 #define NXT_RT_HAS_URING 1
 #else
 #define NXT_RT_HAS_URING 0
+#endif
+
+#if NXT_RT_HAS_URING
+#include "nxtrt/raw_uring.hpp"
 #endif
 
 #include <algorithm>
@@ -28,7 +31,6 @@
 #include <string>
 #include <string_view>
 #include <sys/ioctl.h>
-#include <sys/pidfd.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>

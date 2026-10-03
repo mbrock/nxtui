@@ -15,11 +15,7 @@
 #include <nxtrt/net_dns.hpp>
 #include <nxtrt/tls.hpp>
 
-#if defined(__linux__)
-#  include <nxtrt/wand/uring.hpp>
-#else
-#  include <nxtrt/wand/kqueue.hpp>
-#endif
+#include <nxtrt/app.hpp>
 
 #include <cstddef>
 #include <cstdlib>
@@ -124,15 +120,9 @@ try {
         argc > 1 ? std::string_view{argv[1]}
                  : std::string_view{"https://less.rest/"});
 
-#if defined(__linux__)
-    nxtrt::run(
+    auto runtime = nxtrt::runtime{};
+    runtime.run(
         [url = std::move(url)]() mutable { return fetch(std::move(url)); });
-#elif NXT_RT_HAS_KQUEUE
-    nxtrt::run_with_kqueue(
-        [url = std::move(url)]() mutable { return fetch(std::move(url)); });
-#else
-    static_assert(NXT_RT_HAS_KQUEUE, "http demo needs a runtime wand");
-#endif
 
     return 0;
 } catch (std::exception const & error) {

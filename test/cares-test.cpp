@@ -1,5 +1,5 @@
 #include <nxtrt/net_dns.hpp>
-#include <nxtrt/wand/uring.hpp>
+#include <nxtrt/arch.hpp>
 
 #include "test.hpp"
 
@@ -15,7 +15,7 @@ using namespace boost::ut;
 template<typename T>
 T cares_pump_until_done(
     nxtrt::deck & deck,
-    nxtrt::uring_wand & wand,
+    nxtrt::arch::wand & wand,
     nxtrt::task<T> & task)
 {
     wand.run_until_done(deck, task);
@@ -31,7 +31,7 @@ static suite dns_tests{
     "DNS", [] {
         "resolver"_group = [] {
             "localhost resolves to IPv4 loopback"_test = [] {
-                auto wand = nxtrt::uring_wand{};
+                auto wand = nxtrt::arch::wand{};
                 auto deck = nxtrt::deck{&wand};
                 auto root = nxtrt::root_task{
                     deck,

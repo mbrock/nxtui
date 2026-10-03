@@ -10,6 +10,11 @@
 static_assert(std::same_as<nxtrt::arch::wand, nxtrt::NXTRT_DEFAULT_WAND>);
 #endif
 
+#ifdef __FILC__
+static_assert(!nxtrt::has_uring_wand);
+static_assert(std::same_as<nxtrt::arch::wand, nxtrt::epoll_wand>);
+#endif
+
 namespace nxt::test {
 
 using namespace boost::ut;

@@ -1032,8 +1032,10 @@ void server_tests()
 #if defined(__linux__)
 static suite http_server_epoll_tests{
     "HTTP server epoll", server_tests<nxtrt::epoll_wand>};
+#if NXT_RT_HAS_URING
 static suite http_server_uring_tests{
     "HTTP server uring", server_tests<nxtrt::uring_wand>};
+#endif
 #else
 static suite http_server_kqueue_tests{
     "HTTP server kqueue", server_tests<nxtrt::kqueue_wand>};

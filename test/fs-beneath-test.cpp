@@ -194,7 +194,9 @@ void files_tests()
 
 #if defined(__linux__)
 static suite files_epoll_tests{"files on epoll", files_tests<nxtrt::epoll_wand>};
+#if NXT_RT_HAS_URING
 static suite files_uring_tests{"files on uring", files_tests<nxtrt::uring_wand>};
+#endif
 #else
 static suite files_kqueue_tests{
     "files on kqueue", files_tests<nxtrt::kqueue_wand>};

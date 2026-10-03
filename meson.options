@@ -6,7 +6,7 @@ option('tests', type : 'boolean', value : true,
 
 option('default_wand', type : 'combo', value : 'auto',
   choices : ['auto', 'epoll', 'uring', 'kqueue'],
-  description : 'Default application Wand backend (auto: io_uring on Linux, kqueue on BSD/macOS)')
+  description : 'Default application Wand backend (auto: epoll on Fil-C, io_uring on other Linux, kqueue on BSD/macOS)')
 
 option('wisp_tool', type : 'boolean', value : true,
   description : 'Build the Wisp console and timer host')

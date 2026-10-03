@@ -39,7 +39,15 @@ if cpp.get_id() == 'gcc'
   add_project_arguments('-Wno-subobject-linkage', language : 'cpp')
 endif
 
+nxt_filc = cpp.get_define('__FILC__') != ''
 nxt_wand = get_option('default_wand')
+if nxt_filc
+  if nxt_wand == 'uring'
+    error('Fil-C does not support io_uring; use -Ddefault_wand=epoll')
+  elif nxt_wand == 'auto'
+    nxt_wand = 'epoll'
+  endif
+endif
 nxt_wand_args = []
 if nxt_wand != 'auto'
   if nxt_wand in ['epoll', 'uring']

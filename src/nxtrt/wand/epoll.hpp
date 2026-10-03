@@ -7,6 +7,10 @@
 
 #include <boost/container/hub.hpp>
 
+#ifdef __FILC__
+#include <stdfil.h>
+#endif
+
 #if defined(__linux__)
 #define NXT_RT_HAS_EPOLL 1
 #else
@@ -37,6 +41,12 @@
 
 #if NXT_RT_HAS_EPOLL
 #include <sys/epoll.h>
+#ifdef __FILC__
+// Fil-C's glibc header currently omits the C++ linkage guard.
+extern "C" {
+#include <sys/pidfd.h>
+}
+#endif
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
@@ -925,32 +935,40 @@ private:
             packet.wish);
     }
 
-    static wait_token token_for(exec & execution) noexcept
+    wait_token token_for(exec & execution) noexcept
     {
         static_assert(sizeof(std::uintptr_t) <= sizeof(wait_token));
         static_assert(alignof(exec) >= 2);
+#ifdef __FILC__
+        return zexact_ptrtable_encode(exec_pointers_, &execution);
+#else
         return static_cast<wait_token>(
             reinterpret_cast<std::uintptr_t>(&execution));
+#endif
     }
 
-    static exec * exec_from_token(wait_token token) noexcept
+    exec * exec_from_token(wait_token token) noexcept
     {
+#ifdef __FILC__
+        return static_cast<exec *>(zexact_ptrtable_decode(exec_pointers_, token));
+#else
         return reinterpret_cast<exec *>(
             static_cast<std::uintptr_t>(token));
+#endif
     }
 
-    static std::uint64_t encode_user_data(exec & execution, event_kind kind)
+    std::uint64_t encode_user_data(exec & execution, event_kind kind)
     {
-        auto bits = reinterpret_cast<std::uintptr_t>(&execution);
+        auto bits = token_for(execution);
         return static_cast<std::uint64_t>(
             bits | static_cast<std::uintptr_t>(kind));
     }
 
-    static event_key decode_user_data(std::uint64_t data)
+    event_key decode_user_data(std::uint64_t data)
     {
         auto bits = static_cast<std::uintptr_t>(data);
         return event_key{
-            .execution = reinterpret_cast<exec *>(bits & ~std::uintptr_t{1}),
+            .execution = exec_from_token(bits & ~std::uintptr_t{1}),
             .kind = (bits & std::uintptr_t{1}) == 0
                 ? event_kind::op
                 : event_kind::timer,
@@ -1231,7 +1249,9 @@ private:
 
     static int open_pidfd(pid_t pid)
     {
-#ifdef SYS_pidfd_open
+#ifdef __FILC__
+        return ::pidfd_open(pid, 0);
+#elif defined(SYS_pidfd_open)
         return static_cast<int>(::syscall(SYS_pidfd_open, pid, 0));
 #else
         errno = ENOSYS;
@@ -1241,7 +1261,9 @@ private:
 
     static int send_pidfd_signal(int pidfd, int signal)
     {
-#ifdef SYS_pidfd_send_signal
+#ifdef __FILC__
+        return ::pidfd_send_signal(pidfd, signal, nullptr, 0);
+#elif defined(SYS_pidfd_send_signal)
         return static_cast<int>(
             ::syscall(SYS_pidfd_send_signal, pidfd, signal, nullptr, 0));
 #else
@@ -1294,6 +1316,12 @@ private:
 
     nxt::unique_fd epoll_;
     boost::container::hub<exec> execs_;
+#ifdef __FILC__
+    // Integer wait tokens and kernel event data do not carry capabilities.
+    // The hub owns live execs; this weak table restores their capabilities
+    // without extending the lifetime of hub storage after reclamation.
+    zexact_ptrtable * exec_pointers_ = zexact_ptrtable_new_weak();
+#endif
     std::vector<exec *> pending_submissions_;
     deck * current_deck_ = nullptr;
 };

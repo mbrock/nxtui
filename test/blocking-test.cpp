@@ -218,7 +218,13 @@ void cases()
             if (pid > 0) {
                 int status = 0;
                 expect(::waitpid(pid, &status, 0) == pid);
-                expect(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+#ifdef __FILC__
+                // Fil-C implements abort through its runtime panic (SIGTRAP).
+                constexpr auto abort_signal = SIGTRAP;
+#else
+                constexpr auto abort_signal = SIGABRT;
+#endif
+                expect(WIFSIGNALED(status) && WTERMSIG(status) == abort_signal);
             }
             host<Wand> h;
             nxtrt::blocking_pool pool{1, 1};
