@@ -2,6 +2,13 @@
 
 Status: superseded; bounded bookkeeping is a deferred optimization
 
+> **Firms have since been removed.** `firm`, `with_firm`, `fork` / `join`,
+> child records, and `deed<T>` / `catching_deed<T>` no longer exist. Concurrent
+> work is a group of ideas awaited by a task (`settle`, `settle_range`,
+> `when_all`, `wait_any`, `drain`), owned by a pool, with cancellation carried
+> by task stop. See [RFC 0019](../new/rfc-0019-firms-without-bodies.md). The
+> rest of this document, including the "current decision" below, is history.
+
 ## Current decision: optional explicit ownership
 
 This RFC's historical implementation notes below describe nursery behavior,

@@ -42,8 +42,8 @@ systems get one or two of those. I want all three at once, and I'm not
 convinced anyone knows how yet — including me.
 
 A symptom you'll notice immediately: nearly everything is named with a short,
-plain, slightly-off word. `deck`, `wand`, `firm`, `deed`, `wish`, `urge`,
-`need`, `hope`, `feed`, `sink`, `game`, `task`, `exec`, `coin`. Four letters,
+plain, slightly-off word. `deck`, `wand`, `wish`, `urge`, `need`, `hope`,
+`feed`, `sink`, `pool`, `task`, `exec`, `coin`. Four letters,
 chosen for sound and resonance as much as for precision. This is deliberate,
 and it is a *technique*, not a bit. Odd names keep the concepts **soft**: a
 `wand` doesn't arrive pre-loaded with decades of "Executor" baggage, so I can
@@ -64,7 +64,7 @@ moment those four collapse into one.
 And because I refuse to *only* hand-wave, the model is also written down
 formally. `nxtrt/runtime.rkt` is `#lang rdf-forge` — a small homemade language
 that is at once an OWL **ontology**, an Alloy-style **relational model**, and a
-**temporal** spec, in one file. It describes the runtime's own `deck` / `firm`
+**temporal** spec, in one file. It describes the runtime's own `deck` / `pool`
 / `task` / `wish` / `exec` and the lifecycle an `exec` moves through (prepared
 → parked → settled → retired), states invariants as predicates, and lets the
 checker search bounded **traces** — then renders straight into these docs.
@@ -78,7 +78,7 @@ So the open questions, right now, are roughly:
    buffers, with the byte streams as the `<byte>` specialization — feeds,
    sinks, and the `hope<T>` hot path that makes the buffered case free. (See
    `src/nxtrt/value-buffers.hpp` and the [holding essay][rt-holding].)
-2. **A coherent unifying theory of `deck` / `wand` / `firm`.**
+2. **A coherent unifying theory of `deck` / `wand` / `pool`.**
 3. **Modeling without a pile of tools** — domain + ontology + time in a single
    language (`rdf-forge`), pointed back at the runtime it describes.
 4. **Much, much more.** This list is not closed, and neither is the vocabulary.
@@ -93,9 +93,9 @@ conceptual spine of the project:
 
 | Page | What it is |
 | --- | --- |
-| [**Runtime overview**][rt-overview] | The map. Every core type — `task`, `deck`, `firm`, `wish`, `wand` — and how they fit, in one page. Start here. |
+| [**Runtime overview**][rt-overview] | The map. Every core type — `task`, `deck`, `pool`, `wish`, `wand` — and how they fit, in one page. Start here. |
 | [**A story about holding work**][rt-holding] | The narrative. Why the deck, the wand, the byte streams, and `hope<T>` are all the *same* idea — a holder with a release policy — and the endgame where they merge. |
-| [**Runtime RFCs**][runtime-rfcs] | The design notebook. Current and speculative RFCs for firms, wands, feeds, reels, buffer land, and the runtime vocabulary. |
+| [**Runtime RFCs**][runtime-rfcs] | The design notebook. Current and speculative RFCs for groups, wands, feeds, reels, buffer land, and the runtime vocabulary. |
 | [**RFC 0001: Reels**][rfc-reels] | The framing note. Reels are frame-shaped projections over `bytefeed` stock: raw bytes becoming marked frames, before anything turns into owned values. |
 | [**Occurrent structure**][rt-occurrents] | The ontology note. Behavioral threads, coroutines, and structured concurrency as process parts, boundaries, and shared happenings. |
 
@@ -109,8 +109,13 @@ conceptual spine of the project:
   pumped one round at a time.
 - [`wand`][nxtrt-wand] — the platform backend boundary; concrete `uring` and
   `kqueue` wands stage and complete I/O wishes.
-- [`firm`][nxtrt-firm] / [`deed<T>`][nxtrt-deed] — structured concurrency:
-  fork child tasks, join them, stop them together, recover their results.
+- groups — structured concurrency as a group of ideas awaited by a task:
+  `settle` runs a fixed set or range concurrently under a stop rule and returns
+  every outcome; `when_all`, `wait_any`, and `with_timeout` are built on it,
+  and `drain` runs a feed of ideas with bounded concurrency. Each group stops
+  and drains its own jobs before it returns.
+- [`pool<Idea>`][nxtrt-pool] — the bounded evaluator under every group: a feed
+  of ideas in, completion-ordered results out, at most one job per slot.
 - [`channel<T>`][nxtrt-channel] and [`event`][nxtrt-event] — coordination
   primitives; low-level awaitables live under [`nxtrt::op`][nxtrt-op].
 
@@ -169,7 +174,7 @@ build/nxtllm --dump-request "hello from nxtrt"
 The executable currently handles one text response, not a model/tool/model
 agent loop. The separate tool library exposes pool-ready call recipes and a
 bounded batch collector (four concurrent calls by default), preserving ordered
-batch results without firm child records or deeds. See the
+batch results without per-call bookkeeping vectors. See the
 [NXTAI status and next steps](docs/ai-overview.md) for what is connected,
 ownership/error contracts, and the remaining integration work.
 
@@ -469,7 +474,7 @@ terminal applications and the OpenAI/SSE client.
 └─────────────────────┬─────────────────────┘
                       │ awaits
 ┌─────────────────────▼─────────────────────┐
-│ nxtrt: deck, firms, tasks, I/O operations  │
+│ nxtrt: deck, pools, tasks, I/O operations  │
 │ HTTP server / DNS+TCP+TLS client / buffers │
 └─────────────────────┬─────────────────────┘
                       │
@@ -782,8 +787,7 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 [nxtrt-task]: https://swa.sh/nxt/classnxtrt_1_1task.html
 [nxtrt-deck]: https://swa.sh/nxt/classnxtrt_1_1deck.html
 [nxtrt-wand]: https://swa.sh/nxt/classnxtrt_1_1wand.html
-[nxtrt-firm]: https://swa.sh/nxt/classnxtrt_1_1firm.html
-[nxtrt-deed]: https://swa.sh/nxt/classnxtrt_1_1deed.html
+[nxtrt-pool]: https://swa.sh/nxt/classnxtrt_1_1pool.html
 [nxtrt-channel]: https://swa.sh/nxt/classnxtrt_1_1channel.html
 [nxtrt-event]: https://swa.sh/nxt/classnxtrt_1_1event.html
 [nxtrt-op]: https://swa.sh/nxt/namespacenxtrt_1_1op.html

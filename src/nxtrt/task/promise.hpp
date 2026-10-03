@@ -41,20 +41,9 @@
 
 namespace nxtrt {
 
-template<typename T>
-class deed;
-
-template<typename T>
-class catching_deed;
-
-template<typename T>
-class deed_result_storage;
-
 namespace detail {
 
 struct promise_base;
-struct child_record_base;
-struct deed_result_state_base;
 
 /// A stable, non-owning observer of final suspension. Notification must not
 /// destroy the completing frame: final_suspend still has work to do.

@@ -1,8 +1,8 @@
 # Recipes, pools, and structured async {#rt_concurrency_direction}
 
 This is a design synthesis, not a second runtime specification. It records the
-direction established while simplifying firms and introducing bounded idea
-pools, and the questions to resolve with real migrations.
+direction established while simplifying firms (since removed) and introducing
+bounded idea pools, and the questions to resolve with real migrations.
 
 The implemented baseline is the pool introduced in commit `8946acc`.
 The Wisp async/HTTP simplification now uses that pool for native connections
@@ -17,18 +17,21 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Firm | Lifetime scope providing cancellation, with optional explicit child ownership through a passed scope reference |
-| Tuple concurrency helpers | Fixed heterogeneous work lowers to finite indexed `task<void>` recipes in the ordinary pool; main work has zero child/deed records |
+| Groups: `settle`, `settle_range`, stop rules | Implemented: a fixed set or range of tasks/ideas runs in a pool with one slot per job; every job settles before the group returns, with typed `outcome<T>` results |
+| `when_all`, `wait_any`, `with_timeout`, `poll_until_after` | Implemented over `settle` |
+| `drain(feed, capacity)`, `pool_land<Idea>` | Implemented: bounded evaluation of a feed of ideas, and owned land for a pool |
+| Cancellation | Per task: stop propagates to the awaited task, and a group stops its own jobs |
+| Firms, fork/join, deeds | Removed; see [RFC 0019](../rfc/new/rfc-0019-firms-without-bodies.md) |
 | Frame provision | Ordinary C++ allocation; firm arenas were removed (see RFC 0002) |
 | Idea-level `cope`, generic feed mapping, lifetime-aware terminal consumers | Design direction; no APIs are specified here as already available |
-| Strict transitive static teams | Design direction; tuple lowering bounds only its own fixed batch, not separately owned child work |
+| Strict transitive static teams | Design direction; a group bounds only its own jobs, not work its jobs start in nested groups |
 | Wisp without permanent evaluation workers | Implemented explicit-await bridge and pool-based HTTP; guest structured-concurrency semantics remain open |
 
 See @ref rt_pool "the pool guide" for the current API and executable example.
 
 ## Separate the relationships, not merely the names
 
-Several relationships previously hid behind “this task belongs to a firm”:
+Several relationships used to hide behind “this task belongs to a firm”:
 
 1. **Recipe:** what work could be performed, with which input?
 2. **Execution state:** what has started or acquired a coroutine frame?
@@ -38,17 +41,16 @@ Several relationships previously hid behind “this task belongs to a firm”:
 6. **Scheduling:** what makes a runnable continuation run again?
 
 These often have the same surrounding scope, but they are not the same
-relationship. A pool now owns pending task handles without registering them as
-firm children. The deck identifies and schedules those tasks without owning
-their frames. Fixed
-tuple composition uses this existing pool: each finite indexed recipe starts
-one task and writes its typed `expected<T, exception_ptr>` into the matching
-tuple position. It allocates no main-work child records or deeds. The policy's
-`firm::completed(task_id, exception_ptr)` hook is shared with dynamically forked
-children, so cancellation policy does not require a second ownership system.
-The firm provides frames and stop policy. Explicit child ownership is opt-in
-through a passed firm reference; those children are outside the fixed batch
-bound. Work does not implicitly spawn into whichever firm is ambient.
+relationship. The runtime now keeps them apart. Frames come from the ordinary
+allocator. A pool owns pending task handles directly in its slots. The deck
+identifies and schedules those tasks without owning their frames. Fixed tuple
+composition (`settle`) uses the same pool: each finite indexed recipe starts
+one task and writes its typed `outcome<T>` into the matching tuple position,
+and the group's stop rule sees each settlement as it happens, so cancellation
+policy does not need a second ownership system. Stop belongs to tasks: it
+propagates from an awaiting task to the task it awaits, and a group stops its
+own jobs. Nothing spawns into an ambient scope; work is owned by the group it
+was handed to.
 
 The goal is shared lifetime rules, not one universal container or a configurable
 holder with a policy parameter for every difference. The useful questions from
@@ -134,7 +136,7 @@ An N-slot pool is not a proof that the entire computation uses bounded memory:
 - recipes and output values may own allocations;
 - response bodies and upstream queues need their own budgets;
 - nested awaits consume additional frame memory;
-- work explicitly forked through a scope is outside the pool's slot bound;
+- work a job starts in its own nested group is outside the pool's slot bound;
 - a crawler's discovered-URL frontier and visited set are separate resources.
 
 The appropriate principle is visible ownership and explicit capacity where
@@ -163,10 +165,9 @@ execution. The existing frame allocator uses nonmoving chunks or explicit
 borrowed land; a ring with prefix retirement was rejected because long-lived
 frames pin the prefix.
 
-The tuple helpers now use a finite batch in the pool, rather than allocating
-firm child records for the main work. This shares execution machinery with pool
-jobs, but is not a strict transitive static team: recipes may explicitly fork
-through a passed scope reference. Nor is it an
+The tuple helpers use a finite batch in the pool, with no per-child records.
+This shares execution machinery with pool jobs, but is not a strict transitive
+static team: a job may await nested groups of its own. Nor is it an
 allocation-free claim; task frames and result values retain their ordinary
 allocation behavior. A stronger static-team guarantee would have to account
 for nested work and sound lifetimes, not merely the fixed tuple shape.
@@ -177,8 +178,10 @@ The desired default is simple: **task failure means pool failure**. If an
 individual failure is an acceptable outcome, the recipe should explicitly cope
 with it and produce a value such as `expected<T, error>`.
 
-Today deeds have `cope()` and a catching result handle. A corresponding
-idea-level adaptor is a next step, not an implemented API. Coping must happen
+Groups already report per-job outcomes: `settle` returns `outcome<T>` values
+instead of rethrowing, so a caller can inspect every failure before deciding
+what to throw. An idea-level coping adaptor for feeds and pools is a next step,
+not an implemented API. Coping must happen
 around individual work before an exception becomes terminal pool failure;
 catching the failed output stream afterward cannot recover discarded sibling
 outcomes. Cancellation and recoverable application errors must remain
@@ -195,11 +198,12 @@ upstream producer; independently owned upstream work needs its own teardown
 boundary. The pool does not collect every failure during close, and successful
 unconsumed outputs from the same pump may be discarded.
 
-The tuple path invokes the shared `firm::completed(task_id, exception_ptr)` hook
-for pool-owned task outcomes just as dynamic children do. Policy-driven
-cancellation therefore works without allocating main-work child records.
-This unifies ownership and drain machinery for fixed batches, but does not
-change the general pool's consumer-driven error handling described above.
+Groups differ: `settle` and `settle_range` record every job's outcome and
+consult the stop rule as each one settles, so a failure stops the others only
+when the rule says so. This unifies ownership and drain machinery for fixed
+batches, but does not change the general pool's consumer-driven error handling
+described above. `drain` uses the consumer-driven path: the first failure
+stops admission, drains the running jobs, and is rethrown.
 
 ## Selection can be a feed operation; lifetime must accompany it
 
@@ -231,7 +235,7 @@ The current concrete spelling is `finally(consume(pool), cleanup)` with cleanup
 returning `pool.close()`, and the pool/land outside the consumer's frame.
 
 This is the ergonomic target: applications describe useful work and observation,
-not repeat “enter scope, fork, retain deeds, join, unwrap, cancel losers.”
+not repeat “enter scope, fork, retain handles, join, unwrap, cancel losers.”
 The low-level machinery still exists; it belongs under reusable operations.
 
 Batching should survive this layering. Admit up to available capacity, publish
@@ -289,11 +293,11 @@ remaining targets are identified below:
 
 | Use | Why it fits / what must be preserved |
 | --- | --- |
-| [AI tool batches][tool-batches] | Migrated to bounded pool admission without fork/join/deed vectors. Ordered collection and collect-before-rethrow are preserved; cancellation stops admission and drains. Direct tool ideas expose completion-order feeds. See [NXTAI status](ai-overview.md). |
+| [AI tool batches][tool-batches] | Migrated to bounded pool admission without fork/join or result-handle vectors. Ordered collection and collect-before-rethrow are preserved; cancellation stops admission and drains. Direct tool ideas expose completion-order feeds. See [NXTAI status](ai-overview.md). |
 | [Directory metadata][directory-metadata] | Bounded stat ideas; results are sorted afterward, so completion-order production is natural. |
 | [Connection racing][connection-racing] | Coped attempts and first-success consumption. Existing range selection chooses an input-order success after drain; distinguish that from first published success. |
 | [HTTP serving][http-serving] | Migrated to one accept feed and a bounded connection pool, preserving connection-local error containment. |
-| [Process capture][process-capture] and [shell supervision][shell-supervision] | Process capture now uses a tuple for primary capture plus its monitor; only primary completion stops the scope. Other heterogeneous resource lifetimes may need a team or companions. |
+| [Process capture][process-capture] and [shell supervision][shell-supervision] | Process capture now uses a group for primary capture plus its monitor, with `stop_after_first`: only primary completion stops the companions. Other heterogeneous resource lifetimes may need a team or companions. |
 | [Wisp host][wisp-host] | Migrated to explicit native-task awaiting; old guest-job identities are no longer a prerequisite for I/O. |
 
 These source links pin the inventory to the implemented baseline, so the
@@ -307,10 +311,9 @@ comparison remains intelligible after those applications change.
 [shell-supervision]: https://github.com/mbrock/nxtui/blob/8946acc004295d4699a69fb3c6f79f5f15d5c69b/demo/shell_scope_demo.cpp#L344-L380
 [wisp-host]: https://github.com/mbrock/nxtui/blob/8946acc004295d4699a69fb3c6f79f5f15d5c69b/src/wisp/main.cpp#L1029-L1128
 
-Some existing firms are only resource or cancellation scopes, with no
-explicitly owned children. See
-[RFC 0019](../rfc/new/rfc-0019-firms-without-bodies.md) for removing firm
-bodies in favour of groups of ideas.
+Many former firms were only resource or cancellation scopes, with no
+explicitly owned children. [RFC 0019](../rfc/new/rfc-0019-firms-without-bodies.md)
+removed firms entirely in favour of groups of ideas awaited by a task.
 
 ## Next decisions and verification
 
@@ -321,7 +324,7 @@ Use actual pipelines to settle:
 3. Generic mapping and bounded in-memory admission/feedback, without a second
    scheduler or a mandatory channel around every source.
 4. Static team representation and companion-resource lifetimes.
-5. Further frame-provision and child-ownership simplification, without conflating the two.
+5. Companion lifetimes beyond a primary job and `stop_after_first`.
 6. The native task/guest continuation cancellation and root-release boundary.
 
 Preserve evidence alongside the design: many more jobs than slots; a paused

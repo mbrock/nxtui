@@ -1,11 +1,51 @@
 #pragma once
 
-// Task-local environment bindings and trace spans.
-// Include nxtrt/task.hpp for the complete runtime API.
+// Ambient deck and stop state, task-local environment bindings, and trace
+// spans. Include nxtrt/task.hpp for the complete runtime API.
 
 #include "nxtrt/task/task.hpp"
 
 namespace nxtrt {
+
+inline deck * current_deck() noexcept
+{
+    auto * env = current_env();
+    return env == nullptr ? nullptr : env->current_deck;
+}
+
+/// The running task's stop token. Stop propagates from an awaiting task to
+/// the task it awaits, and a group stops its own jobs.
+inline std::stop_token current_task_stop_token() noexcept
+{
+    auto * env = current_env();
+    if (env == nullptr || env->current_promise == nullptr)
+        return {};
+    return env->current_promise->stop_token();
+}
+
+inline bool task_stop_requested() noexcept
+{
+    auto * env = current_env();
+    return env != nullptr
+        && env->current_promise != nullptr
+        && env->current_promise->stop_requested();
+}
+
+inline std::stop_token current_stop_token() noexcept
+{
+    return current_task_stop_token();
+}
+
+inline bool stop_requested() noexcept
+{
+    return task_stop_requested();
+}
+
+inline void throw_if_stop_requested()
+{
+    if (stop_requested())
+        throw operation_cancelled{};
+}
 
 namespace detail {
 

@@ -40,13 +40,6 @@ struct bench_stats
     std::size_t client_received = 0;
 };
 
-struct bench_state
-{
-    nxtrt::bell done;
-    std::size_t clients_done = 0;
-    bool timed_out = false;
-};
-
 nxtrt::task<std::size_t> send_all_socket(
     int fd,
     std::span<const std::byte> bytes)
@@ -113,20 +106,60 @@ nxtrt::task<void> echo_connection(
     }
 }
 
+struct echo_idea
+{
+    nxt::unique_fd fd;
+    std::size_t payload_size;
+    bench_stats * stats;
+
+    nxtrt::task<void> operator()() &
+    {
+        return echo_connection(std::move(fd), payload_size, stats);
+    }
+};
+
+/// Accepts `clients` connections, then ends.
+class accepted_echoes final : public nxtrt::feed<echo_idea>
+{
+public:
+    accepted_echoes(
+        int listener,
+        std::size_t clients,
+        std::size_t payload_size,
+        bench_stats * stats)
+        : feed(1)
+        , listener_(listener)
+        , clients_(clients)
+        , payload_size_(payload_size)
+        , stats_(stats)
+    {}
+
+private:
+    nxtrt::task<std::optional<echo_idea>> next_value() override
+    {
+        if (accepted_ == clients_)
+            co_return std::nullopt;
+        auto fd = co_await nxtrt::net::accept(listener_);
+        ++accepted_;
+        stats_->accepted += 1;
+        co_return echo_idea{std::move(fd), payload_size_, stats_};
+    }
+
+    int listener_;
+    std::size_t clients_;
+    std::size_t payload_size_;
+    bench_stats * stats_;
+    std::size_t accepted_ = 0;
+};
+
 nxtrt::task<void> echo_server(
-    nxtrt::firm & scope,
     int listener,
     std::size_t clients,
     std::size_t payload_size,
     bench_stats * stats)
 {
-    auto accepted = std::size_t{0};
-    while (accepted < clients) {
-        auto client = co_await nxtrt::net::accept(listener);
-        ++accepted;
-        stats->accepted += 1;
-        scope.fork(echo_connection(std::move(client), payload_size, stats));
-    }
+    auto accepted = accepted_echoes{listener, clients, payload_size, stats};
+    co_await nxtrt::drain(accepted, clients);
 }
 
 nxtrt::task<void> echo_client(
@@ -149,87 +182,57 @@ nxtrt::task<void> echo_client(
     }
 }
 
-void mark_client_done(bench_state & state, std::size_t clients)
-{
-    ++state.clients_done;
-    if (state.clients_done >= clients)
-        state.done.ring();
-}
-
-nxtrt::task<void> echo_client_tracked(
+nxtrt::task<void> run_clients(
+    bench_options options,
     sockaddr_in address,
-    std::size_t messages,
     std::span<const std::byte> payload,
-    bench_stats * stats,
-    std::shared_ptr<bench_state> state,
-    std::size_t clients)
+    bench_stats * stats)
 {
-    try {
-        co_await echo_client(address, messages, payload, stats);
-    } catch (...) {
-        mark_client_done(*state, clients);
-        throw;
-    }
-    mark_client_done(*state, clients);
-}
-
-nxtrt::task<void> timeout_load(
-    std::chrono::milliseconds timeout,
-    std::shared_ptr<bench_state> state)
-{
-    co_await nxtrt::op::timeout::after(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(timeout));
-    state->timed_out = true;
-    state->done.ring();
+    auto clients = std::vector<nxtrt::task<void>>{};
+    clients.reserve(options.clients);
+    for (auto i = std::size_t{0}; i < options.clients; ++i)
+        clients.push_back(
+            echo_client(address, options.messages, payload, stats));
+    auto outcomes = co_await nxtrt::settle_range(
+        std::move(clients), nxtrt::stop_on_failure{});
+    for (auto & outcome : outcomes)
+        if (!outcome)
+            nxtrt::rethrow(outcome.error());
 }
 
 nxtrt::task<void> run_echo_load(
-    nxtrt::firm & scope,
     bench_options options,
     sockaddr_in address,
     int listener,
     std::span<const std::byte> payload,
     bench_stats * stats)
 {
-    auto state = std::make_shared<bench_state>();
-
-    scope.fork(echo_server(
-        scope, listener, options.clients, options.payload_size, stats));
-
-    for (auto i = std::size_t{0}; i < options.clients; ++i)
-        scope.fork(echo_client_tracked(
-            address,
-            options.messages,
-            payload,
-            stats,
-            state,
-            options.clients));
-
-    scope.fork(timeout_load(options.timeout, state));
-
-    co_await state->done;
-    if (state->timed_out)
-        throw nxtrt::timeout_error{};
-    scope.stop();
-    co_await scope.join();
-}
-
-struct echo_load_factory
-{
-    bench_options options;
-    sockaddr_in address;
-    int listener = -1;
-    std::span<const std::byte> payload;
-    bench_stats * stats = nullptr;
-
-    nxtrt::task<void> operator()()
-    {
-        return nxtrt::with_firm([&](nxtrt::firm & scope) {
-            return run_echo_load(
-                scope, options, address, listener, payload, stats);
+    // The clients are the primary job: when they finish, or when anything
+    // fails (including the timeout), the rest are stopped.
+    auto [clients, server, deadline] = co_await nxtrt::settle(
+        std::tuple{
+            [&] { return run_clients(options, address, payload, stats); },
+            [&] {
+                return echo_server(
+                    listener, options.clients, options.payload_size, stats);
+            },
+            [&] {
+                return nxtrt::timeout_after(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        options.timeout));
+            },
+        },
+        [](std::size_t index, bool failed) noexcept {
+            return index == 0 || failed;
         });
-    }
-};
+
+    if (!deadline && !nxtrt::is_operation_cancelled(deadline.error()))
+        nxtrt::rethrow(deadline.error());
+    if (!clients)
+        nxtrt::rethrow(clients.error());
+    if (!server && !nxtrt::is_operation_cancelled(server.error()))
+        nxtrt::rethrow(server.error());
+}
 
 std::size_t parse_size(std::string_view text, std::string_view name)
 {
@@ -367,13 +370,13 @@ int main(int argc, char ** argv)
         auto runtime = nxtrt::runtime{};
 
         auto started = std::chrono::steady_clock::now();
-        runtime.run(echo_load_factory{
-            .options = options,
-            .address = address,
-            .listener = listener.get(),
-            .payload = std::span<const std::byte>{payload},
-            .stats = &stats,
-        });
+        runtime.run(
+            run_echo_load,
+            options,
+            address,
+            listener.get(),
+            std::span<const std::byte>{payload},
+            &stats);
         auto elapsed = std::chrono::steady_clock::now() - started;
 
         print_result(options, stats, elapsed);

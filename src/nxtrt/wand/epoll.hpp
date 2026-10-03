@@ -1317,7 +1317,23 @@ template<task_factory Fn>
 [[nodiscard]] inline task_result_t<std::invoke_result_t<Fn>>
 run_with_epoll(Fn && fn)
 {
-    return run_with_epoll(std::invoke(std::forward<Fn>(fn)));
+    auto wand = epoll_wand{};
+    auto d = deck{&wand};
+    auto root_env = runtime_env{};
+    auto root_guard = detail::env_guard{root_env, &d, nullptr};
+    // The factory outlives its task: a capturing coroutine lambda's frame
+    // refers to the closure object.
+    auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};
+    auto root = std::invoke(factory);
+
+    d.start(root);
+    wand.run_until_done(d, root);
+
+    if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+        std::move(root).result();
+    } else {
+        return std::move(root).result();
+    }
 }
 
 #endif

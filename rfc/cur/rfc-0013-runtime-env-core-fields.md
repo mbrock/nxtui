@@ -2,6 +2,12 @@
 
 Status: current
 
+> **Firms have since been removed**, and with them the `current_firm` field
+> and `firm_key` binding proposed or described below. Frames come from the
+> ordinary allocator (RFC 0002), and stop state is read from the running
+> task's promise. See [RFC 0019](../new/rfc-0019-firms-without-bodies.md). The
+> rest of the proposal is unaffected; read `current_firm` below as history.
+
 ## Summary
 
 The runtime environment should keep hot runtime context in direct fields:

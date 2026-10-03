@@ -8,8 +8,8 @@ permanent workers.
 An `idea` is a concept: a concrete, move-constructible callable returning a
 `task<T>` or `hope<T>`. The pool invokes each admitted recipe once, as a stored
 lvalue. It preserves that recipe until the task has settled and its output has
-been consumed. Pending tasks are owned directly by slots, without firm child
-records or deeds. Ready hopes can pass through without creating any coroutine.
+been consumed. Pending tasks are owned directly by slots, without separate
+child records. Ready hopes can pass through without creating any coroutine.
 Void ideas produce `std::monostate` items.
 
 ## Land and admission
@@ -51,9 +51,9 @@ output view; ordinary feed view-invalidation rules still apply.
 This bounds admitted jobs, not every byte in the pipeline. Upstream recipe
 buffers, response-body storage, the deck registry, and coroutine frames have
 their own budgets. Recipes may themselves allocate or create further work;
-they do not spawn ambiently into the surrounding firm. Any
-child ownership must use an explicitly passed firm scope, and is outside the
-pool's transitive bound.
+nothing spawns ambiently into a surrounding scope. Work a job runs in its own
+nested group or pool is owned there, and is outside this pool's transitive
+bound.
 
 ## A small pipeline
 
@@ -101,6 +101,14 @@ void example() {
     });
 }
 ```
+
+`pool_land<Idea>{capacity}` owns the same pieces (slots, the farm's index land,
+and one output cell per slot) when a caller does not want to lay them out by
+hand: construct `pool<Idea>{input, land.slots(), land.output()}` and keep the
+land alive until the pool has drained. When the results are not needed at all,
+`co_await nxtrt::drain(input, capacity)` does the whole pattern: it runs every
+idea, at most `capacity` at once, discards the results, and on the first
+failure stops admission, drains the running jobs, and rethrows.
 
 Both cleanup factories above are ordinary functions returning tasks, not
 capturing coroutine lambdas. The pool and all its borrowed land live outside
@@ -153,24 +161,23 @@ Destruction may discard already-settled state, but destroying a pool with
 running tasks or a pending reader aborts rather than leaving dangling borrowed
 storage. Reading after close is not supported.
 
-## Relation to firms and future work
+## Relation to groups and future work
 
-Firms provide frame memory and cancellation, and optionally own explicitly
-forked children. The pool is also the execution owner for fixed heterogeneous
-tuple batches. Tuple composition
-lowers each indexed position to a finite `task<void>` recipe in this existing
-pool; that recipe stores its typed `expected<T, exception_ptr>` outcome at the
-matching tuple position. No main-work child records or deeds are allocated;
-the tuple's main work stays pool-owned.
-The same `firm::completed(task_id, exception_ptr)` hook is used for pool-owned
-work and explicitly forked children, allowing policies to stop and drain the
-fixed batch through shared cancellation machinery.
+The pool is the execution owner for every group. `settle(tuple, rule)` lowers
+each indexed position to a finite `task<void>` recipe in a pool with one slot
+per job; that recipe stores its typed `outcome<T>`
+(`expected<T, exception_ptr>`) at the matching tuple position and reports the
+settlement to the group's stop rule. When the rule says stop, the group calls
+the pool's `stop()` and then closes it, so stopped jobs are drained like any
+other. `settle_range` does the same for a range, and `when_all`, `wait_any`,
+and `with_timeout` are written over `settle`. Stopping the task that awaits a
+group stops the pool's jobs the same way.
 
 This is a real unification of ownership and drain, not a strict transitive
-static team or an allocation-free guarantee. Explicit children require a
-passed scope reference and remain outside the tuple batch's finite bound. The
-homogeneous stream pool remains a distinct API shape with slots,
-completion-order output, and borrowed feed/land contracts described above.
+static team or an allocation-free guarantee. Work a job starts in its own
+nested group is outside the batch's finite bound. The homogeneous stream pool
+remains a distinct API shape with slots, completion-order output, and borrowed
+feed/land contracts described above.
 
 The slot lifecycle is modeled in `nxtrt/runtime.rkt`, including consumption,
 close/discard, and reuse. The model abstracts frame bytes and cancellation

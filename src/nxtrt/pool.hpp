@@ -4,6 +4,8 @@
 #include "nxtrt/idea.hpp"
 #include "nxtrt/task/compose.hpp"
 
+#include <memory>
+
 namespace nxtrt {
 
 template<idea Idea>
@@ -44,8 +46,7 @@ private:
 /// Exclusively borrows a fully free farm and at least one output cell per
 /// slot. Free + awaiting input + running + completed/unconsumed = capacity.
 /// Input recipes are invoked once, only after admission. Ready hopes require
-/// no task or scheduler turn. Pending jobs are owned directly, not forked into
-/// a firm.
+/// no task or scheduler turn. Pending jobs are owned directly by their slots.
 ///
 /// One consumer, on one deck. Values are consumed according to feed rules:
 /// transfer out of this source returns credit, not eventual delivery through
@@ -468,6 +469,73 @@ template<idea Idea>
 void pool_slot<Idea>::task_completed() noexcept
 {
     owner_->completed(*this);
+}
+
+/// Owned land for a pool of `capacity` slots: the slots, the farm's index
+/// land, and one output cell per slot. Keep it alive until the pool has
+/// drained.
+template<idea Idea>
+class pool_land
+{
+public:
+    using slot_type = pool_slot<Idea>;
+    using result_type = pool_result_t<Idea>;
+
+    explicit pool_land(std::size_t capacity)
+        : slots_(std::make_unique<slot_type[]>(capacity))
+        , hot_(farm<slot_type>::hot_capacity_for(capacity))
+        , cold_(mask<>::words_for(capacity))
+        , output_(capacity)
+        , farm_(
+              std::span{slots_.get(), capacity},
+              farm_index_storage_ref{
+                  std::span{hot_.data(), hot_.size()},
+                  std::span{cold_.data(), cold_.size()}})
+    {}
+
+    pool_land(const pool_land &) = delete;
+    pool_land & operator=(const pool_land &) = delete;
+
+    [[nodiscard]] farm<slot_type> & slots() noexcept
+    {
+        return farm_;
+    }
+
+    [[nodiscard]] value_storage_ref<result_type> output() & noexcept
+    {
+        return output_.ref();
+    }
+
+private:
+    std::unique_ptr<slot_type[]> slots_;
+    rack<std::size_t> hot_;
+    rack<std::uint64_t> cold_;
+    rack<result_type> output_;
+    farm<slot_type> farm_;
+};
+
+namespace detail {
+
+template<typename Idea>
+task<void> discard_results(pool<Idea> & work)
+{
+    while (co_await work.take())
+        ;
+}
+
+} // namespace detail
+
+/// Run every idea from `ideas`, at most `capacity` at a time, discarding
+/// results. The first failure stops admission, cancels and drains the
+/// running jobs, and is rethrown.
+template<idea Idea>
+task<void> drain(feed<Idea> & ideas, std::size_t capacity)
+{
+    auto land = pool_land<Idea>{capacity};
+    auto work = pool<Idea>{ideas, land.slots(), land.output()};
+    co_await finally(detail::discard_results(work), [&work] {
+        return work.close();
+    });
 }
 
 } // namespace nxtrt

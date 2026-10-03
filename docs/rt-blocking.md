@@ -1,16 +1,17 @@
 # Blocking C++ off the deck {#rt_blocking}
 
 `nxtrt::blocking_pool` runs ordinary synchronous callables on a fixed set of
-worker threads. The awaiting task, its firm, and its continuation stay on their
-original deck. It does not host extra decks, migrate coroutines, or replace an
-external build scheduler. Include `<nxtrt/blocking.hpp>` or `<nxtrt.hpp>`.
+worker threads. The awaiting task, its group or pool, and its continuation
+stay on their original deck. It does not host extra decks, migrate coroutines,
+or replace an external build scheduler. Include `<nxtrt/blocking.hpp>` or
+`<nxtrt.hpp>`.
 
 ```cpp
 nxtrt::blocking_pool workers{4, 16}; // threads, admitted-call capacity
 auto recipe = workers.call([input = std::move(input)]() mutable {
     return ordinary_cpp_function(input);
 });
-// recipe is an idea: pass it to scope.fork, an NXT pool, or a tuple helper.
+// recipe is an idea: pass it to an NXT pool, drain, or a group like settle.
 // In an existing task, direct use is convenient:
 auto output = co_await workers.run([input = std::move(other_input)] {
     return ordinary_cpp_function(input);
@@ -51,7 +52,7 @@ no permanent NXT controller tasks and no detached calls. Worker threads are
 joined by `close()` or by destruction after all calls have settled.
 
 The pool must outlive every recipe/task using it, including unstarted tasks.
-The existing structured task owner (firm, NXT pool, or awaited parent) retains
+The existing structured task owner (group, NXT pool, or awaited parent) retains
 the frame until settlement. Captured inputs should be owned values. Borrowed
 state must remain alive until **all** its calls settle; owning a callable does
 not magically own its reference captures. Callable/result destruction occurs
@@ -76,8 +77,9 @@ There are three separate facts: stop requested, result unwanted, work settled.
 The optional external `std::stop_token` is the safe foreign-thread cancellation
 entrypoint: its callback touches only synchronized job state and writes the
 pipe. Normal NXT task stop also cancels the job, but **do not request stop on
-arbitrary NXT tasks/firms or call `pool.stop()` from a worker**. Other NXT stop
-callbacks can synchronously mutate a wand or firm on the requesting thread.
+arbitrary NXT tasks or pools, or call `pool.stop()` from a worker**. Other NXT
+stop callbacks can synchronously mutate a wand or pool on the requesting
+thread.
 This API does not make the rest of the runtime thread-safe. If ordinary code
 supports cooperative cancellation, separately capture its own token and check
 it there; the pool never interrupts that code.

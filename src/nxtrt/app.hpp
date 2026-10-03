@@ -20,7 +20,7 @@ namespace nxtrt {
 ///
 /// This is intentionally not the terminal UI runtime yet. It is the common
 /// owner the UI runtime can be built around: one `deck`, one platform `wand`,
-/// a root-firm run entrypoint, and the app-level coordination primitives that
+/// a root run entrypoint, and the app-level coordination primitives that
 /// the old `UIRuntime` currently gets from libcoro.
 #if NXTRT_ARCH_HAS_WAND
 class runtime
@@ -116,24 +116,24 @@ public:
             sizeof(T *) == 0,
             "runtime::run takes a task factory, not a task: write "
             "rt.run(make_task) or rt.run([&] { return make_task(args); }) "
-            "so the root task is created inside its firm");
+            "so the root task is created inside its runtime");
     }
 
-    template<typename Fn>
-        requires stored_task_factory<std::decay_t<Fn>>
-    [[nodiscard]] stored_task_result_t<std::decay_t<Fn>>
-    run(Fn && fn)
+    /// Create the root task by calling `fn(args...)` inside the runtime,
+    /// then drive it to completion.
+    template<typename Fn, typename... Args>
+        requires task_factory<std::decay_t<Fn> &, Args...>
+    [[nodiscard]] task_result_t<
+        std::invoke_result_t<std::decay_t<Fn> &, Args...>>
+    run(Fn && fn, Args &&... args)
     {
-        auto root_firm = firm{};
         auto root_env = runtime_env{};
-        [[maybe_unused]] auto previous_root_firm =
-            root_env.replace<firm_key>(&root_firm);
         auto root_guard = detail::env_guard{root_env, &deck_, nullptr};
 
         // The factory outlives its task: a capturing coroutine lambda's
         // frame refers to the closure object.
         auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};
-        return drive(std::invoke(factory));
+        return drive(std::invoke(factory, std::forward<Args>(args)...));
     }
 
     void request_stop()

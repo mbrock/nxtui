@@ -93,26 +93,11 @@ nxtrt::task<int> timeout_value(int value)
 
 nxtrt::task<std::vector<int>> many_short_timeouts()
 {
-    auto deeds = co_await nxtrt::with_firm<nxtrt::stop_on_failure>(
-        [](auto & policy)
-            -> nxtrt::task<std::vector<nxtrt::catching_deed<int>>> {
-            auto out = std::vector<nxtrt::catching_deed<int>>{};
-            out.reserve(32);
-            for (auto i = 0; i != 32; ++i)
-                out.push_back(policy.fork(timeout_value(i)).cope());
-            co_await policy.join();
-            co_return out;
-        });
-
-    auto values = std::vector<int>{};
-    values.reserve(deeds.size());
-    for (auto & deed : deeds) {
-        auto result = std::move(deed).get();
-        if (!result)
-            nxtrt::rethrow(result.error());
-        values.push_back(*result);
-    }
-    co_return values;
+    auto timeouts = std::vector<nxtrt::task<int>>{};
+    timeouts.reserve(32);
+    for (auto i = 0; i != 32; ++i)
+        timeouts.push_back(timeout_value(i));
+    co_return co_await nxtrt::when_all_range(std::move(timeouts));
 }
 
 nxtrt::task<int> app_child_value(int value)
@@ -380,22 +365,16 @@ static suite uring_wand_tests{
                 expect(value == 42_i);
             };
 
-            "runtime owns a root firm and app wires"_test = [] {
+            "runtime runs groups and owns app wires"_test = [] {
                 auto rt = nxtrt::runtime{};
 
-                auto child = rt.run([]() -> nxtrt::task<nxtrt::deed<int>> {
-                    expect(nxtrt::current_firm() != nullptr);
-                    auto child = co_await nxtrt::with_firm(
-                        [](nxtrt::firm & scope)
-                            -> nxtrt::task<nxtrt::deed<int>> {
-                            auto child = scope.fork(app_child_value(41));
-                            co_await scope.join();
-                            co_return std::move(child);
-                        });
-                    co_return std::move(child);
+                auto child = rt.run([]() -> nxtrt::task<int> {
+                    auto values =
+                        co_await nxtrt::when_all(app_child_value(41));
+                    co_return std::get<0>(values);
                 });
 
-                expect(std::move(child).get() == 41_i);
+                expect(child == 41_i);
 
                 auto key = nxtui::input::KeyEvent{};
                 key.key = nxtui::input::Key::character;

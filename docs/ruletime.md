@@ -92,7 +92,7 @@ The feed may end:
 
 text no more emissions
 
-while the final deed still remains:
+while the final outcome still remains:
 
 text how did the resident settle?
 
@@ -298,7 +298,7 @@ Modern C++ coroutines expose explicit control over:
 
 At the runtime level we can directly realize:
 
-text task feed jack firm game
+text task feed jack pool
 
 as concrete objects with explicit memory ownership and structured lifetimes.
 

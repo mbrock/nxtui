@@ -911,7 +911,6 @@ run_tool_batch_probe(tool_batch_probe & state, int id)
     ++state.started;
     ++state.active;
     state.peak = std::max(state.peak, state.active);
-    expect(nxtrt::require_current_firm().child_count() == 0);
 
     struct active_guard
     {
@@ -988,9 +987,9 @@ inline nxtrt::task<void> record_after_yield(std::vector<int> & events, int value
     events.push_back(value * 10 + 2);
 }
 
-inline nxtrt::task<int> root_task_probe(bool & had_firm)
+inline nxtrt::task<int> root_task_probe(bool & had_deck)
 {
-    had_firm = nxtrt::current_firm() != nullptr;
+    had_deck = nxtrt::current_deck() != nullptr;
     co_return 9;
 }
 
@@ -1035,13 +1034,6 @@ record_after_bell(
     out.push_back(value);
 }
 
-inline nxtrt::task<void> record_current_firm(
-    std::vector<nxtrt::firm *> & firms)
-{
-    co_await nxtrt::yield();
-    firms.push_back(nxtrt::current_firm());
-}
-
 inline nxtrt::task<void> record_current_task_id_after_yield(
     std::vector<nxtrt::task_id> & ids)
 {
@@ -1050,38 +1042,6 @@ inline nxtrt::task<void> record_current_task_id_after_yield(
     expect(deck != nullptr);
     ids.push_back(deck->current_task_id());
 }
-
-inline nxtrt::task<void> probe_fork_deck_overflow_body(
-    nxtrt::firm & scope,
-    std::vector<int> & events,
-    bool & overflowed,
-    std::size_t & child_count_after_failure)
-{
-    try {
-        scope.fork(record_after_yield(events, 7));
-    } catch (const nxtrt::runtime_error & e) {
-        overflowed =
-            std::string_view{e.what()}.contains("deck task table is full");
-        child_count_after_failure =
-            nxtrt::require_current_firm().child_count();
-    }
-    co_return;
-}
-
-struct fork_deck_overflow_root
-{
-    std::vector<int> * events = nullptr;
-    bool * overflowed = nullptr;
-    std::size_t * child_count_after_failure = nullptr;
-
-    nxtrt::task<void> operator()() const
-    {
-        return nxtrt::with_firm([&](nxtrt::firm & scope) {
-            return probe_fork_deck_overflow_body(
-                scope, *events, *overflowed, *child_count_after_failure);
-        });
-    }
-};
 
 inline nxtrt::task<bool> read_task_stop_after_yield()
 {
@@ -1153,160 +1113,6 @@ inline nxtrt::task<int> tuple_wait_for_stop(
     throw nxtrt::operation_cancelled{};
 }
 
-inline nxtrt::task<int> tuple_frame_context(std::vector<int> & events)
-{
-    events.push_back(
-        nxtrt::require_current_firm().child_count() == 0 ? 3 : -3);
-    co_return 17;
-}
-
-struct returned_deeds_firm : nxtrt::firm
-{
-    using firm::firm;
-
-    static nxtrt::task<void> empty_child()
-    {
-        co_await nxtrt::yield();
-    }
-
-    nxtrt::task<std::tuple<nxtrt::deed<int>, nxtrt::deed<void>>>
-    operator()()
-    {
-        auto a = fork(value_after_yield(41));
-        auto b = fork(empty_child());
-        co_await join();
-        co_return std::tuple{std::move(a), std::move(b)};
-    }
-};
-
-struct external_result_firm : nxtrt::firm
-{
-    explicit external_result_firm(int & target)
-        : target(target)
-    {}
-
-    int & target;
-
-    nxtrt::task<nxtrt::deed<int>> operator()()
-    {
-        auto child = fork(value_after_yield(64));
-        child.store_result_in(target);
-        co_await join();
-        co_return std::move(child);
-    }
-};
-
-inline nxtrt::task<nxtrt::deed<int>> fork_external_result_into(int & target)
-{
-    co_return co_await external_result_firm{target};
-}
-
-struct firm_result_value
-{
-    explicit firm_result_value(int value)
-        : value(value)
-    {}
-
-    firm_result_value(const firm_result_value &) = delete;
-    firm_result_value & operator=(const firm_result_value &) = delete;
-
-    firm_result_value(firm_result_value && other) noexcept
-        : value(std::exchange(other.value, -1))
-    {}
-
-    firm_result_value & operator=(firm_result_value &&) = delete;
-
-    int value = 0;
-};
-
-inline nxtrt::task<firm_result_value> firm_result_value_after_yield(int value)
-{
-    co_await nxtrt::yield();
-    co_return firm_result_value{value};
-}
-
-struct external_result_cell_firm : nxtrt::firm
-{
-    explicit external_result_cell_firm(
-        nxtrt::deed_result_storage<firm_result_value> & target)
-        : target(target)
-    {}
-
-    nxtrt::deed_result_storage<firm_result_value> & target;
-
-    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
-    {
-        auto child = fork(firm_result_value_after_yield(71));
-        child.store_result_in(target);
-        co_await join();
-        co_return std::move(child);
-    }
-};
-
-struct pooled_result_cell_firm : nxtrt::firm
-{
-    explicit pooled_result_cell_firm(
-        nxtrt::deed_result_storage_pool_ref<firm_result_value> & pool)
-        : pool(&pool)
-    {}
-
-    nxtrt::deed_result_storage_pool_ref<firm_result_value> * pool = nullptr;
-
-    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
-    {
-        auto & target = pool->borrow();
-        auto child = fork(firm_result_value_after_yield(72));
-        child.store_result_in(target);
-        co_await join();
-        co_return std::move(child);
-    }
-};
-
-inline nxtrt::task<nxtrt::deed<firm_result_value>>
-fork_external_result_cell_into(
-    nxtrt::deed_result_storage<firm_result_value> & target)
-{
-    co_return co_await external_result_cell_firm{target};
-}
-
-inline nxtrt::task<nxtrt::deed<firm_result_value>>
-fork_pooled_result_cell_into(
-    nxtrt::deed_result_storage_pool_ref<firm_result_value> & pool)
-{
-    co_return co_await pooled_result_cell_firm{pool};
-}
-
-struct external_result_root
-{
-    int * target = nullptr;
-
-    nxtrt::task<nxtrt::deed<int>> operator()()
-    {
-        return fork_external_result_into(*target);
-    }
-};
-
-struct external_result_cell_root
-{
-    nxtrt::deed_result_storage<firm_result_value> * target = nullptr;
-
-    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
-    {
-        return fork_external_result_cell_into(*target);
-    }
-};
-
-struct pooled_result_cell_root
-{
-    nxtrt::deed_result_storage_pool_ref<firm_result_value> * pool =
-        nullptr;
-
-    nxtrt::task<nxtrt::deed<firm_result_value>> operator()()
-    {
-        return fork_pooled_result_cell_into(*pool);
-    }
-};
-
 inline nxtrt::task<void> record_stop_state_after_yield(
     std::vector<int> & events,
     int value)
@@ -1315,20 +1121,21 @@ inline nxtrt::task<void> record_stop_state_after_yield(
     events.push_back(nxtrt::stop_requested() ? value : -value);
 }
 
-inline nxtrt::task<void>
-hosted_firm_stop_body(nxtrt::firm & scope, std::vector<int> & events)
+inline nxtrt::task<void> empty_child()
 {
-    scope.fork(record_stop_state_after_yield(events, 4));
-    events.push_back(100);
     co_await nxtrt::yield();
-    co_await scope.join();
 }
 
-inline nxtrt::task<void> hosted_firm_stop_probe(std::vector<int> & events)
+inline nxtrt::task<int> mark_then_wait_for_stop(std::vector<int> & events)
 {
-    co_await nxtrt::with_firm([&](nxtrt::firm & scope) {
-        return hosted_firm_stop_body(scope, events);
-    });
+    events.push_back(100);
+    co_return co_await tuple_wait_for_stop(events, 4);
+}
+
+inline nxtrt::task<void> hosted_group_stop_probe(std::vector<int> & events)
+{
+    co_await nxtrt::settle(
+        std::tuple{[&] { return mark_then_wait_for_stop(events); }});
 }
 
 inline nxtrt::task<void> record_stop_state_after_two_yields(
@@ -1496,8 +1303,7 @@ inline nxtrt::task<int> map_over_manual_wish(nxtrt::coin_t token)
         nxtrt::op::manual{token}, [] { return 7; });
 }
 
-void declare_runtime_firm_tests();
-void declare_runtime_firm_stop_tests();
+void declare_runtime_group_tests();
 void declare_runtime_buffer_tests();
 void declare_runtime_io_tests();
 

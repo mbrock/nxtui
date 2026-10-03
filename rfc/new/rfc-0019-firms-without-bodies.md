@@ -1,6 +1,38 @@
 # RFC 0019: Firms Without Bodies {#rfc_firms_without_bodies}
 
-Status: proposal
+Status: implemented. The sections after "As implemented" are the original
+proposal, kept as written; where names differ, the code is authoritative.
+
+## As implemented
+
+- `settle(std::tuple{work...}, rule = settle_all{})` runs a fixed set of tasks
+  or task factories in a pool with one slot per job, settles all of them, and
+  returns `std::tuple<outcome<T>...>`, where
+  `outcome<T> = std::expected<T, std::exception_ptr>`.
+  `settle_range(range, rule)` returns `std::vector<outcome<T>>` in range order.
+- Stop rules: `settle_all`, `stop_on_failure`, `stop_on_success`,
+  `stop_on_completion`, `stop_after_first` (stop the companions when job 0,
+  the primary, settles), or any `noexcept` callable
+  `bool(std::size_t index, bool failed)`. `stop_after_first` covers the
+  proposed `supervise`, which did not land.
+- `when_all`, `wait_any`, `when_all_range`, `wait_any_range`, `with_timeout`,
+  and `poll_until_after` are written over `settle`.
+- `drain(feed<Idea>&, capacity)` runs a feed of ideas at most `capacity` at a
+  time, discarding results; the first failure stops and is rethrown.
+  `pool_land<Idea>{capacity}` owns a pool's slots and output cells for callers
+  that want results from `pool<Idea>`. Together they replace the proposed
+  `bounded_pool<Idea, N>`.
+- Root entry (`deck.sync_wait(fn, args...)`, `runtime::run`,
+  `run_with_kqueue`, the io_uring `nxtrt::run`) calls the factory inside the
+  runtime environment and keeps it alive while its task runs. There is no
+  root firm.
+- `firm` itself was removed entirely, not only its bodies. Without frames or
+  children, a firm only carried a stop source and a policy, which duplicated
+  task stop: stop now propagates from an awaiting task to the task it awaits,
+  and a group stops its own jobs. `current_firm()`, firm subclasses as
+  policies, and the firm snapshots in runtime dumps went with it.
+- `nxtrt/runtime.rkt` no longer has firms, deeds, `spawned`, `issued`, or
+  `observes`; pools hold all concurrent work.
 
 ## Problem
 

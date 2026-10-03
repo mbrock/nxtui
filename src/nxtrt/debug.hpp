@@ -22,15 +22,6 @@ namespace nxtrt::debug {
 
 inline constexpr bool describe_wishes = NXT_RT_DESCRIBE_WISHES != 0;
 
-using firm_id = std::uint64_t;
-
-struct firm_snapshot
-{
-    firm_id id = 0;
-    firm_id parent = 0;
-    std::size_t children = 0;
-    bool stopping = false;
-};
 
 struct wait_snapshot
 {
@@ -42,9 +33,6 @@ struct wait_snapshot
 
 namespace detail {
 
-inline std::atomic<firm_id> next_firm_id = 1;
-inline std::mutex firms_mutex;
-inline std::vector<firm_snapshot> firms;
 inline std::mutex waits_mutex;
 inline std::vector<wait_snapshot> waits;
 inline volatile std::sig_atomic_t dump_requested = 0;
@@ -55,11 +43,6 @@ inline void signal_handler(int) noexcept
 }
 
 } // namespace detail
-
-[[nodiscard]] inline firm_id allocate_firm_id() noexcept
-{
-    return detail::next_firm_id.fetch_add(1, std::memory_order_relaxed);
-}
 
 inline void install_signal_dump(int signal = SIGUSR1)
 {
@@ -76,37 +59,6 @@ inline void install_signal_dump(int signal = SIGUSR1)
         return false;
     detail::dump_requested = 0;
     return true;
-}
-
-inline void register_firm(firm_snapshot firm)
-{
-    auto lock = std::scoped_lock{detail::firms_mutex};
-    detail::firms.push_back(firm);
-}
-
-inline void unregister_firm(firm_id id)
-{
-    auto lock = std::scoped_lock{detail::firms_mutex};
-    std::erase_if(detail::firms, [id](const firm_snapshot & firm) {
-        return firm.id == id;
-    });
-}
-
-inline void update_firm(firm_snapshot firm)
-{
-    auto lock = std::scoped_lock{detail::firms_mutex};
-    for (auto & existing : detail::firms) {
-        if (existing.id == firm.id) {
-            existing = firm;
-            return;
-        }
-    }
-}
-
-[[nodiscard]] inline std::vector<firm_snapshot> snapshot_firms()
-{
-    auto lock = std::scoped_lock{detail::firms_mutex};
-    return detail::firms;
 }
 
 inline void park_task(task_id task, std::uint64_t token, std::string wish)
@@ -185,7 +137,6 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
 }
 
 [[nodiscard]] inline std::string format_runtime_dump(
-    std::vector<firm_snapshot> firms,
     std::vector<wait_snapshot> waits,
     std::vector<task_id> ready_tasks)
 {
@@ -204,17 +155,6 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
     }
     out << "\n";
 
-    out << "  firms: " << firms.size() << "\n";
-    for (auto const & firm : firms) {
-        out << "    firm " << firm.id;
-        if (firm.parent != 0)
-            out << " parent " << firm.parent;
-        out << " children " << firm.children;
-        if (firm.stopping)
-            out << " stopping";
-        out << "\n";
-    }
-
     out << "  parked wishes: " << waits.size() << "\n";
     for (auto const & wait : waits) {
         out << "    task " << wait.task.value
@@ -226,13 +166,11 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
 }
 
 inline void print_runtime_dump(
-    std::vector<firm_snapshot> firms,
     std::vector<wait_snapshot> waits,
     std::vector<task_id> ready_tasks)
 {
     std::cerr << "\n"
               << format_runtime_dump(
-                     std::move(firms),
                      std::move(waits),
                      std::move(ready_tasks));
     std::cerr << std::flush;

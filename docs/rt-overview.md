@@ -6,7 +6,7 @@ boundary for platform I/O.
 
 The public namespace currently contains several abstraction levels at once:
 high-level task composition, the scheduler that drives tasks, structured
-concurrency handles, buffered byte streams, and low-level backend operations.
+concurrency groups, buffered byte streams, and low-level backend operations.
 This page is the conceptual map for those pieces. The class and function pages
 remain the exact reference for the corresponding C++ declarations.
 
@@ -23,7 +23,7 @@ continuation by enqueueing it, rather than by resuming it inline.
 
 Ordinary blocking C++ can run off the deck through @ref rt_blocking
 "blocking pools". Only owned callables and outcomes cross that boundary;
-tasks, firms, and continuations remain confined to the original deck.
+tasks, pools, and continuations remain confined to the original deck.
 
 ## Decks {#rt_deck}
 
@@ -35,9 +35,13 @@ ready at the start of the call. Tasks that become ready during the call are
 left for a later round. This keeps scheduling explicit and avoids surprising
 reentrancy.
 
-`sync_wait()` is the bridge from synchronous code into the runtime: it starts
-a root task and pumps the deck until that task completes. A deck may also be
-paired with a @ref rt_wand "wand" so tasks can await external I/O.
+`sync_wait(fn, args...)` is the bridge from synchronous code into the runtime:
+it calls the task factory inside the deck's runtime environment, keeps the
+factory alive while the root task runs, and pumps the deck until that task
+completes. `runtime::run`, `run_with_kqueue`, and the io_uring `nxtrt::run`
+enter the same way; there is no enclosing scope object around the root task.
+A deck may also be paired with a @ref rt_wand "wand" so tasks can await
+external I/O.
 
 Concrete API:
 
@@ -59,46 +63,58 @@ Concrete API:
 - @ref nxtrt::task "nxtrt::task<T>"
 - @ref nxtrt::task_id "nxtrt::task_id"
 
-## Firms {#rt_firm}
+## Groups {#rt_group}
 
-Firms are lifetime scopes: they provide coroutine-frame memory and cancellation
-context, and may optionally own explicitly forked children. A firm is not
-synonymous with a nursery; scope-only work needs no child records or join.
+Concurrency is always a group of ideas awaited by a task. An idea is a
+callable that returns `task<T>` (or `hope<T>`) when invoked; a task is work
+that has already been created. A group runs its jobs concurrently in a pool,
+applies a stop rule as each job settles, and settles every job before the
+awaiting task resumes. There is no fork, join, or child record: a group owns
+exactly the jobs it was given, and they cannot outlive it.
 
-`with_firm<Policy = firm>(fn)` retains a nullary factory for scope-only work,
-or accepts a factory taking `Policy&` when explicit child ownership is needed.
-That scope reference provides `fork`, `join`, and `stop`. There are no free
-`nxtrt::fork` or `nxtrt::join` functions, and tasks do not spawn ambiently into
-the current firm. Pass the scope reference explicitly to nested work that
-needs to fork. Call `scope.join()` before borrowed locals go out of scope;
-leaving the body does not make it safe for children to keep using those locals.
+`settle(std::tuple{work...}, rule)` runs a fixed heterogeneous set of tasks or
+nullary task factories, one pool slot per job. A factory is invoked once, when
+its job starts, and the tuple keeps it alive until the group returns. The
+result is `std::tuple<outcome<T>...>` in tuple order, where `outcome<T>` is
+`std::expected<T, std::exception_ptr>` (including `outcome<void>`); a job
+stopped before it started settles as cancelled. `settle_range(range, rule)` does
+the same for a homogeneous range and returns `std::vector<outcome<T>>` in range
+order.
 
-Use `scope.fork(factory, args...)` to invoke work in the owner's frame context.
-Preconstructed task frames must already be allocated by that owner or an
-enclosing ancestor; a shorter-lived inner allocation scope is unsafe. The
-ambient `current_firm` / `require_current_firm()` context remains available
-for frame, cancellation, and debugging context, not implicit child admission.
-Firm subclasses remain awaitable.
+The stop rule decides, as each job settles, whether to stop the rest:
 
-Higher-level helpers such as `when_all`, `wait_any`, and `with_timeout` are
-written in terms of firms. They are not separate schedulers; they are
-composition patterns over the same task and deck machinery.
+- `settle_all` (the default) lets every job finish;
+- `stop_on_failure` and `stop_on_success` stop the others on the first failure
+  or success;
+- `stop_on_completion` stops the others when any job settles;
+- `stop_after_first` stops the companions when job 0, the primary, settles;
+- any `noexcept` callable `bool(std::size_t index, bool failed)`.
 
-For a fixed heterogeneous batch, pass a tuple of tasks or nullary task
-factories:
-`when_all(std::tuple{f, g})`, `wait_any(std::tuple{f, g})`, or
-`with_firm<Policy>(std::tuple{f, g})`. This does not make the firm a fixed
-child-ownership container: tuple main work is lowered to finite indexed
-`task<void>` recipes in the existing pool, with typed settled outcomes stored
-at their tuple positions and no child records or deeds.
-The firm supplies frames and stop policy; separately forked children require
-an explicit scope reference and are outside the tuple's fixed bound.
-`with_firm<Policy>(tuple)` returns `expected<T, exception_ptr>` outcomes
-(including `expected<void, ...>`), not `catching_deed` handles. `when_all` and
-`wait_any` preserve their value, cancellation/drain, and input-order selection
-contracts; variadic forms delegate to tuple forms. `with_timeout` and
+A stop chosen by the rule is a normal finish. Stopping the awaiting task also
+stops the group's jobs; the group drains them and then reports cancellation.
+
+The usual helpers are written over `settle`. `when_all(tuple)` /
+`when_all(tasks...)` and `when_all_range` return every value in order (void
+positions are `std::monostate`), stopping the rest and rethrowing on the first
+failure. `wait_any(tuple)` / `wait_any(tasks...)` and `wait_any_range` return
+the first success in input order, not first completion, stop the rest on
+success, and group the failures if none succeeds. `with_timeout` and
 `poll_until_after` use the same route. See the
 [implemented tuple contract](../rfc/new/rfc-0014-idea-algebra.md#implemented-task-tuples).
+
+```cpp
+auto [page, icon] = co_await nxtrt::settle(
+    std::tuple{
+        [&] { return fetch(page_url); },
+        [&] { return fetch(icon_url); }});
+if (!page)
+    std::rethrow_exception(page.error());
+```
+
+Cancellation belongs to tasks. Stop propagates from an awaiting task to the
+task it awaits, and a group stops its own jobs through its pool.
+`current_stop_token()`, `stop_requested()`, and `throw_if_stop_requested()`
+read the running task's stop state.
 
 `nxtrt/idea.hpp` names the broader recipe constraint: `idea<Fn>` is a
 move-constructible callable invoked as a mutable stored lvalue, returning
@@ -107,42 +123,39 @@ move-constructible callable invoked as a mutable stored lvalue, returning
 wrapper. Consumers invoke each admitted recipe once and preserve its storage
 through settlement, including failure and cancellation; the concept itself
 cannot enforce those obligations. Hope-producing ideas may complete without
-allocating a coroutine. This does not extend the tuple helpers' task-only
-factory contract or turn firms into a future fixed-team abstraction.
+allocating a coroutine. The tuple and range groups accept tasks and
+task-returning factories only.
 
 Concrete API:
 
-- @ref nxtrt::firm "nxtrt::firm"
+- @ref nxtrt::settle "nxtrt::settle"
+- @ref nxtrt::settle_range "nxtrt::settle_range"
+- @ref nxtrt::when_all "nxtrt::when_all"
+- @ref nxtrt::wait_any "nxtrt::wait_any"
 
 ## Pools {#rt_pool_overview}
 
 A [bounded idea pool](rt-pool.md) turns a homogeneous feed of recipes into a
 completion-order result feed. It borrows farm slots and output land; consuming
-results returns admission capacity. Pool jobs are owned directly, not retained
-as firm child records. Ready hopes stay synchronous, while pending tasks use
-the existing deck.
+results returns admission capacity. Pool jobs are owned directly by their
+slots. Ready hopes stay synchronous, while pending tasks use the existing deck.
+Every group above runs in a pool.
+
+`drain(ideas, capacity)` runs a feed of ideas through a pool, at most
+`capacity` at once, and discards the results; the first failure stops
+admission, cancels and drains the running jobs, and is rethrown. Callers that
+want the results construct a `pool<Idea>` over a `pool_land<Idea>{capacity}`,
+which owns the slots and output cells.
 
 See [Recipes, pools, and structured async](rt-concurrency-direction.md) for
-the design direction: teams versus pools, explicit coping, lifetime-aware
-terminal consumption, and the separate Wisp operation-awaiting bridge.
-
-## Deeds {#rt_deed}
-
-A deed is the caller's handle to a task forked into a firm. It is deliberately
-not the same thing as a task: the firm owns and joins the child work, while
-the deed lets user code recover the child's result after the firm has reached
-the appropriate point.
-
-`deed<T>` rethrows child failure when read. Moving it through `.cope()` explicitly
-selects `catching_deed<T>`, whose `get()` returns an expected-like outcome so
-dynamic-fork users can collect child outcomes before deciding what to return
-or throw. Fixed tuple composition instead returns settled expected outcomes
-directly; it does not make deeds for its pool-owned main work.
+the design direction: teams versus pools, outcomes, lifetime-aware terminal
+consumption, and the separate Wisp operation-awaiting bridge.
 
 Concrete API:
 
-- @ref nxtrt::deed "nxtrt::deed<T>"
-- @ref nxtrt::catching_deed "nxtrt::catching_deed<T>"
+- @ref nxtrt::pool "nxtrt::pool<Idea>"
+- @ref nxtrt::pool_land "nxtrt::pool_land<Idea>"
+- @ref nxtrt::drain "nxtrt::drain"
 
 ## Wishes {#rt_wish}
 

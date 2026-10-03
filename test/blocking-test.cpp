@@ -65,7 +65,6 @@ bool cancelled(nxtrt::task<int> & task)
 }
 
 nxtrt::task<void> scope_probe(
-    nxtrt::firm & scope,
     nxtrt::blocking_pool & pool,
     gate & running,
     bool & destroyed,
@@ -83,13 +82,13 @@ nxtrt::task<void> scope_probe(
         int value = 11;
     } state{destroyed};
 
-    auto child = scope.fork(pool.call([&] {
+    // The group settles the call before the locals it borrows go away,
+    // including when it is stopped.
+    (void) co_await nxtrt::settle(std::tuple{pool.call([&] {
         (void) running();
         state.value *= 7;
         touched = state.value == 77;
-    }));
-    co_await scope
-        .join(); // locals outlive all worker access, including stop
+    })});
 }
 
 template<typename Wand>
@@ -308,17 +307,14 @@ void cases()
         expect(invoked.load() == 1);
     };
 
-    "stopped firm retains frame locals until worker settlement"_test = [] {
+    "stopped group retains frame locals until worker settlement"_test = [] {
         host<Wand> h;
         nxtrt::blocking_pool pool{1, 1};
         gate running;
         bool destroyed = false, touched = false;
         nxtrt::root_task root{
             h.deck, [&] {
-                return nxtrt::with_firm([&](nxtrt::firm & scope) {
-                    return scope_probe(
-                        scope, pool, running, destroyed, touched);
-                });
+                return scope_probe(pool, running, destroyed, touched);
             }};
         root.start();
         h.deck.run_until_idle();

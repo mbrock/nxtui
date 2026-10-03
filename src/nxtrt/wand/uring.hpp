@@ -875,10 +875,7 @@ template<task_factory Fn>
 {
     auto wand = uring_wand{};
     auto d = deck{&wand};
-    auto root_firm = firm{};
     auto root_env = runtime_env{};
-    [[maybe_unused]] auto previous_root_firm =
-        root_env.replace<firm_key>(&root_firm);
     auto root_guard = detail::env_guard{root_env, &d, nullptr};
     // The factory outlives its task: a capturing coroutine lambda's frame
     // refers to the closure object.

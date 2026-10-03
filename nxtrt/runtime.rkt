@@ -2,7 +2,6 @@
 
 ontology nxt "https://swa.sh/nxt#"
   class deck
-  class firm
   class task
   class pool
   class pool-slot
@@ -24,15 +23,11 @@ ontology nxt "https://swa.sh/nxt#"
   class settled-phase :abstract
   class ready-to-retire-phase :subclass-of settled-phase
   class draining-phase :subclass-of settled-phase
-  class deed
 
   property has-ready
   property has-lifecycle
   property has-parked-phase
   property has-settled-phase
-  property spawned
-  property issued
-  property observes
   property has-continuation
   property realizes
   property admitted
@@ -51,28 +46,17 @@ ontology nxt "https://swa.sh/nxt#"
 model runtime-model
   signature deck
     has-ready var set task
-  // Ownership here is a snapshot, not a model of admission or exception
-  // selection. A stopped C++ firm rejects new forks: timeout scope
-  // bodies must check stop before spawning if cancelled before their first
-  // turn. Once wishes exist, both timeout and external stop drain their
-  // execs under the same lifecycle below, before the owning scope returns.
-  // HTTP connection tasks use the bounded pool below; Wisp callbacks await
-  // native tasks directly. Guest continuations stay in the Wisp heap, not
-  // in this deck. Neither layer needs permanent evaluator/connection workers.
-  // Firms provide cancellation context; core no longer offers ambient free
-  // fork/join. A firm may be an empty cancellation scope, or a callback may
-  // explicitly use its firm reference to own children. Coroutine frames use
-  // the ordinary allocator and are not modeled.
-  // The concurrent tuple combinator admits its finite input of N indexed
-  // void recipes into an N-slot ordinary pool: main work stays pool-owned,
-  // with no firm child/deed records. Any additional fork needs an explicit
-  // owner reference. This model describes pool ownership and close/drain;
-  // tuple value types and positional writes are intentionally not modeled.
-  signature firm
-    // Optional explicit child ownership, not what makes the firm exist.
-    spawned set task
-    issued set deed
-  // Pool jobs have no firm child/deed record.
+  // Concurrent work is always held by a pool. Groups (settle, when_all,
+  // wait_any, their range forms) admit their N jobs into an N-slot pool;
+  // drain admits a feed of ideas into a bounded pool. There is no fork,
+  // child record or deed. Stop belongs to tasks: stopping a task stops the
+  // pool it awaits, which drains its jobs before the group returns. Once
+  // wishes exist, both timeouts and outside stops drain their execs under
+  // the same lifecycle below. HTTP connections use a pool; Wisp callbacks
+  // await native tasks directly, and guest continuations stay in the Wisp
+  // heap. Coroutine frames use the ordinary allocator and are not modeled.
+  // This model describes pool ownership and close/drain; group value types
+  // and positional writes are intentionally not modeled.
   // slots is fixed capacity; consuming/discarding are events on this step.
   // admitted records job provenance, not current occupancy; slot.job is the
   // live/result identity. Result values, cancellation delivery,
@@ -123,17 +107,6 @@ model runtime-model
   signature settled-phase
   signature ready-to-retire-phase
   signature draining-phase
-  signature deed
-    // Observation survives task-frame evacuation. C++ keeps the deed and
-    // settlement record linked until either is destroyed, retargeting the
-    // record when the deed moves. This is not ownership of a live frame.
-    // issued/observes are semantic relations, not separate C++ ledgers.
-    observes one task
-
-  predicate explicitly-owned-child
-    all ([t task])
-      (=> (some (matching spawned t))
-          (== (count (matching spawned t)) 1))
 
   predicate blocking-starts
     all ([b blocking-work])
@@ -209,24 +182,8 @@ model runtime-model
       eventually (in (b blocking-lifecycle) retired-state)
 
   predicate structural-invariants
-    all ([t task])
-      (either
-        (some ([z firm]) (in t (z spawned)))
-        (some ([p pool]) (in t (p admitted))))
     all ([p pool] [t (p admitted)])
-      no (matching spawned t)
       one (matching admitted t)
-    all ([z firm] [t (z spawned)])
-      some ([d (z issued)])
-        == (d observes) t
-    all ([z firm] [t (z spawned)])
-      lone ([d (z issued)])
-        == (d observes) t
-    all ([z firm] [d (z issued)])
-      in (d observes) (z spawned)
-    all ([t task])
-      (=> (some (matching spawned t))
-          (== (count (matching spawned t)) 1))
     all ([s pool-slot])
       one (matching slots s)
     all ([a exec] [s (intersect (a has-lifecycle) prepared-state)])
@@ -329,28 +286,18 @@ model runtime-model
                 next-state
                   in s (p free-slots)
 
-  run pool-reuse-witness :for ([1 pool pool-slot pool-close firm] [2 task] [0 deck deed wish exec]) :trace-length 8
+  run pool-reuse-witness :for ([1 pool pool-slot pool-close] [2 task] [0 deck wish exec]) :trace-length 8
     always structural-invariants
     always pool-shape
     pools-start-free
     always pool-transitions
     pool-reuse
 
-  // A scope is valid even when the callback retains no forked children.
-  predicate empty-firm-scope
-    some ([z firm])
-      no (z spawned)
-      no (z issued)
-
-  run empty-firm-scope-witness :for ([1 firm] [0 deck task deed wish exec pool pool-slot pool-close]) :trace-length 2
-    structural-invariants
-    empty-firm-scope
-
-  // Two indexed tuple jobs occupy distinct ordinary-pool slots. At close
+  // Two indexed group jobs occupy distinct ordinary-pool slots. At close
   // start one result is ready while the other job is still running; close
   // then discards both results as they become ready and returns both slots.
   // This witnesses early policy completion using the same pool drain, not a
-  // second tuple/nursery ownership mechanism. It makes no fairness or general
+  // second ownership mechanism. It makes no fairness or general
   // cancellation-liveness claim.
   predicate tuple-close-drains
     some ([p pool] [s1 (p slots)] [s2 (p slots)] [a (p admitted)] [b (p admitted)])
@@ -379,7 +326,7 @@ model runtime-model
                 in s1 (p free-slots)
                 in s2 (p free-slots)
 
-  run tuple-close-drains-witness :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 6
+  run tuple-close-drains-witness :for ([1 pool pool-close] [2 pool-slot task] [0 deck wish exec]) :trace-length 6
     always structural-invariants
     always pool-shape
     always pool-transitions
@@ -387,34 +334,28 @@ model runtime-model
 
   // Bounded safety checks: at most two slots/jobs, eight steps; ownership
   // and slot shape are premises, as are the transition rules under test.
-  // The pool-only scopes contain one pool/ambient firm and no execs/deeds.
+  // The pool-only scopes contain one pool and no execs.
   // Exec retirement is independent and checked below, not assumed here.
-  check pool-capacity-only-after-release :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 8
+  check pool-capacity-only-after-release :for ([1 pool pool-close] [2 pool-slot task] [0 deck wish exec]) :trace-length 8
     assume always structural-invariants
     assume always pool-shape
     assume pools-start-free
     assume always pool-transitions
     show always pool-capacity-returned-only-by-release
 
-  check pool-ready-not-readmitted :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 8
+  check pool-ready-not-readmitted :for ([1 pool pool-close] [2 pool-slot task] [0 deck wish exec]) :trace-length 8
     assume always structural-invariants
     assume always pool-shape
     assume pools-start-free
     assume always pool-transitions
     show always pool-ready-cannot-be-readmitted
 
-  check pool-release-retires :for ([1 pool pool-close firm] [2 pool-slot task] [0 deck deed wish exec]) :trace-length 8
+  check pool-release-retires :for ([1 pool pool-close] [2 pool-slot task] [0 deck wish exec]) :trace-length 8
     assume always structural-invariants
     assume always pool-shape
     assume pools-start-free
     assume always pool-transitions
     show always pool-release-retires-result
-
-  // Removing explicitly-owned-child from structural-invariants makes this
-  // check fail: the remaining ownership facts allow two firms to own a task.
-  check explicit-child-has-one-firm-owner :for ([2 firm task deed] [0 deck wish exec pool pool-slot pool-close]) :trace-length 2
-    assume always structural-invariants
-    show always explicitly-owned-child
 
   predicate lifecycle-transitions
     all ([a exec] [s (intersect (a has-lifecycle) prepared-state)])
@@ -461,12 +402,12 @@ model runtime-model
         in (a has-lifecycle) parked-state
 
   predicate rich-runtime-shape
-    some ([d deck] [z firm])
+    some ([d deck] [p pool])
       some (d has-ready)
-      ge (count (z spawned)) 2
+      ge (count (p admitted)) 2
       all ([a exec])
         in (a has-lifecycle) prepared-state
-      some ([a exec] [t (z spawned)])
+      some ([a exec] [t (p admitted)])
         == (a (has-continuation (task exec))) t
 
   // Properties the C++ wands rely on. Execs are constructed `prepared{}`.
@@ -510,40 +451,40 @@ model runtime-model
       eventually (some (intersect (a has-settled-phase) draining-phase))
       eventually (in (a has-lifecycle) retired-state)
 
-  check lifecycle-can-complete :for ([1 deck firm wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed]) :trace-length 6 :expect sat
+  check lifecycle-can-complete :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task]) :trace-length 6 :expect sat
     assume execs-start-prepared
     assume always structural-invariants
     assume always lifecycle-transitions
     show some-exec-retires
 
-  check cancelled-exec-can-drain-and-retire :for ([1 deck firm wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed]) :trace-length 6 :expect sat
+  check cancelled-exec-can-drain-and-retire :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task]) :trace-length 6 :expect sat
     assume execs-start-prepared
     assume always structural-invariants
     assume always lifecycle-transitions
     show some-exec-drains-then-retires
 
-  check retire-only-when-ready :for ([1 deck firm wish prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task deed]) :trace-length 6
+  check retire-only-when-ready :for ([1 deck pool wish prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task]) :trace-length 6
     assume execs-start-prepared
     assume always structural-invariants
     assume always lifecycle-transitions
     show always retires-only-when-ready
 
-  check drain-only-after-cancel :for ([1 deck firm wish prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task deed]) :trace-length 6
+  check drain-only-after-cancel :for ([1 deck pool wish prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task]) :trace-length 6
     assume execs-start-prepared
     assume always structural-invariants
     assume always lifecycle-transitions
     show always drains-only-after-cancel
 
-  check settled-exec-never-reparks :for ([1 deck firm wish prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task deed]) :trace-length 6
+  check settled-exec-never-reparks :for ([1 deck pool wish prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task]) :trace-length 6
     assume execs-start-prepared
     assume always structural-invariants
     assume always lifecycle-transitions
     show always settled-never-reparks
 
-  run rich-runtime-shape-witness :for ([1 deck firm wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed])
+  run rich-runtime-shape-witness :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task])
     structural-invariants
     rich-runtime-shape
-  run rich-runtime-trace-witness :for ([1 deck firm wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task deed]) :trace-length 5
+  run rich-runtime-trace-witness :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task]) :trace-length 5
     always structural-invariants
     always lifecycle-transitions
     rich-runtime-shape

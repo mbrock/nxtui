@@ -3,6 +3,7 @@
 #include "nxtrt/buffers.cpp"
 #include "nxtrt/compression.cpp"
 #include "nxtrt/crypto.cpp"
+#include "nxtrt/group.cpp"
 #include "nxtrt/tls.cpp"
 #include "nxt/crypto.cpp"
 #include "nxt/crypto/aes128gcm.cpp"

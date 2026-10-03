@@ -1,21 +1,11 @@
 #pragma once
 
-// Definitions connecting completed promise, child, firm, deck, and wish types.
+// Definitions connecting promise, deck, and wish types.
 // Include nxtrt/task.hpp for the complete runtime API.
 
-#include "nxtrt/task/firm.hpp"
+#include "nxtrt/task/context.hpp"
 
 namespace nxtrt {
-
-namespace detail {
-
-inline void child_record_base::task_completed() noexcept
-{
-    if (firm_record.owner != nullptr)
-        firm_record.owner->report_child_finished(*this);
-}
-
-} // namespace detail
 
 inline task_id deck::current_task_id() const noexcept
 {
@@ -43,7 +33,6 @@ inline std::string deck::runtime_dump_text() const
         ready.push_back(id);
 
     return debug::format_runtime_dump(
-        debug::snapshot_firms(),
         debug::snapshot_waits(),
         std::move(ready));
 }

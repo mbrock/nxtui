@@ -3,7 +3,7 @@
 // Sequential task and awaitable composition.
 // Include nxtrt/task.hpp for the complete runtime API.
 
-#include "nxtrt/task/firm.hpp"
+#include "nxtrt/task/context.hpp"
 
 namespace nxtrt {
 

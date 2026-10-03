@@ -192,36 +192,39 @@ buffered bytes never reach the socket. Don't forget to flush.
 > in a different I/O world, the way you swap an allocator to change where
 > memory lives. The wand is the allocator for *time*.
 
-## Firms and deeds: holding a whole subtree {#rt_holding_firm}
+## Groups and pools: holding a set of jobs {#rt_holding_group}
 
 Before the smallest holder, one structural layer, because it is the same
 trick applied to tasks themselves.
 
-A @ref nxtrt::firm "firm" is an extent in which child tasks can be forked,
-joined, stopped together, and read afterward. Forking a task into a firm
-starts it without awaiting it — the firm now *holds* that child, keeping
-enough shared state to stop it, join it, and surface its result or exception
-in a controlled order.
+A group is a set of ideas awaited by one task. @ref nxtrt::settle "settle"
+takes a tuple of tasks or task factories, runs them concurrently, and does not
+return until every one of them has settled; the awaiting task is parked the
+whole time. The group *holds* its jobs in a @ref nxtrt::pool "pool", one slot
+per job, keeping enough shared state to stop them, drain them, and surface each
+result or exception in a controlled order.
 
-A @ref nxtrt::deed "deed" is the caller's handle to a forked child. It is
-deliberately **not** a task: the firm owns and joins the work; the deed is
-just the ticket you redeem for the child's result once the firm has reached
-its join point. `deed<T>` rethrows a child's failure when you read it;
-`std::move(deed).cope()` explicitly chooses catching observation, yielding a
-`catching_deed<T>` with an expected-like outcome. This lets a helper collect
-several outcomes before deciding what to throw; ordinary dropped deeds do not
-hide child failures.
-
-Join settles the child executions and evacuates their coroutine frames.
-It does not remove the nursery's child records: those remain until firm
-destruction, and result storage may survive through a deed. Frame reuse,
-child-record lifetime, and result consumption are separate events.
+What the caller gets back is not a handle to running work but a settled
+`outcome<T>` per job — `std::expected<T, std::exception_ptr>` — in input
+order. Nothing remains to redeem later: by the time the outcomes exist, the
+executions are over and their frames are gone. A stop rule decides when a
+settled job should stop the others (`stop_on_failure`, `stop_on_success`,
+`stop_after_first`, or any `noexcept` predicate over the job's index and
+whether it failed). This lets a helper see every outcome before deciding what
+to throw, without dropped failures.
 
 `when_all`, `wait_any`, `with_timeout` are not new schedulers. They are
-composition patterns written over firms — which are written over tasks and
-the deck. The holder nests: a firm is a deck-shaped idea (hold children,
-release on join) scoped to a subtree instead of the whole program. As above,
-so below, again.
+small functions over `settle`, which is written over a pool, which is written
+over tasks and the deck. `drain` holds an open-ended feed of ideas the same
+way, at most `capacity` at once. The holder nests: a pool is a deck-shaped
+idea (hold jobs, release on settlement) scoped to a set of jobs instead of the
+whole program. As above, so below, again.
+
+The runtime used to have a separate holder for this, the `firm`, with `fork`,
+`join`, and per-child `deed<T>` handles redeemed after the join. It held child
+records past settlement and borrowed its scope from a callable body. Once
+frames stopped coming from firm arenas, what remained only duplicated task
+stop and the pool, and it was removed (RFC 0019).
 
 ## A hope is the holder at its smallest {#rt_holding_hope}
 
@@ -267,7 +270,7 @@ irreducible core. `ready(v)` is a buffer with the most trivial drain
 imaginable: the data is here, take it. `task<T>` is the full scheduler path:
 park, wait, be resumed. **One** awaitable, holding either "already here" or
 "the work to get here," choosing per call. Every larger holder in this
-runtime — deck, wand, firm — is this same either/or at a bigger grain.
+runtime — deck, wand, pool — is this same either/or at a bigger grain.
 
 ## The feed and the sink: buffers that ARE the buffer {#rt_holding_feed}
 

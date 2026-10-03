@@ -49,8 +49,9 @@ It produces a `task<function_call_result>` and can go directly into an ordinary
 ```
 
 Each result retains its call and call ID, tool result, and serialized output
-item. There is no need to keep a deed or spawn into an ambient firm. The firm
-still supplies frame/cancellation context; the pool owns execution and drain.
+item. There is no need to keep per-call handles or spawn into an ambient scope.
+Cancellation comes from the consuming task's stop; the pool owns execution and
+drain.
 The registry, input feed, slots, output land, and any referenced state must
 survive that drain. Use `finally(consume(pool), close_factory)` for consumers
 that may fail or stop before EOF.
@@ -64,8 +65,8 @@ auto results = co_await nxtai::tools::run_function_tool_batch(
 
 Its default capacity is four; zero is invalid. It creates recipes lazily,
 reuses bounded slots, and writes outcomes to their original input positions.
-It does not allocate firm child records or retain a vector of deeds. Calls
-may finish out of order, but returned results remain in input order.
+It does not allocate per-call child records or retain a vector of handles.
+Calls may finish out of order, but returned results remain in input order.
 The batch still retains all calls and outputs: bounded admission is not an
 aggregate memory budget or a guarantee that concurrent tools are independent.
 
@@ -120,7 +121,7 @@ Important limitations remain:
    before relying on live provider calls. Make conversation ownership explicit.
 3. Consume completion-order tool results for progress reporting, collecting an
    ordered turn only where needed. Then reconnect the UI to real lifecycle
-   events rather than another collection of worker/deed bookkeeping.
+   events rather than another collection of worker/handle bookkeeping.
 4. Establish tool permissions, filesystem scope, deadlines, and aggregate
    output budgets before exposing shell execution as a general agent feature.
 

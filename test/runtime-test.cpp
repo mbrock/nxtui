@@ -109,33 +109,33 @@ static suite runtime_tests{
                 }) == 7_i);
             };
 
-            "sync_wait factories run inside a root firm"_test = [] {
+            "sync_wait factories run inside the deck"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto had_firm = false;
+                auto had_deck = false;
 
                 deck.sync_wait([&] {
-                    had_firm = nxtrt::current_firm() != nullptr;
+                    had_deck = nxtrt::current_deck() == &deck;
                     return []() -> nxtrt::task<void> { co_return; }();
                 });
 
-                expect(had_firm);
+                expect(had_deck);
             };
 
-            "root_task keeps a root firm for manually pumped tasks"_test = [] {
+            "root_task keeps a root environment for manually pumped tasks"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto had_firm = false;
+                auto had_deck = false;
 
                 auto root = nxtrt::root_task{
                     deck,
                     [&] {
-                        return root_task_probe(had_firm);
+                        return root_task_probe(had_deck);
                     },
                 };
 
                 root.start();
                 deck.run_until_idle();
 
-                expect(had_firm);
+                expect(had_deck);
                 expect(std::move(root.inner()).result() == 9_i);
             };
 
@@ -760,36 +760,21 @@ static suite runtime_tests{
                 expect(result == 1210_i);
             };
 
-            "forked tasks keep env after binder exits"_test = [] {
+            "group jobs see the env bound around the group"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto child = deck.sync_wait(
-                    []() -> nxtrt::task<nxtrt::catching_deed<int>> {
-                        co_return co_await nxtrt::with_firm(
-                            [](nxtrt::firm & scope)
-                                -> nxtrt::task<nxtrt::catching_deed<int>> {
-                                co_return co_await nxtrt::with_env<
-                                    ambient_int_key>(
-                                    99,
-                                    [&scope]()
-                                        -> nxtrt::task<
-                                            nxtrt::catching_deed<int>> {
-                                        auto child =
-                                            scope
-                                                .fork(
-                                                    read_ambient_int_after_yield())
-                                                .cope();
-                                        co_await scope.join();
-                                        co_return std::move(child);
-                                    });
-                            });
-                    });
+                auto result = deck.sync_wait([]() -> nxtrt::task<int> {
+                    auto values = co_await nxtrt::with_env<ambient_int_key>(
+                        99, [] {
+                            return nxtrt::when_all(
+                                std::tuple{read_ambient_int_after_yield});
+                        });
+                    co_return std::get<0>(values);
+                });
 
-                auto result = std::move(child).get();
-                expect(result.has_value());
-                expect(*result == 99_i);
+                expect(result == 99_i);
             };
 
-            "trace context is inherited by forked tasks"_test = [] {
+            "trace context is inherited by group jobs"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
@@ -810,16 +795,9 @@ static suite runtime_tests{
                             co_await nxtrt::with_env<
                                 nxtrt::trace_current_span_key>(
                                 root.span_id(), [&]() -> nxtrt::task<void> {
-                                    co_await nxtrt::with_firm(
-                                        [&](nxtrt::firm & scope)
-                                            -> nxtrt::task<void> {
-                                            scope.fork(
-                                                traced_child("child-a"));
-                                            scope.fork(
-                                                traced_child("child-b"));
-                                            co_await scope.join();
-                                            co_return;
-                                        });
+                                    (void)co_await nxtrt::when_all(
+                                        traced_child("child-a"),
+                                        traced_child("child-b"));
                                 });
                         });
                 });
@@ -871,7 +849,7 @@ static suite runtime_tests{
             };
         };
 
-        declare_runtime_firm_tests();
+        declare_runtime_group_tests();
         declare_runtime_buffer_tests();
         declare_runtime_io_tests();
     }};

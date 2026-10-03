@@ -4,7 +4,7 @@ The application/runtime surface has moved from the old `nxtio` stack onto
 `nxtrt`. `libcoro` has been removed from the Meson build and from
 `subprojects`, and the remaining `nxtio` sources have been deleted. The old
 custom task prototype is gone; its useful ideas now belong in `nxtrt::env`,
-firms, and explicit UI/runtime capabilities.
+groups and pools, and explicit UI/runtime capabilities.
 
 ## Current Shape
 
@@ -13,8 +13,8 @@ firms, and explicit UI/runtime capabilities.
 - `nxtrt::task<T>` for lazy coroutine tasks.
 - `nxtrt::deck` for pumpable execution.
 - `nxtrt::wand` implementations for platform waiting.
-- `nxtrt::with_firm`, explicit `scope.fork` / `scope.join` / `scope.stop`,
-  deeds, `when_all`, and timeout helpers.
+- Groups (`settle`, `settle_range`, `when_all`, `wait_any`, `with_timeout`),
+  bounded `pool<Idea>` evaluation, and `drain` for feeds of ideas.
 - DNS, HTTP, TLS, and socket experiments.
 - Subprocess wishes for piped children, pty children, waits, and signals:
   pidfd-based on Linux, pid-based with `EVFILT_PROC` on kqueue.
@@ -37,24 +37,42 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::queue<T>` | `nxtrt::wire<T>` | Done. Used for UI input, resize, and tool streams. |
 | `nxt::event` | `nxtrt::bell` | Done. Used for damage notifications and small UI coordination points. |
 | `nxtio/input.hpp` | `nxtui/input.hpp` | Done. The compatibility include has been removed. |
-| `nxt::latch` | explicit firm scope join/deeds or a small latch | Prefer structured joins; add a latch only for true countdown cases. |
-| `spawn_detached` | `scope.fork` inside `with_firm` | Child ownership is explicit; there is no free `nxtrt::fork` or ambient spawning. |
-| `nxt::scope` | `nxtrt::with_firm` + UI capabilities | Firm supplies frame/cancellation context and may own explicitly forked children; it is not inherently a nursery. The richer yard-style UI facade is still being rebuilt on top. |
+| `nxt::latch` | `settle` / `when_all` over the jobs, or a small latch | Prefer awaiting a group; add a latch only for true countdown cases. |
+| `spawn_detached` | a job in a group, or an idea fed to `drain` / `pool<Idea>` | There is no fork or ambient spawning; work is owned by the group or pool it is handed to. |
+| `nxt::scope` | a group with a stop rule + UI capabilities | Cancellation is per task; a group stops and drains its own jobs. The richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
 | old LLM entry point | `src/nxtai/nxtllm.cpp` | Simplified. The executable is now a small one-shot SSE client without the old HUD/tool UI runtime path. |
 
 ## Firm API migration
 
-Use `with_firm<Policy = firm>(fn)` with a nullary factory when work only needs
-the firm lifetime/frame/cancellation context. When work owns children, take
-`Policy&` in the factory and use `scope.fork`, `scope.join`, and `scope.stop`;
-pass that reference explicitly to nested helpers. Replace free `fork` / `join`
-calls with those scope methods, and join before child-borrowed locals leave
-scope. `current_firm()` remains context for frame allocation, cancellation,
-and debugging, not an implicit spawning API. A task passed preconstructed to
-`scope.fork` must use frame storage owned by that scope or an enclosing
-ancestor.
+Firms, `with_firm`, `fork` / `join`, and deeds have been removed (see
+[RFC 0019](../rfc/new/rfc-0019-firms-without-bodies.md)). Port code by the
+shape of its concurrency:
+
+- A scope-only firm (cancellation or lifetime, no children) becomes a plain
+  awaited task. Read stop through `current_stop_token()`, `stop_requested()`,
+  or `throw_if_stop_requested()`, which see the running task's stop.
+- A fixed fork/fork/join becomes `settle(std::tuple{a, b}, rule)`, which
+  returns `std::tuple<outcome<T>...>`, or `when_all` / `wait_any` when the
+  usual aggregation fits. Elements are tasks or nullary task factories; the
+  tuple keeps factories alive until the group returns.
+- A firm policy that stopped siblings becomes a stop rule: `stop_on_failure`,
+  `stop_on_success`, `stop_on_completion`, `stop_after_first` (a primary job
+  plus companions), or a `noexcept` callable `bool(std::size_t, bool failed)`.
+- A loop of forks over a range becomes `settle_range(range, rule)`, returning
+  outcomes in range order.
+- An open-ended stream of forked work becomes a feed of ideas run by
+  `drain(ideas, capacity)`, or a `pool<Idea>` over a `pool_land<Idea>` when the
+  results are needed.
+- `catching_deed` / `.cope()` collection becomes reading the `outcome<T>`
+  values a group returns.
+
+Root entry takes a factory directly: `deck.sync_wait(fn, args...)`,
+`runtime.run(fn, args...)`, `run_with_kqueue(fn)`, or the io_uring
+`nxtrt::run(fn)`.
+The factory is called inside the runtime environment and kept alive while
+its task runs.
 
 ## Completed Slices
 
@@ -62,7 +80,7 @@ ancestor.
    `nxtrt::wire<T>` and manual-reset `nxtrt::bell`.
 
 2. Introduce a runtime facade beside terminal UI helpers. Done as
-   `nxtrt::runtime`: it owns a `deck`, platform `wand`, root-firm run
+   `nxtrt::runtime`: it owns a `deck`, platform `wand`, root-task run
    entrypoint, damage bell, input wire, resize wire, and `sleep`.
    `nxtrt::terminal_app` and the runtime demos layer terminal/compositor
    ownership on top of it.

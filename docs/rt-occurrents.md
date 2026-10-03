@@ -1,7 +1,9 @@
 # Behavioral threads as occurrent structure {#rt_occurrents}
 
 The runtime's behavioral-programming coordinator, `game<Event>`, has been
-removed; this note keeps the ideas it explored.
+removed, and so have firms and deeds; concurrent work is now a group of ideas
+awaited by a task, run in a pool. This note keeps the ideas those types
+explored and says, where it matters, what the code does now.
 
 This note sits beside @ref rt_holding. It is a place to keep
 one of the stranger and more promising ideas in the runtime model: behavioral
@@ -43,9 +45,9 @@ onto. Some words are purely one or the other (a `—` marks the absent side):
 | `deck` | the scheduler object and its ready queue | a deck round / pump — boundary-like |
 | coroutine suspension | — | a boundary between phases of the task-process |
 | final suspend | — | the boundary where the task-process completes |
-| `firm` | a **place** — a region of memory owning sub-objects, `located-in` a spatial region | its **history**: the structured unfolding of its children |
-| `deed<T>` | the handle a parent holds | (its referent) the child occurrent it observes |
-| forked child task | the child `task` value | an occurrent part of the parent process |
+| `pool` | a **place** — slots and output cells, `located-in` a spatial region | its **history**: the admissions and settlements of its jobs |
+| group (`settle`, `when_all`) | the outcome tuple or vector the awaiting task receives | the overlapping jobs, an occurrent part of the awaiting task's process |
+| group job | the job's `task` value, held in a pool slot | an occurrent part of the group |
 | `wish` | a **realizable** — a disposition to do I/O | — (not an occurrent; it is *realized in* an exec) |
 | `exec` | the backend record and its lifecycle state | the process that realizes the wish |
 | cancellation | — | a stop request followed by cooperative termination and any required drain |
@@ -90,11 +92,13 @@ parts of the process at all; they `participate-in` it, which is why
 
 That distinction matters for the runtime. Structured concurrency is a claim
 about **ownership of occurrent parts**, not just about start and stop times.
-When a firm exits, its child executions must settle because those
-child tasks are occurrent parts of the firm's **history**. Deeds are observation
-handles, not the executions; a deed and its result may survive settlement.
-But the firm itself is not that history — it is the *place* the history
-happens, which turns out to matter enough to take up its own section below.
+Before a group returns, every one of its jobs must settle, because those jobs
+are occurrent parts of the awaiting task's process. The outcomes it returns are
+continuants that record how each part ended; they survive settlement, and the
+executions do not. The pool that holds the jobs is not that history either — it
+is the *place* the history happens, which turns out to matter enough to take up
+its own section below. (The removed `firm` was an earlier attempt at the same
+place, and `deed<T>` an earlier attempt at the outcome.)
 
 Behavioral threads sharpen the same point. A game super-step is not one
 b-thread's private next moment. It is a shared event selected from many
@@ -131,10 +135,11 @@ interior, that really take up trace-time — are the **waits**: a live I/O wait,
 a timer, a task parked for an event that has not arrived. Everything else is
 edges between edges.
 
-Cancellation exposes the limit of the boundary metaphor. A firm's stop
-request propagates synchronously to its children, but their actual completion
-is cooperative. Observing stop, unwinding with `operation_cancelled`, and
-draining backend operations can require later deck turns and backend events.
+Cancellation exposes the limit of the boundary metaphor. A stop request
+propagates synchronously from a task to the task it awaits, and from a group
+to its jobs, but their actual completion is cooperative. Observing stop,
+unwinding with `operation_cancelled`, and draining backend operations can
+require later deck turns and backend events.
 The request cascade is not a cascade of completed histories: stop is control,
 settlement is an outcome, and backend retirement may still require drain.
 
@@ -148,32 +153,36 @@ with an interior boundary at each suspension; a `hope` that is `ready` is only
 an edge. The `eager-wand` endgame is the same wish stated in general — collapse
 every avoidable wait into an edge.
 
-## The firm is a place, not a process {#rt_occurrents_firm}
+## The pool is a place, not a process {#rt_occurrents_pool}
 
 It would be a mistake to read the whole runtime as occurrents; pushed too far
-the lens distorts, and the `firm` is where it distorts first. The dictionary
-lists a firm-*history* in the occurrent column, but the firm **itself** belongs
-in the other column — and, more pointedly, it is *spatial*. A firm is a region
-of memory that owns sub-objects: its storage sits at some range of addresses,
-which is to say it is `located-in` a spatial region. That is BFO's own axiom
-[134-001], already in `bfo-sketch.rkt` — every independent continuant is
-located in some spatial region at every time. The firm's bytes are, quite
-literally, somewhere inside your computer.
+the lens distorts, and the holder of concurrent work is where it distorts
+first. The runtime used to call that holder a `firm`; today it is a `pool` and
+its land. The dictionary lists a pool-*history* in the occurrent column, but
+the pool **itself** belongs in the other column — and, more pointedly, it is
+*spatial*. A pool is a region of memory that owns sub-objects: its slots and
+output cells sit at some range of addresses, which is to say it is
+`located-in` a spatial region. That is BFO's own axiom [134-001], already in
+`bfo-sketch.rkt` — every independent continuant is located in some spatial
+region at every time. The pool's bytes are, quite literally, somewhere inside
+your computer.
 
 And here the ontology says something almost uncanny: a region of memory really
 *is* a region of space. The address range resolves to physical cells in a
 memory chip, which occupy actual three-dimensional volume. Swept through the
-firm's lifetime, that spatial region traces out a **spatiotemporal region** —
-BFO's occurrent-side counterpart to the spatial one. So the firm wears both
+pool's lifetime, that spatial region traces out a **spatiotemporal region** —
+BFO's occurrent-side counterpart to the spatial one. So the pool wears both
 faces at once: it *is* a spatial continuant, and it *has* a history that
-occupies a spatiotemporal region. The history — the structured unfolding of its
-children — is the occurrent. The firm is not that history; it is the place the
-history happens.
+occupies a spatiotemporal region. The history — jobs admitted into slots,
+running, settling, and leaving — is the occurrent. The pool is not that
+history; it is the place the history happens.
 
-The useful structured-concurrency rule is about owned child executions: they
-must settle before the firm exits. Cancellation requests do not satisfy that
-rule by themselves. The [pool](rt-pool.md), for example, owns pending jobs
-directly, without firm child records.
+The useful structured-concurrency rule is about owned executions: every job
+must settle before its group returns and its [pool](rt-pool.md) is released.
+Cancellation requests do not satisfy that rule by themselves; the group stops
+its jobs and then drains them. Slots make the place literal: a slot is reused
+only after the job that occupied it has settled and its outcome has been
+consumed.
 
 ## What this suggests for the model {#rt_occurrents_model}
 
@@ -187,17 +196,17 @@ The `rdf-forge` work points at a useful split:
 For runtime semantics, the same split suggests a path:
 
 - split each runtime word into its continuant/occurrent pair, and classify the
-  *histories* of `TASK`, `EXEC`, and `DEED` as process-like — while `FIRM` and
-  `GAME` are **places** (spatial continuants) whose histories are the
+  *histories* of `TASK` and `EXEC` as process-like — while `POOL` and its
+  slots are **places** (spatial continuants) whose histories are the
   occurrents, and `WISH` stays a **realizable** continuant, `realized-in` its
   `exec`;
-- model `spawned`, `issued`, and `has-continuation` as occurrent-part relations,
+- model `admitted` and `has-continuation` as occurrent-part relations,
   and the role of an fd, a buffer, or a `coin` as `participates-in` — a
   continuant taking part in a process, not a part of it;
 - treat lifecycle states and sync points as boundaries or phases rather than
   as ordinary object fields;
 - express structured concurrency as closure over occurrent parts: child work
-  owned by a scope must settle before the scope can retire, including completion
+  admitted to a pool must settle before the pool can close, including completion
   of cancellation and any required backend drain;
 - express behavioral programming as a temporal logic over a processual
   context: every super-step chooses one event that is requested and not

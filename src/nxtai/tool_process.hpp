@@ -125,13 +125,13 @@ capture(
     state->child = std::move(child.child);
     state->observed = std::move(child.observed);
 
-    auto outcomes = co_await nxtrt::with_firm(
+    // The monitor stops once the capture (the first job) settles.
+    auto outcomes = co_await nxtrt::settle(
         std::tuple{
             [&] {
-                return nxtrt::detail::stop_firm_on_completion(
-                    nxtrt::finally(
-                        capture_output(state, options.max_capture_bytes),
-                        [state] { return finish_child(state); }));
+                return nxtrt::finally(
+                    capture_output(state, options.max_capture_bytes),
+                    [state] { return finish_child(state); });
             },
             [&] {
                 return nxtrt::scoped_process::monitor_until_done(
@@ -140,7 +140,8 @@ capture(
                     options.scope.sample_interval,
                     options.scope.max_samples);
             },
-        });
+        },
+        nxtrt::stop_after_first{});
 
     auto capture_done = std::move(std::get<0>(outcomes));
     if (!capture_done)

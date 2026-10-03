@@ -440,7 +440,6 @@ void timer_cancellation_case(bool early_consumer_failure)
 static suite pool_tests{"POOLS", [] {
     "ready hopes batch without a deck and retain credit through peek"_test = [] {
         expect(nxtrt::current_deck() == nullptr);
-        expect(nxtrt::current_firm() == nullptr);
         job_state state;
         recipe_feed input{ready_recipes(state, 41)};
         pool_land<mixed_recipe, 3> land;

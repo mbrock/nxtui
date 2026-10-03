@@ -340,26 +340,20 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
     });
     auto terminal = nxtrt::terminal_app{};
 
+    // Each loop ends once the process is done.
     auto failure = std::exception_ptr{};
-    auto reader = nxtrt::catching_deed<void>{};
-    auto input = nxtrt::catching_deed<void>{};
-    auto sampler = nxtrt::catching_deed<void>{};
-    auto renderer = nxtrt::catching_deed<void>{};
     try {
-        co_await nxtrt::with_firm(
-            [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                reader = scope.fork(read_pty_until_done(pty, state)).cope();
-                input = scope.fork(pump_stdin_to_pty(pty, state)).cope();
-                sampler =
-                    scope.fork(sample_cgroup_until_done(state)).cope();
-                renderer =
-                    scope.fork(render_until_done(terminal, state, pty))
-                        .cope();
-
-                while (!state.process_done)
-                    co_await nxtrt::op::timeout::after(frame_interval);
-                co_await scope.join();
-            });
+        auto loops = co_await nxtrt::settle(std::tuple{
+            [&] { return read_pty_until_done(pty, state); },
+            [&] { return pump_stdin_to_pty(pty, state); },
+            [&] { return sample_cgroup_until_done(state); },
+            [&] { return render_until_done(terminal, state, pty); },
+        });
+        std::apply(
+            [](auto &... loop) {
+                ((loop ? void() : nxtrt::rethrow(loop.error())), ...);
+            },
+            loops);
     } catch (...) {
         failure = std::current_exception();
     }
@@ -369,19 +363,6 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
             co_await pty.terminate_and_wait();
         nxtrt::rethrow(failure);
     }
-
-    auto reader_done = std::move(reader).get();
-    if (!reader_done)
-        nxtrt::rethrow(reader_done.error());
-    auto input_done = std::move(input).get();
-    if (!input_done)
-        nxtrt::rethrow(input_done.error());
-    auto sampler_done = std::move(sampler).get();
-    if (!sampler_done)
-        nxtrt::rethrow(sampler_done.error());
-    auto renderer_done = std::move(renderer).get();
-    if (!renderer_done)
-        nxtrt::rethrow(renderer_done.error());
 }
 
 } // namespace

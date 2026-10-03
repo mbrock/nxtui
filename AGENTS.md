@@ -42,9 +42,11 @@ If a UI/tool animation is "just waiting on timers forever", first suspect a
 lifetime or completion-signal bug, not the timer. Verify that the worker task
 can actually set the `done` flag it is supposed to set.
 
-When a sibling task needs to stop the main work in a scope, make the main work
-a forked child owned by that scope. A firm body is not automatically the same
-thing as one of the firm's child deeds.
+When a sibling task needs to stop the main work, make the main work a job in
+the same group, with a stop rule that says when (for example
+`nxtrt::settle(std::tuple{main, watcher}, nxtrt::stop_after_first{})`). A
+group can only stop its own jobs; the task awaiting the group is not one of
+them.
 
 Do not paper over freezes by repeatedly running the whole test suite. Reproduce
 the failing app path, inspect the parked tasks/wishes, and fix the concrete
@@ -60,7 +62,7 @@ expectations, and `run` blocks are small witness/debugging scenarios.
 
 `nxtrt/model.rkt` is only the CLI wrapper for that model, and
 `nxtrt/ontology.rkt` is the ontology export wrapper. When changing deck,
-wish/exec, task, deed, or firm semantics, update `nxtrt/runtime.rkt`
+wish/exec, task, pool, or blocking-work semantics, update `nxtrt/runtime.rkt`
 alongside the C++ code so the executable model keeps describing the runtime you
 mean to have. The model currently focuses on exec lifecycle semantics; add wand
 vocabulary only when modeling wand-level scheduling, ownership, or backend
@@ -81,7 +83,7 @@ the example traces of the `run` blocks instead.
 Checks read like run blocks:
 
 ```
-check retire-only-when-ready :for ([1 ...] [2 exec task deed]) :trace-length 6
+check retire-only-when-ready :for ([1 ...] [2 exec task]) :trace-length 6
   assume execs-start-prepared
   assume always structural-invariants
   assume always lifecycle-transitions
@@ -127,7 +129,8 @@ keep the header install excludes in `src/meson.build` in sync.
 For wand bugs, first map the concrete operation to the model vocabulary:
 `has-lifecycle`, `prepared-state`, `parked-state`, `settled-state`,
 `retired-state`, `has-parked-phase`, `has-settled-phase`, `has-ready`,
-`has-continuation`, `realizes`, `spawned`, `issued`, and `observes`. Each exec
+`has-continuation`, `realizes`, and, for concurrent work, the pool's
+`admitted`, `slots`, `free-slots`, `running-slots`, and `ready-slots`. Each exec
 owns its lifecycle and backend phase details. If the bug is a missing invariant
 or impossible transition, encode that in the model before or alongside the
 runtime fix.

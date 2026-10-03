@@ -3,7 +3,7 @@
 // Root task ownership and synchronous deck entry.
 // Include nxtrt/task.hpp for the complete runtime API.
 
-#include "nxtrt/task/scope.hpp"
+#include "nxtrt/task/context.hpp"
 
 namespace nxtrt {
 
@@ -26,8 +26,6 @@ public:
         : deck_(&d)
     {
         using factory_type = std::decay_t<Fn>;
-        [[maybe_unused]] auto previous_root_firm =
-            env_.replace<firm_key>(&firm_);
         auto root_guard = detail::env_guard{env_, &d, nullptr};
         task_ = std::invoke(factory_type{std::forward<Fn>(fn)});
     }
@@ -47,13 +45,7 @@ public:
         return task_;
     }
 
-    [[nodiscard]] firm & root_firm() noexcept
-    {
-        return firm_;
-    }
-
 private:
-    firm firm_;
     runtime_env env_;
     task<T> task_;
     deck * deck_ = nullptr;
@@ -71,10 +63,7 @@ deck::sync_wait(Fn && fn, Args &&... args)
     // The factory outlives its task: a capturing coroutine lambda's frame
     // refers to the closure object.
     auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};
-    auto root_firm = firm{};
     auto root_env = runtime_env{};
-    [[maybe_unused]] auto previous_root_firm =
-        root_env.replace<firm_key>(&root_firm);
     auto root_guard = detail::env_guard{root_env, this, nullptr};
 
     return drive(std::invoke(factory, std::forward<Args>(args)...));

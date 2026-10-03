@@ -415,16 +415,15 @@ void declare_runtime_io_tests()
             auto events = nxtrt::wire<int>{storage};
             auto seen = std::vector<int>{};
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        scope.fork(
-                            record_next_wire_value(events, seen));
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_next_wire_value(events, seen); },
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         expect(seen.empty());
                         expect(co_await events.send(7));
-                        co_await scope.join();
-                    });
+                    },
+                });
             });
 
             expect(seen == std::vector<int>{7});
@@ -458,15 +457,14 @@ void declare_runtime_io_tests()
             auto events = nxtrt::wire<int>{storage};
             auto finished = false;
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        scope.fork(
-                            record_closed_wire(events, finished));
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_closed_wire(events, finished); },
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         events.close();
-                        co_await scope.join();
-                    });
+                    },
+                });
             });
 
             expect(events.closed());
@@ -549,22 +547,16 @@ void declare_runtime_io_tests()
             auto events = nxtrt::wire<int>{storage};
             auto seen = std::vector<int>{};
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        auto & tx = events.tx();
-                        co_await tx.write(12);
-
-                        scope.fork(
-                            record_next_wire_value(events, seen));
+            rt.run([&]() -> nxtrt::task<void> {
+                auto & tx = events.tx();
+                co_await tx.write(12);
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_next_wire_value(events, seen); },
+                    [&]() -> nxtrt::task<void> {
                         co_await tx.write(13);
-
-                        scope.fork(
-                            record_next_wire_value(events, seen));
-                        while (seen.size() != 2)
-                            co_await nxtrt::yield();
-                        co_await scope.join();
-                    });
+                        co_await record_next_wire_value(events, seen);
+                    },
+                });
             });
 
             expect(seen == std::vector<int>{12, 13});
@@ -588,20 +580,15 @@ void declare_runtime_io_tests()
             expect(events.capacity() == std::size_t{0});
             expect(!events.try_send(1));
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        scope.fork(send_wire_value(events, 42, sent));
-
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return send_wire_value(events, 42, sent); },
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         expect(!sent);
-
-                        scope.fork(
-                            record_next_wire_value(events, seen));
-                        while (!sent)
-                            co_await nxtrt::yield();
-                        co_await scope.join();
-                    });
+                        co_await record_next_wire_value(events, seen);
+                    },
+                });
             });
 
             expect(sent);
@@ -617,19 +604,15 @@ void declare_runtime_io_tests()
 
             expect(events.try_send(3));
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        scope.fork(flush_wire(events, flushed));
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return flush_wire(events, flushed); },
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         expect(!flushed);
-
-                        scope.fork(
-                            record_next_wire_value(events, seen));
-                        while (!flushed)
-                            co_await nxtrt::yield();
-                        co_await scope.join();
-                    });
+                        co_await record_next_wire_value(events, seen);
+                    },
+                });
             });
 
             expect(flushed);
@@ -643,20 +626,16 @@ void declare_runtime_io_tests()
             auto seen = std::vector<int>{};
             auto flushed = false;
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        expect(co_await events.send(4));
-                        scope.fork(flush_wire(events, flushed));
+            rt.run([&]() -> nxtrt::task<void> {
+                expect(co_await events.send(4));
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return flush_wire(events, flushed); },
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         expect(!flushed);
-
-                        scope.fork(
-                            record_next_wire_value(events, seen));
-                        while (!flushed)
-                            co_await nxtrt::yield();
-                        co_await scope.join();
-                    });
+                        co_await record_next_wire_value(events, seen);
+                    },
+                });
             });
 
             expect(flushed);
@@ -670,16 +649,16 @@ void declare_runtime_io_tests()
             auto ready = nxtrt::bell{};
             auto values = std::vector<int>{};
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        scope.fork(record_after_bell(ready, values, 1));
-                        scope.fork(record_after_bell(ready, values, 2));
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         expect(values.empty());
                         ready.ring();
-                        co_await scope.join();
-                    });
+                    },
+                    [&] { return record_after_bell(ready, values, 1); },
+                    [&] { return record_after_bell(ready, values, 2); },
+                });
             });
 
             expect(values == std::vector<int>{1, 2});
@@ -698,15 +677,15 @@ void declare_runtime_io_tests()
 
             ready.reset();
 
-            rt.run([&] {
-                return nxtrt::with_firm(
-                    [&](nxtrt::firm & scope) -> nxtrt::task<void> {
-                        scope.fork(record_after_bell(ready, values, 2));
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_after_bell(ready, values, 2); },
+                    [&]() -> nxtrt::task<void> {
                         co_await nxtrt::yield();
                         expect(values == std::vector<int>{1});
                         ready.ring();
-                        co_await scope.join();
-                    });
+                    },
+                });
             });
 
             expect(values == std::vector<int>{1, 2});

@@ -60,10 +60,12 @@ take_poll_until_result(poll_until_outcomes & outcomes)
     short events,
     std::chrono::nanoseconds timeout)
 {
-    auto outcomes = co_await with_firm<stop_on_completion>(std::tuple{
-        [fd, events] { return detail::poll_ready(op::poll{fd, events}); },
-        [timeout] { return detail::poll_deadline(timeout); },
-    });
+    auto outcomes = co_await settle(
+        std::tuple{
+            [fd, events] { return detail::poll_ready(op::poll{fd, events}); },
+            [timeout] { return detail::poll_deadline(timeout); },
+        },
+        stop_on_completion{});
     co_return detail::take_poll_until_result(outcomes);
 }
 

@@ -22,7 +22,6 @@ namespace nxtrt {
 
 template<typename T = void>
 class task;
-class firm;
 class deck;
 struct yield_awaiter;
 
@@ -262,9 +261,9 @@ public:
 
     /// Rejects an already-created task at compile time.
     ///
-    /// A task captures the runtime environment (deck, firm) when it is
-    /// created, and the root firm only exists inside `sync_wait`, so the root
-    /// must be created there: pass the factory instead.
+    /// A task captures the runtime environment when it is created, and the
+    /// root environment only exists inside `sync_wait`, so the root must be
+    /// created there: pass the factory instead.
     template<typename T>
     void sync_wait(task<T>)
     {
@@ -272,10 +271,10 @@ public:
             sizeof(T *) == 0,
             "deck::sync_wait takes a task factory, not a task: write "
             "d.sync_wait(make_task) or d.sync_wait([&] { return "
-            "make_task(args); }) so the root task is created inside its firm");
+            "make_task(args); }) so the root task is created inside its runtime");
     }
 
-    /// Create a task by calling `fn(args...)` inside the root firm, then
+    /// Create a task by calling `fn(args...)` in the root environment, then
     /// drive it to completion. The factory stays alive until it finishes.
     template<typename Fn, typename... Args>
         requires task_factory<std::decay_t<Fn> &, Args...>
@@ -284,7 +283,8 @@ public:
     sync_wait(Fn && fn, Args &&... args);
 
 private:
-    /// Drive one root task, created inside its root firm, until completion.
+    /// Drive one root task, created in its root environment, until
+    /// completion.
     ///
     /// The deadlock check catches the seed runtime's only current blocking
     /// condition: a task suspended but no future event/timer/fd machinery exists
@@ -313,7 +313,6 @@ private:
     friend struct detail::promise_base;
     template<typename T>
     friend class task;
-    friend class firm;
     friend struct need;
     friend struct yield_awaiter;
     /// @endcond

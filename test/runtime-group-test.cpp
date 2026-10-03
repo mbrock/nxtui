@@ -1,0 +1,510 @@
+#include "runtime-test.hpp"
+
+namespace nxt::test {
+
+namespace {
+
+struct drain_probe
+{
+    int active = 0;
+    int peak = 0;
+    int finished = 0;
+};
+
+nxtrt::task<void> run_drain_job(drain_probe & probe)
+{
+    ++probe.active;
+    probe.peak = std::max(probe.peak, probe.active);
+    co_await nxtrt::yield();
+    co_await nxtrt::yield();
+    --probe.active;
+    ++probe.finished;
+}
+
+struct drain_idea
+{
+    drain_probe * probe = nullptr;
+
+    nxtrt::task<void> operator()() &
+    {
+        return run_drain_job(*probe);
+    }
+};
+
+} // namespace
+
+void declare_runtime_group_tests()
+{
+    "groups"_group = [] {
+        "settle returns outcomes in order with individual failures"_test =
+            [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto outcomes = deck.sync_wait([&] {
+                    return nxtrt::settle(std::tuple{
+                        [&] {
+                            return value_after_two_yields_or_stop(events, 43);
+                        },
+                        [] { return value_after_yield(7); },
+                        throw_int_after_yield,
+                        empty_child,
+                    });
+                });
+                static_assert(std::same_as<
+                              decltype(outcomes),
+                              std::tuple<
+                                  nxtrt::outcome<int>,
+                                  nxtrt::outcome<int>,
+                                  nxtrt::outcome<int>,
+                                  nxtrt::outcome<void>>>);
+                expect(std::get<0>(outcomes).value() == -43);
+                expect(std::get<1>(outcomes).value() == 7);
+                expect(!std::get<2>(outcomes));
+                expect(!nxtrt::is_operation_cancelled(
+                    std::get<2>(outcomes).error()));
+                expect(std::get<3>(outcomes).has_value());
+                expect(events.empty());
+
+                auto values = deck.sync_wait([&] {
+                    return nxtrt::when_all(
+                        record_after_yield(events, 9),
+                        value_after_yield(31));
+                });
+                static_assert(std::same_as<
+                              decltype(values),
+                              std::tuple<std::monostate, int>>);
+                expect(std::get<1>(values) == 31);
+                expect(events == std::vector<int>{91, 92});
+            };
+
+        "stop on failure stops the others"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto outcomes = deck.sync_wait([&] {
+                return nxtrt::settle(
+                    std::tuple{
+                        [&] { return throw_after_yield(events, 1); },
+                        [&] {
+                            return record_stop_state_after_two_yields(
+                                events, 2);
+                        },
+                    },
+                    nxtrt::stop_on_failure{});
+            });
+            expect(!std::get<0>(outcomes));
+            expect(std::get<1>(outcomes).has_value());
+            expect(events == std::vector<int>{11, 2});
+        };
+
+        "stop on success stops the others"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto outcomes = deck.sync_wait([&] {
+                return nxtrt::settle(
+                    std::tuple{
+                        value_after_yield(123),
+                        [&] {
+                            return record_stop_state_after_two_yields(
+                                events, 3);
+                        },
+                    },
+                    nxtrt::stop_on_success{});
+            });
+            expect(std::get<0>(outcomes).value() == 123);
+            expect(events == std::vector<int>{3});
+        };
+
+        "stop after first stops companions when the primary settles"_test =
+            [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto outcomes = deck.sync_wait([&] {
+                    return nxtrt::settle(
+                        std::tuple{
+                            [] { return value_after_yield(5); },
+                            [&] { return tuple_wait_for_stop(events, 6); },
+                        },
+                        nxtrt::stop_after_first{});
+                });
+                expect(std::get<0>(outcomes).value() == 5);
+                expect(!std::get<1>(outcomes));
+                expect(nxtrt::is_operation_cancelled(
+                    std::get<1>(outcomes).error()));
+                expect(events == std::vector<int>{6});
+
+                // A failing companion does not stop the primary.
+                events.clear();
+                auto primary_ran = deck.sync_wait([&] {
+                    return nxtrt::settle(
+                        std::tuple{
+                            [&] {
+                                return value_after_two_yields_or_stop(
+                                    events, 7);
+                            },
+                            throw_int_after_yield,
+                        },
+                        nxtrt::stop_after_first{});
+                });
+                expect(std::get<0>(primary_ran).value() == -7);
+                expect(!std::get<1>(primary_ran));
+                expect(events.empty());
+            };
+
+        "a stop rule can be any noexcept callable"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto outcomes = deck.sync_wait([&] {
+                return nxtrt::settle(
+                    std::tuple{
+                        [&] { return tuple_wait_for_stop(events, 1); },
+                        [] { return value_after_yield(2); },
+                    },
+                    [](std::size_t index, bool) noexcept {
+                        return index == 1;
+                    });
+            });
+            expect(!std::get<0>(outcomes));
+            expect(std::get<1>(outcomes).value() == 2);
+            expect(events == std::vector<int>{1});
+        };
+
+        "wait_any returns the first successful task"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+
+            auto result = deck.sync_wait([&]() -> nxtrt::task<int> {
+                co_return co_await nxtrt::wait_any(
+                    value_after_yield(5),
+                    value_after_two_yields_or_stop(events, 6));
+            });
+
+            expect(result == 5_i);
+            expect(events == std::vector<int>{6});
+        };
+
+        "wait_any groups failures when all tasks fail"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto grouped = false;
+
+            try {
+                (void)deck.sync_wait([]() -> nxtrt::task<int> {
+                    co_return co_await nxtrt::wait_any(
+                        throw_int_after_yield(),
+                        throw_int_after_yield());
+                });
+            } catch (const nxtrt::exception_group & group) {
+                grouped = true;
+                expect(group.exceptions().size() == std::size_t{2});
+            }
+
+            expect(grouped);
+        };
+
+        "wait_any skips failures and drains losers"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto result = deck.sync_wait([&] {
+                return nxtrt::wait_any(std::tuple{
+                    throw_int_after_yield,
+                    [] { return value_after_yield(37); },
+                    [&] { return tuple_wait_for_stop(events, 19); },
+                });
+            });
+            expect(result == 37);
+            expect(events == std::vector<int>{19});
+            deck.sync_wait([] {
+                return nxtrt::wait_any(std::tuple{empty_child, empty_child});
+            });
+        };
+
+        "when_all returns a tuple of task results"_test = [] {
+            auto deck = nxtrt::deck{};
+
+            auto values = deck.sync_wait(
+                []() -> nxtrt::task<std::tuple<int, std::string>> {
+                    co_return co_await nxtrt::when_all(
+                        value_after_yield(7),
+                        string_after_yield("seven"));
+                });
+
+            expect(std::get<0>(values) == 7_i);
+            expect(std::get<1>(values) == "seven");
+        };
+
+        "when_all stops the others after a failure"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto failed = false;
+            try {
+                (void)deck.sync_wait([&] {
+                    return nxtrt::when_all(std::tuple{
+                        throw_int_after_yield,
+                        [&] { return tuple_wait_for_stop(events, 11); },
+                    });
+                });
+            } catch (const nxtrt::runtime_error & error) {
+                failed =
+                    std::string_view{error.what()} == "firm child int boom";
+            }
+            expect(failed);
+            expect(events == std::vector<int>{11});
+
+            auto outcomes = deck.sync_wait([&] {
+                return nxtrt::settle(
+                    std::tuple{
+                        throw_int_after_yield,
+                        [&] { return tuple_wait_for_stop(events, 23); },
+                    },
+                    nxtrt::stop_on_completion{});
+            });
+            auto first = std::move(std::get<0>(outcomes));
+            auto second = std::move(std::get<1>(outcomes));
+            expect(!first && !second);
+            expect(!nxtrt::is_operation_cancelled(first.error()));
+            expect(nxtrt::is_operation_cancelled(second.error()));
+            expect(events == std::vector<int>{11, 23});
+        };
+
+        "when_all keeps factories alive and collects mixed results"_test =
+            [] {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto calls = 0;
+                auto values = deck.sync_wait([&] {
+                    return nxtrt::when_all(std::tuple{
+                        // Deliberately a capturing coroutine factory: its
+                        // move-only closure must survive suspension.
+                        [value = std::make_unique<int>(29),
+                         &calls]() -> nxtrt::task<std::unique_ptr<int>> {
+                            ++calls;
+                            co_await nxtrt::yield();
+                            co_return std::make_unique<int>(*value);
+                        },
+                        value_after_yield(7),
+                        [&] { return record_after_yield(events, 5); },
+                    });
+                });
+                static_assert(std::same_as<
+                              decltype(values),
+                              std::tuple<
+                                  std::unique_ptr<int>,
+                                  int,
+                                  std::monostate>>);
+                expect(*std::get<0>(values) == 29);
+                expect(std::get<1>(values) == 7);
+                expect(calls == 1);
+                expect(events == std::vector<int>{51, 52});
+            };
+
+        "group factories are lazy"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto calls = 0;
+            auto result =
+                deck.sync_wait([&]() -> nxtrt::task<std::tuple<int>> {
+                    auto work = nxtrt::when_all(std::tuple{[&] {
+                        ++calls;
+                        expect(nxtrt::current_deck() == &deck);
+                        return value_after_yield(53);
+                    }});
+                    expect(calls == 0);
+                    co_return co_await std::move(work);
+                });
+            expect(calls == 1 && std::get<0>(result) == 53);
+            auto empty =
+                deck.sync_wait([] { return nxtrt::when_all(std::tuple{}); });
+            static_assert(std::tuple_size_v<decltype(empty)> == 0);
+        };
+
+        "factory failure stops and drains earlier jobs"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto skipped = 0;
+            auto failed = false;
+            try {
+                (void)deck.sync_wait([&] {
+                    return nxtrt::when_all(std::tuple{
+                        [value = std::make_unique<int>(43),
+                         &events]() -> nxtrt::task<int> {
+                            co_await nxtrt::yield();
+                            expect(nxtrt::stop_requested());
+                            events.push_back(*value);
+                            co_return *value;
+                        },
+                        []() -> nxtrt::task<int> {
+                            throw std::domain_error{"factory failed"};
+                        },
+                        [&] {
+                            ++skipped;
+                            return value_after_yield(1);
+                        },
+                    });
+                });
+            } catch (const std::domain_error & error) {
+                failed = std::string_view{error.what()} == "factory failed";
+            }
+            expect(failed && skipped == 0);
+            expect(events == std::vector<int>{43});
+        };
+
+        "group recipes reject empty tasks before awaiting them"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto rejected = false;
+            try {
+                (void)deck.sync_wait([] {
+                    return nxtrt::when_all(
+                        std::tuple{[] { return nxtrt::task<int>{}; }});
+                });
+            } catch (const nxtrt::runtime_error & error) {
+                rejected = std::string_view{error.what()}
+                           == "nxtrt group recipe returned an empty task";
+            }
+            expect(rejected);
+        };
+
+        "when_all accepts cancellation at every startup turn"_test = [] {
+            auto saw_prepared = false;
+            auto saw_started = false;
+            for (int turns = 0; turns < 40; ++turns) {
+                auto deck = nxtrt::deck{};
+                auto events = std::vector<int>{};
+                auto calls = 0;
+                auto starts = 0;
+                auto root = nxtrt::root_task{deck, [&] {
+                    return nxtrt::when_all(std::tuple{[&] {
+                        ++calls;
+                        return tuple_wait_for_stop(events, 61, &starts);
+                    }});
+                }};
+                root.start();
+                for (int i = 0; i < turns; ++i)
+                    deck.run_ready();
+                root.inner().request_stop();
+                deck.run_until_idle();
+                expect(root.inner().done());
+                auto cancelled = false;
+                try {
+                    (void)std::move(root.inner()).result();
+                } catch (const nxtrt::operation_cancelled &) {
+                    cancelled = true;
+                }
+                expect(cancelled);
+                if (turns == 0)
+                    expect(calls == 0);
+                expect(calls <= 1);
+                expect(starts <= calls);
+                saw_prepared |= calls != 0 && starts == 0;
+                saw_started |= starts != 0;
+                expect(
+                    events
+                    == (starts ? std::vector<int>{61} : std::vector<int>{}));
+            }
+            expect(saw_prepared && saw_started);
+        };
+
+        "stopping the awaiting task stops the group"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return hosted_group_stop_probe(events);
+                },
+            };
+
+            root.start();
+            for (auto i = 0; i != 32 && events.empty(); ++i)
+                deck.run_ready();
+
+            expect(events == std::vector<int>{100});
+            root.inner().request_stop();
+            deck.run_until_idle();
+
+            expect(events == std::vector<int>{100, 4});
+        };
+
+        "shielded child tasks do not inherit parent stop"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto root = nxtrt::root_task{
+                deck,
+                [] {
+                    return shielded_child_stop_state();
+                },
+            };
+
+            root.start();
+            root.inner().request_stop();
+            deck.run_until_idle();
+
+            expect(root.inner().done());
+            expect(!std::move(root.inner()).result());
+        };
+
+        "shielded child wishes are not cancelled by parent stop"_test = [] {
+            auto wand = manual_wand{};
+            auto deck = nxtrt::deck{&wand};
+            auto root = nxtrt::root_task{
+                deck,
+                [] {
+                    return shielded_manual_token(99);
+                },
+            };
+
+            root.start();
+            root.inner().request_stop();
+            deck.run_until_idle();
+
+            expect(wand.prepared == std::vector<nxtrt::coin_t>{99});
+            expect(wand.cancelled.empty());
+            expect(wand.parked.size() == std::size_t{1});
+
+            wand.fulfill(deck, 99);
+            deck.run_until_idle();
+
+            expect(root.inner().done());
+            std::move(root.inner()).result();
+        };
+
+        "settle_range returns outcomes in range order"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto outcomes = deck.sync_wait([] {
+                auto work = std::vector<nxtrt::task<int>>{};
+                work.push_back(value_after_yield(1));
+                work.push_back(throw_int_after_yield());
+                work.push_back(value_after_yield(3));
+                return nxtrt::settle_range(std::move(work));
+            });
+            expect(outcomes.size() == std::size_t{3});
+            expect(outcomes[0].value() == 1);
+            expect(!outcomes[1]);
+            expect(outcomes[2].value() == 3);
+
+            auto events = std::vector<int>{};
+            auto stopped = deck.sync_wait([&] {
+                auto work = std::vector<nxtrt::task<int>>{};
+                work.push_back(tuple_wait_for_stop(events, 5));
+                work.push_back(throw_int_after_yield());
+                return nxtrt::settle_range(
+                    std::move(work), nxtrt::stop_on_failure{});
+            });
+            expect(nxtrt::is_operation_cancelled(stopped[0].error()));
+            expect(!nxtrt::is_operation_cancelled(stopped[1].error()));
+            expect(events == std::vector<int>{5});
+        };
+
+        "drain runs a feed of ideas with bounded concurrency"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto probe = drain_probe{};
+            auto ideas = std::vector<drain_idea>(10, drain_idea{&probe});
+            deck.sync_wait([&]() -> nxtrt::task<void> {
+                auto input = nxtrt::value_range_source{ideas};
+                co_await nxtrt::drain(input, 3);
+            });
+            expect(probe.finished == 10);
+            expect(probe.peak == 3);
+            expect(probe.active == 0);
+        };
+    };
+}
+
+} // namespace nxt::test

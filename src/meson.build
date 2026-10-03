@@ -219,6 +219,7 @@ nxt_header_install_excludes = {
     'buffers.cpp',
     'compression.cpp',
     'crypto.cpp',
+    'group.cpp',
     'http-server.cpp',
     'tls.cpp',
   ],
