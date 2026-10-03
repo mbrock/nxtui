@@ -17,7 +17,7 @@
 
 #include <chrono>
 #include <poll.h>
-#include <sys/select.h>
+#  include <array>
 #endif
 
 namespace nxtrt {
@@ -114,21 +114,16 @@ public:
 
 /// Asynchronous name resolution through c-ares, driven by runtime wishes.
 ///
-/// Each resolver owns one c-ares channel, configured from the system
-/// resolver settings. `getaddrinfo` starts a lookup and then waits on the
-/// channel's sockets with poll wishes and c-ares's own timeouts, so only
-/// the awaiting task suspends. It waits on one socket at a time (the
-/// lowest-numbered one c-ares reports), so activity on other sockets is
-/// noticed only when the c-ares timeout expires. Sockets are tracked in an
-/// `fd_set`, so descriptors must stay below FD_SETSIZE. Not copyable or
-/// movable; deck-confined.
+/// Each resolver owns a configuration channel initialized from the system
+/// resolver settings. Each lookup duplicates that channel and races poll
+/// wishes for all its sockets against c-ares's timeout, without fd_set's
+/// descriptor-number limit. Not copyable or movable; deck-confined.
 /// Throws `runtime_error` with the c-ares error text on failure.
 ///
-/// Cancellation is not safe mid-lookup: the pending query's completion
-/// state lives in the cancelled `getaddrinfo` frame, and c-ares still
-/// writes to it when the channel is later processed or destroyed. Let a
-/// lookup finish; c-ares's default timeouts and retries bound how long it
-/// takes.
+/// Cancellation drains the lookup's socket wishes, then destroys its
+/// channel. Channel destruction invokes pending callbacks synchronously,
+/// before the query state leaves the coroutine frame. Other lookups are
+/// unaffected.
 class cares_resolver
 {
 public:
@@ -159,6 +154,19 @@ public:
         int protocol = 0)
     {
         auto query = addrinfo_query{};
+        // Each lookup owns its channel. Destroying it synchronously invokes
+        // any pending callback before query leaves this coroutine frame,
+        // including when drive_once is cancelled. Other lookups are
+        // unaffected.
+        ares_channel_t * duplicate = nullptr;
+        NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
+        auto rc = ares_dup(&duplicate, channel_.get());
+        NXT_RT_CARES_IGNORE_DEPRECATED_END
+        if (rc != ARES_SUCCESS)
+            throw runtime_error{
+                "ares_dup failed: " + std::string{ares_strerror(rc)}};
+        auto channel =
+            std::unique_ptr<ares_channel_t, channel_deleter>{duplicate};
         auto hints = ares_addrinfo_hints{
             .ai_flags = 0,
             .ai_family = family,
@@ -167,7 +175,7 @@ public:
         };
 
         ares_getaddrinfo(
-            channel_.get(),
+            channel.get(),
             name.c_str(),
             service.empty() ? nullptr : service.c_str(),
             &hints,
@@ -175,8 +183,10 @@ public:
             &query);
 
         while (!query.done)
-            co_await drive_once();
+            co_await drive_once(channel.get());
 
+        if (query.error)
+            std::rethrow_exception(query.error);
         if (query.status != ARES_SUCCESS)
             throw runtime_error{
                 "ares_getaddrinfo failed: "
@@ -217,6 +227,7 @@ private:
         bool done = false;
         int status = ARES_SUCCESS;
         std::vector<resolved_address> addresses;
+        std::exception_ptr error;
     };
 
     static void ensure_library()
@@ -226,31 +237,34 @@ private:
     }
 
     static void complete_addrinfo(
-        void * arg,
-        int status,
-        int,
-        ares_addrinfo * result)
+        void * arg, int status, int, ares_addrinfo * result) noexcept
     {
         auto & query = *static_cast<addrinfo_query *>(arg);
         query.status = status;
 
-        if (status == ARES_SUCCESS && result != nullptr) {
-            for (auto * node = result->nodes; node != nullptr;
-                 node = node->ai_next) {
-                if (node->ai_addr == nullptr
-                    || node->ai_addrlen > sizeof(sockaddr_storage))
-                    continue;
+        try {
+            if (status == ARES_SUCCESS && result != nullptr) {
+                for (auto * node = result->nodes; node != nullptr;
+                     node = node->ai_next) {
+                    if (node->ai_addr == nullptr
+                        || node->ai_addrlen > sizeof(sockaddr_storage))
+                        continue;
 
-                auto address = resolved_address{
-                    .family = node->ai_family,
-                    .socktype = node->ai_socktype,
-                    .protocol = node->ai_protocol,
-                    .address = {},
-                    .address_size = static_cast<socklen_t>(node->ai_addrlen),
-                };
-                std::memcpy(&address.address, node->ai_addr, node->ai_addrlen);
-                query.addresses.push_back(address);
+                    auto address = resolved_address{
+                        .family = node->ai_family,
+                        .socktype = node->ai_socktype,
+                        .protocol = node->ai_protocol,
+                        .address = {},
+                        .address_size =
+                            static_cast<socklen_t>(node->ai_addrlen),
+                    };
+                    std::memcpy(
+                        &address.address, node->ai_addr, node->ai_addrlen);
+                    query.addresses.push_back(address);
+                }
             }
+        } catch (...) {
+            query.error = std::current_exception();
         }
 
         if (result != nullptr)
@@ -259,69 +273,55 @@ private:
         query.done = true;
     }
 
-    task<> drive_once()
+    static task<pollfd> wait_socket(int fd, short events)
     {
-        auto read_fds = fd_set{};
-        auto write_fds = fd_set{};
-        FD_ZERO(&read_fds);
-        FD_ZERO(&write_fds);
+        auto ready = co_await op::poll{fd, events};
+        co_return pollfd{fd, events, static_cast<short>(ready)};
+    }
 
-        auto timeout_storage = timeval{};
-        auto * timeout = ares_timeout(channel_.get(), nullptr, &timeout_storage);
+    static task<pollfd> wait_timeout(std::chrono::nanoseconds duration)
+    {
+        co_await op::timeout::after(duration);
+        co_return pollfd{ARES_SOCKET_BAD, 0, 0};
+    }
+
+    static task<> drive_once(ares_channel_t * channel)
+    {
+        // A single lookup has at most the A/AAAA sockets. Unlike ares_fds,
+        // ares_getsock does not index a fixed-size fd_set by descriptor
+        // value.
+        auto sockets = std::array<ares_socket_t, ARES_GETSOCK_MAXNUM>{};
         NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
-        auto nfds = ares_fds(channel_.get(), &read_fds, &write_fds);
+        auto bits = ares_getsock(channel, sockets.data(), sockets.size());
         NXT_RT_CARES_IGNORE_DEPRECATED_END
-        if (nfds == 0) {
-            if (timeout != nullptr)
-                co_await op::timeout::after(as_duration(*timeout));
-            ares_process_fd(
-                channel_.get(),
-                ARES_SOCKET_BAD,
-                ARES_SOCKET_BAD);
-            co_return;
-        }
-
-        for (auto fd = 0; fd < nfds; ++fd) {
+        auto waits = std::vector<task<pollfd>>{};
+        for (auto i = 0; i < ARES_GETSOCK_MAXNUM; ++i) {
             auto events = short{0};
-            if (FD_ISSET(fd, &read_fds))
+            if (ARES_GETSOCK_READABLE(bits, i))
                 events |= POLLIN;
-            if (FD_ISSET(fd, &write_fds))
+            if (ARES_GETSOCK_WRITABLE(bits, i))
                 events |= POLLOUT;
-            if (events == 0)
-                continue;
-
-            auto result = timeout != nullptr
-                ? co_await poll_until_after(
-                    fd,
-                    events,
-                    as_duration(*timeout))
-                : poll_until_result{
-                    .events = co_await op::poll{fd, events},
-                    .timed_out = false,
-                };
-            if (result.timed_out) {
-                ares_process_fd(
-                    channel_.get(),
-                    ARES_SOCKET_BAD,
-                    ARES_SOCKET_BAD);
-                co_return;
-            }
-
-            auto revents = result.events;
-            auto has_error = (revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
-            auto read_fd = ((revents & POLLIN) || has_error)
-                    && FD_ISSET(fd, &read_fds)
-                ? fd
-                : ARES_SOCKET_BAD;
-            auto write_fd = ((revents & POLLOUT) || has_error)
-                    && FD_ISSET(fd, &write_fds)
-                ? fd
-                : ARES_SOCKET_BAD;
-            ares_process_fd(channel_.get(), read_fd, write_fd);
-            co_return;
+            if (events != 0)
+                waits.push_back(wait_socket(sockets[i], events));
         }
-
-        ares_process_fd(channel_.get(), ARES_SOCKET_BAD, ARES_SOCKET_BAD);
+        auto timeout_storage = timeval{};
+        auto * timeout = ares_timeout(channel, nullptr, &timeout_storage);
+        if (timeout != nullptr)
+            waits.push_back(wait_timeout(as_duration(*timeout)));
+        auto ready = waits.empty()
+                         ? pollfd{ARES_SOCKET_BAD, 0, 0}
+                         : co_await wait_any_range(std::move(waits));
+        auto has_error =
+            (ready.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
+        auto read_fd = ((ready.revents & POLLIN) || has_error)
+                               && (ready.events & POLLIN)
+                           ? ready.fd
+                           : ARES_SOCKET_BAD;
+        auto write_fd = ((ready.revents & POLLOUT) || has_error)
+                                && (ready.events & POLLOUT)
+                            ? ready.fd
+                            : ARES_SOCKET_BAD;
+        ares_process_fd(channel, read_fd, write_fd);
     }
 
     static std::chrono::nanoseconds as_duration(timeval value)

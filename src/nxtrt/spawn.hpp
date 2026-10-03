@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <fcntl.h>
 #include <spawn.h>

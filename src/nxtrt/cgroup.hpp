@@ -135,6 +135,8 @@ inline task<std::string> read_text_file(std::filesystem::path path)
             out += as_string_view(std::span{storage}.first(n));
         }
         co_return out;
+    } catch (const operation_cancelled &) {
+        throw;
     } catch (const runtime_error &) {
         co_return std::string{};
     }
@@ -249,6 +251,8 @@ inline task<std::optional<std::filesystem::path>> find_unit_scope(
     auto names = std::vector<std::string>{};
     try {
         names = co_await detail::list_names(root);
+    } catch (const operation_cancelled &) {
+        throw;
     } catch (const runtime_error &) {
         co_return std::nullopt;
     }

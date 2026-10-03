@@ -3,6 +3,8 @@
 #include <nxtrt/task/concurrent.hpp>
 
 #if defined(__linux__)
+#  include <nxtrt/cgroup.hpp>
+#  include <nxtrt/pty.hpp>
 #  include <nxtrt/wand/epoll.hpp>
 #  include <nxtrt/wand/uring.hpp>
 #else
@@ -122,6 +124,37 @@ task<std::string> pty_output()
 template<class Wand>
 void process_tests()
 {
+#if defined(__linux__)
+    "optional cgroup reads and PTY reads propagate task cancellation"_test =
+        [] {
+            auto stopped = [](auto factory) {
+                auto wand = Wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto root = nxtrt::root_task{deck, std::move(factory)};
+                root.inner().request_stop();
+                root.start();
+                wand.run_until_done(deck, root.inner());
+                auto cancelled = false;
+                try {
+                    (void) std::move(root.inner()).result();
+                } catch (const nxtrt::operation_cancelled &) {
+                    cancelled = true;
+                } catch (const nxtrt::runtime_error &) {
+                }
+                expect(cancelled);
+            };
+            stopped([] {
+                return nxtrt::cgroup::read_text_file(
+                    "/missing/cgroup/file");
+            });
+            stopped([] {
+                return nxtrt::cgroup::find_unit_scope(
+                    "missing", "/missing/cgroup");
+            });
+            auto terminal = nxtrt::pty::session{};
+            stopped([&] { return terminal.read_loop(); });
+        };
+#endif
     "piped children merge stdout and stderr and report exit codes"_test =
         [] {
             auto run = run_on<Wand>([] {

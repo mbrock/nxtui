@@ -159,6 +159,8 @@ public:
                 auto reply = terminal_.read_pending_output();
                 if (!reply.empty())
                     co_await write_all(std::move(reply));
+            } catch (const operation_cancelled &) {
+                throw;
             } catch (const runtime_error &) {
                 break;
             }

@@ -44,10 +44,10 @@ enum class zlib_format
 /// storage.
 ///
 /// The wrapped feed is borrowed and must outlive this one. Compressed input
-/// is consumed from it with `take_some()` as needed, so the wrapped feed
-/// must not be read by anyone else meanwhile. The feed reports EOF after
-/// the end of the compressed stream; input bytes after that end that were
-/// already taken from the wrapped feed are dropped. Corrupt data, or the
+/// is buffered as needed and discarded only as the decoder consumes it,
+/// so the wrapped feed must not be read by anyone else meanwhile. The feed
+/// reports EOF after the compressed stream; trailing bytes remain in the
+/// wrapped feed. Corrupt data, or the
 /// wrapped feed ending first, throws @ref compression_error. Not movable;
 /// the factory functions below rely on guaranteed copy elision.
 class zlib_reader final : public bytefeed
@@ -128,9 +128,11 @@ inline zlib_reader deflate_reader(
 
 /// Streaming Zstandard decompressing byte feed over a borrowed byte feed.
 ///
-/// Built only when `NXTRT_HAVE_ZSTD` is defined. Reports EOF after the first
-/// complete frame. Input, ownership, and error behavior are as for
-/// @ref zlib_reader; library errors throw @ref compression_error.
+/// Decodes concatenated standard and skippable Zstandard frames, leaving
+/// trailing non-Zstandard bytes in the source. The source needs at least
+/// four bytes of buffering for non-consuming frame-magic lookahead.
+/// Built only when `NXTRT_HAVE_ZSTD` is defined. Ownership and error behavior
+/// are as for @ref zlib_reader; library errors throw @ref compression_error.
 class zstd_reader final : public bytefeed
 {
 public:
@@ -161,6 +163,7 @@ private:
     std::span<const std::byte> input_span_;
     ZSTD_inBuffer input_{};
     bool done_ = false;
+    bool frame_complete_ = false;
 };
 
 /// A @ref zstd_reader over `reader`.

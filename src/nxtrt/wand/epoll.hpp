@@ -68,21 +68,22 @@ using epoll_event_t = struct epoll_event;
 /// each queued wish's syscall right away on the deck's thread. Those that
 /// finish settle immediately; those that would block (`EAGAIN`, or a
 /// connect in progress) register a one-shot epoll interest and are retried
-/// once when the fd is ready. Each registration watches a private
+/// when the fd is ready, rearming if the retry still would block. Each
+/// registration watches a private
 /// `F_DUPFD_CLOEXEC` duplicate of the fd, so several wishes may wait on
 /// the same fd. epoll does not batch submissions: `wave` makes one
 /// `epoll_ctl` per waiting wish, and `poll`/`wait` collect up to 64 events
 /// per call.
 ///
-/// Limitations: reads, writes, sends, receives, connects, and accepts set
-/// `O_NONBLOCK` on the caller's fd, which affects every user of that open
-/// file description. File opens, `statx`, `getdents64`, and spawns are
+/// Socket send/receive use `MSG_DONTWAIT`; generic reads/writes, connects,
+/// and accepts temporarily enable `O_NONBLOCK` for each syscall and restore
+/// it immediately. The temporary flag is visible to other threads sharing
+/// that open-file description. Accepted sockets honor the wish's flags.
+/// File opens, `statx`, `getdents64`, and spawns are
 /// synchronous syscalls on the deck's thread, so `asynchronous_files()` is
 /// false and `nxtrt::fs::files` moves file work to a blocking pool
 /// instead. epoll refuses regular files, so a `poll` on one makes
-/// `epoll_ctl` fail and `wave` throws `runtime_error`. If a retried
-/// I/O call still reports `EAGAIN` after readiness, the wish fails with
-/// that error rather than waiting again.
+/// `epoll_ctl` fail; only that wish fails with `errno_error`.
 ///
 /// Timers: each `timeout` or `poll_until` creates a `CLOCK_MONOTONIC`
 /// timerfd; a zero duration fires after one nanosecond.
@@ -501,10 +502,16 @@ private:
             exec & execution,
             op::read_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result = op.offset < 0
-                ? ::read(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pread(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::read(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pread(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
             return finish_or_wait(wand, execution, result, op.fd, EPOLLIN);
         }
 
@@ -515,10 +522,16 @@ private:
             exec & execution,
             op::write_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result = op.offset < 0
-                ? ::write(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pwrite(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::write(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pwrite(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
             return finish_or_wait(wand, execution, result, op.fd, EPOLLOUT);
         }
 
@@ -529,9 +542,11 @@ private:
             exec & execution,
             op::recv_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result =
-                ::recv(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
+            auto result = ::recv(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
             return finish_or_wait(wand, execution, result, op.fd, EPOLLIN);
         }
 
@@ -542,9 +557,11 @@ private:
             exec & execution,
             op::send_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result =
-                ::send(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
+            auto result = ::send(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
             return finish_or_wait(wand, execution, result, op.fd, EPOLLOUT);
         }
 
@@ -555,8 +572,10 @@ private:
             exec & execution,
             op::connect & op)
         {
-            set_nonblocking(op.fd);
-            if (::connect(op.fd, op.sockaddr_ptr(), op.address_size) == 0) {
+            auto connected = nonblocking_call(op.fd, [&] {
+                return ::connect(op.fd, op.sockaddr_ptr(), op.address_size);
+            });
+            if (connected == 0) {
                 finish_result(0);
                 return false;
             }
@@ -575,7 +594,6 @@ private:
             exec & execution,
             op::accept & op)
         {
-            set_nonblocking(op.fd);
             auto result = accept_once(op);
             return finish_or_wait(wand, execution, result, op.fd, EPOLLIN);
         }
@@ -635,55 +653,75 @@ private:
         bool event_op(
             epoll_wand & wand,
             deck &,
-            wait_token,
+            wait_token token,
             epoll_event_t const &,
             event_kind,
             op::read_some & op)
         {
-            auto result = op.offset < 0
-                ? ::read(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pread(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
-            return finish_or_rearm(wand, result, op.fd, EPOLLIN);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::read(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pread(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
+            return finish_or_rearm(wand, token, result, op.fd, EPOLLIN);
         }
 
         bool event_op(
             epoll_wand & wand,
             deck &,
-            wait_token,
+            wait_token token,
             epoll_event_t const &,
             event_kind,
             op::write_some & op)
         {
-            auto result = op.offset < 0
-                ? ::write(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pwrite(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
-            return finish_or_rearm(wand, result, op.fd, EPOLLOUT);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::write(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pwrite(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
+            return finish_or_rearm(wand, token, result, op.fd, EPOLLOUT);
         }
 
         bool event_op(
             epoll_wand & wand,
             deck &,
-            wait_token,
+            wait_token token,
             epoll_event_t const &,
             event_kind,
             op::recv_some & op)
         {
-            auto result =
-                ::recv(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
-            return finish_or_rearm(wand, result, op.fd, EPOLLIN);
+            auto result = ::recv(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
+            return finish_or_rearm(wand, token, result, op.fd, EPOLLIN);
         }
 
         bool event_op(
             epoll_wand & wand,
             deck &,
-            wait_token,
+            wait_token token,
             epoll_event_t const &,
             event_kind,
             op::send_some & op)
         {
-            auto result =
-                ::send(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
-            return finish_or_rearm(wand, result, op.fd, EPOLLOUT);
+            auto result = ::send(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
+            return finish_or_rearm(wand, token, result, op.fd, EPOLLOUT);
         }
 
         bool event_op(
@@ -702,13 +740,13 @@ private:
         bool event_op(
             epoll_wand & wand,
             deck &,
-            wait_token,
+            wait_token token,
             epoll_event_t const &,
             event_kind,
             op::accept & op)
         {
             auto result = accept_once(op);
-            return finish_or_rearm(wand, result, op.fd, EPOLLIN);
+            return finish_or_rearm(wand, token, result, op.fd, EPOLLIN);
         }
 
         bool event_op(
@@ -804,14 +842,28 @@ private:
         }
 
         bool finish_or_rearm(
-            epoll_wand &,
+            epoll_wand & wand,
+            wait_token token,
             ssize_t result,
-            int,
-            std::uint32_t)
+            int fd,
+            std::uint32_t events)
         {
             if (result >= 0) {
                 finish_result(static_cast<int>(result));
                 return true;
+            }
+            if (would_block(errno)) {
+                // epoll is oneshot: readiness may be stale by the time the
+                // operation is retried, so retain the wish and arm it
+                // again. handle_event removes the old registration before
+                // this call.
+                if (auto * execution = wand.exec_from_token(token))
+                    wand.add(
+                        *execution,
+                        fd,
+                        events | EPOLLONESHOT,
+                        event_kind::op);
+                return false;
             }
             finish_result(-errno);
             return true;
@@ -1049,10 +1101,12 @@ private:
             .data = {.u64 = encode_user_data(execution, kind)},
         };
         if (::epoll_ctl(epoll_.get(), EPOLL_CTL_ADD, fd, &event) != 0) {
+            auto error = errno;
             if (owns_fd)
                 ::close(fd);
-            throw runtime_error{
-                "epoll_ctl add failed: " + std::to_string(errno)};
+            execution.specification.completion->complete(
+                execution.specification.request, -error, false);
+            return;
         }
         execution.registrations.push_back(registration{
             .fd = fd,
@@ -1105,6 +1159,7 @@ private:
                 execution->specification.request,
                 *execution);
             if (execution->specification.completion->finished()) {
+                cleanup(*execution);
                 settle(d, *execution);
             } else if (did_submit) {
                 state->phase = submitted{};
@@ -1149,16 +1204,18 @@ private:
         if (state == nullptr)
             return;
 
-        if (!key.execution->specification.completion->on_event(
+        cleanup(*key.execution);
+        auto const keep_waiting =
+            !key.execution->specification.completion->on_event(
                 *this,
                 d,
                 token_for(*key.execution),
                 key.execution->specification.request,
                 event,
-                key.kind))
+                key.kind);
+        if (keep_waiting
+            && !key.execution->specification.completion->finished())
             return;
-
-        cleanup(*key.execution);
         settle(d, *key.execution);
     }
 
@@ -1210,17 +1267,6 @@ private:
     static bool would_block(int err) noexcept
     {
         return err == EAGAIN || err == EWOULDBLOCK;
-    }
-
-    static void set_nonblocking(int fd)
-    {
-        auto flags = ::fcntl(fd, F_GETFL, 0);
-        if (flags < 0)
-            throw runtime_error{"fcntl(F_GETFL) failed: " + std::to_string(errno)};
-        if ((flags & O_NONBLOCK) != 0)
-            return;
-        if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-            throw runtime_error{"fcntl(F_SETFL) failed: " + std::to_string(errno)};
     }
 
     static std::uint32_t poll_to_epoll(short events) noexcept
@@ -1276,15 +1322,29 @@ private:
 
     static int accept_once(op::accept const & op)
     {
-        auto flags = op.flags;
-#ifdef SOCK_CLOEXEC
-        flags |= SOCK_CLOEXEC;
-#endif
-#ifdef SOCK_NONBLOCK
-        flags |= SOCK_NONBLOCK;
-#endif
-        auto fd = ::accept4(op.fd, nullptr, nullptr, flags);
-        return fd < 0 ? -errno : fd;
+        return nonblocking_call(op.fd, [&] {
+            return ::accept4(op.fd, nullptr, nullptr, op.flags);
+        });
+    }
+
+    // Temporarily set O_NONBLOCK for one readiness-driven syscall. File
+    // status flags are shared by dup() aliases, so restore them immediately
+    // and retain the syscall errno across the restoring fcntl.
+    template<typename Call>
+    static ssize_t nonblocking_call(int fd, Call && call)
+    {
+        auto flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags < 0)
+            return -1;
+        auto changed = (flags & O_NONBLOCK) == 0;
+        if (changed && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+            return -1;
+        auto result = call();
+        auto error = errno;
+        if (changed)
+            (void) ::fcntl(fd, F_SETFL, flags);
+        errno = error;
+        return result;
     }
 
     static int open_pidfd(pid_t pid)

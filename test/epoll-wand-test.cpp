@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdexcept>
 #include <string_view>
@@ -87,6 +88,16 @@ nxtrt::task<void> epoll_poll_cancelled(int rx)
         "epoll poll completed instead of being cancelled"};
 }
 
+nxtrt::task<int> epoll_poll_fd(int fd)
+{
+    co_return co_await nxtrt::op::poll{fd, POLLIN};
+}
+
+nxtrt::task<std::size_t> epoll_read_one(int fd, std::span<std::byte> buffer)
+{
+    co_return co_await nxtrt::op::read_some{fd, buffer};
+}
+
 static suite epoll_wand_tests{
     "epoll wand", [] {
         "timeout wishes complete"_test = [] {
@@ -160,6 +171,7 @@ static suite epoll_wand_tests{
 
         "native poll-until reports readiness"_test = [] {
             auto sockets = make_epoll_socketpair();
+            auto original_flags = ::fcntl(sockets[0].get(), F_GETFL, 0);
             auto wand = nxtrt::epoll_wand{};
             auto deck = nxtrt::deck{&wand};
             auto root = nxtrt::root_task{
@@ -174,6 +186,104 @@ static suite epoll_wand_tests{
             epoll_pump_until_done(deck, wand, root.inner());
 
             expect(root.inner().done());
+            expect(::fcntl(sockets[0].get(), F_GETFL, 0) == original_flags);
+        };
+
+        "read retries EAGAIN without changing blocking socket flags"_test =
+            [] {
+                auto sockets = make_epoll_socketpair();
+                auto original_flags = ::fcntl(sockets[1].get(), F_GETFL, 0);
+                auto buffer = std::array<std::byte, 1>{};
+                auto wand = nxtrt::epoll_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&] {
+                        return epoll_read_one(sockets[1].get(), buffer);
+                    },
+                };
+
+                root.start();
+                deck.run_ready();
+                wand.wave(
+                    deck); // The first read must return EAGAIN, not block.
+                expect(
+                    ::fcntl(sockets[1].get(), F_GETFL, 0)
+                    == original_flags);
+                auto byte = std::byte{'x'};
+                expect(::write(sockets[0].get(), &byte, 1) == 1);
+                wand.run_until_done(deck, root.inner());
+
+                expect(std::move(root.inner()).result() == 1_ul);
+                expect(buffer[0] == byte);
+                expect(
+                    ::fcntl(sockets[1].get(), F_GETFL, 0)
+                    == original_flags);
+            };
+
+        "stale readiness rearms instead of failing the losing read"_test =
+            [] {
+                auto sockets = make_epoll_socketpair();
+                auto alias = nxt::unique_fd{
+                    ::fcntl(sockets[1].get(), F_DUPFD_CLOEXEC, 0)};
+                if (alias.get() < 0)
+                    throw std::runtime_error{"dup failed"};
+                auto first_byte = std::array<std::byte, 1>{};
+                auto second_byte = std::array<std::byte, 1>{};
+                auto wand = nxtrt::epoll_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto first = nxtrt::root_task{
+                    deck, [&] {
+                        return epoll_read_one(sockets[1].get(), first_byte);
+                    }};
+                auto second = nxtrt::root_task{
+                    deck, [&] {
+                        return epoll_read_one(alias.get(), second_byte);
+                    }};
+                first.start();
+                second.start();
+                deck.run_ready();
+                expect(::write(sockets[0].get(), "x", 1) == 1);
+                // Both registrations are ready, but only the first callback
+                // can consume x. The second callback must see EAGAIN and
+                // rearm.
+                wand.poll(deck);
+                expect(
+                    (first_byte[0] == std::byte{'x'})
+                    != (second_byte[0] == std::byte{'x'}));
+                expect(::write(sockets[0].get(), "y", 1) == 1);
+                wand.run_until_done(deck, first.inner());
+                wand.run_until_done(deck, second.inner());
+                expect(std::move(first.inner()).result() == 1_ul);
+                expect(std::move(second.inner()).result() == 1_ul);
+                expect(
+                    (first_byte[0] == std::byte{'x'}
+                     && second_byte[0] == std::byte{'y'})
+                    || (first_byte[0] == std::byte{'y'}
+                        && second_byte[0] == std::byte{'x'}));
+            };
+
+        "poll registration failure fails only its wish"_test = [] {
+            auto fd = nxt::unique_fd{::open("/dev/null", O_RDONLY)};
+            if (fd.get() < 0)
+                throw std::runtime_error{"open /dev/null failed"};
+
+            auto wand = nxtrt::epoll_wand{};
+            auto deck = nxtrt::deck{&wand};
+            auto root = nxtrt::root_task{
+                deck,
+                [&] { return epoll_poll_fd(fd.get()); },
+            };
+
+            root.start();
+            auto failed = false;
+            try {
+                wand.run_until_done(deck, root.inner());
+                (void) std::move(root.inner()).result();
+            } catch (const nxtrt::errno_error &) {
+                failed = true;
+            }
+            expect(failed);
         };
 
         "native poll-until times out"_test = [] {

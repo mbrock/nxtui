@@ -465,15 +465,18 @@ public:
 
         auto discarded = source_.discard(extent);
         if (discarded.is_ready()) {
-            auto n = value_count(discarded.take_ready());
+            auto result = discarded.take_ready();
+            auto n = value_count(result);
             if (n > extent)
                 throw buffer_error{"frame discard overreported extent"};
             if (n == extent)
                 return hope<void>::ready();
-            if (n == 0)
+            if (n == 0 && is_eof(result))
                 throw value_end_of_stream{
                     "unexpected end of frame input",
                 };
+            if (n == 0)
+                return discard_prefix_slow(extent);
             return discard_prefix_slow(extent - n);
         }
 
@@ -507,10 +510,12 @@ private:
             auto n = value_count(discarded);
             if (n > remaining)
                 throw buffer_error{"frame discard overreported extent"};
-            if (n == 0)
+            if (n == 0 && is_eof(discarded))
                 throw value_end_of_stream{
                     "unexpected end of frame input",
                 };
+            if (n == 0)
+                continue;
             remaining -= n;
         }
     }
@@ -523,10 +528,14 @@ private:
         auto n = value_count(discarded);
         if (n > remaining)
             throw buffer_error{"frame discard overreported extent"};
-        if (n == 0)
+        if (n == 0 && is_eof(discarded))
             throw value_end_of_stream{
                 "unexpected end of frame input",
             };
+        if (n == 0) {
+            co_await discard_prefix_slow(remaining);
+            co_return;
+        }
         co_await discard_prefix_slow(remaining - n);
     }
 

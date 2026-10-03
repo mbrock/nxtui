@@ -139,6 +139,23 @@ static suite runtime_tests{
                 expect(std::move(root.inner()).result() == 9_i);
             };
 
+            "root_task retains a capturing coroutine factory"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto root = nxtrt::root_task{
+                    deck,
+                    [value =
+                         std::make_unique<int>(23)]() -> nxtrt::task<int> {
+                        co_await nxtrt::yield();
+                        co_return *value;
+                    },
+                };
+
+                root.start();
+                deck.run_until_idle();
+
+                expect(std::move(root.inner()).result() == 23_i);
+            };
+
             "resumes tasks awaiting children"_test = [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
@@ -383,6 +400,66 @@ static suite runtime_tests{
                     }
                     co_return false;
                 }));
+            };
+
+            "rejects nested sync_wait from a running task"_test = [] {
+                auto deck = nxtrt::deck{};
+
+                expect(deck.sync_wait([&deck]() -> nxtrt::task<bool> {
+                    try {
+                        (void) deck.sync_wait(
+                            []() -> nxtrt::task<void> { co_return; });
+                    } catch (const nxtrt::runtime_error &) {
+                        co_return true;
+                    }
+                    co_return false;
+                }));
+            };
+
+            "release reclaims a completed task registry row"_test = [] {
+                auto storage = nxtrt::static_deck_task_storage<1>{};
+                auto deck = nxtrt::deck{storage};
+                auto first = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<void> { co_return; },
+                };
+                first.start();
+                deck.run_until_idle();
+                auto released = first.inner().release();
+                released.destroy();
+
+                auto second = nxtrt::root_task{
+                    deck,
+                    []() -> nxtrt::task<void> { co_return; },
+                };
+                second.start();
+                deck.run_until_idle();
+
+                expect(second.inner().done());
+            };
+
+            "release preserves queued active task registry rows"_test = [] {
+                auto storage = nxtrt::static_deck_task_storage<1>{};
+                auto deck = nxtrt::deck{storage};
+                auto finished = false;
+                auto root = nxtrt::root_task{
+                    deck,
+                    [&]() -> nxtrt::task<void> {
+                        co_await nxtrt::yield();
+                        finished = true;
+                    },
+                };
+                root.start();
+                auto released = root.inner().release();
+                deck.run_until_idle();
+                expect(finished);
+                released.destroy();
+
+                auto next = nxtrt::root_task{
+                    deck, []() -> nxtrt::task<void> { co_return; }};
+                next.start();
+                deck.run_until_idle();
+                expect(next.inner().done());
             };
 
             "tasks observe their own stop request"_test = [] {
@@ -793,6 +870,22 @@ static suite runtime_tests{
                 expect(children.size() == std::size_t{1});
                 expect(children[0].name == "child"sv);
                 expect(children[0].status == "ok"sv);
+            };
+
+            "with_trace_span owns its capturing coroutine factory"_test =
+                []() -> nxtrt::task<void> {
+                auto span = nxtrt::with_trace_span(
+                    "owned factory",
+                    [captured =
+                         std::make_unique<int>(31)]() -> nxtrt::task<int> {
+                        co_await nxtrt::yield();
+                        co_return *captured;
+                    });
+                // The factory temporary is already gone before the lazy
+                // task is started.
+                co_await nxtrt::yield();
+                auto value = co_await span;
+                expect(value == 31_i);
             };
         };
 

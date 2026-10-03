@@ -62,18 +62,18 @@ tls_event_kind tls_event_kind_from_content_type(std::uint8_t type);
 /// X25519 key exchange only, server signatures ecdsa_secp256r1_sha256 or
 /// rsa_pss_rsae_sha256, ALPN "http/1.1". No PSK, 0-RTT or client
 /// authentication. Post-handshake handshake messages (such as
-/// NewSessionTicket) are skipped by the bytefeed reads; KeyUpdate is not
-/// supported, so records after one fail to decrypt.
+/// NewSessionTicket) are skipped by bytefeed reads. KeyUpdate rotates
+/// inbound traffic keys and, when requested, responds and rotates outbound
+/// keys before further application writes.
 ///
 /// Ownership: the reader and writer (or the `net::socket`) are borrowed and
 /// must outlive the session. The session is deck-confined, like the
 /// streams under it.
 ///
-/// Ending: any alert, including close_notify, makes the bytefeed reads
-/// throw `nxtrt::runtime_error` rather than report end of stream, and end
-/// of the transport, even between records, throws `end_of_stream`. Callers
-/// that
-/// read to the end of a response should rely on HTTP framing
+/// Ending: close_notify reports bytefeed EOF (and `read()` throws
+/// `end_of_stream`); other alerts throw `nxtrt::runtime_error`. End of the
+/// transport without close_notify, even between records, throws
+/// `end_of_stream`. Callers reading responses should rely on HTTP framing
 /// (Content-Length or chunked), not on connection close.
 class tls13_client_session final : public bytefeed
 {
@@ -122,11 +122,13 @@ public:
     /// writes them to the writer and flushes it.
     task<> write_all(std::span<const std::byte> bytes);
     task<> write_all(std::string_view text);
-    /// The next non-alert record as an owned copy; throws on an alert.
+    /// The next non-alert record as an owned copy. close_notify throws
+    /// `end_of_stream`; other alerts throw `runtime_error`.
     task<nxt::tls::tls13_plaintext> read();
     /// The next record, decrypted unless it is change_cipher_spec. CONTENT
-    /// borrows the session's record storage until the next call. Alerts
-    /// are returned, not thrown.
+    /// borrows the session's record storage until the next call. KeyUpdate
+    /// is handled internally; close_notify is returned as an alert event.
+    /// Other alerts throw `runtime_error`.
     task<tls13_session_event> next_event();
 
 private:
@@ -159,11 +161,13 @@ private:
     bytesink & writer_;
     nxt::tls::tls13_application_keys application_keys_;
     std::vector<std::byte> record_storage_;
+    std::vector<std::byte> post_handshake_;
     std::vector<std::byte> pending_;
     std::size_t pending_offset_ = 0;
     std::uint8_t record_type_ = 0;
     std::uint16_t record_version_ = 0;
     bool handshaken_ = false;
+    bool close_notify_received_ = false;
 };
 
 } // namespace nxtrt::tls

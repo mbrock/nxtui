@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -125,6 +126,17 @@ nxtrt::task<void> poll_until_timeout(int rx)
     auto result = co_await nxtrt::poll_until_after(rx, POLLIN, 1ms);
     if (!result.timed_out)
         throw std::runtime_error{"poll-until did not time out"};
+}
+
+nxtrt::task<void> poll_until_native_cancelled(int rx)
+{
+    try {
+        (void) co_await nxtrt::op::poll_until::after(rx, POLLIN, 10s);
+    } catch (const nxtrt::operation_cancelled &) {
+        co_return;
+    }
+    throw std::runtime_error{
+        "fused poll-until completed instead of cancelling"};
 }
 
 nxtrt::task<void> poll_forever(int rx)
@@ -983,6 +995,133 @@ static suite uring_wand_tests{
 
                 expect(root.inner().done());
             };
+
+            "stale fused readiness waits for the next event"_test = [] {
+                auto sockets = std::array<int, 2>{-1, -1};
+                if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data())
+                    != 0)
+                    throw std::runtime_error{"socketpair failed"};
+                auto first = nxt::unique_fd{sockets[0]};
+                auto second = nxt::unique_fd{sockets[1]};
+                auto wand = nxtrt::uring_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto root = nxtrt::root_task{
+                    deck, [&]() -> nxtrt::task<nxtrt::poll_until_result> {
+                        co_return co_await nxtrt::op::poll_until::after(
+                            second.get(), POLLIN, 1s);
+                    }};
+                expect(::write(first.get(), "a", 1) == 1);
+                root.start();
+                deck.run_ready();
+                // Submission observes readability. Consume the byte before
+                // decoding the proxy's event at CQE delivery.
+                auto byte = char{};
+                expect(::read(second.get(), &byte, 1) == 1);
+                wand.wait(deck);
+                expect(deck.empty());
+                expect(::write(first.get(), "b", 1) == 1);
+                auto result =
+                    uring_pump_until_done(deck, wand, root.inner());
+                expect(!result.timed_out);
+                expect((result.events & POLLIN) != 0);
+            };
+
+            "completed reads and opens win an in-flight cancellation"_test =
+                [] {
+                    auto sockets = std::array<int, 2>{-1, -1};
+                    if (::socketpair(
+                            AF_UNIX, SOCK_STREAM, 0, sockets.data())
+                        != 0)
+                        throw std::runtime_error{"socketpair failed"};
+                    auto first = nxt::unique_fd{sockets[0]};
+                    auto second = nxt::unique_fd{sockets[1]};
+                    auto wand = nxtrt::uring_wand{};
+                    auto deck = nxtrt::deck{&wand};
+                    auto buffer = std::array<std::byte, 3>{};
+                    expect(::write(first.get(), "abc", 3) == 3);
+                    auto read = nxtrt::root_task{
+                        deck, [&]() -> nxtrt::task<std::size_t> {
+                            co_return co_await nxtrt::op::read_some{
+                                second.get(), buffer};
+                        }};
+                    read.start();
+                    deck.run_ready();
+                    // Observe that the kernel consumed the bytes, without
+                    // polling the CQE. Cancellation is then submitted
+                    // before CQE delivery.
+                    auto until = std::chrono::steady_clock::now() + 1s;
+                    auto peek = std::byte{};
+                    while (
+                        ::recv(
+                            second.get(), &peek, 1, MSG_PEEK | MSG_DONTWAIT)
+                        >= 0) {
+                        if (std::chrono::steady_clock::now() >= until)
+                            throw std::runtime_error{
+                                "read did not reach its CQE"};
+                        std::this_thread::yield();
+                    }
+                    expect(errno == EAGAIN || errno == EWOULDBLOCK);
+                    read.inner().request_stop();
+                    wand.wave(deck);
+                    expect(
+                        uring_pump_until_done(deck, wand, read.inner())
+                        == 3_ul);
+                    expect(nxtrt::as_string_view(buffer) == "abc");
+
+                    auto expected_fd =
+                        ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+                    if (expected_fd < 0)
+                        throw std::runtime_error{"open failed"};
+                    ::close(expected_fd);
+                    auto opened = nxtrt::root_task{
+                        deck, []() -> nxtrt::task<int> {
+                            co_return co_await nxtrt::op::openat{
+                                AT_FDCWD,
+                                "/dev/null",
+                                O_RDONLY | O_CLOEXEC};
+                        }};
+                    opened.start();
+                    deck.run_ready();
+                    until = std::chrono::steady_clock::now() + 1s;
+                    while (::fcntl(expected_fd, F_GETFD) < 0) {
+                        if (std::chrono::steady_clock::now() >= until)
+                            throw std::runtime_error{
+                                "open did not reach its CQE"};
+                        std::this_thread::yield();
+                    }
+                    auto cleanup = nxt::unique_fd{expected_fd};
+                    opened.inner().request_stop();
+                    wand.wave(deck);
+                    expect(
+                        uring_pump_until_done(deck, wand, opened.inner())
+                        == expected_fd);
+                };
+
+            "fused poll-until is cancelled and drains its completion"_test =
+                [] {
+                    auto sockets = std::array<int, 2>{-1, -1};
+                    if (::socketpair(
+                            AF_UNIX, SOCK_STREAM, 0, sockets.data())
+                        != 0)
+                        throw std::runtime_error{"socketpair failed"};
+                    auto first = nxt::unique_fd{sockets[0]};
+                    auto second = nxt::unique_fd{sockets[1]};
+                    auto wand = nxtrt::uring_wand{};
+                    auto deck = nxtrt::deck{&wand};
+                    auto root = nxtrt::root_task{
+                        deck,
+                        [&] {
+                            return poll_until_native_cancelled(
+                                second.get());
+                        },
+                    };
+                    root.start();
+                    deck.run_ready();
+                    expect(!root.inner().done());
+                    root.inner().request_stop();
+                    wand.run_until_done(deck, root.inner());
+                    std::move(root.inner()).result();
+                };
 
             "poll wishes are cancelled when their task stops"_test = [] {
                 auto sockets = std::array<int, 2>{-1, -1};

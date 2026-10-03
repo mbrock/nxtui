@@ -293,15 +293,19 @@ public:
     /// Make at least `capacity` contiguous free slots while keeping the
     /// newest `preserve` buffered values staged.
     ///
-    /// Drains only the older values in front of the preserved suffix. It does
-    /// not move values to join split free space, so it throws
-    /// @ref nxtrt::value_buffer_error "value_buffer_error" when the free run cannot grow any further, as
-    /// well as up front when `preserve + capacity` exceeds the storage.
+    /// Drains only the older values in front of the preserved suffix and
+    /// moves buffered values to join split free space when necessary.
+    /// Throws @ref nxtrt::value_buffer_error "value_buffer_error" up front
+    /// when `preserve + capacity` exceeds the storage.
     hope<void> rebase(std::size_t preserve, std::size_t capacity)
     {
         require_preserved_capacity(preserve, capacity);
         if (unused_capacity().size() >= capacity)
             return hope<void>::ready();
+        if (unused_capacity_size() >= capacity) {
+            contiguize_buffered();
+            return hope<void>::ready();
+        }
         return rebase_slow(preserve, capacity);
     }
 
@@ -485,6 +489,27 @@ private:
         reset_if_empty();
     }
 
+    void contiguize_buffered()
+    {
+        if (ring_.empty()) {
+            ring_.reset_if_empty();
+            return;
+        }
+
+        auto values = std::vector<value_type>{};
+        values.reserve(ring_.size());
+        for (auto chunk : buffered_values())
+            for (auto & value : chunk)
+                values.emplace_back(std::move(value));
+
+        ring_.destroy_all();
+        for (auto & value : values) {
+            std::construct_at(
+                ring_.data() + ring_.write_index(), std::move(value));
+            ring_.advance_constructed(1);
+        }
+    }
+
     void destroy_buffered() noexcept
     {
         ring_.destroy_all();
@@ -635,6 +660,10 @@ private:
     task<void> rebase_slow(std::size_t preserve, std::size_t capacity)
     {
         while (unused_capacity().size() < capacity) {
+            if (unused_capacity_size() >= capacity) {
+                contiguize_buffered();
+                co_return;
+            }
             auto values = buffered_values();
             auto drainable = values.size() - std::min(preserve, values.size());
             if (drainable == 0)
@@ -1764,8 +1793,14 @@ private:
 
     task<fare_t> read_more_slow(std::size_t limit)
     {
+        // A producer-backed feed may fill its ring between staging this
+        // lazy refill and running it. In that case there is already data to
+        // inspect.
+        auto capacity = unused_capacity();
+        if (capacity.empty())
+            co_return 0;
         auto sink = fixed_sink<value_type>{
-            unused_capacity().first(limit),
+            capacity.first(std::min(limit, capacity.size())),
         };
         auto result = co_await stream_more(sink, limit);
         co_return finish_read(sink, result);

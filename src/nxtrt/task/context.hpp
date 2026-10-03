@@ -140,25 +140,16 @@ with_env(typename Key::value_type value, Fn && fn)
         factory_type{std::forward<Fn>(fn)});
 }
 
-/// A task that runs the task made by `fn()` inside a new trace span.
-///
-/// If a trace context is bound in the env (`trace_context_key`), this
-/// starts a span named `name` with `attributes` as a child of the current
-/// span, binds it as the current span while `fn`'s task runs, and finishes
-/// it with status `"ok"` or, if the task throws, `"error"` (the exception
-/// propagates). Without a trace context it just runs `fn`'s task.
-///
-/// `fn` is held by reference, not copied: await the returned task in the
-/// same full-expression (`co_await with_trace_span("x", [&] {...})`) or keep
-/// `fn` alive until it finishes.
-template<task_factory Fn>
-[[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
-with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
+namespace detail {
+
+template<stored_task_factory Fn>
+[[nodiscard]] task<stored_task_result_t<Fn>>
+with_trace_span_task(std::string name, trace_attributes attributes, Fn fn)
 {
     auto context = current_trace_context();
     if (context == nullptr) {
-        auto child = std::invoke(std::forward<Fn>(fn));
-        if constexpr (std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+        auto child = std::invoke(fn);
+        if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
             co_await child;
         } else {
             co_return co_await child;
@@ -167,8 +158,7 @@ with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
         auto span = context->start_span(
             std::move(name), current_trace_span_id(), std::move(attributes));
         try {
-            if constexpr (
-                std::is_void_v<task_result_t<std::invoke_result_t<Fn>>>) {
+            if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
                 co_await with_env<trace_current_span_key>(
                     span.span_id(), [&]() -> task<void> {
                     co_await std::invoke(fn);
@@ -177,9 +167,9 @@ with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
             } else {
                 auto result = co_await with_env<trace_current_span_key>(
                     span.span_id(),
-                    [&]() -> task<task_result_t<std::invoke_result_t<Fn>>> {
-                    co_return co_await std::invoke(fn);
-                });
+                    [&]() -> task<stored_task_result_t<Fn>> {
+                        co_return co_await std::invoke(fn);
+                    });
                 span.finish("ok");
                 co_return std::move(result);
             }
@@ -190,9 +180,34 @@ with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
     }
 }
 
+} // namespace detail
+
+/// A task that runs the task made by `fn()` inside a new trace span.
+///
+/// If a trace context is bound in the env (`trace_context_key`), this
+/// starts a span named `name` with `attributes` as a child of the current
+/// span, binds it as the current span while `fn`'s task runs, and finishes
+/// it with status `"ok"` or, if the task throws, `"error"` (the exception
+/// propagates). Without a trace context it just runs `fn`'s task.
+///
+/// `fn` is copied or moved into the returned task's frame and stays alive
+/// until it finishes, so the lazy task may be stored before it is awaited.
+template<typename Fn>
+    requires stored_task_factory<std::decay_t<Fn>>
+[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
+with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
+{
+    using factory_type = std::decay_t<Fn>;
+    return detail::with_trace_span_task(
+        std::move(name),
+        std::move(attributes),
+        factory_type{std::forward<Fn>(fn)});
+}
+
 /// `with_trace_span` with no span attributes.
-template<task_factory Fn>
-[[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
+template<typename Fn>
+    requires stored_task_factory<std::decay_t<Fn>>
+[[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
 with_trace_span(std::string name, Fn && fn)
 {
     return with_trace_span(

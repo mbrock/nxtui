@@ -380,6 +380,19 @@ static suite glyph_table_tests{
             auto text = glyphs.get(static_cast<GlyphTable::GlyphId>('A'));
             expect(text && *text == std::string_view{"A"});
         };
+
+        "keep returned views stable across intern growth"_test = [] {
+            GlyphTable glyphs;
+            auto id = glyphs.intern("persistent glyph");
+            auto view = glyphs.get(id);
+            expect(view.has_value());
+
+            for (int i = 0; i < 1000; ++i)
+                (void) glyphs.intern(std::format("growth-{}", i));
+
+            expect(*view == std::string_view{"persistent glyph"});
+            expect(glyphs[id] == std::string_view{"persistent glyph"});
+        };
     }};
 
 // ============================================================================
@@ -519,6 +532,35 @@ static suite raster_diff_tests{
 
             expect(runs.size() == 3_ul);
         };
+
+        "reset bold when transitioning through bold italic to italic"_test =
+            [] {
+                GlyphTable glyphs;
+                Raster front(3 * ch, 1 * ln, glyphs);
+                Raster back(3 * ch, 1 * ln, glyphs);
+                auto view = back.view();
+                view.write_text(Pos::origin(), "ABC");
+                view.set_em(Pos::at(0 * ch, 0 * ln), Emphasis::bold);
+                view.set_em(
+                    Pos::at(1 * ch, 0 * ln),
+                    Emphasis::bold | Emphasis::italic);
+                view.set_em(Pos::at(2 * ch, 0 * ln), Emphasis::italic);
+
+                std::vector<ChangeRun> runs;
+                diff_rasters(front, back, [&](const ChangeRun & run) {
+                    runs.push_back(run);
+                });
+
+                expect(runs.size() == 3_ul);
+                expect(runs[0].em_change == Emphasis::bold);
+                expect(!runs[0].em_reset);
+                expect(
+                    runs[1].em_change
+                    == (Emphasis::bold | Emphasis::italic));
+                expect(!runs[1].em_reset);
+                expect(runs[2].em_reset);
+                expect(runs[2].em_change == Emphasis::italic);
+            };
     }};
 
 // ============================================================================

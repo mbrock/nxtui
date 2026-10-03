@@ -1,6 +1,7 @@
 #include "nxtrt/compression.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 namespace nxtrt {
@@ -89,8 +90,22 @@ task<fare_t> zlib_reader::stream_more_task(
             out.size(), std::numeric_limits<uInt>::max()));
 
         auto before = stream_.avail_out;
+        auto input_before = stream_.avail_in;
         auto rc = ::inflate(&stream_, Z_NO_FLUSH);
         auto produced = static_cast<std::size_t>(before - stream_.avail_out);
+        auto consumed =
+            static_cast<std::size_t>(input_before - stream_.avail_in);
+        if (consumed != 0) {
+            auto discard = reader_->discard(consumed);
+            if (!discard.is_ready())
+                co_await std::move(discard);
+            if (stream_.avail_in != 0) {
+                reader_->rebase(1);
+                input_ = reader_->buffered_span();
+                stream_.next_in = reinterpret_cast<Bytef *>(
+                    const_cast<std::byte *>(input_.data()));
+            }
+        }
 
         if (rc == Z_STREAM_END)
             done_ = true;
@@ -133,18 +148,17 @@ std::span<std::byte> zlib_reader::output_capacity(
 task<void> zlib_reader::refill_input()
 {
     while (stream_.avail_in == 0) {
-        auto limit = static_cast<std::size_t>(
-            std::numeric_limits<uInt>::max());
-        auto chunk = co_await reader_->take_some(limit);
-        if (!chunk)
+        try {
+            co_await reader_->fill(1);
+        } catch (const value_end_of_stream &) {
             throw compression_error{"unexpected end of compressed stream"};
-        if (chunk->empty())
-            continue;
-
-        input_ = *chunk;
+        }
+        reader_->rebase(1);
+        input_ = reader_->buffered_span();
         stream_.next_in = reinterpret_cast<Bytef *>(
             const_cast<std::byte *>(input_.data()));
-        stream_.avail_in = static_cast<uInt>(input_.size());
+        stream_.avail_in = static_cast<uInt>(std::min<std::size_t>(
+            input_.size(), std::numeric_limits<uInt>::max()));
     }
 }
 
@@ -195,17 +209,28 @@ task<fare_t> zstd_reader::stream_more_task(
 
         if (input_.pos == input_.size)
             co_await refill_input();
+        if (done_)
+            co_return eof;
 
         auto output = ZSTD_outBuffer{
             .dst = out.data(),
             .size = std::min(out.size(), std::numeric_limits<std::size_t>::max()),
             .pos = 0,
         };
+        auto before_input = input_.pos;
         auto rc = ZSTD_decompressStream(stream_, &output, &input_);
+        auto consumed = input_.pos - before_input;
+        if (consumed != 0) {
+            auto discard = reader_->discard(consumed);
+            if (!discard.is_ready())
+                co_await std::move(discard);
+            input_.pos = 0;
+            input_.size = 0;
+        }
         if (ZSTD_isError(rc))
             throw compression_error{ZSTD_getErrorName(rc)};
         if (rc == 0)
-            done_ = true;
+            frame_complete_ = true;
 
         if (output.pos != 0) {
             if (into_reader) {
@@ -240,18 +265,48 @@ std::span<std::byte> zstd_reader::output_capacity(
 task<void> zstd_reader::refill_input()
 {
     while (input_.pos == input_.size) {
-        auto chunk = co_await reader_->take_some();
-        if (!chunk)
+        auto minimum = frame_complete_ ? std::size_t{4} : std::size_t{1};
+        try {
+            co_await reader_->fill(minimum);
+        } catch (const value_end_of_stream &) {
+            if (frame_complete_) {
+                done_ = true;
+                co_return;
+            }
             throw compression_error{"unexpected end of zstd stream"};
-        if (chunk->empty())
-            continue;
+        }
 
-        input_span_ = *chunk;
+        reader_->rebase(1);
+        input_span_ = reader_->buffered_span();
+        if (frame_complete_) {
+            if (input_span_.size() < sizeof(std::uint32_t)) {
+                done_ = true;
+                co_return;
+            }
+            constexpr auto magic = std::array{
+                std::byte{0x28},
+                std::byte{0xb5},
+                std::byte{0x2f},
+                std::byte{0xfd},
+            };
+            auto skippable =
+                (std::to_integer<unsigned>(input_span_[0]) & 0xf0) == 0x50
+                && input_span_[1] == std::byte{0x2a}
+                && input_span_[2] == std::byte{0x4d}
+                && input_span_[3] == std::byte{0x18};
+            if (!skippable
+                && !std::equal(
+                    magic.begin(), magic.end(), input_span_.begin())) {
+                done_ = true;
+                co_return;
+            }
+        }
         input_ = ZSTD_inBuffer{
             .src = input_span_.data(),
             .size = input_span_.size(),
             .pos = 0,
         };
+        frame_complete_ = false;
     }
 }
 
@@ -307,6 +362,7 @@ task<fare_t> brotli_reader::stream_more_task(
 
         auto next_out = reinterpret_cast<std::uint8_t *>(out.data());
         auto available_out = out.size();
+        auto input_before = available_in_;
         auto result = BrotliDecoderDecompressStream(
             state_,
             &available_in_,
@@ -315,6 +371,18 @@ task<fare_t> brotli_reader::stream_more_task(
             &next_out,
             nullptr);
         auto produced = out.size() - available_out;
+        auto consumed = input_before - available_in_;
+        if (consumed != 0) {
+            auto discard = reader_->discard(consumed);
+            if (!discard.is_ready())
+                co_await std::move(discard);
+            if (available_in_ != 0) {
+                reader_->rebase(1);
+                input_ = reader_->buffered_span();
+                next_in_ =
+                    reinterpret_cast<const std::uint8_t *>(input_.data());
+            }
+        }
 
         if (result == BROTLI_DECODER_RESULT_ERROR) {
             auto code = BrotliDecoderGetErrorCode(state_);
@@ -357,13 +425,14 @@ std::span<std::byte> brotli_reader::output_capacity(
 task<void> brotli_reader::refill_input()
 {
     while (available_in_ == 0) {
-        auto chunk = co_await reader_->take_some();
-        if (!chunk)
+        try {
+            co_await reader_->fill(1);
+        } catch (const value_end_of_stream &) {
             throw compression_error{"unexpected end of brotli stream"};
-        if (chunk->empty())
-            continue;
+        }
 
-        input_ = *chunk;
+        reader_->rebase(1);
+        input_ = reader_->buffered_span();
         next_in_ = reinterpret_cast<const std::uint8_t *>(input_.data());
         available_in_ = input_.size();
     }

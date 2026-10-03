@@ -7,6 +7,7 @@
 
 #include "test.hpp"
 #include <format>
+#include <iostream>
 #include <optional>
 #include <sstream>
 
@@ -555,6 +556,109 @@ static suite compositor_tests{
             expect(cell.has_value());
             expect(cell->bold);
             expect(cell->underline);
+        };
+
+        "transitions bold to italic without losing foreground color"_test =
+            [] {
+                ansi::mode = ansi::Mode::enabled;
+                GlyphTable glyphs;
+                tui::TerminalCompositor compositor(
+                    {3 * ch, 1 * ln}, glyphs);
+                vterm::Terminal term(1, 3);
+                const auto red = Rgba8(255, 0, 0);
+                auto view = compositor.back_buffer().view();
+                view.write_text(Pos::origin(), "ABC");
+                for (int x = 0; x < 3; ++x)
+                    view.set_fg(Pos::at(x * ch, 0 * ln), red);
+                view.set_em(Pos::at(0 * ch, 0 * ln), Emphasis::bold);
+                view.set_em(
+                    Pos::at(1 * ch, 0 * ln),
+                    Emphasis::bold | Emphasis::italic);
+                view.set_em(Pos::at(2 * ch, 0 * ln), Emphasis::italic);
+
+                std::ostringstream output;
+                compositor.present_frame(output);
+                term.write(output.str());
+
+                auto bold = term.get_cell(0, 0);
+                auto bold_italic = term.get_cell(0, 1);
+                auto italic = term.get_cell(0, 2);
+                expect(bold && bold->bold && !bold->italic);
+                expect(
+                    bold_italic && bold_italic->bold
+                    && bold_italic->italic);
+                expect(italic && !italic->bold && italic->italic);
+                for (const auto & cell : {bold, bold_italic, italic})
+                    expect(
+                        cell && cell->fg.is_rgb()
+                        && cell->fg.c.rgb.red == 255);
+            };
+
+        "resize keeps fullscreen ownership and updates terminal partition"_test =
+            [] {
+                GlyphTable glyphs;
+                tui::TerminalCompositor compositor(
+                    {12 * ch, 3 * ln}, glyphs);
+                std::ostringstream init;
+                compositor.set_hud_height(2 * ln, 3 * ln, init);
+                compositor.set_hud_height(3 * ln, 3 * ln, init);
+
+                std::ostringstream resize_output;
+                auto * previous = std::cout.rdbuf(resize_output.rdbuf());
+                compositor.resize({12 * ch, 5 * ln});
+                std::cout.rdbuf(previous);
+
+                expect(compositor.partition().fullscreen());
+                expect(compositor.partition().terminal.height() == 5 * ln);
+                expect(compositor.size().h == 5 * ln);
+                expect(!resize_output.str().empty());
+            };
+
+        "resize preserves windowed HUD partition"_test = [] {
+            GlyphTable glyphs;
+            tui::TerminalCompositor compositor({12 * ch, 5 * ln}, glyphs);
+            std::ostringstream init;
+            compositor.set_hud_height(2 * ln, 5 * ln, init);
+
+            std::ostringstream resize_output;
+            auto * previous = std::cout.rdbuf(resize_output.rdbuf());
+            compositor.resize({16 * ch, 7 * ln});
+            std::cout.rdbuf(previous);
+
+            expect(compositor.partition().windowed());
+            expect(compositor.partition().terminal.height() == 7 * ln);
+            expect(compositor.hud_height() == 2 * ln);
+            expect(compositor.size().w == 16 * ch);
+            expect(compositor.size().h == 2 * ln);
+            expect(compositor.scrollback_bottom_row() == 4_i);
+        };
+
+        "redraws the HUD at its resized terminal rows"_test = [] {
+            ansi::mode = ansi::Mode::enabled;
+            GlyphTable glyphs;
+            tui::TerminalCompositor compositor({12 * ch, 4 * ln}, glyphs);
+            vterm::Terminal term(4, 12);
+            set_hud_height(compositor, term, 2 * ln, 4 * ln);
+            auto initial =
+                tui::column(tui::text("HUD one"), tui::text("HUD two"));
+            term.write(
+                render_to_string(compositor, initial, {12 * ch, 2 * ln}));
+
+            term.set_size(6, 16);
+            std::ostringstream resize_output;
+            auto * previous = std::cout.rdbuf(resize_output.rdbuf());
+            compositor.resize({16 * ch, 6 * ln});
+            std::cout.rdbuf(previous);
+            term.write(resize_output.str());
+
+            auto resized =
+                tui::column(tui::text("HUD one"), tui::text("HUD two"));
+            term.write(
+                render_to_string(compositor, resized, {16 * ch, 2 * ln}));
+            expect(compositor.partition().windowed());
+            expect(compositor.partition().terminal.height() == 6 * ln);
+            expect(term.get_row_text(4) == "HUD one");
+            expect(term.get_row_text(5) == "HUD two");
         };
     }};
 

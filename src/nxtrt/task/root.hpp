@@ -45,9 +45,11 @@ public:
     root_task(deck & d, Fn && fn)
         : deck_(&d)
     {
-        using factory_type = std::decay_t<Fn>;
+        auto factory =
+            std::make_shared<std::decay_t<Fn>>(std::forward<Fn>(fn));
         auto root_guard = detail::env_guard{env_, &d, nullptr};
-        task_ = std::invoke(factory_type{std::forward<Fn>(fn)});
+        task_ = std::invoke(*factory);
+        factory_ = std::move(factory);
     }
 
     /// Queue the task on its deck. Does nothing if it is already done.
@@ -68,6 +70,9 @@ public:
     }
 
 private:
+    // Keep coroutine-lambda closures alive for as long as their task
+    // frames.
+    std::shared_ptr<void> factory_;
     runtime_env env_;
     task<T> task_;
     deck * deck_ = nullptr;
@@ -82,6 +87,12 @@ template<typename Fn, typename... Args>
 [[nodiscard]] task_result_t<std::invoke_result_t<std::decay_t<Fn> &, Args...>>
 deck::sync_wait(Fn && fn, Args &&... args)
 {
+    // Installing a root environment must not hide an already-running task
+    // from the deck's reentrancy guard.
+    auto * current = current_env();
+    if (current != nullptr && current->current_promise != nullptr)
+        throw runtime_error{"nxtrt sync_wait is not reentrant"};
+
     // The factory outlives its task: a capturing coroutine lambda's frame
     // refers to the closure object.
     auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};

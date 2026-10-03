@@ -121,6 +121,7 @@ struct promise_base
     {
         if (completion != nullptr)
             completion->task_destroyed();
+        unregister_from_deck();
     }
 
     /// Called by the compiler before running the coroutine body.

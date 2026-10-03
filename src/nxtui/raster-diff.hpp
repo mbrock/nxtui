@@ -84,13 +84,17 @@ struct StyleState
             bg = raw.bg;
         }
 
-        if (raw.em == Emphasis::none && em) {
+        // SGR emphasis parameters only turn attributes on. If the next
+        // style drops any currently active attribute, reset first;
+        // otherwise emit the changed nonempty style without disturbing
+        // existing attributes.
+        if (em && ((*em & raw.em) != *em))
             run.em_reset = true;
-            em = std::nullopt;
-        } else if (raw.em != Emphasis::none && raw.em != em) {
+
+        if (raw.em != Emphasis::none && raw.em != em)
             run.em_change = raw.em;
-            em = raw.em;
-        }
+        em =
+            raw.em == Emphasis::none ? std::nullopt : std::optional{raw.em};
 
         return run;
     }

@@ -26,11 +26,16 @@ ontology nxt "https://swa.sh/nxt#"
   class settled-phase :abstract
   class ready-to-retire-phase :subclass-of settled-phase
   class draining-phase :subclass-of settled-phase
+  class completion-result :abstract
+  class success-result :subclass-of completion-result
+  class cancellation-result :subclass-of completion-result
 
   property has-ready
   property has-lifecycle
   property has-parked-phase
   property has-settled-phase
+  property operation-result
+  property delivered-result
   property has-continuation
   property realizes
   property admitted
@@ -344,6 +349,9 @@ model runtime-model
     has-lifecycle var one exec-state
     has-parked-phase var lone parked-phase
     has-settled-phase var lone settled-phase
+    // Abstract the operation CQE separately from the cancel request/CQE.
+    operation-result var lone completion-result
+    delivered-result var lone completion-result
   signature exec-state
   signature prepared-state
   signature parked-state
@@ -356,6 +364,9 @@ model runtime-model
   signature settled-phase
   signature ready-to-retire-phase
   signature draining-phase
+  signature completion-result
+  signature success-result
+  signature cancellation-result
 
   predicate blocking-starts
     all ([b blocking-work])
@@ -624,8 +635,12 @@ model runtime-model
     all ([a exec] [s (intersect (a has-lifecycle) retired-state)])
       next-state
         in (a has-lifecycle) retired-state
-    // Only a parked exec with a cancel in flight settles into draining
-    // (uring: op CQE before cancel CQE); everything else settles ready.
+    // Only a parked exec with a cancel SQE in flight settles into draining
+    // (uring: op CQE before cancel CQE). The operation CQE wins the result
+    // race: a successful CQE still delivers its FD/bytes even if cancellation
+    // was requested; only an -ECANCELED operation result cancels the wish.
+    // Rearming after readiness (epoll/kqueue EAGAIN) remains parked and does
+    // not change exec lifecycle state.
     all ([a exec] [s (intersect (a has-lifecycle) parked-state)])
       (=> (next-state (some (intersect (a has-settled-phase) draining-phase)))
           (some (intersect (a has-parked-phase) cancelling-phase)))
@@ -698,6 +713,52 @@ model runtime-model
     some ([a exec])
       eventually (some (intersect (a has-settled-phase) draining-phase))
       eventually (in (a has-lifecycle) retired-state)
+
+  predicate completion-delivery
+    all ([a exec])
+      (=> (in (a has-lifecycle) (union prepared-state parked-state))
+          (no (a delivered-result)))
+      // Cancellation in flight affects retirement, not the operation result.
+      (=> (block (in (a has-lifecycle) parked-state)
+                 (some (a operation-result))
+                 (next-state (in (a has-lifecycle) settled-state)))
+          (== (a operation-result) (a (prime delivered-result))))
+      (=> (in (a has-lifecycle) (union settled-state retired-state))
+          (== (a delivered-result) (a (prime delivered-result))))
+
+  predicate successful-completion-not-cancelled
+    all ([a exec])
+      (=> (block (in (a has-lifecycle) parked-state)
+                 (some (intersect (a operation-result) success-result))
+                 (next-state (in (a has-lifecycle) settled-state)))
+          (next-state (some (intersect (a delivered-result) success-result))))
+
+  check successful-operation-wins-cancellation :for ([1 exec wish task prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase success-result cancellation-result] [0 deck pool]) :trace-length 6
+    assume execs-start-prepared
+    assume always structural-invariants
+    assume always lifecycle-transitions
+    assume always completion-delivery
+    show always successful-completion-not-cancelled
+
+  run successful-operation-during-cancel-witness :for ([1 exec wish task prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase success-result cancellation-result] [0 deck pool]) :trace-length 6
+    execs-start-prepared
+    always structural-invariants
+    always lifecycle-transitions
+    always completion-delivery
+    some ([a exec])
+      next-state
+        in (a has-lifecycle) parked-state
+        some (intersect (a has-parked-phase) cancelling-phase)
+        == (a operation-result) success-result
+        next-state
+          in (a has-lifecycle) settled-state
+          some (intersect (a has-settled-phase) draining-phase)
+          == (a delivered-result) success-result
+          next-state
+            some (intersect (a has-settled-phase) ready-to-retire-phase)
+            next-state
+              in (a has-lifecycle) retired-state
+              == (a delivered-result) success-result
 
   check lifecycle-can-complete :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task]) :trace-length 6 :expect sat
     assume execs-start-prepared

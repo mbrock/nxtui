@@ -756,8 +756,8 @@ serve(int listener, request_handler handler, server_options options)
     try {
         co_await drain(accepted, options.max_connections);
     } catch (const operation_cancelled &) {
-        // As with the former server scope, stopping the serving task is a
-        // normal shutdown, but only after acceptance and connections drain.
+        // Stopping the serving task is a normal shutdown, but only after
+        // acceptance and connections drain.
         if (!current_task_stop_token().stop_requested())
             throw;
     }

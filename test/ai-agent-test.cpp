@@ -162,6 +162,35 @@ static suite ai_agent_tests{"AI agent", [] {
         expect(next.input_items.size() == 2_ul);
         expect(next.tools.size() == 1_ul);
     };
+    "caller tools and includes survive every agent turn without duplicates"_test =
+        []() -> nxtrt::task<void> {
+        auto count = 0;
+        auto tools = nxtai::tools::make_tool_registry(
+            {nxtai::tools::make_function_tool(counting_echo{&count})});
+        auto transport = scripted_transport{};
+        auto observer = agent_observer{};
+        auto request =
+            nxtai::responses::openai_responses_request{.input = "inspect"};
+        request.tools = {
+            {.name = "extra",
+             .description = "caller extra",
+             .parameters = raw_json{"{}"}},
+            {.name = "echo",
+             .description = "caller echo",
+             .parameters = raw_json{"{}"}}};
+        request.include = {
+            "message.output_text.logprobs", "reasoning.encrypted_content"};
+        co_await nxtai::run_agent(request, tools, transport, observer);
+        expect(transport.requests.size() == 2_ul);
+        for (const auto & sent : transport.requests) {
+            expect(sent.tools.size() == 2_ul);
+            expect(sent.tools.at(0).name == "extra");
+            expect(sent.tools.at(1).description == "caller echo");
+            expect(sent.include == request.include);
+        }
+        expect(request.model == "gpt-6-luna");
+        expect(request.reasoning_effort.empty());
+    };
     "turn limit prevents unanswerable extra tool work"_test = []() -> nxtrt::task<void> {
         auto count = 0;
         auto tools = nxtai::tools::make_tool_registry({

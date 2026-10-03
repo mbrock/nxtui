@@ -59,6 +59,8 @@ task<> tls13_client_session::handshake(
     std::string_view host, std::string_view ca_file)
 {
     handshaken_ = false;
+    close_notify_received_ = false;
+    post_handshake_.clear();
     auto hello = nxt::tls::make_tls13_client_hello(host);
     co_await nxtrt::write_all(writer_, hello.record);
 
@@ -196,7 +198,7 @@ task<nxt::tls::tls13_plaintext> tls13_client_session::read()
     while (true) {
         auto event = co_await next_event();
         if (event.kind == tls_event_kind::alert)
-            throw runtime_error{"received TLS alert"};
+            throw end_of_stream{"TLS close_notify"};
         co_return nxt::tls::tls13_plaintext{
             .content = nxt::tls::bytes{
                 event.content.begin(),
@@ -211,25 +213,114 @@ task<tls13_session_event> tls13_client_session::next_event()
 {
     require_handshake();
 
-    co_await read_record_into_storage();
-    if (record_type_ == 20) {
+    if (close_notify_received_)
         co_return tls13_session_event{
-            .kind = tls_event_kind::change_cipher_spec,
-            .content_type = record_type_,
-            .content = record_payload(),
+            .kind = tls_event_kind::alert,
+            .content_type = 21,
+            .content = {},
+        };
+
+    while (true) {
+        co_await read_record_into_storage();
+        if (record_type_ == 20) {
+            co_return tls13_session_event{
+                .kind = tls_event_kind::change_cipher_spec,
+                .content_type = record_type_,
+                .content = record_payload(),
+            };
+        }
+
+        auto plaintext = nxt::tls::open_tls13_record_in_place(
+            application_keys_.server,
+            record_type_,
+            record_version_,
+            record_payload());
+        nxt::tls::require_tls(
+            post_handshake_.empty() || plaintext.inner_type == 22,
+            "interleaved post-handshake message");
+        if (plaintext.inner_type == 21) {
+            nxt::tls::require_tls(
+                plaintext.content.size() == 2
+                    && plaintext.content[1] == std::byte{0},
+                "received TLS alert");
+            close_notify_received_ = true;
+            co_return tls13_session_event{
+                .kind = tls_event_kind::alert,
+                .content_type = 21,
+                .content = plaintext.content,
+            };
+        }
+
+        if (plaintext.inner_type == 22) {
+            constexpr auto max_flight_size = std::size_t{1024 * 1024};
+            nxt::tls::require_tls(
+                !plaintext.content.empty()
+                    && plaintext.content.size()
+                           <= max_flight_size - post_handshake_.size(),
+                "invalid post-handshake message size");
+            nxt::tls::put_bytes(post_handshake_, plaintext.content);
+            auto consumed = std::size_t{0};
+            auto updated = false;
+            while (post_handshake_.size() - consumed >= 4) {
+                auto message =
+                    std::span<const std::byte>{post_handshake_}.subspan(
+                        consumed);
+                auto length = nxt::tls::parse_u24(message.subspan(1, 3));
+                auto size = std::size_t{4} + length;
+                nxt::tls::require_tls(
+                    size <= max_flight_size,
+                    "post-handshake message is too large");
+                if (message.size() < size)
+                    break;
+                consumed += size;
+                if (message[0] != std::byte{24})
+                    continue;
+                nxt::tls::require_tls(
+                    length == 1 && message.size() == 5
+                        && (message[4] == std::byte{0}
+                            || message[4] == std::byte{1}),
+                    "invalid TLS KeyUpdate");
+
+                auto update = [](nxt::tls::tls13_read_keys & keys) {
+                    auto secret = nxt::tls::hkdf_expand_label(
+                        keys.traffic_secret,
+                        "traffic upd",
+                        {},
+                        nxt::crypto::sha256_len);
+                    auto traffic_secret =
+                        std::array<std::byte, nxt::crypto::sha256_len>{};
+                    std::ranges::copy(secret, traffic_secret.begin());
+                    keys = nxt::tls::derive_traffic_keys(traffic_secret);
+                };
+                auto requested = message[4] == std::byte{1};
+                update(application_keys_.server);
+                if (requested) {
+                    constexpr auto key_update = std::array{
+                        std::byte{24},
+                        std::byte{0},
+                        std::byte{0},
+                        std::byte{1},
+                        std::byte{0}};
+                    co_await nxtrt::write_all(
+                        writer_,
+                        nxt::tls::seal_tls13_record(
+                            application_keys_.client, 22, key_update));
+                    update(application_keys_.client);
+                }
+                updated = true;
+            }
+            post_handshake_.erase(
+                post_handshake_.begin(),
+                post_handshake_.begin() + consumed);
+            if (updated || !post_handshake_.empty())
+                continue;
+        }
+        co_return tls13_session_event{
+            .kind = tls_event_kind_from_content_type(plaintext.inner_type),
+            .content_type = plaintext.inner_type,
+            .content = plaintext.content,
         };
     }
-
-    auto plaintext = nxt::tls::open_tls13_record_in_place(
-        application_keys_.server,
-        record_type_,
-        record_version_,
-        record_payload());
-    co_return tls13_session_event{
-        .kind = tls_event_kind_from_content_type(plaintext.inner_type),
-        .content_type = plaintext.inner_type,
-        .content = plaintext.content,
-    };
 }
 
 std::uint16_t tls13_client_session::parse_record_u16(
@@ -295,7 +386,7 @@ task<fare_t> tls13_client_session::stream_more_task(
     do {
         auto event = co_await next_event();
         if (event.kind == tls_event_kind::alert)
-            throw runtime_error{"received TLS alert"};
+            co_return eof;
         if (event.kind == tls_event_kind::application_data) {
             pending_.assign(event.content.begin(), event.content.end());
             break;

@@ -1,6 +1,7 @@
 #include "nxtui/glyph-table.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 namespace nxtui {
 
@@ -11,28 +12,22 @@ GlyphTable::GlyphTable()
 
 void GlyphTable::init_ascii()
 {
-    arena_.reserve(256);
-    spans_.reserve(256);
     table_.reserve(256);
 
     for (std::uint32_t i = 0; i <= ASCII_MAX; ++i) {
-        const auto offset = static_cast<std::uint32_t>(arena_.size());
-        arena_.push_back(static_cast<char>(i));
-        spans_.push_back({offset, 1});
-
-        table_.emplace(
-            std::string(1, static_cast<char>(i)),
-            static_cast<GlyphId>(i));
+        auto bytes = std::string(1, static_cast<char>(i));
+        glyphs_.push_back(bytes);
+        table_.emplace(std::move(bytes), static_cast<GlyphId>(i));
     }
 }
 
 GlyphTable::GlyphId GlyphTable::intern(const std::string_view bytes)
 {
-    // Fast path for single bytes (no lock needed - ASCII is immutable)
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // ASCII IDs are self-mapped, and clear() may run concurrently.
     if (bytes.size() == 1)
         return static_cast<unsigned char>(bytes[0]);
-
-    std::lock_guard<std::mutex> lock(mutex_);
 
     // Check if already interned
     if (const auto it = table_.find(std::string(bytes)); it != table_.end())
@@ -42,15 +37,8 @@ GlyphTable::GlyphId GlyphTable::intern(const std::string_view bytes)
     if (bytes.size() > 255)
         throw std::length_error("Glyph too long (max 255 bytes)");
 
-    const auto offset = static_cast<std::uint32_t>(arena_.size());
-    const auto length = static_cast<std::uint8_t>(bytes.size());
-
-    // Append to arena
-    arena_.insert(arena_.end(), bytes.begin(), bytes.end());
-
-    // Track span
-    spans_.push_back({offset, length});
-    auto id = static_cast<GlyphId>(spans_.size() - 1);
+    glyphs_.emplace_back(bytes);
+    auto id = static_cast<GlyphId>(glyphs_.size() - 1);
 
     table_.emplace(std::string(bytes), id);
 
@@ -60,11 +48,12 @@ GlyphTable::GlyphId GlyphTable::intern(const std::string_view bytes)
 std::optional<std::span<const char>>
 GlyphTable::get_span(const GlyphId id) const noexcept
 {
-    if (id >= spans_.size())
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (id >= glyphs_.size())
         return std::nullopt;
 
-    const auto & [offset, length] = spans_[id];
-    return std::span{arena_.data() + offset, length};
+    const auto & glyph = glyphs_[id];
+    return std::span{glyph.data(), glyph.size()};
 }
 
 std::optional<std::string_view>
@@ -84,14 +73,15 @@ std::string_view GlyphTable::operator[](const GlyphId id) const
 
 std::size_t GlyphTable::size() const noexcept
 {
-    return spans_.size();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return glyphs_.size();
 }
 
 void GlyphTable::clear()
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     table_.clear();
-    arena_.clear();
-    spans_.clear();
+    glyphs_.clear();
     init_ascii();
 }
 

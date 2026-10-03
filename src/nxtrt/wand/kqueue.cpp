@@ -31,13 +31,6 @@
 #include <variant>
 #include <vector>
 
-// Timer data is passed in nanoseconds. Without NOTE_NSECONDS the fflags
-// are 0 and kqueue reads the data in milliseconds, so timers would run
-// a million times too long on such a platform.
-#ifndef NOTE_NSECONDS
-#define NOTE_NSECONDS 0
-#endif
-
 namespace nxtrt::detail {
 
 using kqueue_event = struct kevent;
@@ -226,15 +219,6 @@ public:
         prepared_wish packet);
 
 private:
-    static void set_nonblocking(int fd)
-    {
-        auto flags = ::fcntl(fd, F_GETFL, 0);
-        if (flags < 0)
-            return;
-        if ((flags & O_NONBLOCK) == 0)
-            (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    }
-
     static void set_close_on_exec(int fd)
     {
         auto flags = ::fcntl(fd, F_GETFD, 0);
@@ -245,7 +229,8 @@ private:
 
     static int accept_once(op::accept const & op)
     {
-        auto accepted = ::accept(op.fd, nullptr, nullptr);
+        auto accepted = static_cast<int>(nonblocking_call(
+            op.fd, [&] { return ::accept(op.fd, nullptr, nullptr); }));
         if (accepted < 0)
             return accepted;
 
@@ -254,10 +239,35 @@ private:
             set_close_on_exec(accepted);
 #endif
 #ifdef SOCK_NONBLOCK
-        if ((op.flags & SOCK_NONBLOCK) != 0)
-            set_nonblocking(accepted);
+        if ((op.flags & SOCK_NONBLOCK) != 0) {
+            auto flags = ::fcntl(accepted, F_GETFL, 0);
+            if (flags < 0
+                || ::fcntl(accepted, F_SETFL, flags | O_NONBLOCK) < 0) {
+                auto error = errno;
+                ::close(accepted);
+                errno = error;
+                return -1;
+            }
+        }
 #endif
         return accepted;
+    }
+
+    template<typename Call>
+    static ssize_t nonblocking_call(int fd, Call && call)
+    {
+        auto flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags < 0)
+            return -1;
+        auto changed = (flags & O_NONBLOCK) == 0;
+        if (changed && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+            return -1;
+        auto result = call();
+        auto error = errno;
+        if (changed)
+            (void) ::fcntl(fd, F_SETFL, flags);
+        errno = error;
+        return result;
     }
 
     static bool would_block(int err) noexcept
@@ -292,10 +302,19 @@ private:
             reinterpret_cast<uintptr_t>(event.udata));
     }
 
-    static std::int64_t nanoseconds(kernel_timespec duration) noexcept
+    static std::pair<unsigned int, std::int64_t>
+    timer_spec(kernel_timespec duration) noexcept
     {
         auto value = duration.tv_sec * 1'000'000'000LL + duration.tv_nsec;
-        return value <= 0 ? 1 : value;
+        value = value <= 0 ? 1 : value;
+#  ifdef NOTE_NSECONDS
+        return {NOTE_NSECONDS, value};
+#  else
+        // Fall back to milliseconds, rounding up to preserve positive
+        // delays.
+        return {
+            0, std::max<std::int64_t>(1, (value + 999'999) / 1'000'000)};
+#  endif
     }
 
     static int poll_events_from_filter(short filter) noexcept
@@ -305,6 +324,16 @@ private:
         if (filter == EVFILT_WRITE)
             return POLLOUT;
         return 0;
+    }
+
+    static int poll_events_from_event(kqueue_event const & event) noexcept
+    {
+        auto events = poll_events_from_filter(event.filter);
+        if ((event.flags & EV_EOF) != 0)
+            events |= POLLHUP;
+        if ((event.flags & EV_ERROR) != 0)
+            events |= POLLERR;
+        return events;
     }
 
     class completion_base
@@ -328,10 +357,13 @@ private:
             wait_token token,
             kqueue_wish & request,
             std::vector<kqueue_event> & changes) = 0;
-        virtual void complete(
-            kqueue_wish & request,
-            int result,
-            bool cancelled) = 0;
+        virtual void
+        complete(kqueue_wish & request, int result, bool cancelled) = 0;
+
+        virtual uintptr_t poll_registration_identity(int fd) const noexcept
+        {
+            return static_cast<uintptr_t>(fd);
+        }
 
         [[nodiscard]] bool finished() const noexcept
         {
@@ -382,7 +414,10 @@ private:
             kqueue_wish & request,
             kqueue_event const & event) override
         {
-            if ((event.flags & EV_ERROR) != 0) {
+            auto is_poll =
+                std::holds_alternative<op::poll>(request)
+                || std::holds_alternative<op::poll_until>(request);
+            if ((event.flags & EV_ERROR) != 0 && !is_poll) {
                 finish_error(static_cast<int>(event.data));
                 return true;
             }
@@ -449,10 +484,16 @@ private:
             std::vector<kqueue_event> & changes,
             op::read_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result = op.offset < 0
-                ? ::read(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pread(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::read(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pread(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
             return finish_or_wait(
                 token,
                 changes,
@@ -468,10 +509,16 @@ private:
             std::vector<kqueue_event> & changes,
             op::write_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result = op.offset < 0
-                ? ::write(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pwrite(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::write(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pwrite(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
             return finish_or_wait(
                 token,
                 changes,
@@ -487,9 +534,11 @@ private:
             std::vector<kqueue_event> & changes,
             op::recv_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result =
-                ::recv(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
+            auto result = ::recv(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
             return finish_or_wait(
                 token,
                 changes,
@@ -505,9 +554,11 @@ private:
             std::vector<kqueue_event> & changes,
             op::send_some & op)
         {
-            set_nonblocking(op.fd);
-            auto result =
-                ::send(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
+            auto result = ::send(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
             return finish_or_wait(
                 token,
                 changes,
@@ -523,8 +574,10 @@ private:
             std::vector<kqueue_event> & changes,
             op::connect & op)
         {
-            set_nonblocking(op.fd);
-            if (::connect(op.fd, op.sockaddr_ptr(), op.address_size) == 0) {
+            auto connected = nonblocking_call(op.fd, [&] {
+                return ::connect(op.fd, op.sockaddr_ptr(), op.address_size);
+            });
+            if (connected == 0) {
                 finish_result(0);
                 return false;
             }
@@ -552,7 +605,6 @@ private:
             std::vector<kqueue_event> & changes,
             op::accept & op)
         {
-            set_nonblocking(op.fd);
             auto result = accept_once(op);
             return finish_or_wait(
                 token,
@@ -569,10 +621,15 @@ private:
             std::vector<kqueue_event> & changes,
             op::poll & op)
         {
+            auto registration = poll_registration_fd(op.fd);
+            if (registration < 0) {
+                finish_error(errno);
+                return false;
+            }
             if ((op.events & POLLIN) != 0) {
                 set_event(
                     changes,
-                    op.fd,
+                    static_cast<uintptr_t>(registration),
                     EVFILT_READ,
                     EV_ADD | EV_ONESHOT,
                     0,
@@ -582,7 +639,7 @@ private:
             if ((op.events & POLLOUT) != 0) {
                 set_event(
                     changes,
-                    op.fd,
+                    static_cast<uintptr_t>(registration),
                     EVFILT_WRITE,
                     EV_ADD | EV_ONESHOT,
                     0,
@@ -599,13 +656,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::timeout & op)
         {
+            auto [units, delay] = timer_spec(op.duration);
             set_event(
                 changes,
                 token,
                 EVFILT_TIMER,
                 EV_ADD | EV_ONESHOT,
-                NOTE_NSECONDS,
-                static_cast<intptr_t>(nanoseconds(op.duration)),
+                units,
+                static_cast<intptr_t>(delay),
                 token);
             return true;
         }
@@ -617,10 +675,15 @@ private:
             std::vector<kqueue_event> & changes,
             op::poll_until & op)
         {
+            auto registration = poll_registration_fd(op.fd);
+            if (registration < 0) {
+                finish_error(errno);
+                return false;
+            }
             if ((op.events & POLLIN) != 0) {
                 set_event(
                     changes,
-                    op.fd,
+                    static_cast<uintptr_t>(registration),
                     EVFILT_READ,
                     EV_ADD | EV_ONESHOT,
                     0,
@@ -630,20 +693,21 @@ private:
             if ((op.events & POLLOUT) != 0) {
                 set_event(
                     changes,
-                    op.fd,
+                    static_cast<uintptr_t>(registration),
                     EVFILT_WRITE,
                     EV_ADD | EV_ONESHOT,
                     0,
                     0,
                     token);
             }
+            auto [units, delay] = timer_spec(op.timeout);
             set_event(
                 changes,
                 token,
                 EVFILT_TIMER,
                 EV_ADD | EV_ONESHOT,
-                NOTE_NSECONDS,
-                static_cast<intptr_t>(nanoseconds(op.timeout)),
+                units,
+                static_cast<intptr_t>(delay),
                 token);
             return true;
         }
@@ -738,9 +802,16 @@ private:
             kqueue_event const &,
             op::read_some & op)
         {
-            auto result = op.offset < 0
-                ? ::read(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pread(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::read(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pread(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
             return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_READ);
         }
 
@@ -751,9 +822,16 @@ private:
             kqueue_event const &,
             op::write_some & op)
         {
-            auto result = op.offset < 0
-                ? ::write(op.fd, op.buffer.data(), op.buffer.size())
-                : ::pwrite(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
+            auto result = nonblocking_call(op.fd, [&] {
+                return op.offset < 0
+                           ? ::write(
+                                 op.fd, op.buffer.data(), op.buffer.size())
+                           : ::pwrite(
+                                 op.fd,
+                                 op.buffer.data(),
+                                 op.buffer.size(),
+                                 op.offset);
+            });
             return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_WRITE);
         }
 
@@ -764,8 +842,11 @@ private:
             kqueue_event const &,
             op::recv_some & op)
         {
-            auto result =
-                ::recv(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
+            auto result = ::recv(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
             return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_READ);
         }
 
@@ -776,8 +857,11 @@ private:
             kqueue_event const &,
             op::send_some & op)
         {
-            auto result =
-                ::send(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
+            auto result = ::send(
+                op.fd,
+                op.buffer.data(),
+                op.buffer.size(),
+                op.flags | MSG_DONTWAIT);
             return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_WRITE);
         }
 
@@ -821,7 +905,7 @@ private:
             kqueue_event const & event,
             op::poll & op)
         {
-            finish_result(poll_events_from_filter(event.filter));
+            finish_result(poll_events_from_event(event));
             if (wand.delete_poll_siblings(token, op, event.filter))
                 this->mark_delete_pending();
             return true;
@@ -851,10 +935,11 @@ private:
                     .timed_out = true,
                 });
             } else {
-                finish_poll_until(poll_until_result{
-                    .events = poll_events_from_filter(event.filter),
-                    .timed_out = false,
-                });
+                finish_poll_until(
+                    poll_until_result{
+                        .events = poll_events_from_event(event),
+                        .timed_out = false,
+                    });
             }
             if (wand.delete_poll_until_siblings(token, op, event.filter))
                 this->mark_delete_pending();
@@ -882,9 +967,12 @@ private:
             auto error = wand.try_arm(
                 token, static_cast<uintptr_t>(op.child), EVFILT_PROC, NOTE_EXIT);
             watching_timer_ = error == ESRCH;
-            if (watching_timer_)
-                error = wand.try_arm(
-                    token, token, EVFILT_TIMER, NOTE_NSECONDS, 200'000);
+            if (watching_timer_) {
+                auto [units, delay] =
+                    timer_spec(kernel_timespec{0, 200'000});
+                error =
+                    wand.try_arm(token, token, EVFILT_TIMER, units, delay);
+            }
             if (error == 0)
                 return false;
             finish_error(error);
@@ -1013,10 +1101,28 @@ private:
             std::vector<kqueue_event> & changes,
             op::poll & op)
         {
+            auto const registration =
+                poll_registration_fd_.get() >= 0
+                    ? static_cast<uintptr_t>(poll_registration_fd_.get())
+                    : static_cast<uintptr_t>(op.fd);
             if ((op.events & POLLIN) != 0)
-                set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+                set_event(
+                    changes,
+                    registration,
+                    EVFILT_READ,
+                    EV_DELETE,
+                    0,
+                    0,
+                    token);
             if ((op.events & POLLOUT) != 0)
-                set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+                set_event(
+                    changes,
+                    registration,
+                    EVFILT_WRITE,
+                    EV_DELETE,
+                    0,
+                    0,
+                    token);
         }
 
         void delete_op_events(
@@ -1032,10 +1138,28 @@ private:
             std::vector<kqueue_event> & changes,
             op::poll_until & op)
         {
+            auto const registration =
+                poll_registration_fd_.get() >= 0
+                    ? static_cast<uintptr_t>(poll_registration_fd_.get())
+                    : static_cast<uintptr_t>(op.fd);
             if ((op.events & POLLIN) != 0)
-                set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+                set_event(
+                    changes,
+                    registration,
+                    EVFILT_READ,
+                    EV_DELETE,
+                    0,
+                    0,
+                    token);
             if ((op.events & POLLOUT) != 0)
-                set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+                set_event(
+                    changes,
+                    registration,
+                    EVFILT_WRITE,
+                    EV_DELETE,
+                    0,
+                    0,
+                    token);
             set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
         }
 
@@ -1164,8 +1288,35 @@ private:
                         + " (" + std::to_string(err) + ")"}));
         }
 
+        int poll_registration_fd(int fd)
+        {
+            if (poll_registration_fd_.get() >= 0)
+                return poll_registration_fd_.get();
+#  ifdef F_DUPFD_CLOEXEC
+            auto duplicate = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
+#  else
+            auto duplicate = ::dup(fd);
+#  endif
+            if (duplicate < 0)
+                return -1;
+            poll_registration_fd_.reset(duplicate);
+            return duplicate;
+        }
+
+        uintptr_t poll_registration_identity(int fd) const noexcept override
+        {
+            return static_cast<uintptr_t>(
+                poll_registration_fd_.get() >= 0
+                    ? poll_registration_fd_.get()
+                    : fd);
+        }
+
         std::shared_ptr<urge_state<T>> state_;
         bool watching_timer_ = false; // wait_child: timer, not NOTE_EXIT
+        // Each execution owns an independent kevent identity. Keep it alive
+        // through EV_DELETE application so a reused descriptor cannot
+        // inherit or remove another execution's registration.
+        nxt::unique_fd poll_registration_fd_;
     };
 
     /// Immutable wish recipe plus the typed completion sink for an exec.
@@ -1352,11 +1503,24 @@ private:
         op::poll const & op,
         short completed_filter)
     {
+        auto * execution = exec_from_token(token);
+        auto registration = execution == nullptr
+                                ? static_cast<uintptr_t>(op.fd)
+                                : execution->specification.completion
+                                      ->poll_registration_identity(op.fd);
         auto changes = std::vector<kqueue_event>{};
         if (completed_filter != EVFILT_READ && (op.events & POLLIN) != 0)
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+            set_event(
+                changes, registration, EVFILT_READ, EV_DELETE, 0, 0, token);
         if (completed_filter != EVFILT_WRITE && (op.events & POLLOUT) != 0)
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                registration,
+                EVFILT_WRITE,
+                EV_DELETE,
+                0,
+                0,
+                token);
         auto const any = !changes.empty();
         pending_changes_.insert(
             pending_changes_.end(),
@@ -1370,13 +1534,26 @@ private:
         op::poll_until const & op,
         short completed_filter)
     {
+        auto * execution = exec_from_token(token);
+        auto registration = execution == nullptr
+                                ? static_cast<uintptr_t>(op.fd)
+                                : execution->specification.completion
+                                      ->poll_registration_identity(op.fd);
         auto changes = std::vector<kqueue_event>{};
         if (completed_filter != EVFILT_TIMER)
             set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
         if (completed_filter != EVFILT_READ && (op.events & POLLIN) != 0)
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+            set_event(
+                changes, registration, EVFILT_READ, EV_DELETE, 0, 0, token);
         if (completed_filter != EVFILT_WRITE && (op.events & POLLOUT) != 0)
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                registration,
+                EVFILT_WRITE,
+                EV_DELETE,
+                0,
+                0,
+                token);
         auto const any = !changes.empty();
         pending_changes_.insert(
             pending_changes_.end(),

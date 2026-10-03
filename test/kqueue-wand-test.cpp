@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdexcept>
@@ -163,6 +164,32 @@ nxtrt::task<void> poll_cancelled(int rx)
     throw std::runtime_error{"poll completed instead of being cancelled"};
 }
 
+nxtrt::task<int> kqueue_poll_events(int fd, short events)
+{
+    co_return co_await nxtrt::op::poll{fd, events};
+}
+
+nxtrt::task<void> wait_for_both_directions(int fd)
+{
+    auto [read_events, another_read, write_events] =
+        co_await nxtrt::when_all(
+            kqueue_poll_events(fd, POLLIN),
+            kqueue_poll_events(fd, POLLIN),
+            kqueue_poll_events(fd, POLLOUT));
+    if ((read_events & POLLIN) == 0 || (another_read & POLLIN) == 0
+        || (write_events & POLLOUT) == 0)
+        throw std::runtime_error{"same-fd poll waiters lost readiness"};
+}
+
+nxtrt::task<void> drive_both_direction_waiters(int tx, int rx)
+{
+    auto waiters = wait_for_both_directions(rx);
+    auto sent = co_await nxtrt::send_some(tx, nxtrt::as_bytes("d"));
+    if (sent != 1)
+        throw std::runtime_error{"short same-fd poll send"};
+    co_await std::move(waiters);
+}
+
 nxtrt::task<void> native_poll_until_cancelled(int rx)
 {
     try {
@@ -257,6 +284,8 @@ static suite kqueue_wand_tests{
 
             auto accepted = kqueue_pump_until_done(deck, wand, root.inner());
             expect(accepted.get() >= 0);
+            expect((::fcntl(accepted.get(), F_GETFL, 0) & O_NONBLOCK) == 0);
+            expect((::fcntl(accepted.get(), F_GETFD, 0) & FD_CLOEXEC) == 0);
         };
 
         "native poll-until slots are reusable after sibling deletes"_test = [] {
@@ -280,6 +309,8 @@ static suite kqueue_wand_tests{
 
         "poll slots are reusable after sibling deletes"_test = [] {
             auto sockets = make_socketpair();
+            auto tx_flags = ::fcntl(sockets[0].get(), F_GETFL, 0);
+            auto rx_flags = ::fcntl(sockets[1].get(), F_GETFL, 0);
             auto wand = nxtrt::kqueue_wand{};
             auto deck = nxtrt::deck{&wand};
             auto root = nxtrt::root_task{
@@ -294,6 +325,25 @@ static suite kqueue_wand_tests{
             root.start();
             kqueue_pump_until_done(deck, wand, root.inner());
 
+            expect(root.inner().done());
+            expect(::fcntl(sockets[0].get(), F_GETFL, 0) == tx_flags);
+            expect(::fcntl(sockets[1].get(), F_GETFL, 0) == rx_flags);
+        };
+
+        "same-fd read and write poll waiters are independent"_test = [] {
+            auto sockets = make_socketpair();
+            auto wand = nxtrt::kqueue_wand{};
+            auto deck = nxtrt::deck{&wand};
+            auto root = nxtrt::root_task{
+                deck,
+                [&] {
+                    return drive_both_direction_waiters(
+                        sockets[0].get(), sockets[1].get());
+                },
+            };
+
+            root.start();
+            kqueue_pump_until_done(deck, wand, root.inner());
             expect(root.inner().done());
         };
 

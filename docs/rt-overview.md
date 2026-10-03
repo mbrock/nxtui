@@ -185,6 +185,18 @@ after the cancellation's own completion arrives. This lifecycle is specified
 in the executable model [`nxtrt/runtime.rkt`](#rt_model), and
 `detail::wand_exec::lifecycle` is its C++ form.
 
+An io_uring operation that already completed still delivers its result,
+including accepted/opened descriptors and read bytes; the exec stays alive
+until any outstanding cancellation CQE drains. For readiness-driven child
+waits, cancellation before `waitid` leaves the child unreaped for cleanup.
+
+The readiness backends preserve caller descriptor flags between syscalls and
+honor the requested accept flags. Socket send/receive use `MSG_DONTWAIT`;
+generic read/write, connect, and accept temporarily enable `O_NONBLOCK` and
+restore it immediately. That temporary change is visible to other threads
+using the same open-file description (including `dup` aliases), so concurrent
+flag changes or blocking I/O on those aliases require caller synchronization.
+
 ## Cancellation {#rt_cancel}
 
 Cancellation in nxtrt is a stop request on a task, and it is cooperative.
@@ -193,9 +205,10 @@ Cancellation in nxtrt is a stop request on a task, and it is cooperative.
   the awaiting task's stop state, so stopping a task stops whatever it is
   currently awaiting.
 - **Parked wishes are cancelled.** A task stopped while waiting on a wish
-  asks the wand to cancel that operation; the await then throws
-  @ref nxtrt::operation_cancelled "operation_cancelled". A task already
-  stopped when it awaits a wish has it cancelled immediately.
+  asks the wand to cancel that operation; if cancellation wins, the await
+  throws @ref nxtrt::operation_cancelled "operation_cancelled". An operation
+  that already completed still returns its result. A task already stopped
+  when it awaits a wish has it cancelled immediately.
 - **Groups stop their own jobs.** A [group](#rt_group) stops its remaining
   jobs when its policy says so or when the group itself is stopped, and
   waits for all of them to finish before returning.

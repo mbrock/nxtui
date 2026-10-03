@@ -70,11 +70,15 @@ void TerminalCompositor::resize(nxtui::Size size)
 {
     // In HUD mode, the raster only covers HUD rows; fullscreen layouts use
     // the whole terminal.
-    auto resized_partition =
-        partition_for(partition_.bottom_fixed.height(), size.h);
+    // Full-screen ownership follows the terminal size. In windowed mode,
+    // preserve the fixed HUD height while rebuilding the scroll partition.
+    auto hud_height =
+        partition_.fullscreen() ? size.h : partition_.bottom_fixed.height();
+    auto resized_partition = partition_for(hud_height, size.h);
     auto raster_h = raster_height_for(resized_partition);
     front_ = Raster(size.w, raster_h, glyphs_);
     back_ = Raster(size.w, raster_h, glyphs_);
+    partition_ = resized_partition;
 
     if (!geometry_initialized_)
         return;
@@ -84,6 +88,14 @@ void TerminalCompositor::resize(nxtui::Size size)
     std::string buf;
     ansi::Writer w(buf);
     w.save_cursor();
+
+    if (resized_partition.scroll) {
+        w.set_scroll_region(
+            resized_partition.scroll->top_margin(),
+            resized_partition.scroll->bottom_margin());
+    } else {
+        w.reset_scroll_region();
+    }
 
     if (resized_partition.windowed()) {
         for (auto row = resized_partition.bottom_fixed.top;

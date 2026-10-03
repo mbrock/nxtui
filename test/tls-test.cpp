@@ -25,6 +25,18 @@ void fixture_check(bool ok)
         throw std::runtime_error{"TLS fixture construction failed"};
 }
 
+nxtrt::task<std::size_t> read_growing_tls_reply(
+    const nxt::tls::bytes & reply,
+    std::size_t & offset,
+    nxtrt::junk<std::byte> into)
+{
+    auto count = std::min(into.size(), reply.size() - offset);
+    if (count != 0)
+        std::memcpy(into.data(), reply.data() + offset, count);
+    offset += count;
+    co_return count;
+}
+
 key_ptr certificate_key()
 {
     auto context =
@@ -399,6 +411,165 @@ suite tls_tests = [] {
             }
             expect(nxtrt::as_string_view(decoded) == payload);
         };
+        "close_notify ends reads and requested KeyUpdate refreshes both directions"_test =
+            [] {
+                auto fixture = certificate_fixture{};
+                auto chunks = std::array<nxt::tls::bytes, 1>{};
+                auto offset = std::size_t{0};
+                auto reader = nxtrt::task_bytefeed{
+                    [&](nxtrt::junk<std::byte> into) {
+                        return read_growing_tls_reply(
+                            chunks[0], offset, into);
+                    },
+                    std::size_t{65536}};
+                auto peer =
+                    handshake_peer{chunks[0], fixture, {8, 11, 15, 20}};
+                auto client =
+                    nxtrt::tls::tls13_client_session{reader, peer};
+                auto deck = nxtrt::deck{};
+                deck.sync_wait([&] {
+                    return client.handshake(
+                        "service.example", fixture.path.data());
+                });
+
+                auto before_close = nxt::tls::bytes{};
+                nxt::tls::put_text(before_close, "before close");
+                nxt::tls::put_bytes(
+                    chunks[0],
+                    nxt::tls::seal_tls13_record(
+                        peer.application_keys.server, 23, before_close));
+                auto close_record = nxt::tls::seal_tls13_record(
+                    peer.application_keys.server,
+                    21,
+                    std::array{std::byte{2}, std::byte{0}});
+                nxt::tls::put_bytes(chunks[0], close_record);
+                auto before = deck.sync_wait([&] { return client.read(); });
+                expect(
+                    nxtrt::as_string_view(before.content)
+                    == "before close"sv);
+                auto closed = false;
+                try {
+                    (void) deck.sync_wait([&] { return client.read(); });
+                } catch (nxtrt::end_of_stream const &) {
+                    closed = true;
+                }
+                expect(closed);
+                expect(deck.sync_wait([&]() -> nxtrt::task<bool> {
+                    co_return !(co_await client.take());
+                }));
+
+                // A fresh connection exercises a requested KeyUpdate
+                // followed by application data protected by the new server
+                // traffic secret.
+                auto updated_chunks = std::array<nxt::tls::bytes, 1>{};
+                auto updated_offset = std::size_t{0};
+                auto updated_reader = nxtrt::task_bytefeed{
+                    [&](nxtrt::junk<std::byte> into) {
+                        return read_growing_tls_reply(
+                            updated_chunks[0], updated_offset, into);
+                    },
+                    std::size_t{65536}};
+                auto updated_peer = handshake_peer{
+                    updated_chunks[0], fixture, {8, 11, 15, 20}};
+                auto updated_client = nxtrt::tls::tls13_client_session{
+                    updated_reader, updated_peer};
+                deck.sync_wait([&] {
+                    return updated_client.handshake(
+                        "service.example", fixture.path.data());
+                });
+                constexpr auto request_update = std::array{
+                    std::byte{24},
+                    std::byte{0},
+                    std::byte{0},
+                    std::byte{1},
+                    std::byte{1}};
+                // Coalesce a ticket with a fragmented KeyUpdate. Its final
+                // byte still aligns with the end of the last old-key
+                // record.
+                auto fragment = nxt::tls::bytes{
+                    std::byte{4}, std::byte{0}, std::byte{0}, std::byte{0}};
+                nxt::tls::put_bytes(
+                    fragment, std::span{request_update}.first(2));
+                nxt::tls::put_bytes(
+                    updated_chunks[0],
+                    nxt::tls::seal_tls13_record(
+                        updated_peer.application_keys.server,
+                        22,
+                        fragment));
+                nxt::tls::put_bytes(
+                    updated_chunks[0],
+                    nxt::tls::seal_tls13_record(
+                        updated_peer.application_keys.server,
+                        22,
+                        std::span{request_update}.subspan(2)));
+                auto update_secret = nxt::tls::hkdf_expand_label(
+                    updated_peer.application_keys.server.traffic_secret,
+                    "traffic upd",
+                    {},
+                    nxt::crypto::sha256_len);
+                auto server_secret =
+                    std::array<std::byte, nxt::crypto::sha256_len>{};
+                std::ranges::copy(update_secret, server_secret.begin());
+                updated_peer.application_keys.server =
+                    nxt::tls::derive_traffic_keys(server_secret);
+                auto answer = nxt::tls::bytes{};
+                nxt::tls::put_text(answer, "after update");
+                nxt::tls::put_bytes(
+                    updated_chunks[0],
+                    nxt::tls::seal_tls13_record(
+                        updated_peer.application_keys.server, 23, answer));
+
+                auto received =
+                    deck.sync_wait([&] { return updated_client.read(); });
+                expect(
+                    nxtrt::as_string_view(received.content)
+                    == "after update"sv);
+                expect(updated_peer.application_records.size() == 1_ul);
+                auto cursor = nxt::tls::byte_cursor{
+                    updated_peer.application_records[0]};
+                auto type = cursor.take_u8();
+                auto version = cursor.take_u16();
+                auto payload = cursor.take(cursor.take_u16());
+                auto response = nxt::tls::open_tls13_record(
+                    updated_peer.application_keys.client,
+                    {.type = type,
+                     .version = version,
+                     .payload = {payload.begin(), payload.end()}});
+                expect(response.inner_type == 22);
+                expect(response.content.size() == 5_ul);
+                expect(response.content[0] == std::byte{24});
+                expect(response.content[4] == std::byte{0});
+                auto client_secret = nxt::tls::hkdf_expand_label(
+                    updated_peer.application_keys.client.traffic_secret,
+                    "traffic upd",
+                    {},
+                    nxt::crypto::sha256_len);
+                auto next_client_secret =
+                    std::array<std::byte, nxt::crypto::sha256_len>{};
+                std::ranges::copy(
+                    client_secret, next_client_secret.begin());
+                updated_peer.application_keys.client =
+                    nxt::tls::derive_traffic_keys(next_client_secret);
+                deck.sync_wait([&] {
+                    return updated_client.write_all(
+                        "client after update"sv);
+                });
+                expect(updated_peer.application_records.size() == 2_ul);
+                auto application = nxt::tls::byte_cursor{
+                    updated_peer.application_records[1]};
+                auto app_type = application.take_u8();
+                auto app_version = application.take_u16();
+                auto app_payload = application.take(application.take_u16());
+                auto sent = nxt::tls::open_tls13_record(
+                    updated_peer.application_keys.client,
+                    {.type = app_type,
+                     .version = app_version,
+                     .payload = {app_payload.begin(), app_payload.end()}});
+                expect(sent.inner_type == 23);
+                expect(
+                    nxtrt::as_string_view(sent.content)
+                    == "client after update"sv);
+            };
         "validates chains and SAN identities, not common names"_test = [] {
             auto fixture = certificate_fixture{};
             auto chain = fixture.chain();

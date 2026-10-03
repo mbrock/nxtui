@@ -55,14 +55,10 @@ public:
     TerminalCompositor(nxtui::Size size, GlyphTable & glyphs);
     /// Replace both buffers with blank rasters for a terminal of `size`.
     ///
-    /// The raster height is computed from the current owned height (the
-    /// HUD height, or the old terminal height in full-screen mode) clamped
-    /// to the new terminal height, so a full-screen compositor does not
-    /// grow with the terminal by itself. Once `set_hud_height` has
-    /// installed a layout, it also clears the owned rows (or the whole
-    /// screen) on `std::cout`. It does not update `partition()` or the
-    /// terminal's scroll region: follow it with `set_hud_height` for the
-    /// new terminal height.
+    /// Full-screen ownership follows the new terminal size; windowed mode
+    /// preserves the fixed HUD height, clamped to the new terminal height.
+    /// Updates `partition()` and, once a layout is installed, the scroll
+    /// region and clears the owned rows (or screen) on `std::cout`.
     void resize(nxtui::Size size);
 
     /// Raster to render the next frame into. It holds the previously

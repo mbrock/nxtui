@@ -2,6 +2,40 @@
 
 namespace nxt::test {
 
+nxtrt::task<void>
+send_move_only_wire_value(nxtrt::wire<std::unique_ptr<int>> & channel)
+{
+    expect(co_await channel.send(std::make_unique<int>(2)));
+}
+
+nxtrt::task<std::vector<int>>
+receive_move_only_wire_values(nxtrt::wire<std::unique_ptr<int>> & channel)
+{
+    co_await nxtrt::yield();
+    auto first = co_await channel.rx().take_one();
+    auto second = co_await channel.rx().take_one();
+    co_return std::vector{*first, *second};
+}
+
+nxtrt::task<std::vector<int>>
+move_only_wire_roundtrip(nxtrt::wire<std::unique_ptr<int>> & channel)
+{
+    auto work = co_await nxtrt::when_all(
+        std::tuple{
+            send_move_only_wire_value(channel),
+            receive_move_only_wire_values(channel),
+        });
+    co_return std::get<1>(std::move(work));
+}
+
+nxtrt::task<std::string> collect_bytes(nxtrt::bytefeed & reader)
+{
+    auto text = std::string{};
+    while (auto chunk = co_await reader.take_some())
+        text += nxtrt::as_string_view(*chunk);
+    co_return text;
+}
+
 void declare_runtime_buffer_tests()
 {
     "tool batches"_group = [] {
@@ -424,6 +458,61 @@ void declare_runtime_buffer_tests()
             expect(ring.unused_capacity_size() == std::size_t{4});
         };
 
+        "wire feed consumption returns capacity for move-only values"_test =
+            [] {
+                using value = std::unique_ptr<int>;
+                auto deck = nxtrt::deck{};
+                auto storage = nxtrt::rack<value>{1};
+                auto channel = nxtrt::wire<value>{storage};
+                expect(channel.try_send(std::make_unique<int>(1)));
+
+                auto values = deck.sync_wait(
+                    [&] { return move_only_wire_roundtrip(channel); });
+
+                expect(values == std::vector<int>{1, 2});
+            };
+
+        "rebases compact wrapped free space without draining preserved values"_test =
+            []() -> nxtrt::task<void> {
+            auto writer = chunking_string_sink{2, std::size_t{6}};
+            co_await nxtrt::write(writer, "abcde"sv);
+            co_await writer.rebase(3, 2);
+            expect(writer.text == "ab");
+            expect(byte_value_chunks_text(writer.buffered()) == "cde");
+            expect(writer.unused_capacity().size() >= std::size_t{2});
+        };
+
+        "reel retries zero-progress non-EOF discards"_test = [] {
+            class intermittent_feed final : public nxtrt::bytefeed
+            {
+            public:
+                intermittent_feed()
+                    : nxtrt::bytefeed(std::size_t{3})
+                {
+                }
+
+            private:
+                nxtrt::hope<nxtrt::fare_t>
+                discard_more(std::size_t limit) override
+                {
+                    if (calls_++ == 0)
+                        return nxtrt::hope<nxtrt::fare_t>::ready(0);
+                    return nxtrt::hope<nxtrt::fare_t>::ready(
+                        std::min(limit, std::size_t{3}));
+                }
+
+                int calls_ = 0;
+            };
+
+            auto deck = nxtrt::deck{};
+            auto source = intermittent_feed{};
+            auto frames =
+                nxtrt::reel<std::byte, counted_byte_frame>{source};
+            deck.sync_wait([&]() -> nxtrt::task<void> {
+                co_await frames.discard_prefix(3);
+            });
+        };
+
         "ring regions preserve wrapped constructed values"_test = [] {
             auto storage = nxtrt::static_value_storage<int, 3>{};
             auto ring = nxtrt::ring_region<int>{
@@ -650,6 +739,59 @@ void declare_runtime_buffer_tests()
 
             expect(result == plain);
         };
+
+        "gzip reader leaves bytes after its stream in the source"_test =
+            [] {
+                auto deck = nxtrt::deck{};
+                auto compressed = gzip_text("body");
+                compressed += "TAIL";
+                auto chunks = std::array{std::string_view{compressed}};
+                auto source_storage = std::array<std::byte, 32>{};
+                auto output_storage = std::array<std::byte, 8>{};
+                auto source =
+                    text_source(chunks, std::span{source_storage});
+                auto reader =
+                    nxtrt::gzip_reader(source, std::span{output_storage});
+
+                auto result =
+                    deck.sync_wait([&] { return collect_bytes(reader); });
+                expect(result == "body");
+                expect(
+                    nxtrt::as_string_view(source.buffered_span())
+                    == "TAIL");
+            };
+
+#if defined(NXTRT_HAVE_ZSTD)
+        "zstd reader concatenates frames and preserves trailing source bytes"_test =
+            [] {
+                for (auto capacity : {4, 64}) {
+                    for (auto tail : {"TAIL"sv, "!"sv, ""sv}) {
+                        auto deck = nxtrt::deck{};
+                        auto skippable = std::string{
+                            "\x50\x2a\x4d\x18\x03\x00\x00\x00XYZ", 11};
+                        auto compressed = zstd_text("first") + skippable
+                                          + zstd_text("second")
+                                          + std::string{tail};
+                        auto chunks =
+                            std::array{std::string_view{compressed}};
+                        auto source_storage = std::array<std::byte, 64>{};
+                        auto output_storage = std::array<std::byte, 5>{};
+                        auto source = text_source(
+                            chunks,
+                            std::span{source_storage}.first(capacity));
+                        auto reader = nxtrt::zstd_reader_for(
+                            source, std::span{output_storage});
+
+                        auto result = deck.sync_wait(
+                            [&] { return collect_bytes(reader); });
+                        expect(result == "firstsecond");
+                        expect(
+                            nxtrt::as_string_view(source.buffered_span())
+                            == tail);
+                    }
+                }
+            };
+#endif
 
         "protocol leftovers remain buffered"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"abc--def--ghi"sv};

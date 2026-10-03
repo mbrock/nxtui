@@ -29,8 +29,8 @@ struct openai_responses_request
 {
     /// Bearer token for the `Authorization` header; not part of the body.
     std::string api_key = {};
-    /// Model name. `nxtllm` overrides this default with its own.
-    std::string model = "gpt-5-mini";
+    /// Model name; the default matches `nxtllm`.
+    std::string model = "gpt-6-luna";
     /// Plain-text user input, sent as the `input` string when
     /// `input_items` is empty.
     std::string input = {};
@@ -46,7 +46,7 @@ struct openai_responses_request
     /// Upper bound on generated tokens.
     std::size_t max_output_tokens = 6000;
     /// `reasoning.effort`; empty leaves it out.
-    std::string reasoning_effort = "medium";
+    std::string reasoning_effort = {};
     /// `reasoning.summary`; empty leaves it out.
     std::string reasoning_summary = {};
     /// Whether the server stores the response for `previous_response_id`.

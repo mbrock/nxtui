@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -23,10 +24,9 @@ namespace nxtui {
 /// raster that is diffed against another must share the same table. The
 /// table is neither copyable nor movable.
 ///
-/// Threading: `intern` takes an internal mutex, but `get`, `get_span`,
-/// `operator[]`, and `size` do not, and the views they return point into
-/// storage that a later `intern` may reallocate. Use the table from one
-/// thread, or treat returned views as valid only until the next `intern`.
+/// Threading: interning, lookups, size, and clear take an internal mutex.
+/// Returned views remain valid across interning, but clear invalidates
+/// them; callers must synchronize clear with use of those views.
 class GlyphTable
 {
 public:
@@ -51,6 +51,8 @@ public:
     [[nodiscard]] GlyphId intern(std::string_view bytes);
 
     /// UTF-8 bytes for `id`, or `std::nullopt` for an unknown id.
+    /// The returned view remains valid across intern() calls, but is
+    /// invalidated by clear(); callers must not race clear() with using it.
     [[nodiscard]] std::optional<std::span<const char>>
     get_span(GlyphId id) const noexcept;
 
@@ -60,6 +62,8 @@ public:
 
     /// UTF-8 bytes for `id`.
     /// @throws std::out_of_range if `id` is unknown.
+    /// The returned view remains valid across intern() calls, but is
+    /// invalidated by clear(); callers must not race clear() with using it.
     [[nodiscard]] std::string_view operator[](GlyphId id) const;
 
     /// Number of ids in use, including the 256 reserved ones.
@@ -71,25 +75,17 @@ public:
     void clear();
 
 private:
-    struct Span
-    {
-        std::uint32_t offset;
-        std::uint8_t length;
-    };
-
     void init_ascii();
 
-    /// Arena holds all UTF-8 bytes contiguously
-    std::vector<char> arena_;
-
-    /// Parallel array: span info per glyph ID (index == ID)
-    std::vector<Span> spans_;
+    /// Individually owned strings keep returned views stable as glyphs
+    /// grow.
+    std::deque<std::string> glyphs_;
 
     /// Hash table for fast lookup. Keys own their bytes; reverse lookup
-    /// still uses spans into arena_.
+    /// uses the individually owned strings in glyphs_.
     std::unordered_map<std::string, GlyphId> table_;
 
-    /// Serializes `intern`; lookups do not take it.
+    /// Serializes interning, lookups, size, and clear.
     mutable std::mutex mutex_;
 };
 

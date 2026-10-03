@@ -307,6 +307,13 @@ public:
     /// machinery only.
     [[nodiscard]] coroutine_handle release() noexcept
     {
+        // A completed frame cannot have queued work, so its registry row
+        // can be reclaimed immediately. An active released frame keeps its
+        // row until the transferred handle is destroyed; queued work must
+        // remain resolvable while ownership is detached from this task
+        // object.
+        if (coroutine_ && coroutine_.done())
+            coroutine_.promise().unregister_from_deck();
         return std::exchange(coroutine_, nullptr);
     }
 

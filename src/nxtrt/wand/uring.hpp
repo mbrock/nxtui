@@ -3,6 +3,7 @@
 #include "nxtrt/exec_lifecycle.hpp"
 #include "nxtrt/spawn.hpp"
 #include "nxtrt/task.hpp"
+#include <nxt/unique-fd.hpp>
 
 #include <boost/container/hub.hpp>
 
@@ -27,10 +28,13 @@
 #include <ranges>
 #include <memory>
 #include <spawn.h>
+#include <poll.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <sys/ioctl.h>
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -65,6 +69,7 @@ public:
     io_uring_sqe * get_sqe();
     void attach(io_uring_sqe * sqe) const noexcept;
     void complete_sync(int result);
+    int prepare_poll_until(op::poll_until & wish);
 
     [[nodiscard]] coin_t token() const noexcept
     {
@@ -113,17 +118,18 @@ inline bool stage_uring(uring_submission &, op::poll_until &);
 /// Reads, writes, sockets, opens, `statx`, polls, and timeouts run in the
 /// kernel; `getdents64`, spawns, and `signal_child` complete synchronously
 /// during `wave`. `wait_child` polls the pidfd and then reaps with
-/// `waitid`. `poll_until` is rejected with `runtime_error`; use
-/// `poll_until_after`.
+/// `waitid`. `poll_until` polls an exec-owned epoll proxy multiplexing the
+/// requested fd and a timerfd, with one operation CQE.
 ///
 /// Timers are io_uring timeout SQEs on the relative duration.
 ///
 /// Cancellation: cancelling a queued wish settles it with
 /// `operation_cancelled` at the next wave without submitting it. For a
-/// submitted wish, `wave` sends an async-cancel SQE; the task resumes with
-/// `operation_cancelled` when the op CQE arrives, even if the operation
-/// had completed, and the record is retired only after the cancel CQE has
-/// drained too.
+/// submitted wish, `wave` sends an async-cancel SQE. The operation CQE
+/// determines the result: completed reads/opens/accepts deliver their
+/// bytes/fd even after a stop request. Child-wait cancellation can still
+/// win before the completion handler reaps with `waitid`. The record is
+/// retired only after the cancel CQE has drained too.
 ///
 /// `asynchronous_files()` is true. Not copyable or movable; the queue depth
 /// defaults to 1024 entries.
@@ -434,11 +440,19 @@ private:
             }
 
             if constexpr (std::is_same_v<T, poll_until_result>) {
-                state_->set_exception(
-                    std::make_exception_ptr(
-                        runtime_error{
-                            "io_uring poll_until is implemented as a "
-                            "task-level race"}));
+                if (result < 0 && result != -ETIME) {
+                    state_->set_exception(
+                        std::make_exception_ptr(
+                            errno_error{
+                                -result,
+                                failure_message(request, result)}));
+                    return;
+                }
+                state_->set_value(
+                    poll_until_result{
+                        .events = result < 0 ? 0 : result,
+                        .timed_out = result == -ETIME,
+                    });
             } else {
                 if constexpr (std::is_void_v<T>) {
                     if (std::holds_alternative<op::timeout>(request)
@@ -566,6 +580,10 @@ private:
         spec specification;
         /// Current lifecycle state.
         exec_state state = prepared{};
+        // poll_until uses one io_uring poll on an exec-owned epoll proxy;
+        // the proxy multiplexes the requested fd and the deadline timerfd.
+        nxt::unique_fd poll_until_epoll;
+        nxt::unique_fd poll_until_timer;
     };
 
     template<typename Wish>
@@ -761,10 +779,77 @@ private:
         if (state == nullptr)
             return;
 
-        auto cancelled =
+        if (std::holds_alternative<op::poll_until>(
+                execution.specification.request)
+            && result >= 0) {
+            auto events = std::array<epoll_event, 2>{};
+            auto count = ::epoll_wait(
+                execution.poll_until_epoll.get(),
+                events.data(),
+                static_cast<int>(events.size()),
+                0);
+            if (count < 0) {
+                result = -errno;
+            } else {
+                auto ready = 0;
+                auto timed_out = false;
+                for (auto i = 0; i != count; ++i) {
+                    if (events[static_cast<std::size_t>(i)].data.u32 == 1) {
+                        if ((events[static_cast<std::size_t>(i)].events
+                             & EPOLLIN)
+                            != 0)
+                            ready |= POLLIN;
+                        if ((events[static_cast<std::size_t>(i)].events
+                             & EPOLLOUT)
+                            != 0)
+                            ready |= POLLOUT;
+                        if ((events[static_cast<std::size_t>(i)].events
+                             & EPOLLPRI)
+                            != 0)
+                            ready |= POLLPRI;
+                        if ((events[static_cast<std::size_t>(i)].events
+                             & EPOLLHUP)
+                            != 0)
+                            ready |= POLLHUP;
+                        if ((events[static_cast<std::size_t>(i)].events
+                             & EPOLLERR)
+                            != 0)
+                            ready |= POLLERR;
+                    } else if (
+                        events[static_cast<std::size_t>(i)].data.u32 == 2) {
+                        timed_out = true;
+                    }
+                }
+                if (ready == 0 && !timed_out) {
+                    // Readiness can disappear before this CQE is consumed.
+                    // Re-poll the same proxy, retaining its original timer.
+                    if (std::holds_alternative<submitted>(state->phase)) {
+                        state->phase = queued{};
+                        pending_submissions_.push_back(&execution);
+                        return;
+                    }
+                    result = -ECANCELED;
+                } else {
+                    result = ready != 0 ? ready : -ETIME;
+                }
+            }
+        }
+
+        // A cancellation request is only a request: the operation CQE is
+        // authoritative. In particular, a successful accept/openat/read CQE
+        // must publish its FD or byte count even when the cancel CQE is
+        // still outstanding.
+        auto cancellation_requested =
             std::holds_alternative<cancel_queued>(state->phase)
             || std::holds_alternative<cancel_submitted>(state->phase)
             || std::holds_alternative<cancel_drained>(state->phase);
+        // wait_child's CQE only reports pidfd readiness. Its actual waitid
+        // (and irreversible reap) happens in complete(), so cancellation
+        // can still win before that syscall, leaving the child for cleanup.
+        auto cancelled = cancellation_requested
+                         && (result == -ECANCELED
+                             || std::holds_alternative<op::wait_child>(
+                                 execution.specification.request));
         auto waiting_for_cancel =
             std::holds_alternative<cancel_submitted>(state->phase);
         if (waiting_for_cancel) {
@@ -967,6 +1052,49 @@ inline void uring_submission::attach(io_uring_sqe * sqe) const noexcept
 inline void uring_submission::complete_sync(int result)
 {
     wand_.complete(deck_, token_, result);
+}
+
+inline int uring_submission::prepare_poll_until(op::poll_until & wish)
+{
+    auto * execution = uring_wand::exec_from_token(token_);
+    if (execution == nullptr)
+        return -EINVAL;
+    if (execution->poll_until_epoll.get() >= 0)
+        return execution->poll_until_epoll.get();
+    auto epoll_fd = ::epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd < 0)
+        return -errno;
+    auto timer_fd =
+        ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (timer_fd < 0) {
+        auto error = errno;
+        ::close(epoll_fd);
+        return -error;
+    }
+    execution->poll_until_epoll.reset(epoll_fd);
+    execution->poll_until_timer.reset(timer_fd);
+    auto target = epoll_event{};
+    if ((wish.events & POLLIN) != 0)
+        target.events |= EPOLLIN;
+    if ((wish.events & POLLOUT) != 0)
+        target.events |= EPOLLOUT;
+    if ((wish.events & POLLPRI) != 0)
+        target.events |= EPOLLPRI;
+    target.data.u32 = 1;
+    if (::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, wish.fd, &target) != 0)
+        return -errno;
+    auto timer = epoll_event{.events = EPOLLIN, .data = {.u32 = 2}};
+    // timerfd is monitored by the proxy epoll instance, not by itself.
+    if (::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, timer_fd, &timer) != 0)
+        return -errno;
+    auto timeout = itimerspec{};
+    timeout.it_value.tv_sec = wish.timeout.tv_sec;
+    timeout.it_value.tv_nsec = wish.timeout.tv_nsec;
+    if (timeout.it_value.tv_sec == 0 && timeout.it_value.tv_nsec == 0)
+        timeout.it_value.tv_nsec = 1;
+    if (::timerfd_settime(timer_fd, 0, &timeout, nullptr) != 0)
+        return -errno;
+    return epoll_fd;
 }
 
 inline int open_pidfd(pid_t pid)
@@ -1224,11 +1352,15 @@ inline bool stage_uring(uring_submission & submission, op::timeout & wish)
 
 inline bool stage_uring(uring_submission & submission, op::poll_until & wish)
 {
-    (void)wish.fd;
-    (void)wish.events;
-    (void)wish.timeout;
-    submission.complete_sync(-ENOTSUP);
-    return false;
+    auto fd = submission.prepare_poll_until(wish);
+    if (fd < 0) {
+        submission.complete_sync(fd);
+        return false;
+    }
+    auto * sqe = submission.get_sqe();
+    io_uring_prep_poll_add(sqe, fd, POLLIN);
+    submission.attach(sqe);
+    return true;
 }
 
 #endif

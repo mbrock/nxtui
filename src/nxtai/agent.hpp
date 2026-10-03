@@ -4,6 +4,8 @@
 #include <nxtai/responses_stream.hpp>
 #include <nxtai/tool_batch.hpp>
 
+#include <algorithm>
+
 /**
  * @namespace nxtai
  * OpenAI Responses client pieces and a tool-calling agent loop, running as
@@ -52,9 +54,10 @@ struct agent_options
 /// the next request sets `previous_response_id` and carries only the new
 /// tool outputs.
 ///
-/// Before the first turn, `request.tools` is replaced with the registry's
-/// definitions and, when `store` is false and the registry is not empty,
-/// `request.include` is replaced with `reasoning.encrypted_content`.
+/// Before the first turn, missing registry definitions are appended to
+/// `request.tools` by name, preserving caller definitions. When `store` is
+/// false and the registry is not empty, `reasoning.encrypted_content` is
+/// appended to `request.include` if absent, preserving other includes.
 ///
 /// `request` is owned by the task. `registry`, `transport`, and `observer`
 /// are borrowed and must outlive it.
@@ -79,9 +82,18 @@ nxtrt::task<void> run_agent(
 {
     if (options.max_turns == 0 || options.tool_concurrency == 0)
         throw nxtrt::runtime_error{"agent limits must be nonzero"};
-    request.tools = tools::function_tool_definitions(registry);
-    if (!request.store && !tools::empty(registry))
-        request.include = {"reasoning.encrypted_content"};
+    for (auto & definition : tools::function_tool_definitions(registry)) {
+        if (std::ranges::find(
+                request.tools,
+                definition.name,
+                &openai::function_tool_definition::name)
+            == request.tools.end())
+            request.tools.push_back(std::move(definition));
+    }
+    if (!request.store && !tools::empty(registry)
+        && std::ranges::find(request.include, "reasoning.encrypted_content")
+               == request.include.end())
+        request.include.push_back("reasoning.encrypted_content");
     auto history = responses::input_items_from_request(request);
 
     for (std::size_t turn = 0; turn < options.max_turns; ++turn) {

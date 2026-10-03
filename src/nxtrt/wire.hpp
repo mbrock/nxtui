@@ -24,8 +24,8 @@ class wire_tx;
 ///
 /// Receive with `next()` or `try_next()`; these return `std::nullopt` once the
 /// wire is closed and empty, and ring the space bell that wakes a waiting
-/// sender. The inherited @ref feed verbs also work, but consuming
-/// already-buffered values through them does not wake a waiting sender.
+/// sender. The inherited @ref feed verbs also work and ring the same space
+/// bell whenever they consume buffered values.
 /// The storage must outlive the receiver; destruction closes the wire.
 /// See RFC 0008 (@ref runtime_rfcs).
 template<typename T>
@@ -37,7 +37,12 @@ public:
 
     explicit wire_rx(storage_ref storage)
         : feed<T>(storage)
-    {}
+    {
+        this->observe_consumption(
+            this, [](void * context, std::size_t) noexcept {
+                static_cast<wire_rx *>(context)->space_.ring();
+            });
+    }
 
     template<std::size_t Extent>
     explicit wire_rx(std::span<value_type, Extent> storage)
@@ -91,7 +96,6 @@ public:
             return value;
         if (empty())
             data_.reset();
-        space_.ring();
         return value;
     }
 
@@ -239,6 +243,30 @@ private:
     task<std::optional<value_type>> next_value() override
     {
         co_return co_await next();
+    }
+
+    hope<fare_t>
+    stream_more(sink<value_type> & output, std::size_t limit) override
+    {
+        if (capacity() == 0)
+            return feed<T>::stream_more(output, limit);
+        if (!empty() || limit == 0)
+            return hope<fare_t>::ready(0);
+        if (closed_)
+            return hope<fare_t>::ready(eof);
+        return wait_for_data();
+    }
+
+    task<fare_t> wait_for_data()
+    {
+        // send() already constructs values in this feed's ring. A refill
+        // waits for that data; it must not consume and reconstruct it
+        // through a second sink borrowing the same storage.
+        while (empty() && !closed_) {
+            data_.reset();
+            co_await data_;
+        }
+        co_return empty() ? fare_t{eof} : fare_t{0};
     }
 
     bell data_;
