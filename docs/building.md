@@ -114,21 +114,24 @@ nix flake check      # the package (with tests) plus a pkg-config consumer build
 nix develop          # Clang, Meson, AWS-LC, clangd, docs tools, Racket + JDK
 nix develop .#clang  # explicit Clang shell (also the default on Linux and macOS)
 nix develop .#gcc    # GCC 16 and libstdc++ from the pinned Nixpkgs
+nix develop .#filc   # experimental Fil-C compiler and libraries (Linux only)
 ```
 
 Inside `nix develop`, the plain C++ build/test and docs commands above work
 as-is. `.envrc` uses this flake through direnv and then loads `.env` if present.
 Meson keeps the compiler chosen at setup time; use a new build directory when
-switching toolchains. Both compiler shells include the cached Racket and Java
-environment for runtime model development.
+switching toolchains. The Clang and GCC shells include the cached Racket and
+Java environment for runtime model development.
 
-To try either compiler without entering a shell manually:
+To try a compiler without entering a shell manually:
 
 ```sh
 make clang      # configure build/clang if needed, then build nxt-dev
 make clang-test # build and run the tests, including slow suites
 make gcc        # configure build/gcc if needed, then build nxt-dev
 make gcc-test   # build and run the tests, including slow suites
+make filc       # try building nxt-dev with Fil-C in build/filc (Linux)
+make filc-test  # build and run the tests with Fil-C
 ```
 
 The Clang commands use `nix develop .#clang` and a separate `build/clang`
@@ -140,6 +143,23 @@ Inside that shell, `make build-gcc` and `make test-gcc` run the same workflow.
 Override the directory with `GCC_BUILD_DIR=...` if needed. The older
 `build-gcc15` / `test-gcc15` targets are for separately installed compilers
 named `gcc-15` / `g++-15`.
+
+The experimental Fil-C commands use `nix develop .#filc` and `build/filc`;
+override the directory with `FILC_BUILD_DIR=...`. Inside that shell, use
+`make build-filc` and `make test-filc`. The pinned `github:mbrock/filnix`
+input supplies both the compiler and its matching library package set, since
+Fil-C libraries must use the Fil-C ABI. AWS-LC uses its portable C mode because
+its assembly flags are not supported by Fil-C's assembler. The shell uses
+Fil-C's linker and contains the C++ build tools; use the default shell for docs
+and runtime model work. `nix build .#nxt-filc` attempts the installable package with tests.
+
+At the pinned Filnix revision `0e32960446f8`, the x86_64 Linux attempt is
+blocked before Meson setup: AWS-LC 1.69.0 compiles in portable mode, but its
+`ASN1Test.ASN1Dup` test triggers `filc safety error: attempting to use
+unrecognized madvise advice -1`. AWS-LC's fork-detection code deliberately
+passes invalid advice to probe for an older QEMU bug; Fil-C traps on that
+argument. Dependency checks remain enabled. Nxt compilation and runtime
+compatibility have not yet been established with this toolchain.
 
 For editors launched outside the development shell, use `scripts/clangd` as
 the language-server executable. It enters the pinned Nix shell so clangd sees

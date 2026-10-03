@@ -3,8 +3,14 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+  inputs.filnix.url = "github:mbrock/filnix";
+
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      filnix,
+    }:
     let
       systems = [
         "aarch64-darwin"
@@ -14,13 +20,28 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      packages = forAllSystems (pkgs: rec {
-        nxt = pkgs.callPackage ./nix/package.nix { };
-        spec-racket = pkgs.callPackage ./nix/spec-racket.nix { };
-        spec-sources = pkgs.callPackage ./nix/spec-sources.nix { };
-        poxy = pkgs.callPackage ./nix/poxy.nix { };
-        default = nxt;
-      });
+      packages = forAllSystems (
+        pkgs:
+        rec {
+          nxt = pkgs.callPackage ./nix/package.nix { };
+          spec-racket = pkgs.callPackage ./nix/spec-racket.nix { };
+          spec-sources = pkgs.callPackage ./nix/spec-sources.nix { };
+          poxy = pkgs.callPackage ./nix/poxy.nix { };
+          default = nxt;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          nxt-filc =
+            let
+              filcPkgs = filnix.legacyPackages.${pkgs.stdenv.hostPlatform.system}.pkgsFilc;
+            in
+            filcPkgs.callPackage ./nix/package.nix {
+              # AWS-LC's assembly flags are not supported by Fil-C's assembler.
+              aws-lc = filcPkgs.aws-lc.overrideAttrs (old: {
+                cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DOPENSSL_NO_ASM=ON" ];
+              });
+            };
+        }
+      );
 
       devShells = forAllSystems (
         pkgs:
@@ -77,6 +98,19 @@
           };
           # Keep GCC's libstdc++ separate from Clang's toolchain.
           gcc = mkDevShell gccStdenv;
+        }
+        // lib.optionalAttrs stdenv.hostPlatform.isLinux {
+          # Fil-C libraries must come from the same ABI as its compiler.
+          filc =
+            let
+              filcPkgs = filnix.legacyPackages.${stdenv.hostPlatform.system}.pkgsFilc;
+            in
+            filcPkgs.mkShell {
+              inputsFrom = [ self.packages.${stdenv.hostPlatform.system}.nxt-filc ];
+              nativeBuildInputs = [ pkgs.gnumake ];
+              # Fil-C supplies its own linker; do not pick up host mold.
+              NXT_MESON_LINK_ARGS = "";
+            };
         }
       );
 

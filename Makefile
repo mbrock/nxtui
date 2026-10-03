@@ -9,6 +9,7 @@ WISP_BENCH_ARGS ?=
 GCC15_BUILD_DIR ?= build-gcc15
 GCC_BUILD_DIR ?= build/gcc
 CLANG_BUILD_DIR ?= build/clang
+FILC_BUILD_DIR ?= build/filc
 DEPS_FILE ?=
 DEPS_DEPTH ?= 4
 DEPS_FLAGS ?=
@@ -97,6 +98,27 @@ build-clang:
 test-clang: build-clang
 	meson compile -C "$(CLANG_BUILD_DIR)" nxt-tests
 	meson test -C "$(CLANG_BUILD_DIR)"
+
+# Fil-C uses its bundled linker, independent of host mold availability.
+.PHONY: filc filc-test setup-filc build-filc test-filc
+filc:
+	nix develop .#filc -c make build-filc FILC_BUILD_DIR="$(FILC_BUILD_DIR)"
+
+filc-test:
+	nix develop .#filc -c make test-filc FILC_BUILD_DIR="$(FILC_BUILD_DIR)"
+
+setup-filc:
+	meson setup "$(FILC_BUILD_DIR)"
+
+build-filc:
+	@if [ ! -f "$(FILC_BUILD_DIR)/build.ninja" ]; then \
+		meson setup "$(FILC_BUILD_DIR)"; \
+	fi
+	meson compile -C "$(FILC_BUILD_DIR)" nxt-dev
+
+test-filc: build-filc
+	meson compile -C "$(FILC_BUILD_DIR)" nxt-tests
+	meson test -C "$(FILC_BUILD_DIR)"
 
 deps:
 	@scripts/include-graph --summary --depth "$(DEPS_DEPTH)" $(DEPS_FLAGS) $(DEPS_FILE)
