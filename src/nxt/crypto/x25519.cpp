@@ -34,12 +34,6 @@ auto * u8_data(T & bytes) noexcept
     return reinterpret_cast<std::uint8_t *>(bytes.data());
 }
 
-template<typename T>
-const auto * u8_data(const T & bytes) noexcept
-{
-    return reinterpret_cast<const std::uint8_t *>(bytes.data());
-}
-
 void require_x25519_size(std::span<const std::byte> value, const char * name)
 {
     if (value.size() != x25519_key_len)

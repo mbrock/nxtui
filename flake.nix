@@ -24,7 +24,8 @@
         pkgs:
         let
           inherit (pkgs) lib stdenv;
-          clangStdenv = pkgs.llvmPackages.stdenv;
+          llvm = pkgs.llvmPackages_23;
+          clangStdenv = llvm.stdenv;
           gccStdenv = pkgs.gcc16Stdenv;
           mkDevShell =
             toolchainStdenv:
@@ -39,7 +40,8 @@
                 with pkgs;
                 [
                   aws-lc
-                  llvmPackages.clang-tools
+                  llvm.clang-tools
+                  nixd
                   gnumake
 
                   # `make docs`
