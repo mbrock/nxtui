@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -189,16 +188,13 @@ inline task<sample> read_sample(const std::filesystem::path & dir)
          cpu_pressure,
          io_pressure] =
             co_await when_all(
-                std::tuple{
-                    std::bind_front(read_uint_file, dir / "memory.current"),
-                    std::bind_front(read_uint_file, dir / "memory.peak"),
-                    std::bind_front(read_uint_file, dir / "pids.current"),
-                    std::bind_front(read_text_file, dir / "cpu.stat"),
-                    std::bind_front(
-                        read_text_file, dir / "memory.pressure"),
-                    std::bind_front(read_text_file, dir / "cpu.pressure"),
-                    std::bind_front(read_text_file, dir / "io.pressure"),
-                });
+                read_uint_file(dir / "memory.current"),
+                read_uint_file(dir / "memory.peak"),
+                read_uint_file(dir / "pids.current"),
+                read_text_file(dir / "cpu.stat"),
+                read_text_file(dir / "memory.pressure"),
+                read_text_file(dir / "cpu.pressure"),
+                read_text_file(dir / "io.pressure"));
 
     out.at = std::chrono::steady_clock::now();
     out.memory_current = bytes_t{memory_current};
