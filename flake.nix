@@ -47,6 +47,11 @@
           llvm = pkgs.llvmPackages_23;
           clangStdenv = llvm.stdenv;
           gccStdenv = pkgs.gcc16Stdenv;
+          certificateShellHook = ''
+            # libcrypto reads SSL_CERT_FILE, not NIX_SSL_CERT_FILE.
+            # Preserve custom trust bundles, with a portable store fallback.
+            export SSL_CERT_FILE="''${SSL_CERT_FILE:-''${NIX_SSL_CERT_FILE:-${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt}}"
+          '';
           mkDevShell =
             toolchainStdenv:
             (pkgs.mkShell.override { stdenv = toolchainStdenv; }) {
@@ -74,7 +79,7 @@
                   gdb
                 ];
 
-              shellHook = ''
+              shellHook = certificateShellHook + ''
                 # Only editable model/DSL bytecode is local. Dependencies and
                 # their compiled code come from the immutable Nix package.
                 export PLTCOLLECTS="$PWD:"
@@ -88,6 +93,7 @@
           clang = mkDevShell clangStdenv;
           # Publishing docs does not need the C++ or Racket toolchains.
           docs = pkgs.mkShellNoCC {
+            shellHook = certificateShellHook;
             packages = [
               pkgs.gnumake
               self.packages.${stdenv.hostPlatform.system}.poxy
@@ -103,6 +109,7 @@
               filcPkgs = filnix.legacyPackages.${stdenv.hostPlatform.system}.pkgsFilc;
             in
             filcPkgs.mkShell {
+              shellHook = certificateShellHook;
               inputsFrom = [ self.packages.${stdenv.hostPlatform.system}.nxt-filc ];
               nativeBuildInputs = [ pkgs.gnumake ];
               # Fil-C supplies its own linker; do not pick up host mold.

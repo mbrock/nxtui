@@ -123,6 +123,19 @@ Meson keeps the compiler chosen at setup time; use a new build directory when
 switching toolchains. The Clang and GCC shells include the cached Racket and
 Java environment for runtime model development.
 
+All development shells set `SSL_CERT_FILE` for TLS certificate verification.
+They preserve an existing nonempty value, otherwise use `NIX_SSL_CERT_FILE`,
+or fall back to the pinned Nixpkgs CA bundle. This also applies to
+`nix develop -c` commands, including live LLM requests:
+
+```sh
+nix develop .#filc -c build/filc/nxt-dev nxtllm "Hello from Fil-C"
+```
+
+Set `OPENAI_API_KEY` before running the client. Programs launched outside
+the development shell still need a discoverable system trust store or an
+explicit `SSL_CERT_FILE`.
+
 To try a compiler without entering a shell manually:
 
 ```sh
