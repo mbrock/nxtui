@@ -1,0 +1,226 @@
+/*
+ * Nxt's technical reference skin. Keep Poxy's markup, responsive navigation,
+ * search, and syntax highlighting; change the visual system, not the renderer.
+ * Loaded after Poxy. Shared geometry applies to both selectable themes.
+ */
+html:root {
+  --font: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --code-font: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-size: 16px;
+  --code-font-size: 0.875em;
+  --line-height: 1.45;
+  --heading-font-weight: 700;
+  --border-radius: 0;
+  --nav-brand-case: none;
+  --header-border-width: 0 0 1px;
+  --poxy-header-shadow: none;
+  --poxy-shadow-sm: none;
+  --poxy-shadow-md: none;
+  --footer-font-size: 0.875rem;
+}
+
+html.poxy-theme-light {
+  color-scheme: light;
+  --background-color: #fff;
+  --color: #171717;
+  --line-color: #d5d2cc;
+  --link-color: #893c49;
+  --link-active-color: #511d28;
+  --article-heading-color: #111;
+  --article-heading-active-color: #893c49;
+  --code-color: #171717;
+  --code-background-color: #f3f1ec;
+  --code-note-background-color: #f3f1ec;
+  --header-color: #111;
+  --header-breadcrumb-color: #666;
+  --header-background-color: #f7f5f4;
+  --poxy-header-bg-translucent: #f7f5f4;
+  --header-link-color: #111;
+  --header-link-active-color: #893c49;
+  --header-link-current-color: #893c49;
+  --header-link-active-background-color: transparent;
+  --footer-color: #666;
+  --footer-background-color: #fff;
+  --footer-link-color: #893c49;
+  --footer-link-active-color: #511d28;
+  --dim-color: #686868;
+  --dim-link-color: #686868;
+  --default-color: #171717;
+  --default-filled-color: #171717;
+  --default-filled-background-color: #f3f1ec;
+  --detail-section-header-color: #f3f1ec;
+  --poxy-card-border-color: #d5d2cc;
+  --poxy-footer-border-color: #d5d2cc;
+  --search-background-color: #fff;
+  --search-overlay-color: #0009;
+}
+
+/* Dark mode remains useful, but uses the same flat, compact structure. */
+html.poxy-theme-dark {
+  color-scheme: dark;
+  --background-color: #191919;
+  --color: #e8e6e2;
+  --line-color: #454440;
+  --link-color: #dfa1ac;
+  --link-active-color: #fff;
+  --dim-color: #aaa8a3;
+  --dim-link-color: #aaa8a3;
+  --article-heading-color: #e8e6e2;
+  --article-heading-active-color: #dfa1ac;
+  --code-background-color: #242422;
+  --header-background-color: #242422;
+  --poxy-header-bg-translucent: #242422;
+  --header-link-color: #e8e6e2;
+  --header-link-active-color: #dfa1ac;
+  --header-link-current-color: #dfa1ac;
+  --header-link-active-background-color: transparent;
+  --footer-background-color: #191919;
+  --detail-section-header-color: #242422;
+  --poxy-card-border-color: #454440;
+  --poxy-footer-border-color: #454440;
+}
+
+/* One reading scale; hierarchy comes from weight, rules, and placement. */
+main article h1,
+main article h2,
+main article h3,
+main article h4,
+main article h5,
+main article h6 {
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+main article h1 {
+  margin-bottom: 1rem;
+  padding: 0.35rem 0.6rem;
+  background: #000;
+  color: #fff;
+  font-family: var(--code-font);
+  overflow-wrap: anywhere;
+}
+
+main article h1 a,
+main article h1 .m-thin,
+main article h1 .m-doc-template,
+main article h1 .m-doc-include {
+  color: #e8e6e2;
+  font-size: 1em;
+}
+
+main article h2 {
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--line-color);
+}
+
+main article h2:not(:first-child),
+main article h3:not(:first-child),
+article div > section,
+article div > section > section {
+  margin-top: 1.25rem;
+}
+
+main p,
+main ul,
+main ol,
+main dl,
+main pre {
+  margin-bottom: 0.75rem;
+}
+
+body > header > nav {
+  box-shadow: none;
+}
+
+body > header > nav:not(.m-navbar-landing):not(.m-navbar-cover) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body > header > nav a#m-navbar-brand,
+body > header > nav #m-navbar-collapse li a {
+  padding-top: 0.65rem;
+  padding-bottom: 0.65rem;
+}
+
+body > header > nav a#m-navbar-brand {
+  font-weight: 700;
+}
+
+body > header > nav .m-thin {
+  font-size: 0.875rem;
+}
+
+body > header > nav #m-navbar-current {
+  border-bottom: 2px solid var(--link-color);
+}
+
+body > main {
+  padding-top: 1.25rem;
+}
+
+pre.m-code,
+pre.m-console {
+  padding: 0.5rem 0.65rem;
+  box-shadow: none;
+  border-radius: 0;
+  line-height: 1.4;
+}
+
+/* Member documentation is a ruled record, not a floating card. */
+article section.m-doc-details > div {
+  padding: 0.65rem;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+article section.m-doc-details > div::before {
+  border-radius: 0;
+  border-color: var(--line-color);
+}
+
+article section.m-doc-details > div > h3:first-child {
+  padding: 0.4rem 0.65rem;
+}
+
+article table.m-table {
+  box-shadow: none;
+  border-radius: 0;
+}
+
+article table.m-table th,
+article table.m-table td {
+  padding: 0.3rem 0.5rem;
+}
+
+main ul.m-doc li,
+main dl.m-doc dt,
+main dl.m-doc dd {
+  margin-bottom: 0.25rem;
+}
+
+body > footer > nav {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--link-color);
+  outline-offset: 2px;
+}
+
+/* Let long signatures scroll locally, never widen the mobile viewport. */
+main article h1 .m-doc-include {
+  float: none;
+}
+
+@media (max-width: 767px) {
+  body > main {
+    padding-top: 0.75rem;
+  }
+
+  main article h1 {
+    padding: 0.35rem 0.5rem;
+  }
+}
