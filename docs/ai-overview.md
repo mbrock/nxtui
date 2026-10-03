@@ -17,9 +17,10 @@ request without contacting OpenAI:
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
-The current text consumer expects a particular event sequence: response
-creation, progress, one output item, one content part, text deltas, and
-completion. It does not yet dispatch arbitrary/interleaved output items,
+The current text consumer expects response creation, progress, sequential
+output items with zero or more text content parts, and completion. This
+includes empty reasoning items before a model's text answer. It does not
+yet dispatch arbitrary/interleaved output items,
 reasoning events, function calls, or all terminal/error states. It is a useful
 transport experiment, not a general Responses stream implementation.
 

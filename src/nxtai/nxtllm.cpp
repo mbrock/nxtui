@@ -71,7 +71,8 @@ struct openai_unexpected_content_type : nxtrt::runtime_error
 struct openai_unexpected_event : nxtrt::runtime_error
 {
     openai_unexpected_event(std::string expected, std::string actual)
-        : nxtrt::runtime_error{"OpenAI Responses unexpected event"}
+        : nxtrt::runtime_error{
+              "OpenAI Responses expected " + expected + ", got " + actual}
         , expected(std::move(expected))
         , actual(std::move(actual))
     {
@@ -431,7 +432,9 @@ private:
             openai_response_event::response_created);
         co_await write_expected_event(
             openai_response_event::response_in_progress);
-        co_await stream_output_item();
+        while ((co_await events.peek_one())->type
+               == openai_response_event::output_item_added)
+            co_await stream_output_item();
         co_await write_expected_event(
             openai_response_event::response_completed);
     }
@@ -463,7 +466,10 @@ private:
     {
         co_await write_expected_event(
             openai_response_event::output_item_added);
-        co_await stream_content_part();
+        // Reasoning items can finish without any text content parts.
+        while ((co_await events.peek_one())->type
+               == openai_response_event::content_part_added)
+            co_await stream_content_part();
         co_await write_expected_event(
             openai_response_event::output_item_done);
     }
