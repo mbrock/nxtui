@@ -1137,7 +1137,7 @@ inline nxtrt::task<int> mark_then_wait_for_stop(std::vector<int> & events)
 inline nxtrt::task<void> hosted_group_stop_probe(std::vector<int> & events)
 {
     co_await nxtrt::settle(
-        std::tuple{[&] { return mark_then_wait_for_stop(events); }});
+        std::tuple{mark_then_wait_for_stop(events)});
 }
 
 inline nxtrt::task<void> record_stop_state_after_two_yields(

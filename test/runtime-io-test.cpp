@@ -351,13 +351,14 @@ void declare_runtime_io_tests()
             auto seen = std::vector<int>{};
 
             rt.run([&]() -> nxtrt::task<void> {
+                auto publish = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    expect(seen.empty());
+                    expect(co_await events.send(7));
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return record_next_wire_value(events, seen); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        expect(seen.empty());
-                        expect(co_await events.send(7));
-                    },
+                    record_next_wire_value(events, seen),
+                    publish(),
                 });
             });
 
@@ -386,12 +387,13 @@ void declare_runtime_io_tests()
             auto finished = false;
 
             rt.run([&]() -> nxtrt::task<void> {
+                auto close = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    events.close();
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return record_closed_wire(events, finished); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        events.close();
-                    },
+                    record_closed_wire(events, finished),
+                    close(),
                 });
             });
 
@@ -478,12 +480,13 @@ void declare_runtime_io_tests()
             rt.run([&]() -> nxtrt::task<void> {
                 auto & tx = events.tx();
                 co_await tx.write(12);
+                auto write_and_receive = [&]() -> nxtrt::task<void> {
+                    co_await tx.write(13);
+                    co_await record_next_wire_value(events, seen);
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return record_next_wire_value(events, seen); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await tx.write(13);
-                        co_await record_next_wire_value(events, seen);
-                    },
+                    record_next_wire_value(events, seen),
+                    write_and_receive(),
                 });
             });
 
@@ -509,13 +512,14 @@ void declare_runtime_io_tests()
             expect(!events.try_send(1));
 
             rt.run([&]() -> nxtrt::task<void> {
+                auto receive = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    expect(!sent);
+                    co_await record_next_wire_value(events, seen);
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return send_wire_value(events, 42, sent); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        expect(!sent);
-                        co_await record_next_wire_value(events, seen);
-                    },
+                    send_wire_value(events, 42, sent),
+                    receive(),
                 });
             });
 
@@ -533,13 +537,14 @@ void declare_runtime_io_tests()
             expect(events.try_send(3));
 
             rt.run([&]() -> nxtrt::task<void> {
+                auto receive = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    expect(!flushed);
+                    co_await record_next_wire_value(events, seen);
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return flush_wire(events, flushed); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        expect(!flushed);
-                        co_await record_next_wire_value(events, seen);
-                    },
+                    flush_wire(events, flushed),
+                    receive(),
                 });
             });
 
@@ -556,13 +561,14 @@ void declare_runtime_io_tests()
 
             rt.run([&]() -> nxtrt::task<void> {
                 expect(co_await events.send(4));
+                auto receive = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    expect(!flushed);
+                    co_await record_next_wire_value(events, seen);
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return flush_wire(events, flushed); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        expect(!flushed);
-                        co_await record_next_wire_value(events, seen);
-                    },
+                    flush_wire(events, flushed),
+                    receive(),
                 });
             });
 
@@ -578,14 +584,15 @@ void declare_runtime_io_tests()
             auto values = std::vector<int>{};
 
             rt.run([&]() -> nxtrt::task<void> {
+                auto ring = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    expect(values.empty());
+                    ready.ring();
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        expect(values.empty());
-                        ready.ring();
-                    },
-                    [&] { return record_after_bell(ready, values, 1); },
-                    [&] { return record_after_bell(ready, values, 2); },
+                    ring(),
+                    record_after_bell(ready, values, 1),
+                    record_after_bell(ready, values, 2),
                 });
             });
 
@@ -606,13 +613,14 @@ void declare_runtime_io_tests()
             ready.reset();
 
             rt.run([&]() -> nxtrt::task<void> {
+                auto ring = [&]() -> nxtrt::task<void> {
+                    co_await nxtrt::yield();
+                    expect(values == std::vector<int>{1});
+                    ready.ring();
+                };
                 (void)co_await nxtrt::when_all(std::tuple{
-                    [&] { return record_after_bell(ready, values, 2); },
-                    [&]() -> nxtrt::task<void> {
-                        co_await nxtrt::yield();
-                        expect(values == std::vector<int>{1});
-                        ready.ring();
-                    },
+                    record_after_bell(ready, values, 2),
+                    ring(),
                 });
             });
 

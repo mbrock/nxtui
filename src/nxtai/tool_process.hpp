@@ -128,18 +128,14 @@ capture(
     // The monitor stops once the capture (the first job) settles.
     auto outcomes = co_await nxtrt::settle(
         std::tuple{
-            [&] {
-                return nxtrt::finally(
-                    capture_output(state, options.max_capture_bytes),
-                    [state] { return finish_child(state); });
-            },
-            [&] {
-                return nxtrt::scoped_process::monitor_until_done(
-                    state->observed,
-                    state->done,
-                    options.scope.sample_interval,
-                    options.scope.max_samples);
-            },
+            nxtrt::finally(
+                capture_output(state, options.max_capture_bytes),
+                [state] { return finish_child(state); }),
+            nxtrt::scoped_process::monitor_until_done(
+                state->observed,
+                state->done,
+                options.scope.sample_interval,
+                options.scope.max_samples),
         },
         nxtrt::stop_after_first{});
 

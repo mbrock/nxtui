@@ -163,6 +163,7 @@ storage. Reading after close is not supported.
 
 ## Relation to groups and future work
 
+Fixed groups accept tasks only; the stream pool still accepts idea factories.
 The pool is the execution owner for every group. `settle(tuple, rule)` lowers
 each indexed position to a finite `task<void>` recipe in a pool with one slot
 per job; that recipe stores its typed `outcome<T>`

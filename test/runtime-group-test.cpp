@@ -4,6 +4,44 @@ namespace nxt::test {
 
 namespace {
 
+template<typename T>
+concept tuple_settle_input = requires(T input) {
+    nxtrt::settle(std::tuple{std::move(input)});
+};
+
+template<typename T>
+concept tuple_when_all_input = requires(T input) {
+    nxtrt::when_all(std::tuple{std::move(input)});
+};
+
+template<typename T>
+concept tuple_wait_any_input = requires(T input) {
+    nxtrt::wait_any(std::tuple{std::move(input)});
+};
+
+template<typename T>
+concept range_settle_input = requires(std::vector<T> input) {
+    nxtrt::settle_range(std::move(input));
+};
+
+using int_task_factory = decltype(&throw_int_after_yield);
+static_assert(tuple_settle_input<nxtrt::task<int>>);
+static_assert(tuple_when_all_input<nxtrt::task<int>>);
+static_assert(tuple_wait_any_input<nxtrt::task<int>>);
+static_assert(range_settle_input<nxtrt::task<int>>);
+static_assert(!tuple_settle_input<int_task_factory>);
+static_assert(!tuple_when_all_input<int_task_factory>);
+static_assert(!tuple_wait_any_input<int_task_factory>);
+static_assert(!range_settle_input<int_task_factory>);
+
+nxtrt::task<std::unique_ptr<int>> owned_value_after_yield(
+    std::unique_ptr<int> value, int & starts)
+{
+    ++starts;
+    co_await nxtrt::yield();
+    co_return std::move(value);
+}
+
 struct drain_probe
 {
     int active = 0;
@@ -42,12 +80,10 @@ void declare_runtime_group_tests()
                 auto events = std::vector<int>{};
                 auto outcomes = deck.sync_wait([&] {
                     return nxtrt::settle(std::tuple{
-                        [&] {
-                            return value_after_two_yields_or_stop(events, 43);
-                        },
-                        [] { return value_after_yield(7); },
-                        throw_int_after_yield,
-                        empty_child,
+                        value_after_two_yields_or_stop(events, 43),
+                        value_after_yield(7),
+                        throw_int_after_yield(),
+                        empty_child(),
                     });
                 });
                 static_assert(std::same_as<
@@ -81,11 +117,8 @@ void declare_runtime_group_tests()
             auto events = std::vector<int>{};
             auto outcomes = co_await nxtrt::settle(
             std::tuple{
-                [&] { return throw_after_yield(events, 1); },
-                [&] {
-                    return record_stop_state_after_two_yields(
-                        events, 2);
-                },
+                throw_after_yield(events, 1),
+                record_stop_state_after_two_yields(events, 2),
             },
             nxtrt::stop_on_failure{});
             expect(!std::get<0>(outcomes));
@@ -98,10 +131,7 @@ void declare_runtime_group_tests()
             auto outcomes = co_await nxtrt::settle(
             std::tuple{
                 value_after_yield(123),
-                [&] {
-                    return record_stop_state_after_two_yields(
-                        events, 3);
-                },
+                record_stop_state_after_two_yields(events, 3),
             },
             nxtrt::stop_on_success{});
             expect(std::get<0>(outcomes).value() == 123);
@@ -115,8 +145,8 @@ void declare_runtime_group_tests()
                 auto outcomes = deck.sync_wait([&] {
                     return nxtrt::settle(
                         std::tuple{
-                            [] { return value_after_yield(5); },
-                            [&] { return tuple_wait_for_stop(events, 6); },
+                            value_after_yield(5),
+                            tuple_wait_for_stop(events, 6),
                         },
                         nxtrt::stop_after_first{});
                 });
@@ -131,11 +161,8 @@ void declare_runtime_group_tests()
                 auto primary_ran = deck.sync_wait([&] {
                     return nxtrt::settle(
                         std::tuple{
-                            [&] {
-                                return value_after_two_yields_or_stop(
-                                    events, 7);
-                            },
-                            throw_int_after_yield,
+                            value_after_two_yields_or_stop(events, 7),
+                            throw_int_after_yield(),
                         },
                         nxtrt::stop_after_first{});
                 });
@@ -148,8 +175,8 @@ void declare_runtime_group_tests()
             auto events = std::vector<int>{};
             auto outcomes = co_await nxtrt::settle(
             std::tuple{
-                [&] { return tuple_wait_for_stop(events, 1); },
-                [] { return value_after_yield(2); },
+                tuple_wait_for_stop(events, 1),
+                value_after_yield(2),
             },
             [](std::size_t index, bool) noexcept {
                 return index == 1;
@@ -191,13 +218,13 @@ void declare_runtime_group_tests()
         "wait_any skips failures and drains losers"_test = []() -> nxtrt::task<void> {
             auto events = std::vector<int>{};
             auto result = co_await nxtrt::wait_any(std::tuple{
-                throw_int_after_yield,
-                [] { return value_after_yield(37); },
-                [&] { return tuple_wait_for_stop(events, 19); },
+                throw_int_after_yield(),
+                value_after_yield(37),
+                tuple_wait_for_stop(events, 19),
             });
             expect(result == 37);
             expect(events == std::vector<int>{19});
-            co_await nxtrt::wait_any(std::tuple{empty_child, empty_child});
+            co_await nxtrt::wait_any(std::tuple{empty_child(), empty_child()});
         };
 
         "when_all returns a tuple of task results"_test = []() -> nxtrt::task<void> {
@@ -216,8 +243,8 @@ void declare_runtime_group_tests()
             try {
                 (void)deck.sync_wait([&] {
                     return nxtrt::when_all(std::tuple{
-                        throw_int_after_yield,
-                        [&] { return tuple_wait_for_stop(events, 11); },
+                        throw_int_after_yield(),
+                        tuple_wait_for_stop(events, 11),
                     });
                 });
             } catch (const nxtrt::runtime_error & error) {
@@ -230,8 +257,8 @@ void declare_runtime_group_tests()
             auto outcomes = deck.sync_wait([&] {
                 return nxtrt::settle(
                     std::tuple{
-                        throw_int_after_yield,
-                        [&] { return tuple_wait_for_stop(events, 23); },
+                        throw_int_after_yield(),
+                        tuple_wait_for_stop(events, 23),
                     },
                     nxtrt::stop_on_completion{});
             });
@@ -243,23 +270,17 @@ void declare_runtime_group_tests()
             expect(events == std::vector<int>{11, 23});
         };
 
-        "when_all keeps factories alive and collects mixed results"_test =
+        "when_all owns tasks and collects mixed results"_test =
             [] {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
                 auto calls = 0;
                 auto values = deck.sync_wait([&] {
                     return nxtrt::when_all(std::tuple{
-                        // Deliberately a capturing coroutine factory: its
-                        // move-only closure must survive suspension.
-                        [value = std::make_unique<int>(29),
-                         &calls]() -> nxtrt::task<std::unique_ptr<int>> {
-                            ++calls;
-                            co_await nxtrt::yield();
-                            co_return std::make_unique<int>(*value);
-                        },
+                        owned_value_after_yield(
+                            std::make_unique<int>(29), calls),
                         value_after_yield(7),
-                        [&] { return record_after_yield(events, 5); },
+                        record_after_yield(events, 5),
                     });
                 });
                 static_assert(std::same_as<
@@ -274,84 +295,58 @@ void declare_runtime_group_tests()
                 expect(events == std::vector<int>{51, 52});
             };
 
-        "group factories are lazy"_test = [] {
-            auto deck = nxtrt::deck{};
-            auto calls = 0;
-            auto result =
-                deck.sync_wait([&]() -> nxtrt::task<std::tuple<int>> {
-                    auto work = nxtrt::when_all(std::tuple{[&] {
-                        ++calls;
-                        expect(nxtrt::current_deck() == &deck);
-                        return value_after_yield(53);
-                    }});
-                    expect(calls == 0);
-                    co_return co_await std::move(work);
-                });
-            expect(calls == 1 && std::get<0>(result) == 53);
-            auto empty =
-                deck.sync_wait([] { return nxtrt::when_all(std::tuple{}); });
-            static_assert(std::tuple_size_v<decltype(empty)> == 0);
+        "group tasks stay lazy until awaited"_test = []() -> nxtrt::task<void> {
+            auto starts = 0;
+            auto child = owned_value_after_yield(
+                std::make_unique<int>(53), starts);
+            expect(starts == 0);
+            auto work = nxtrt::when_all(std::tuple{std::move(child)});
+            expect(!child.handle());
+            expect(starts == 0);
+            auto result = co_await std::move(work);
+            expect(starts == 1 && *std::get<0>(result) == 53);
         };
 
-        "factory failure stops and drains earlier jobs"_test = [] {
+        "empty groups complete without jobs"_test = []() -> nxtrt::task<void> {
+            auto values = co_await nxtrt::when_all(std::tuple{});
+            auto outcomes = co_await nxtrt::settle(std::tuple{});
+            static_assert(std::tuple_size_v<decltype(values)> == 0);
+            static_assert(std::tuple_size_v<decltype(outcomes)> == 0);
+            auto ranged = co_await nxtrt::settle_range(
+                std::vector<nxtrt::task<int>>{});
+            expect(ranged.empty());
+        };
+
+        "groups reject empty tasks before awaiting them"_test = [] {
             auto deck = nxtrt::deck{};
             auto events = std::vector<int>{};
-            auto skipped = 0;
-            auto failed = false;
+            auto rejected = false;
             try {
                 (void)deck.sync_wait([&] {
                     return nxtrt::when_all(std::tuple{
-                        [value = std::make_unique<int>(43),
-                         &events]() -> nxtrt::task<int> {
-                            co_await nxtrt::yield();
-                            expect(nxtrt::stop_requested());
-                            events.push_back(*value);
-                            co_return *value;
-                        },
-                        []() -> nxtrt::task<int> {
-                            throw std::domain_error{"factory failed"};
-                        },
-                        [&] {
-                            ++skipped;
-                            return value_after_yield(1);
-                        },
+                        tuple_wait_for_stop(events, 43),
+                        nxtrt::task<int>{},
                     });
-                });
-            } catch (const std::domain_error & error) {
-                failed = std::string_view{error.what()} == "factory failed";
-            }
-            expect(failed && skipped == 0);
-            expect(events == std::vector<int>{43});
-        };
-
-        "group recipes reject empty tasks before awaiting them"_test = [] {
-            auto deck = nxtrt::deck{};
-            auto rejected = false;
-            try {
-                (void)deck.sync_wait([] {
-                    return nxtrt::when_all(
-                        std::tuple{[] { return nxtrt::task<int>{}; }});
                 });
             } catch (const nxtrt::runtime_error & error) {
                 rejected = std::string_view{error.what()}
-                           == "nxtrt group recipe returned an empty task";
+                           == "nxtrt group received an empty task";
             }
             expect(rejected);
+            expect(events == std::vector<int>{43});
         };
 
         "when_all accepts cancellation at every startup turn"_test = [] {
-            auto saw_prepared = false;
+            auto saw_unstarted = false;
             auto saw_started = false;
             for (int turns = 0; turns < 40; ++turns) {
                 auto deck = nxtrt::deck{};
                 auto events = std::vector<int>{};
-                auto calls = 0;
                 auto starts = 0;
+                auto child = tuple_wait_for_stop(events, 61, &starts);
+                expect(starts == 0);
                 auto root = nxtrt::root_task{deck, [&] {
-                    return nxtrt::when_all(std::tuple{[&] {
-                        ++calls;
-                        return tuple_wait_for_stop(events, 61, &starts);
-                    }});
+                    return nxtrt::when_all(std::tuple{std::move(child)});
                 }};
                 root.start();
                 for (int i = 0; i < turns; ++i)
@@ -367,16 +362,15 @@ void declare_runtime_group_tests()
                 }
                 expect(cancelled);
                 if (turns == 0)
-                    expect(calls == 0);
-                expect(calls <= 1);
-                expect(starts <= calls);
-                saw_prepared |= calls != 0 && starts == 0;
+                    expect(starts == 0);
+                expect(starts <= 1);
+                saw_unstarted |= starts == 0;
                 saw_started |= starts != 0;
                 expect(
                     events
                     == (starts ? std::vector<int>{61} : std::vector<int>{}));
             }
-            expect(saw_prepared && saw_started);
+            expect(saw_unstarted && saw_started);
         };
 
         "stopping the awaiting task stops the group"_test = [] {

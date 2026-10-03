@@ -55,8 +55,8 @@ shape of its concurrency:
   or `throw_if_stop_requested()`, which see the running task's stop.
 - A fixed fork/fork/join becomes `settle(std::tuple{a, b}, rule)`, which
   returns `std::tuple<outcome<T>...>`, or `when_all` / `wait_any` when the
-  usual aggregation fits. Elements are tasks or nullary task factories; the
-  tuple keeps factories alive until the group returns.
+  usual aggregation fits. Elements are tasks, created before entering the
+  group; call task factories to obtain those tasks first.
 - A firm policy that stopped siblings becomes a stop rule: `stop_on_failure`,
   `stop_on_success`, `stop_on_completion`, `stop_after_first` (a primary job
   plus companions), or a `noexcept` callable `bool(std::size_t, bool failed)`.

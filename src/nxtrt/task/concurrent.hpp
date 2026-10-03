@@ -1,6 +1,6 @@
 #pragma once
 
-// Groups: run a fixed set or a range of ideas concurrently in a pool, with a
+// Groups: run a fixed set or a range of tasks concurrently in a pool, with a
 // stop rule deciding when the rest are cancelled. A group settles every job
 // before it returns. Include nxtrt/task.hpp for the complete runtime API.
 
@@ -69,20 +69,6 @@ struct stop_after_first
 };
 
 namespace detail {
-
-template<typename Work>
-    requires(is_task_v<Work> || stored_task_factory<Work>)
-[[nodiscard]] auto start_work(Work & work)
-{
-    if constexpr (is_task_v<Work>)
-        return std::move(work);
-    else
-        return std::invoke(work);
-}
-
-template<typename Work>
-using work_result_t =
-    task_result_t<decltype(start_work(std::declval<Work &>()))>;
 
 template<typename T>
 [[nodiscard]] outcome<T> cancelled_outcome()
@@ -164,7 +150,7 @@ task<void> start_job(
     task<T> child)
 {
     if (!child.handle())
-        throw runtime_error{"nxtrt group recipe returned an empty task"};
+        throw runtime_error{"nxtrt group received an empty task"};
     return settle_job(control, index, result, std::move(child));
 }
 
@@ -175,12 +161,12 @@ task<void> run_group(std::span<group_recipe> recipes, group_control & control);
 
 // Heterogeneity lives in the result tuple, not the pool: every indexed
 // recipe produces void work for the same ordinary pool.
-template<typename... Work>
+template<typename... Tasks>
 struct tuple_group
 {
     group_control & control;
-    std::tuple<Work...> & work;
-    std::tuple<std::optional<outcome<work_result_t<Work>>>...> results;
+    std::tuple<Tasks...> & tasks;
+    std::tuple<std::optional<outcome<task_result_t<Tasks>>>...> results;
 
     template<std::size_t I>
     static task<void> start(void * group, std::size_t)
@@ -190,7 +176,7 @@ struct tuple_group
             self.control,
             I,
             std::get<I>(self.results),
-            start_work(std::get<I>(self.work)));
+            std::move(std::get<I>(self.tasks)));
     }
 
     template<std::size_t... Is>
@@ -201,11 +187,11 @@ struct tuple_group
     }
 };
 
-template<typename T, typename Work>
+template<typename T>
 struct range_group
 {
     group_control & control;
-    std::vector<Work> work;
+    std::vector<task<T>> tasks;
     std::vector<std::optional<outcome<T>>> results;
 
     static task<void> start(void * group, std::size_t index)
@@ -215,7 +201,7 @@ struct range_group
             self.control,
             index,
             self.results[index],
-            start_work(self.work[index]));
+            std::move(self.tasks[index]));
     }
 };
 
@@ -293,19 +279,17 @@ void take_first_void_success_or_throw(
 
 } // namespace detail
 
-/// Run a fixed set of work concurrently and settle all of it. Elements are
-/// tasks or task factories (ideas); a factory is invoked once, when its job
-/// starts, and the tuple keeps it alive until the group returns. `rule`
+/// Run a fixed set of tasks concurrently and settle all of it. `rule`
 /// decides when the remaining jobs are stopped. Returns each job's outcome
 /// in tuple order; a job stopped before it started settles as cancelled.
-template<typename... Work, stop_rule Rule = settle_all>
-    requires((is_task_v<Work> || stored_task_factory<Work>) && ...)
-[[nodiscard]] task<std::tuple<outcome<detail::work_result_t<Work>>...>>
-settle(std::tuple<Work...> work, Rule rule = {})
+template<typename... Tasks, stop_rule Rule = settle_all>
+    requires(is_task_v<Tasks> && ...)
+[[nodiscard]] task<std::tuple<outcome<task_result_t<Tasks>>...>>
+settle(std::tuple<Tasks...> tasks, Rule rule = {})
 {
     auto control = detail::group_control{rule};
-    auto group = detail::tuple_group<Work...>{control, work, {}};
-    auto recipes = group.recipes(std::index_sequence_for<Work...>{});
+    auto group = detail::tuple_group<Tasks...>{control, tasks, {}};
+    auto recipes = group.recipes(std::index_sequence_for<Tasks...>{});
     co_await detail::run_group(
         std::span<detail::group_recipe>{recipes}, control);
     co_return std::apply(
@@ -318,27 +302,25 @@ settle(std::tuple<Work...> work, Rule rule = {})
         group.results);
 }
 
-/// Run a range of work (tasks or ideas) concurrently and settle all of it.
+/// Run a range of tasks concurrently and settle all of it.
 /// Returns the outcomes in range order.
 template<std::ranges::input_range Range, stop_rule Rule = settle_all>
-    requires(is_task_v<std::ranges::range_value_t<Range>>
-             || stored_task_factory<std::ranges::range_value_t<Range>>)
+    requires is_task_v<std::ranges::range_value_t<Range>>
 [[nodiscard]] auto settle_range(Range range, Rule rule = {})
     -> task<std::vector<outcome<
-        detail::work_result_t<std::ranges::range_value_t<Range>>>>>
+        task_result_t<std::ranges::range_value_t<Range>>>>>
 {
-    using work_type = std::ranges::range_value_t<Range>;
-    using result_type = detail::work_result_t<work_type>;
-    using group_type = detail::range_group<result_type, work_type>;
+    using result_type = task_result_t<std::ranges::range_value_t<Range>>;
+    using group_type = detail::range_group<result_type>;
 
     auto control = detail::group_control{rule};
     auto group = group_type{control, {}, {}};
     for (auto && item : range)
-        group.work.push_back(std::move(item));
-    group.results.resize(group.work.size());
+        group.tasks.push_back(std::move(item));
+    group.results.resize(group.tasks.size());
     auto recipes = std::vector<detail::group_recipe>{};
-    recipes.reserve(group.work.size());
-    for (auto i = std::size_t{0}; i < group.work.size(); ++i)
+    recipes.reserve(group.tasks.size());
+    for (auto i = std::size_t{0}; i < group.tasks.size(); ++i)
         recipes.push_back({&group, i, group_type::start});
 
     co_await detail::run_group(std::span{recipes}, control);
@@ -354,17 +336,17 @@ template<std::ranges::input_range Range, stop_rule Rule = settle_all>
 
 /// All results in tuple order; void positions are monostate. The first
 /// failure stops the rest and is rethrown.
-template<typename... Work>
-    requires((is_task_v<Work> || stored_task_factory<Work>) && ...)
-[[nodiscard]] auto when_all(std::tuple<Work...> work)
+template<typename... Tasks>
+    requires(is_task_v<Tasks> && ...)
+[[nodiscard]] auto when_all(std::tuple<Tasks...> tasks)
     -> task<std::tuple<std::conditional_t<
-        std::is_void_v<detail::work_result_t<Work>>,
+        std::is_void_v<task_result_t<Tasks>>,
         std::monostate,
-        detail::work_result_t<Work>>...>>
+        task_result_t<Tasks>>...>>
 {
-    auto outcomes = co_await settle(std::move(work), stop_on_failure{});
+    auto outcomes = co_await settle(std::move(tasks), stop_on_failure{});
     co_return detail::take_all_or_throw(
-        outcomes, std::index_sequence_for<Work...>{});
+        outcomes, std::index_sequence_for<Tasks...>{});
 }
 
 template<typename... Tasks>
@@ -377,17 +359,17 @@ template<typename... Tasks>
 /// First success in tuple order, not first completion; the first success
 /// stops the rest. All failures are grouped.
 template<typename First, typename... Rest>
-    requires(is_task_v<First> || stored_task_factory<First>)
-            && ((is_task_v<Rest> || stored_task_factory<Rest>) && ...)
+    requires is_task_v<First>
+            && (is_task_v<Rest> && ...)
             && (std::same_as<
-                    detail::work_result_t<First>,
-                    detail::work_result_t<Rest>>
+                    task_result_t<First>,
+                    task_result_t<Rest>>
                 && ...)
-[[nodiscard]] task<detail::work_result_t<First>>
-wait_any(std::tuple<First, Rest...> work)
+[[nodiscard]] task<task_result_t<First>>
+wait_any(std::tuple<First, Rest...> tasks)
 {
-    using result_type = detail::work_result_t<First>;
-    auto outcomes = co_await settle(std::move(work), stop_on_success{});
+    using result_type = task_result_t<First>;
+    auto outcomes = co_await settle(std::move(tasks), stop_on_success{});
     if constexpr (std::is_void_v<result_type>) {
         detail::take_first_void_success_or_throw(
             outcomes, std::index_sequence_for<First, Rest...>{});
@@ -475,7 +457,7 @@ template<typename T>
     auto outcomes = co_await settle(
         std::tuple{
             std::move(body),
-            [duration] { return timeout_after(duration); }},
+            timeout_after(duration)},
         stop_on_completion{});
     auto body_result = std::move(std::get<0>(outcomes));
     if (body_result) {

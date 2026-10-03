@@ -88,7 +88,7 @@ nxtrt::task<void> scope_probe(
         (void) running();
         state.value *= 7;
         touched = state.value == 77;
-    })});
+    })()});
 }
 
 template<typename Wand>

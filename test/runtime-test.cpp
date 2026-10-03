@@ -727,7 +727,7 @@ static suite runtime_tests{
                 auto values = co_await nxtrt::with_env<ambient_int_key>(
                     99, [] {
                         return nxtrt::when_all(
-                            std::tuple{read_ambient_int_after_yield});
+                            std::tuple{read_ambient_int_after_yield()});
                     });
                 int result = std::get<0>(values);
 

@@ -211,16 +211,12 @@ nxtrt::task<void> run_echo_load(
     // fails (including the timeout), the rest are stopped.
     auto [clients, server, deadline] = co_await nxtrt::settle(
         std::tuple{
-            [&] { return run_clients(options, address, payload, stats); },
-            [&] {
-                return echo_server(
-                    listener, options.clients, options.payload_size, stats);
-            },
-            [&] {
-                return nxtrt::timeout_after(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        options.timeout));
-            },
+            run_clients(options, address, payload, stats),
+            echo_server(
+                listener, options.clients, options.payload_size, stats),
+            nxtrt::timeout_after(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    options.timeout)),
         },
         [](std::size_t index, bool failed) noexcept {
             return index == 0 || failed;

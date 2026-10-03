@@ -344,10 +344,10 @@ nxtrt::task<void> run_scoped_command(std::string command = {})
     auto failure = std::exception_ptr{};
     try {
         auto loops = co_await nxtrt::settle(std::tuple{
-            [&] { return read_pty_until_done(pty, state); },
-            [&] { return pump_stdin_to_pty(pty, state); },
-            [&] { return sample_cgroup_until_done(state); },
-            [&] { return render_until_done(terminal, state, pty); },
+            read_pty_until_done(pty, state),
+            pump_stdin_to_pty(pty, state),
+            sample_cgroup_until_done(state),
+            render_until_done(terminal, state, pty),
         });
         std::apply(
             [](auto &... loop) {

@@ -65,16 +65,16 @@ Concrete API:
 
 ## Groups {#rt_group}
 
-Concurrency is always a group of ideas awaited by a task. An idea is a
+Fixed concurrency is a group of tasks awaited by a task. An idea is a
 callable that returns `task<T>` (or `hope<T>`) when invoked; a task is work
 that has already been created. A group runs its jobs concurrently in a pool,
 applies a stop rule as each job settles, and settles every job before the
 awaiting task resumes. There is no fork, join, or child record: a group owns
 exactly the jobs it was given, and they cannot outlive it.
 
-`settle(std::tuple{work...}, rule)` runs a fixed heterogeneous set of tasks or
-nullary task factories, one pool slot per job. A factory is invoked once, when
-its job starts, and the tuple keeps it alive until the group returns. The
+`settle(std::tuple{tasks...}, rule)` runs a fixed heterogeneous set of tasks,
+one pool slot per job. Tasks are created before entering the group; their
+coroutine bodies begin when their jobs start. Factories are not accepted. The
 result is `std::tuple<outcome<T>...>` in tuple order, where `outcome<T>` is
 `std::expected<T, std::exception_ptr>` (including `outcome<void>`); a job
 stopped before it started settles as cancelled. `settle_range(range, rule)` does
@@ -105,8 +105,8 @@ success, and group the failures if none succeeds. `with_timeout` and
 ```cpp
 auto [page, icon] = co_await nxtrt::settle(
     std::tuple{
-        [&] { return fetch(page_url); },
-        [&] { return fetch(icon_url); }});
+        fetch(page_url),
+        fetch(icon_url)});
 if (!page)
     std::rethrow_exception(page.error());
 ```
