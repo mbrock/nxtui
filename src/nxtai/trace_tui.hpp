@@ -10,10 +10,18 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtai::trace_tui
+ * Waterfall view of an `nxtrt` trace span: one row per completed child
+ * span, with a bar showing when it ran relative to its siblings.
+ * `render_span_waterfall` is the entry point.
+ */
 namespace nxtai::trace_tui {
 
 using namespace nxtui;
 
+/// One child span: display name, start offset from the earliest child,
+/// and duration.
 struct waterfall_row
 {
     std::string name;
@@ -21,6 +29,7 @@ struct waterfall_row
     nxtrt::trace_clock::duration duration{};
 };
 
+/// Rows and overall time span for a waterfall.
 struct waterfall_view
 {
     std::string subject;
@@ -28,6 +37,7 @@ struct waterfall_view
     std::vector<waterfall_row> rows;
 };
 
+/// Header label, detail, subject override, and bar color.
 struct waterfall_options
 {
     std::string label = "span";
@@ -70,6 +80,9 @@ inline std::string attribute_value(
     return {};
 }
 
+/// Collect the completed children of `span` from `trace`. The time span
+/// runs from the earliest child start to the latest child end, or covers
+/// the span itself when no child has finished.
 inline waterfall_view collect_waterfall(
     const nxtrt::trace_context & trace,
     const nxtrt::trace_span & span,
@@ -225,6 +238,8 @@ inline auto render_waterfall(
                 })));
 }
 
+/// Layout of `collect_waterfall(trace, span)` with a header from
+/// `options`. The layout owns its data.
 inline auto render_span_waterfall(
     const nxtrt::trace_context & trace,
     const nxtrt::trace_span & span,

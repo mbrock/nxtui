@@ -12,6 +12,20 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtui::regional_tty
+ * Model of a terminal split into a scrolling region above and a fixed
+ * region (the HUD) at the bottom, and the escape programs that move between
+ * such splits without losing scrollback.
+ *
+ * `screen_partition` describes one split; `repartition` names a change from
+ * one split to another and computes how many rows must be scrolled;
+ * `emit_repartition` turns it into a program for a `backend`, either
+ * `ansi_string_backend` (bytes for the terminal) or `command_list_backend`
+ * (inspectable commands for tests). `scrollback_append_state` formats
+ * ordinary output for the scrolling region. `tui::TerminalCompositor` uses
+ * all of this; most programs need it only through the compositor.
+ */
 namespace nxtui::regional_tty {
 
 /// Half-open vertical terminal region: [top, bottom_exclusive).
@@ -80,6 +94,7 @@ struct scroll_region
     }
 };
 
+/// How the bottom fixed region relates to the terminal.
 enum class partition_kind {
     hidden_fixed_region,
     windowed_fixed_region,
@@ -87,8 +102,8 @@ enum class partition_kind {
 };
 
 /// The terminal divided into the scrollable region and the bottom fixed region
-/// our HUD owns. In windowed mode the two regions form a precise partition of
-/// the terminal rows.
+/// the HUD owns. In windowed mode the two regions form a precise partition of
+/// the terminal rows; hidden and full-screen modes have no scroll region.
 struct screen_partition
 {
     vertical_region terminal{};
@@ -99,6 +114,9 @@ struct screen_partition
     friend constexpr bool
     operator==(screen_partition, screen_partition) noexcept = default;
 
+    /// Partition for a fixed region of `fixed_height` rows (clamped to the
+    /// terminal): hidden for zero, full screen when it fills the terminal,
+    /// windowed otherwise.
     [[nodiscard]] static constexpr screen_partition
     for_bottom_fixed_height(height_t terminal_height, height_t fixed_height)
         noexcept
@@ -150,6 +168,8 @@ struct screen_partition
         return kind == partition_kind::fullscreen_fixed_region;
     }
 
+    /// First terminal row of the fixed region: its top in windowed mode,
+    /// row 0 in full screen, one past the last row when hidden.
     [[nodiscard]] constexpr row_t chrome_start() const noexcept
     {
         if (windowed())
@@ -183,6 +203,8 @@ struct repartition
     std::optional<row_t> insertion_cursor{};
     bool initial_attachment = false;
 
+    /// First installation of `next`. `insertion_cursor` is the terminal
+    /// row where output will continue, if known; see `reservation()`.
     [[nodiscard]] static constexpr repartition
     initial(
         screen_partition next,
@@ -195,6 +217,7 @@ struct repartition
             .initial_attachment = true};
     }
 
+    /// Change from an installed partition `old` to `next`.
     [[nodiscard]] static constexpr repartition
     from(screen_partition old, screen_partition next) noexcept
     {
@@ -204,6 +227,8 @@ struct repartition
             .initial_attachment = false};
     }
 
+    /// Rows to scroll up before the change so output above the incoming
+    /// fixed region is not overwritten by it.
     [[nodiscard]] constexpr scroll_transfer reservation() const noexcept
     {
         if (!next.windowed())
@@ -238,6 +263,8 @@ struct repartition
         return {};
     }
 
+    /// Rows the scroll region gains from the change. `emit_repartition`
+    /// scrolls them back down only when the fixed region is hidden.
     [[nodiscard]] constexpr scroll_transfer release() const noexcept
     {
         if (initial_attachment || !old || !old->windowed())
@@ -257,6 +284,10 @@ struct repartition
         return {};
     }
 
+    /// Rows to blank after the margins change: none on first installation,
+    /// the old fixed region when hiding, otherwise from whichever of the
+    /// old and new fixed-region tops is nearer the screen top down to the
+    /// last row.
     [[nodiscard]] constexpr vertical_region chrome_to_clear() const noexcept
     {
         if (initial_attachment)
@@ -275,6 +306,7 @@ struct repartition
     }
 };
 
+/// Kind of a `command`.
 enum class command_kind {
     save_cursor,
     restore_cursor,
@@ -302,6 +334,7 @@ struct command
     std::string text{};
 };
 
+/// Backend producing a `std::vector<command>`, for tests and inspection.
 struct command_list_backend
 {
     using program_type = std::vector<command>;
@@ -479,6 +512,9 @@ struct ansi_string_backend
     }
 };
 
+/// Output backend for repartition programs: an empty program, `append`,
+/// and one static function per terminal operation, each returning a
+/// `program_type`.
 template<typename Backend>
 concept backend = requires(
     typename Backend::program_type program,
@@ -509,6 +545,7 @@ concept backend = requires(
     { Backend::text(text) } -> std::same_as<typename Backend::program_type>;
 };
 
+/// Accumulates backend steps into one program.
 template<backend Backend>
 class program_builder
 {
@@ -529,6 +566,10 @@ private:
     program_type program_{Backend::empty()};
 };
 
+/// Program applying `change`: reset SGR, scroll up by the reservation,
+/// set or reset the scroll margins (bracketed by save/restore cursor, since
+/// DECSTBM homes the cursor), blank `chrome_to_clear()`, and, when hiding,
+/// scroll down by the release.
 template<backend Backend>
 [[nodiscard]] typename Backend::program_type emit_repartition(
     const repartition & change)
@@ -574,6 +615,9 @@ template<backend Backend>
     return std::move(out).finish();
 }
 
+/// Program writing `block` at the cursor, one line feed after every line
+/// including the last. Prefer `scrollback_append_state`, which defers the
+/// final line feed.
 template<backend Backend>
 [[nodiscard]] typename Backend::program_type append_block(
     const screen_partition &,
@@ -608,8 +652,13 @@ template<backend Backend>
 /// terminal scrollback history.
 struct scrollback_append_state
 {
+    /// True once a block has been written, so the next one starts with a
+    /// line feed.
     bool after_block = false;
 
+    /// Program writing `block` at the cursor: reset SGR, a line feed if a
+    /// block came before, then the lines separated by line feeds. Empty
+    /// blocks produce an empty program and leave the state unchanged.
     template<backend Backend>
     [[nodiscard]] typename Backend::program_type append_block(
         const screen_partition &,

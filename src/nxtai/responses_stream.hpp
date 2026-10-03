@@ -12,8 +12,9 @@
 
 namespace nxtai::responses {
 
-// Preserve complete JSON values, including fields unknown to this client.
-// In particular, reasoning items and message phase must survive continuation.
+// Strict JSON helpers that slice complete values out of event payloads
+// without reinterpreting them, so fields unknown to this client (reasoning
+// items, message phase) survive continuation.
 namespace detail {
 using kind = nxt::json::token_kind;
 
@@ -131,18 +132,44 @@ inline const std::string & required(
 }
 } // namespace detail
 
+/// A completed response: its id and its output items, in order, as raw
+/// JSON exactly as the server sent them.
 struct response_result
 {
+    /// Response id, usable as `previous_response_id`.
     std::string id;
+    /// Output items from the `response.completed` snapshot.
     std::vector<openai::raw_json> output_items;
 };
 
+/// Consumes Responses stream events one at a time and keeps the completed
+/// response.
+///
+/// Feed it the `event` name and `data` of each server-sent event. Text and
+/// refusal deltas are returned for display as they arrive; every other
+/// event (item additions, argument deltas, reasoning summaries, unknown
+/// types) is validated as JSON and otherwise ignored. Only the
+/// `response.completed` snapshot decides the result, so interleaved deltas
+/// cannot reorder or invent output items.
+///
+/// The decoder is a plain value with no I/O; `nxtllm` drives it from an
+/// SSE parser.
 struct stream_decoder
 {
+    /// Set once `response.completed` has been accepted.
     std::optional<response_result> completed;
 
-    // Deltas are presentation only. The terminal snapshot owns canonical,
-    // ordered items, regardless of how item/argument deltas were interleaved.
+    /// Decode one event. Returns the text of an `output_text` or `refusal`
+    /// delta, otherwise `std::nullopt`.
+    ///
+    /// Throws `nxtrt::runtime_error` when `data` is not a single valid JSON
+    /// object (duplicate keys, trailing data, nesting over 128 levels), when
+    /// its `type` member differs from `type`, for `error`,
+    /// `response.failed`, and `response.incomplete` events (with the payload
+    /// in the message), for a `response.completed` whose response lacks an
+    /// id, has a status other than `completed`, or has no `output` array,
+    /// and for any event after completion. The awaitable only parses; it
+    /// does not suspend on I/O.
     nxtrt::task<std::optional<std::string>> accept(
         std::string_view type, std::string_view data)
     {
@@ -178,6 +205,9 @@ struct stream_decoder
         co_return std::nullopt;
     }
 
+    /// Take the completed response.
+    /// @throws nxtrt::runtime_error if the stream ended before
+    /// `response.completed`.
     response_result finish()
     {
         if (!completed)

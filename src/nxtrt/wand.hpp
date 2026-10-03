@@ -22,10 +22,13 @@ namespace detail {
 struct promise_base;
 }
 
-/// A suspended coroutine parked inside a wand.
+/// A suspended coroutine parked inside a wand, waiting for one wish.
 ///
-/// Operation-specific wands store these records by coin. When the platform
-/// completion arrives, `resume()` puts the task back onto the deck.
+/// The wand receives a need in `wand::suspend` and keeps it, keyed by the
+/// wish's coin, until the operation settles. `resume(d)` drops the task's
+/// stop callback and enqueues the coroutine on deck `d`; it never resumes
+/// it inline, so a wand may call it from inside `wave` or its poll loop.
+/// A need is a non-owning handle: call `resume` exactly once.
 struct need
 {
     void resume(deck & d) const;
@@ -37,6 +40,12 @@ struct need
 template<typename T>
 class urge;
 
+/// Shared result slot between a wand and the urge awaiting it.
+///
+/// The wand stores either a value (`set_value`) or an exception
+/// (`set_exception`) before resuming the need; `take()` rethrows the
+/// exception or moves the value out, and throws `runtime_error` if neither
+/// was set. The urge and the wand's execution record share ownership.
 template<typename T>
 class urge_state
 {
@@ -94,7 +103,18 @@ private:
     std::exception_ptr exception_;
 };
 
-/// Typed urge returned by a wand after preparing an operation.
+/// Awaitable for one prepared wish; produced by `co_await` on a wish.
+///
+/// `await_ready` is always false. `await_suspend` parks the coroutine in
+/// the wand as a @ref nxtrt::need "need" under the urge's coin and arms the
+/// task's stop token so a stop request calls `wand::cancel(coin)`.
+/// `await_resume` returns the value or rethrows the exception the wand
+/// stored, typically `errno_error`, `interrupted_system_call`, or
+/// `operation_cancelled`.
+///
+/// An urge must be awaited right away by the task that created it, on the
+/// same deck: the wand has already recorded the execution, and an urge
+/// that is never awaited leaves that record unsubmitted in the wand.
 template<typename T>
 class urge
 {
@@ -153,6 +173,12 @@ inline void urge<void>::await_resume()
 
 namespace op {
 
+/// Makes every wish awaitable: `co_await op::read_some{fd, buf}`.
+///
+/// Copies the wish into the current deck's wand via `wand::prepare` and
+/// returns the urge. Throws `runtime_error` if there is no running task,
+/// deck, or wand (for example, outside a deck or on a deck built without
+/// a wand).
 template<awaitable_wish Wish>
 urge<typename Wish::result_type> operator co_await(Wish const & wish);
 
@@ -177,17 +203,41 @@ template<typename Wish>
 
 } // namespace detail
 
-/// Backend interface for staged platform/event-loop machinery.
+/// Backend boundary that turns wishes into platform I/O.
 ///
-/// `prepare()` is called synchronously while a coroutine is running. It can
-/// allocate backend state, stage submission records, and return a typed urge.
-/// The urge parks the coroutine at `await_suspend()`. After a deck round,
-/// `wave()` lets the wand submit whatever it staged during that round.
+/// A deck holds a pointer to one wand. While a task runs, awaiting a wish
+/// calls `prepare`, which erases the wish into `wish_variant` and calls the
+/// backend's `prep`; the urge then calls `suspend` to park the task. After
+/// each deck round, `deck::run_ready` calls `wave`, where the wand submits
+/// everything staged in that round. When an operation finishes, the wand
+/// stores its result in the urge state and calls `need::resume`, which puts
+/// the task back on the deck.
+///
+/// Shipped implementations are `uring_wand` (Linux io_uring), `epoll_wand`
+/// (Linux epoll, the Fil-C default), and `kqueue_wand` (macOS and BSD);
+/// `nxtrt::arch::wand` names the build's default. Each one also offers
+/// non-virtual `poll`, `wait`, and `run_until_done` loops that drive a deck.
+///
+/// Contract for a backend:
+/// - Each prepared wish gets an execution record with its own coin, unique
+///   among live records. The record moves through prepared, parked,
+///   settled, and retired (see `exec_lifecycle.hpp`).
+/// - Settle each parked execution exactly once, with a value or an
+///   exception, then call its need's `resume`.
+/// - Retire (free) a record only when no kernel structure can still refer
+///   to it, for example after an io_uring cancel CQE has drained.
+/// - Everything runs on the deck's thread; a wand is not thread-safe.
+///
+/// See @ref rt_wand and the executable model in `nxtrt/runtime.rkt`.
 class wand
 {
 public:
     virtual ~wand() = default;
 
+    /// Records `wish` for submission and returns the urge that awaits it.
+    ///
+    /// Called by `op::operator co_await` while task `promise` is running on
+    /// deck `d`. Nothing is submitted until the next `wave`.
     template<typename Wish>
     urge<typename Wish::result_type> prepare(
         deck & d,
@@ -212,8 +262,30 @@ public:
         };
     }
 
+    /// Parks `task` on the prepared execution named by `token`.
+    ///
+    /// Called from `urge::await_suspend`, right after `prep` in the same
+    /// task turn. Implementations move the record from prepared to parked
+    /// and ignore tokens that are not prepared. Must not complete the
+    /// operation here; completion happens in `wave` or the poll loop.
     virtual void suspend(coin_t token, need task) = 0;
+
+    /// Requests cancellation of the parked execution named by `token`.
+    ///
+    /// Called from the waiting task's stop callback. Must be a no-op for an
+    /// execution that is not parked or is already cancelling. The wand must
+    /// still settle the execution exactly once, normally with
+    /// `operation_cancelled`, and resume the need: at once, at the next
+    /// `wave`, or when the kernel confirms the cancel. The record must stay
+    /// alive until the kernel can no longer report events for it.
     virtual void cancel(coin_t token) = 0;
+
+    /// Submits the work staged since the last wave; called by the deck after
+    /// each round.
+    ///
+    /// Also the wand's sync point for retiring settled records. Operations
+    /// that finish synchronously here resume their needs onto `d`. Does not
+    /// block waiting for completions.
     virtual void wave(deck & d) = 0;
 
     /// Whether file opens and stats complete without blocking the deck's
@@ -225,6 +297,9 @@ public:
     }
 
 protected:
+    /// Backend hook behind `prepare`: create an execution record for
+    /// `wish.wish`, keep `wish.state` to deliver the result, and return the
+    /// record's coin. Runs inside the awaiting task; must not resume tasks.
     virtual coin_t prep(
         deck & d,
         detail::promise_base & promise,

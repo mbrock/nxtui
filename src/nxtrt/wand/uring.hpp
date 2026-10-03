@@ -42,6 +42,7 @@ extern "C" char ** environ;
 
 namespace nxtrt {
 
+/// True when `uring_wand` is available (Linux, not Fil-C).
 inline constexpr bool has_uring_wand = NXT_RT_HAS_URING != 0;
 
 #if NXT_RT_HAS_URING
@@ -76,6 +77,8 @@ private:
     coin_t token_;
 };
 
+/// Stages one wish during `uring_wand::wave`. Returns true when it attached
+/// an SQE, false when it completed synchronously through `complete_sync`.
 inline bool stage_uring(uring_submission &, op::manual &);
 inline bool stage_uring(uring_submission &, op::openat &);
 inline bool stage_uring(uring_submission &, op::openat2 &);
@@ -97,11 +100,33 @@ inline bool stage_uring(uring_submission &, op::poll &);
 inline bool stage_uring(uring_submission &, op::timeout &);
 inline bool stage_uring(uring_submission &, op::poll_until &);
 
-/// io_uring-backed wand for Linux runtime wishes.
+/// io_uring-backed wand for Linux; the default on Linux outside Fil-C.
 ///
 /// Each awaited wish becomes one hub-stored execution record. SQE/CQE
 /// `user_data` points at that record while variant phases make the legal
-/// prepared, parked, settled, and retired states explicit.
+/// prepared, parked, settled, and retired states explicit. Uses the
+/// bundled `raw_uring.hpp`, not liburing.
+///
+/// Batching: `prep` only queues the record. `wave` writes one SQE per
+/// queued wish (deferring any that do not fit in the submission queue to a
+/// later wave), adds cancel SQEs, and makes a single `io_uring_submit`.
+/// Reads, writes, sockets, opens, `statx`, polls, and timeouts run in the
+/// kernel; `getdents64`, spawns, and `signal_child` complete synchronously
+/// during `wave`. `wait_child` polls the pidfd and then reaps with
+/// `waitid`. `poll_until` is rejected with `runtime_error`; use
+/// `poll_until_after`.
+///
+/// Timers are io_uring timeout SQEs on the relative duration.
+///
+/// Cancellation: cancelling a queued wish settles it with
+/// `operation_cancelled` at the next wave without submitting it. For a
+/// submitted wish, `wave` sends an async-cancel SQE; the task resumes with
+/// `operation_cancelled` when the op CQE arrives, even if the operation
+/// had completed, and the record is retired only after the cancel CQE has
+/// drained too.
+///
+/// `asynchronous_files()` is true. Not copyable or movable; the queue depth
+/// defaults to 1024 entries.
 class uring_wand final : public wand
 {
 private:
@@ -154,6 +179,7 @@ private:
     struct exec;
 
 public:
+    /// Creates the ring; throws `runtime_error` if io_uring setup fails.
     explicit uring_wand(unsigned queue_depth = 1024)
     {
         auto rc = io_uring_queue_init(queue_depth, &ring_, 0);
@@ -225,7 +251,8 @@ public:
                 "io_uring_submit failed: " + std::to_string(-rc)};
     }
 
-    /// Poll available completions and requeue fulfilled tasks.
+    /// Handles every completion already available without blocking, and
+    /// requeues the tasks they settle onto `d`.
     void poll(deck & d)
     {
         while (true) {
@@ -243,6 +270,8 @@ public:
         }
     }
 
+    /// Blocks until at least one completion arrives, then handles all
+    /// available completions.
     void wait(deck & d)
     {
         auto * cqe = static_cast<io_uring_cqe *>(nullptr);
@@ -261,6 +290,12 @@ public:
         poll(d);
     }
 
+    /// Drives deck `d` and this ring until the started task `root` is done.
+    ///
+    /// Alternates deck rounds, waves, and completion handling, and blocks
+    /// in `wait` only when no task is ready. Throws `runtime_error`
+    /// ("deadlock") if `root` is unfinished while nothing is ready, staged,
+    /// or in flight.
     template<typename T>
     void run_until_done(deck & d, task<T> & root)
     {
@@ -284,6 +319,9 @@ public:
         }
     }
 
+    /// Settles the parked execution `token` as if its op CQE carried
+    /// `result` (a byte count, fd, or negative errno). Used for wishes
+    /// that complete synchronously.
     void complete(deck & d, coin_t token, int result)
     {
         auto * execution = exec_from_token(token);
@@ -294,6 +332,9 @@ public:
         compact_execs();
     }
 
+    /// Requeues the task parked on `token` without storing a result or
+    /// settling its record, so the await throws `runtime_error`. Not for
+    /// normal use.
     void fulfill(deck & d, coin_t token)
     {
         if (auto * execution = exec_from_token(token))
@@ -864,6 +905,12 @@ inline coin_t uring_wand::prep(
         packet.wish);
 }
 
+/// Runs an already-created `root` task on a fresh `uring_wand` and deck,
+/// returning its result or rethrowing its exception.
+///
+/// Prefer the factory overload: a task captures the runtime environment
+/// when it is created, and only the factory overload creates the root
+/// inside the root environment.
 template<typename T>
 [[nodiscard]] inline T run(task<T> root)
 {
@@ -879,6 +926,11 @@ template<typename T>
     }
 }
 
+/// Creates the root task by calling `fn()` inside a fresh `uring_wand`
+/// deck, drives it to completion, and returns its result.
+///
+/// `fn` is moved into storage that outlives the task, so a capturing
+/// coroutine lambda is safe here.
 template<task_factory Fn>
 [[nodiscard]] inline task_result_t<std::invoke_result_t<Fn>> run(Fn && fn)
 {

@@ -1,15 +1,40 @@
 #pragma once
 
-/// Terminal grid geometry.
+/// @file
+/// Terminal grid geometry: strongly typed widths, heights, columns, rows,
+/// ratios, and percentages.
 ///
-/// This is intentionally much smaller than a general units library. It models
-/// the dimensions nxt actually needs: columns, rows, ratios, percentages, and
-/// terminal positions.
+/// This is deliberately much smaller than a general units library. It models
+/// only what terminal layout needs. Values are built by multiplying a number
+/// by a unit constant: `3 * ch` is a `width_t`, `2 * ln` a `height_t`,
+/// `0.5 * one` a `ratio_t`, and `25 * percent` a `percent_t`.
 
 #include <compare>
 #include <cstddef>
 #include <type_traits>
 
+/**
+ * @namespace nxtui
+ * Terminal rendering toolkit: typed cell geometry, colors and styles,
+ * rasters of interned glyphs, ANSI output and keyboard input decoding, and
+ * composable layout values.
+ *
+ * The pieces stack up as follows. `units.hpp` gives cell geometry
+ * (`Size`, `Pos`, `width_t`, `height_t`, written `3 * ch`, `2 * ln`).
+ * `style.hpp` gives colors (`Rgba8`) and `Emphasis` bits. A `Raster` owns a
+ * grid of cells (glyph id, foreground, background, emphasis) whose glyph
+ * ids come from a shared `GlyphTable`; rendering code writes through a
+ * borrowed `RasterView`. Layout values in @ref nxtui::tui "nxtui::tui"
+ * (`column`, `row`, `text`, `progress_bar`, ...) measure themselves and
+ * render into a `RasterView`. `nxtui::tui::TerminalCompositor` diffs the
+ * rendered raster against the previous frame and writes only the changed
+ * cells as ANSI escapes, either full screen or as a fixed-height HUD at the
+ * bottom of the terminal while ordinary output scrolls above it.
+ *
+ * Start with @ref nxtui::tui "nxtui::tui" for building screens and
+ * `nxtui::tui::TerminalCompositor` for putting them on a terminal;
+ * `demo/tui_demo.cpp` is a small complete program.
+ */
 namespace nxtui {
 
 /// Literal unit for terminal-cell widths.
@@ -37,7 +62,10 @@ inline constexpr one_unit one{};
 /// Percent unit. A value of `100 * percent` is equivalent to `1 * one`.
 inline constexpr percent_unit percent{};
 
-/// Strong type for horizontal extents measured in terminal cells.
+/// Horizontal extent in terminal cells; build with `n * ch`.
+///
+/// The count is unsigned: subtracting a larger width wraps around, so
+/// compare before subtracting.
 struct width_t
 {
     /// Number of cells.
@@ -65,7 +93,9 @@ struct width_t
     friend constexpr auto operator<=>(width_t, width_t) noexcept = default;
 };
 
-/// Strong type for vertical extents measured in terminal lines.
+/// Vertical extent in terminal lines; build with `n * ln`.
+///
+/// Unsigned like `width_t`.
 struct height_t
 {
     /// Number of lines.
@@ -93,7 +123,7 @@ struct height_t
     friend constexpr auto operator<=>(height_t, height_t) noexcept = default;
 };
 
-/// Dimensionless flex or scale ratio.
+/// Dimensionless ratio, such as a layout flex factor; build with `x * one`.
 struct ratio_t
 {
     /// Raw ratio value.
@@ -115,7 +145,7 @@ struct ratio_t
     friend constexpr auto operator<=>(ratio_t, ratio_t) noexcept = default;
 };
 
-/// Percentage value, where 100 means one whole.
+/// Percentage, where `100 * percent` means one whole; `ratio()` converts.
 struct percent_t
 {
     /// Raw percentage value.
@@ -377,9 +407,13 @@ struct row_t
     friend constexpr auto operator<=>(row_t, row_t) noexcept = default;
 };
 
-/// ANSI columns share the same representation but are interpreted one-based.
+/// Column passed to `ansi::Writer` calls.
+///
+/// Same type and value as `col_t` (zero-based); the writer converts to the
+/// one-based coordinate in the escape sequence. The alias only marks intent.
 using ansi_col_t = col_t;
-/// ANSI rows share the same representation but are interpreted one-based.
+/// Row passed to `ansi::Writer` calls. Zero-based like `row_t`; see
+/// `ansi_col_t`.
 using ansi_row_t = row_t;
 
 /// Offset the terminal column origin by a width.
@@ -459,7 +493,11 @@ operator-(row_t p, ansi_origin_v_t) noexcept
     return {p.v + 1};
 }
 
-/// Two-dimensional extent in terminal cells.
+/// Width and height of a rectangle of terminal cells.
+///
+/// Built from typed extents, e.g. `Size{80 * ch, 24 * ln}`. Layouts receive
+/// their assigned `Size` in `render`, and rasters report theirs through
+/// `extent()`.
 struct Size
 {
     /// Width in terminal cells.
@@ -478,7 +516,13 @@ struct Size
     constexpr Size() = default;
 };
 
-/// Two-dimensional zero-based terminal position.
+/// Zero-based cell position: column `x`, row `y`.
+///
+/// Positions are relative to whatever raster or view they are used with,
+/// not necessarily to the terminal. Move them by typed extents
+/// (`pos + 2 * ch`, `pos + 1 * ln`, `pos + size`); subtracting two
+/// positions gives a `Size`. Use `Pos::at(dx, dy)` to build one from
+/// offsets and `col()` / `row()` for raw indices.
 struct Pos
 {
     /// Column coordinate.
@@ -565,13 +609,14 @@ struct Pos
     friend constexpr bool operator==(Pos, Pos) noexcept = default;
 };
 
-/// Convert a terminal column to the representation used by ANSI writer calls.
+/// Mark a column as an `ansi::Writer` argument. Returns the value unchanged;
+/// the writer adds one when it emits the sequence.
 [[nodiscard]] constexpr ansi_col_t to_ansi(col_t col) noexcept
 {
     return col;
 }
 
-/// Convert a terminal row to the representation used by ANSI writer calls.
+/// Mark a row as an `ansi::Writer` argument. Returns the value unchanged.
 [[nodiscard]] constexpr ansi_row_t to_ansi(row_t row) noexcept
 {
     return row;

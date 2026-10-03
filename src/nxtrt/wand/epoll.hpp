@@ -55,12 +55,46 @@ extern "C" {
 
 namespace nxtrt {
 
+/// True when `epoll_wand` is available (Linux, including Fil-C).
 inline constexpr bool has_epoll_wand = NXT_RT_HAS_EPOLL != 0;
 
 #if NXT_RT_HAS_EPOLL
 
 using epoll_event_t = struct epoll_event;
 
+/// Readiness-based wand on Linux epoll; the default under Fil-C.
+///
+/// Each awaited wish becomes one hub-stored execution record. `wave` tries
+/// each queued wish's syscall right away on the deck's thread. Those that
+/// finish settle immediately; those that would block (`EAGAIN`, or a
+/// connect in progress) register a one-shot epoll interest and are retried
+/// once when the fd is ready. Each registration watches a private
+/// `F_DUPFD_CLOEXEC` duplicate of the fd, so several wishes may wait on
+/// the same fd. epoll does not batch submissions: `wave` makes one
+/// `epoll_ctl` per waiting wish, and `poll`/`wait` collect up to 64 events
+/// per call.
+///
+/// Limitations: reads, writes, sends, receives, connects, and accepts set
+/// `O_NONBLOCK` on the caller's fd, which affects every user of that open
+/// file description. File opens, `statx`, `getdents64`, and spawns are
+/// synchronous syscalls on the deck's thread, so `asynchronous_files()` is
+/// false and `nxtrt::fs::files` moves file work to a blocking pool
+/// instead. epoll refuses regular files, so a `poll` on one makes
+/// `epoll_ctl` fail and `wave` throws `runtime_error`. If a retried
+/// I/O call still reports `EAGAIN` after readiness, the wish fails with
+/// that error rather than waiting again.
+///
+/// Timers: each `timeout` or `poll_until` creates a `CLOCK_MONOTONIC`
+/// timerfd; a zero duration fires after one nanosecond.
+///
+/// Cancellation: a queued wish settles with `operation_cancelled` at the
+/// next wave. A wish already registered is removed from epoll and settled
+/// with `operation_cancelled` inside `cancel` itself, since no kernel
+/// operation is in flight; its task is requeued on the deck last seen by
+/// `wave` or `poll`.
+///
+/// Under Fil-C, coins and epoll event data go through a weak exact pointer
+/// table so integer tokens keep their pointer capabilities.
 class epoll_wand final : public wand
 {
 private:
@@ -104,6 +138,7 @@ private:
     };
 
 public:
+    /// Creates the epoll instance; throws `runtime_error` on failure.
     epoll_wand()
         : epoll_(::epoll_create1(EPOLL_CLOEXEC))
     {
@@ -165,17 +200,22 @@ public:
         stage_submissions(d);
     }
 
+    /// Handles ready events without blocking and requeues settled tasks.
     void poll(deck & d)
     {
         poll_with_timeout(d, 0);
     }
 
+    /// Blocks until at least one event arrives, then handles ready events.
     void wait(deck & d)
     {
         poll_with_timeout(d, -1);
         poll(d);
     }
 
+    /// Drives deck `d` and this epoll instance until the started task
+    /// `root` is done. Throws `runtime_error` ("deadlock") if `root` is
+    /// unfinished while nothing is ready, staged, or registered.
     template<typename T>
     void run_until_done(deck & d, task<T> & root)
     {
@@ -1326,6 +1366,11 @@ private:
     deck * current_deck_ = nullptr;
 };
 
+/// Runs an already-created `root` task on a fresh `epoll_wand` and deck.
+///
+/// Prefer the factory overload: a task captures the runtime environment
+/// when it is created, and only the factory overload creates the root
+/// inside the root environment.
 template<typename T>
 [[nodiscard]] inline T run_with_epoll(task<T> root)
 {
@@ -1341,6 +1386,9 @@ template<typename T>
     }
 }
 
+/// Creates the root task by calling `fn()` inside a fresh `epoll_wand`
+/// deck, drives it to completion, and returns its result. `fn` outlives the
+/// task, so a capturing coroutine lambda is safe here.
 template<task_factory Fn>
 [[nodiscard]] inline task_result_t<std::invoke_result_t<Fn>>
 run_with_epoll(Fn && fn)

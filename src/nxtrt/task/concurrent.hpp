@@ -12,10 +12,25 @@
 namespace nxtrt {
 
 /// How one job of a group settled: its value, or the exception it ended with.
+///
+/// A job that was stopped before it ever started settles as an
+/// `operation_cancelled` error. A job that was stopped after starting
+/// settles however it ended: usually `operation_cancelled`, but a job that
+/// ignores the stop can still produce a value. Test for cancellation with
+/// `is_operation_cancelled(o.error())`.
 template<typename T>
 using outcome = std::expected<T, std::exception_ptr>;
 
-/// Let every job run to completion.
+/// @name Group policies
+/// A group policy is a `noexcept` callable `bool(std::size_t index, bool
+/// failed)`. The group calls it at each job's final suspension, with the
+/// job's position and whether it ended with an exception, until it first
+/// returns true; then the group requests stop on every other unfinished
+/// job, and jobs that have not started yet are never started. Any lambda
+/// with that signature works as a policy.
+/// @{
+
+/// Let every job run to completion; never stop the others.
 struct all_group
 {
     bool operator()(std::size_t, bool) const noexcept
@@ -51,7 +66,12 @@ struct first_completion_group
     }
 };
 
-/// Stop the companions when the first job (the primary) settles.
+/// Stop the companions when the first job (the primary) settles, whether it
+/// succeeded or failed. Companions settling, even by failing, stop nothing.
+///
+/// Use this when a sibling (a watcher, a heartbeat) should live exactly as
+/// long as the main work:
+/// `settle(std::tuple{main(), watcher()}, primary_group{})`.
 struct primary_group
 {
     bool operator()(std::size_t index, bool) const noexcept
@@ -59,6 +79,8 @@ struct primary_group
         return index == 0;
     }
 };
+
+/// @}
 
 namespace detail {
 
@@ -329,9 +351,37 @@ void take_first_void_success_or_throw(
 
 } // namespace detail
 
-/// Run a fixed set of tasks concurrently and settle all of it. `execution`
-/// decides when the remaining jobs are stopped. Returns each job's outcome
-/// in tuple order; a job stopped before it started settles as cancelled.
+/// Run a fixed set of tasks concurrently on the current deck and wait until
+/// every started one has finished. Returns each job's
+/// @ref nxtrt::outcome "outcome" in tuple order.
+///
+/// The group takes ownership of the tasks. When the returned task runs, it
+/// starts the jobs in tuple order on its own deck (jobs see the group's
+/// env). Tasks that are already done count as settled immediately and are
+/// not run again. The policy `execution` (see the group policies above)
+/// decides when to stop the remaining jobs; a job stopped before it started
+/// settles as `operation_cancelled`. Job failures never make `settle`
+/// throw; they are reported in the outcomes.
+///
+/// Draining: `settle` never returns while a started job is still running,
+/// even when stopped, so jobs may safely borrow from the caller's frame.
+///
+/// Cancellation: stopping the task that awaits `settle` stops every job;
+/// once they have drained, `settle` throws `operation_cancelled` instead of
+/// returning outcomes. If starting a job fails (for example the deck task
+/// table is full, or a job already has a completion observer), the started
+/// jobs are stopped and drained, and that error is thrown. Throws
+/// `runtime_error` for an empty task, before starting anything.
+///
+/// The predicate runs at each job's final suspension, so a stop it issues
+/// reaches companions before their next step. See @ref rt_group.
+///
+/// @code
+/// auto [a, b] = co_await nxtrt::settle(
+///     std::tuple{fetch_a(), fetch_b()}, nxtrt::fail_fast_group{});
+/// if (!a)
+///     nxtrt::rethrow(a.error());
+/// @endcode
 template<typename... Ts, detail::group_policy Policy = all_group>
 [[nodiscard]] task<std::tuple<outcome<Ts>...>>
 settle(std::tuple<task<Ts>...> tasks, Policy execution = {})
@@ -345,8 +395,14 @@ settle(std::tuple<task<Ts>...> tasks, Policy execution = {})
         tasks);
 }
 
-/// Run a range of tasks concurrently and settle all of it.
-/// Returns the outcomes in range order.
+/// Run a range of tasks concurrently and wait until every started one has
+/// finished. Returns the outcomes in range order.
+///
+/// The range is stored by value in the returned task and drained into a
+/// vector when that task first runs, before any job starts; a lazy view that
+/// creates tasks works if whatever it refers to is still alive then. The
+/// policy's `index` is the position in the range. Otherwise the
+/// contract is that of `settle`. An empty range returns an empty vector.
 template<
     std::ranges::input_range Range,
     detail::group_policy Policy = all_group>
@@ -367,9 +423,20 @@ template<
     co_return out;
 }
 
-/// All results in tuple order; void positions are monostate. The first
-/// failure to complete stops the rest and is rethrown, not the
-/// cancellations it causes.
+/// Run tasks concurrently and return all their values, in tuple order, with
+/// `std::monostate` in place of `void` results.
+///
+/// Built on `settle` with `fail_fast_group`: the first job to fail stops
+/// the others, and after every started job has drained, that first
+/// failure (in completion order, not tuple order) is rethrown. Errors from
+/// jobs that failed later, including the `operation_cancelled` of jobs it
+/// stopped, are dropped; use `settle` to see them. Stopping the awaiting
+/// task throws `operation_cancelled`. Also callable as
+/// `when_all(a(), b(), ...)`.
+///
+/// @code
+/// auto [n, text] = co_await nxtrt::when_all(count(), describe());
+/// @endcode
 template<typename... Ts>
 [[nodiscard]] auto when_all(std::tuple<task<Ts>...> tasks)
     -> task<std::tuple<
@@ -392,8 +459,17 @@ template<typename... Ts>
     return when_all(std::tuple{std::move(tasks)...});
 }
 
-/// First success in tuple order, not first completion; the first success
-/// stops the rest. All failures are grouped.
+/// Run same-typed tasks concurrently and return one successful result.
+///
+/// Built on `settle` with `first_success_group`: the first job to succeed
+/// stops the others, and all started jobs drain before this returns. The
+/// value returned is the first success in tuple order, not necessarily the
+/// first to complete: a lower-index job that also succeeded (for example
+/// one that ignored the stop) wins. Failures are skipped. If every job
+/// fails, their exceptions are thrown together through `throw_exceptions`
+/// (an `exception_group`, or the single exception if there was one job).
+/// Stopping the awaiting task throws `operation_cancelled`. Also callable
+/// as `wait_any(a(), b(), ...)`.
 template<typename T, typename... Ts>
     requires(std::same_as<T, Ts> && ...)
 [[nodiscard]] task<T> wait_any(std::tuple<task<T>, task<Ts>...> tasks)
@@ -415,8 +491,10 @@ template<typename T, typename... Ts>
     return wait_any(std::tuple{std::move(first), std::move(rest)...});
 }
 
-/// All results in range order. The first failure stops the rest and is
-/// rethrown.
+/// Range form of `when_all`: returns all values in range order. The first
+/// failure to complete stops the rest and, after draining, is rethrown
+/// (see `when_all`). Element tasks
+/// must not be `task<void>`; use `settle_range` for those.
 template<std::ranges::input_range Range>
     requires is_task_v<std::ranges::range_value_t<Range>>
         && (!std::is_void_v<
@@ -438,6 +516,10 @@ when_all_range(Range tasks)
     co_return out;
 }
 
+/// Await the tasks of a range one at a time, in order, discarding their
+/// values. Not concurrent: each task is created (if the range is a lazy
+/// view) and awaited only after the previous one finished. The first
+/// failure propagates and the remaining tasks are not run.
 template<std::ranges::input_range Range>
 [[nodiscard]] task<void> for_each_task(Range tasks)
 {
@@ -451,8 +533,9 @@ template<std::ranges::input_range Range>
     }
 }
 
-/// First success in range order; the first success stops the rest. All
-/// failures are grouped.
+/// Range form of `wait_any`: returns the first success in range order once
+/// all started jobs have drained. If all fail, their exceptions are thrown
+/// through `throw_exceptions`. Throws `runtime_error` for an empty range.
 template<std::ranges::input_range Range>
     requires is_task_v<std::ranges::range_value_t<Range>>
         && (!std::is_void_v<
@@ -476,6 +559,9 @@ wait_any_range(Range tasks)
     throw logic_error{"wait_any_range returned without result"};
 }
 
+/// A task that waits `duration` on the deck's wand and then throws
+/// `timeout_error`. It never completes normally; stopping it cancels the
+/// timer wish. Needs a deck with a wand.
 [[nodiscard]] inline task<void> timeout_after(
     std::chrono::nanoseconds duration)
 {
@@ -483,6 +569,22 @@ wait_any_range(Range tasks)
     throw timeout_error{};
 }
 
+/// Run `body` with a deadline: return its result, or throw `timeout_error`
+/// if `duration` passes first.
+///
+/// `body` and a `timeout_after(duration)` timer run in a `settle` group
+/// with `first_completion_group`, so whichever settles first stops the
+/// other, and both drain before this returns. The result is decided as:
+/// - `body` succeeded: its value, even if the timer fired meanwhile;
+/// - `body` failed with anything other than `operation_cancelled`: that
+///   exception (an ordinary failure is never replaced by a timeout);
+/// - `body` was cancelled because the timer fired: `timeout_error`;
+/// - `body` ended with `operation_cancelled` on its own before the
+///   deadline: `operation_cancelled`.
+///
+/// Stopping the task that awaits `with_timeout` stops both and throws
+/// `operation_cancelled`, not `timeout_error`. Needs a deck with a wand for
+/// the timer.
 template<typename T>
 [[nodiscard]] task<T> with_timeout(
     std::chrono::nanoseconds duration,

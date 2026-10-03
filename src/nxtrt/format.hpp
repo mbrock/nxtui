@@ -14,6 +14,9 @@ namespace nxtrt {
 /// std::vformat, compiled once in nxt-core.
 [[nodiscard]] std::string vformat(std::string_view fmt, std::format_args args);
 
+/// `std::format` with the compile-time format-string check, formatting
+/// through the single out-of-line `nxtrt::vformat`. Use it instead of
+/// `std::format` in headers to keep compile times down.
 template<typename... Args>
 [[nodiscard]] std::string
 format(std::format_string<Args...> fmt, Args &&... args)

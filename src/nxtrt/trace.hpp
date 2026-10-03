@@ -24,6 +24,8 @@
 
 namespace nxtrt {
 
+/// True when the `NXT_RT_TRACE` environment variable is `1`, `true`,
+/// `yes`, or `on`.
 inline bool trace_env_enabled() noexcept
 {
     auto const * raw = std::getenv("NXT_RT_TRACE");
@@ -35,8 +37,15 @@ inline bool trace_env_enabled() noexcept
         || value == "on";
 }
 
+/// Whether `trace()` writes; read from the environment at startup and
+/// assignable at run time.
 inline bool trace_enabled = trace_env_enabled();
 
+/// Writes one `[nxtrt]`-prefixed line to stderr when `trace_enabled`.
+///
+/// This is the runtime's low-level debug log of task, wish, and wand
+/// events. Building with `NXT_RT_ENABLE_TRACE=0` compiles it out. The
+/// formatting overload takes `std::format` arguments.
 inline void trace(std::string_view message)
 {
     if constexpr (NXT_RT_ENABLE_TRACE) {
@@ -58,8 +67,10 @@ inline void trace(std::format_string<Args...> fmt, Args &&... args)
     }
 }
 
+/// Clock used for span and event timestamps.
 using trace_clock = std::chrono::steady_clock;
 
+/// Key/value annotation on a span or event.
 struct trace_attribute
 {
     std::string key;
@@ -68,6 +79,7 @@ struct trace_attribute
 
 using trace_attributes = std::vector<trace_attribute>;
 
+/// What a `trace_record` reports.
 enum class trace_record_kind
 {
     span_begin,
@@ -75,6 +87,7 @@ enum class trace_record_kind
     event,
 };
 
+/// One span start, span end, or event, as delivered to observers.
 struct trace_record
 {
     trace_record_kind kind = trace_record_kind::event;
@@ -88,6 +101,8 @@ struct trace_record
     trace_attributes attributes;
 };
 
+/// Stored state of one span: identity, status, times, and attributes.
+/// `end` stays default and `status` empty until the span finishes.
 struct trace_span_snapshot
 {
     std::string span_id;
@@ -101,6 +116,11 @@ struct trace_span_snapshot
 
 class trace_context;
 
+/// Handle to a span started by `trace_context::start_span`.
+///
+/// Copyable; copies refer to the same span and keep the context alive. A
+/// default-constructed span is empty (false) and ignores `event` and
+/// `finish`. Finishing is explicit: destroying a span does not end it.
 class trace_span
 {
 public:
@@ -137,7 +157,9 @@ public:
         return name_;
     }
 
+    /// Publishes an event attributed to this span.
     void event(std::string name, trace_attributes attributes = {}) const;
+    /// Ends the span with `status` (by convention `"ok"` or `"error"`).
     void finish(std::string status = "ok") const;
 
 private:
@@ -147,11 +169,36 @@ private:
     std::string name_;
 };
 
+/// In-memory collector of trace spans and events with live observers.
+///
+/// Must be owned by a `std::shared_ptr` (`start_span` uses
+/// `shared_from_this`). It keeps a snapshot of every span it has started
+/// and calls each observer synchronously for every record, outside its
+/// lock. Thread-safe. Tasks find the current context and parent span
+/// through the runtime environment keys `trace_context_key` and
+/// `trace_current_span_key`; `with_trace_span` starts a child span around
+/// a task.
+///
+/// @code
+/// auto trace = std::make_shared<nxtrt::trace_context>();
+/// auto root = trace->start_span("root");
+/// co_await nxtrt::with_env<nxtrt::trace_context_key>(
+///     trace, [&]() -> nxtrt::task<void> {
+///         co_await nxtrt::with_env<nxtrt::trace_current_span_key>(
+///             root.span_id(), [&]() -> nxtrt::task<void> {
+///                 co_await nxtrt::with_trace_span("child", make_child);
+///             });
+///     });
+/// root.finish("ok");
+/// auto spans = trace->children(root.span_id()); // one span: "child"
+/// @endcode
 class trace_context : public std::enable_shared_from_this<trace_context>
 {
 public:
     using observer = std::function<void(const trace_record &)>;
 
+    /// Starts a span under `parent_span_id` (empty for a root span) and
+    /// publishes its start record. Span ids are unique per process.
     trace_span start_span(
         std::string name,
         std::string parent_span_id = {},
@@ -221,12 +268,14 @@ public:
             });
     }
 
+    /// Adds an observer called for every later record.
     void observe(observer callback)
     {
         auto guard = std::scoped_lock{mutex_};
         observers_.push_back(std::move(callback));
     }
 
+    /// Snapshot of the span with `span_id`, if this context started it.
     [[nodiscard]] std::optional<trace_span_snapshot>
     span(std::string_view span_id) const
     {
@@ -238,6 +287,8 @@ public:
         return std::nullopt;
     }
 
+    /// Snapshots of the spans started under `parent_span_id`, in start
+    /// order.
     [[nodiscard]] std::vector<trace_span_snapshot>
     children(std::string_view parent_span_id) const
     {
@@ -320,18 +371,21 @@ inline void trace_span::finish(std::string status) const
         span_id_, parent_span_id_, name_, std::move(status));
 }
 
+/// Runtime environment key holding the current `trace_context`.
 struct trace_context_key
 {
     using value_type = std::shared_ptr<trace_context>;
     static constexpr auto name = "trace_context";
 };
 
+/// Runtime environment key holding the current span id.
 struct trace_current_span_key
 {
     using value_type = std::string;
     static constexpr auto name = "trace_current_span";
 };
 
+/// The running task's trace context, or null when none is set.
 inline std::shared_ptr<trace_context> current_trace_context()
 {
     if (auto context = env_get<trace_context_key>())
@@ -339,6 +393,7 @@ inline std::shared_ptr<trace_context> current_trace_context()
     return {};
 }
 
+/// The running task's current span id, or empty when none is set.
 inline std::string current_trace_span_id()
 {
     if (auto span_id = env_get<trace_current_span_key>())

@@ -7,14 +7,21 @@
 
 namespace nxtrt {
 
+/// The deck that is resuming the current coroutine on this thread, or null
+/// outside deck execution. Inside `deck::sync_wait`'s task factory it is
+/// that deck.
 inline deck * current_deck() noexcept
 {
     auto * env = current_env();
     return env == nullptr ? nullptr : env->current_deck;
 }
 
-/// The running task's stop token. Stop propagates from an awaiting task to
-/// the task it awaits, and a group stops its own jobs.
+/// The running task's stop token, or an empty token (no stop possible)
+/// outside a running task.
+///
+/// Stop propagates from an awaiting task to the task it awaits (unless the
+/// child is shielded), and a group stops its own jobs according to its
+/// policy. Same as `current_stop_token()`.
 inline std::stop_token current_task_stop_token() noexcept
 {
     auto * env = current_env();
@@ -23,6 +30,8 @@ inline std::stop_token current_task_stop_token() noexcept
     return env->current_promise->stop_token();
 }
 
+/// True if the running task has been asked to stop; false outside a
+/// running task. Same as `stop_requested()`.
 inline bool task_stop_requested() noexcept
 {
     auto * env = current_env();
@@ -31,16 +40,23 @@ inline bool task_stop_requested() noexcept
         && env->current_promise->stop_requested();
 }
 
+/// The running task's stop token; see `current_task_stop_token()`. Pass it
+/// to code that takes a `std::stop_token`, or register a
+/// `std::stop_callback` on it.
 inline std::stop_token current_stop_token() noexcept
 {
     return current_task_stop_token();
 }
 
+/// True if the running task has been asked to stop. Stop is cooperative:
+/// parked wishes are cancelled for you, but CPU-bound loops should check
+/// this (or call `throw_if_stop_requested()`) between steps.
 inline bool stop_requested() noexcept
 {
     return task_stop_requested();
 }
 
+/// Throw `operation_cancelled` if the running task has been asked to stop.
 inline void throw_if_stop_requested()
 {
     if (stop_requested())
@@ -49,10 +65,9 @@ inline void throw_if_stop_requested()
 
 namespace detail {
 
-/// Run `fn` with `Key` temporarily bound in the current task environment.
-///
-/// The binding mutates the promise-owned environment and restores the previous
-/// entry when the scoped child task completes.
+/// Coroutine behind `with_env`. Binds `Key` in this coroutine's own
+/// environment, creates and awaits the child from `fn` (which inherits the
+/// binding), and restores the previous snapshot when it finishes.
 template<typename Key, stored_task_factory Fn>
 [[nodiscard]] task<stored_task_result_t<Fn>>
 with_env_bound(typename Key::value_type value, Fn fn)
@@ -90,6 +105,30 @@ with_env_bound(typename Key::value_type value, Fn fn)
 
 } // namespace detail
 
+/// A task that runs the task made by `fn()` with the env key `Key` bound to
+/// `value`, and returns its result.
+///
+/// `Key` is an env key type (see @ref nxtrt::runtime_env "runtime_env").
+/// The binding is visible to the task `fn` creates and to everything that
+/// task awaits or starts in groups, through `env_get<Key>()` and
+/// `env_require<Key>()`. Code outside the returned task, including the
+/// caller, never sees it. Nested `with_env` calls for the same key shadow
+/// the outer value until they finish.
+///
+/// `fn` is copied or moved into the returned task's frame and invoked once
+/// when that task runs, so it may be a capturing coroutine lambda. Lazy
+/// like any task; throws `runtime_error` if it runs outside a deck task.
+///
+/// @code
+/// struct request_id_key
+/// {
+///     using value_type = int;
+///     static constexpr auto name = "request-id";
+/// };
+///
+/// auto id = co_await nxtrt::with_env<request_id_key>(
+///     7, [] { return handle_request(); });
+/// @endcode
 template<typename Key, typename Fn>
     requires stored_task_factory<std::decay_t<Fn>>
 [[nodiscard]] task<stored_task_result_t<std::decay_t<Fn>>>
@@ -101,6 +140,17 @@ with_env(typename Key::value_type value, Fn && fn)
         factory_type{std::forward<Fn>(fn)});
 }
 
+/// A task that runs the task made by `fn()` inside a new trace span.
+///
+/// If a trace context is bound in the env (`trace_context_key`), this
+/// starts a span named `name` with `attributes` as a child of the current
+/// span, binds it as the current span while `fn`'s task runs, and finishes
+/// it with status `"ok"` or, if the task throws, `"error"` (the exception
+/// propagates). Without a trace context it just runs `fn`'s task.
+///
+/// `fn` is held by reference, not copied: await the returned task in the
+/// same full-expression (`co_await with_trace_span("x", [&] {...})`) or keep
+/// `fn` alive until it finishes.
 template<task_factory Fn>
 [[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
 with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
@@ -140,6 +190,7 @@ with_trace_span(std::string name, trace_attributes attributes, Fn && fn)
     }
 }
 
+/// `with_trace_span` with no span attributes.
 template<task_factory Fn>
 [[nodiscard]] task<task_result_t<std::invoke_result_t<Fn>>>
 with_trace_span(std::string name, Fn && fn)

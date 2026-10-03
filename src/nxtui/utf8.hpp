@@ -15,6 +15,18 @@
 
 #include <utf8proc.h>
 
+/**
+ * @namespace nxtui::utf8
+ * UTF-8 text measured the way a terminal shows it: movement by extended
+ * grapheme cluster (via utf8proc) and display width in cells.
+ *
+ * Offsets are typed: `byte_offset_t` for positions in the string and
+ * `grapheme_index_t` for cluster counts, with `width_t` for cell columns.
+ * `next`/`prev` step between clusters, `display_width` and
+ * `cluster_width` measure, and `words`, `segments`, and `paragraphs` are
+ * borrowed views used for wrapping. Malformed bytes count as one cluster
+ * of width one each, and every cluster is at least one cell wide.
+ */
 namespace nxtui::utf8 {
 
 /// Byte offset into a UTF-8 string.

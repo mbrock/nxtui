@@ -8,8 +8,12 @@
 #include <utility>
 #include <vector>
 
+// Small synchronous JSON readers for flat objects such as tool arguments.
+// They are lenient about non-string values, which they skip without fully
+// validating.
 namespace nxtai::tools {
 
+/// Advance `offset` past JSON whitespace.
 inline void skip_json_ws(std::string_view input, std::size_t & offset)
 {
     while (offset < input.size()) {
@@ -65,6 +69,10 @@ read_json_u16(std::string_view input, std::size_t & offset)
     return value;
 }
 
+/// Read a JSON string literal at `offset` (no leading whitespace) and
+/// return its decoded UTF-8 value, advancing `offset` past the closing
+/// quote. Returns `std::nullopt` for a malformed string, a raw control
+/// character, or an unpaired surrogate escape.
 inline std::optional<std::string>
 read_json_string(std::string_view input, std::size_t & offset)
 {
@@ -123,6 +131,8 @@ read_json_string(std::string_view input, std::size_t & offset)
     return std::nullopt;
 }
 
+/// Skip one JSON value of any kind, stopping before the following `,` or
+/// closing bracket. Strings are checked; other values are only scanned.
 inline bool skip_json_sync_value(std::string_view input, std::size_t & offset)
 {
     skip_json_ws(input, offset);
@@ -161,6 +171,10 @@ inline bool skip_json_sync_value(std::string_view input, std::size_t & offset)
     return true;
 }
 
+/// The string-valued members of a JSON object, in order, as decoded
+/// key/value pairs. Members with other value types are skipped. Returns
+/// `std::nullopt` if `object` is not an object. Duplicate keys are kept and
+/// anything after the closing brace is ignored.
 [[nodiscard]] inline std::optional<
     std::vector<std::pair<std::string, std::string>>>
 json_string_object(std::string_view object)
@@ -202,6 +216,9 @@ json_string_object(std::string_view object)
     }
 }
 
+/// Decoded value of the first string member named `key` in a JSON object,
+/// or `std::nullopt` if the object is malformed, the key is absent, or its
+/// value is not a string.
 [[nodiscard]] inline std::optional<std::string>
 json_string_member(std::string_view object, std::string_view key)
 {

@@ -14,7 +14,11 @@
 
 namespace nxtrt {
 
-/// Ordinary owned synchronous work, not a task factory or borrowed result.
+/// A synchronous callable that @ref nxtrt::blocking_pool "blocking_pool" can run on a worker.
+///
+/// Move-constructible, invocable as an lvalue with no arguments, not an
+/// @ref nxtrt::idea "idea" (no task or hope factories), and returning `void`
+/// or a movable non-reference value.
 template<typename Fn>
 concept blocking_call =
     std::move_constructible<Fn> && std::invocable<Fn &> && !idea<Fn>
@@ -184,10 +188,30 @@ struct typed_blocking_job final : blocking_job
 
 } // namespace detail
 
-/// One-deck bounded admission of synchronous work to fixed worker threads.
-/// capacity includes queued, running and settled/not-yet-delivered calls.
-/// Await close() before destruction when stopping early. Workers never use
-/// NXT.
+/// Fixed worker threads for blocking synchronous calls, awaited from tasks
+/// on one deck.
+///
+/// `run(fn)` returns a task that, on its deck, waits for admission credit,
+/// queues `fn` for a worker, and resumes on the same deck with the result or
+/// the rethrown exception. The worker only invokes `fn` and writes a pipe
+/// byte; completion reaches the deck as fd readiness through the active
+/// wand, so the deck's wand must support `op::poll`. `call(fn)` wraps the
+/// same thing as an idea for a @ref pool. See @ref rt_blocking.
+///
+/// **Bounds.** `capacity` counts queued, running, and finished but not yet
+/// delivered calls; further `run` tasks wait (without blocking the deck)
+/// until credit returns. Queue order is FIFO after admission. The
+/// constructor throws `runtime_error` if `workers` or `capacity` is zero.
+///
+/// **Threading.** Every member except the external `std::stop_token`
+/// callbacks is owner-deck only; the first `run` or `close` binds the pool to
+/// its deck, and use from another deck throws `runtime_error`. `fn` and its
+/// result are destroyed on the deck, not on the worker.
+///
+/// **Lifetime.** The pool must outlive every task and recipe made from it.
+/// Destroying it while calls are outstanding aborts the process; `co_await
+/// close()` first when stopping early. Destruction otherwise joins the
+/// workers.
 class blocking_pool
 {
 public:
@@ -242,17 +266,28 @@ public:
         }
     };
 
-    /// Lazy, move-only-capable idea. Invocation transfers its callable to a
-    /// task; worker admission happens only when that task runs on the deck.
+    /// Wrap `fn` as an idea (a lazy recipe) for a @ref pool or a group.
+    ///
+    /// Invoking the recipe moves `fn` into a `run(fn, stop)` task; nothing is
+    /// admitted until that task runs on the deck. Works with move-only `fn`.
     template<blocking_call Fn>
     [[nodiscard]] recipe<Fn> call(Fn fn, std::stop_token stop = {})
     {
         return {this, std::move(fn), stop};
     }
 
-    /// Cancellation wins if observed before result delivery. It skips
-    /// queued work but drains running work, discarding either its result or
+    /// Run `fn` on a worker and deliver its result on this deck.
+    ///
+    /// The returned task is lazy. When it runs it waits for admission, then
+    /// for the worker to finish, and returns `fn`'s value or rethrows its
     /// exception.
+    ///
+    /// Cancellation, through the task's stop token or the external `stop`
+    /// token (safe to request from any thread), wins if observed before the
+    /// result is delivered: before admission or before a worker starts `fn`
+    /// it prevents the call; once `fn` is running the task waits for it to
+    /// return and discards its outcome. Either way the task throws
+    /// `operation_cancelled`, as it does after `stop()` or `close()`.
     template<blocking_call Fn>
     [[nodiscard]] task<std::invoke_result_t<Fn &>>
     run(Fn fn, std::stop_token stop = {})
@@ -304,8 +339,9 @@ public:
             co_return std::move(*job->result);
     }
 
-    /// Owner-deck only. Cancels admission/queued work; running code
-    /// settles.
+    /// Refuse further admission and cancel every outstanding call. Queued
+    /// calls never start; running ones finish and have their outcome
+    /// discarded. Does not wait. Owner deck only.
     void stop() noexcept
     {
         closing_ = true;
@@ -313,8 +349,11 @@ public:
             job->cancel();
     }
 
-    /// Terminal and idempotent; itself stop-shielded. Also joins the
-    /// threads.
+    /// `stop()`, wait until every outstanding call has delivered or
+    /// discarded its outcome, then join the worker threads.
+    ///
+    /// Terminal and idempotent. A stop request on the awaiting task does not
+    /// cut the wait short; a call that never returns keeps it waiting.
     [[nodiscard]] task<void> close()
     {
         bind();

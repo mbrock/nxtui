@@ -8,6 +8,8 @@
 
 namespace nxtrt {
 
+/// Value a @ref pool publishes for `Idea`: its result type, or
+/// `std::monostate` for void ideas.
 template<idea Idea>
 using pool_result_t = std::conditional_t<
     std::is_void_v<idea_result_t<Idea>>,
@@ -17,9 +19,13 @@ using pool_result_t = std::conditional_t<
 template<idea Idea>
 class pool;
 
-/// Stable, reusable residence for one admitted idea. The recipe stays alive
-/// through execution and output consumption; a task may borrow its recipe.
-/// These objects and their farm must outlive the pool.
+/// Stable, reusable residence for one admitted idea in a @ref pool.
+///
+/// Holds the recipe, its pending task, and a ready result. The recipe stays
+/// alive through execution and until the output is consumed, so a task may
+/// borrow its recipe. Slots have no public interface: create them
+/// default-constructed (in an array, or through @ref pool_land), hand them
+/// to a `farm`, and keep them and the farm alive until the pool has drained.
 template<idea Idea>
 class pool_slot : private detail::completion_observer
 {
@@ -41,21 +47,54 @@ private:
     bool started_ = false;
 };
 
-/// Concurrent evaluation of a feed of ideas, in completion-publication order.
+/// Bounded concurrent evaluator of a feed of ideas, itself a feed of their
+/// results in completion order.
 ///
-/// Exclusively borrows a fully free farm and at least one output cell per
-/// slot. Free + awaiting input + running + completed/unconsumed = capacity.
-/// Input recipes are invoked once, only after admission. Ready hopes require
-/// no task or scheduler turn. Pending jobs are owned directly by their slots.
+/// An idea is a movable recipe that returns a `task` or a `hope` (see
+/// @ref nxtrt::idea "idea"). The pool reads ideas from `input`, at most
+/// `slots.capacity()` admitted at a time, invokes each once after reserving
+/// a slot for it, starts pending tasks on the deck, and publishes each
+/// result as a value of this feed when it completes. A ready hope is
+/// published without creating a task. See @ref rt_pool.
 ///
-/// One consumer, on one deck. Values are consumed according to feed rules:
-/// transfer out of this source returns credit, not eventual delivery through
-/// every downstream layer. Consumption never starts work or overwrites a view.
+/// **Capacity.** Every slot is free, reserved for the pending input read,
+/// running, or holding a published result not yet consumed. A slot returns
+/// to the farm only when its result leaves this feed (taken, streamed,
+/// discarded) or is discarded by `close()`; `peek()` keeps it. So a slow
+/// consumer stops admission, and results never outrun the output storage.
 ///
-/// Drain to EOF, or co_await close() before destruction. For early downstream
-/// failure use finally(consume(pool), [&pool] { return pool.close(); }), with
-/// the pool and its borrowed land outside consume's frame. close cancels and
-/// drains input/jobs and discards outstanding outcomes, even if itself stopped.
+/// **Borrowed land.** The constructor borrows `input`, a farm whose slots
+/// are all free (used by no one else), and raw output storage of at least
+/// one cell per slot (only `slots.capacity()` cells are used). All three must
+/// outlive the pool. @ref pool_land bundles the slots and output. The
+/// constructor throws `runtime_error` for zero slots or too little output
+/// storage.
+///
+/// **Reading.** Use the ordinary @ref feed verbs. EOF comes only after the
+/// input has ended and every result has been consumed; a temporarily empty
+/// input is not EOF. One consumer on one deck: the first read that waits
+/// binds the pool to the current deck, and use from another deck throws
+/// `runtime_error`, as do overlapping reads or a `close()` during a read.
+///
+/// **Failure and cancellation.** If reading the input, invoking an idea, or
+/// a job fails, the pending read stops admission, cancels and drains the
+/// input read and every job, discards unconsumed results, and rethrows the
+/// first failure. A stop request on the reading task, or `stop()`, does the
+/// same and then throws `operation_cancelled`. Already consumed results are
+/// not rolled back.
+///
+/// **Teardown.** Read to EOF, or `co_await close()`, before destroying the
+/// pool; destroying it with running work or a pending input read aborts the
+/// process. When the consumer may fail early, pair it with `close()`:
+///
+/// @code
+/// co_await nxtrt::finally(consume(results), [&results] {
+///     return results.close();
+/// });
+/// @endcode
+///
+/// Here `consume` is a named coroutine function, and the pool and its land
+/// live outside its frame.
 template<idea Idea>
 class pool final
     : public feed<pool_result_t<Idea>>
@@ -105,12 +144,17 @@ public:
         return slots_.capacity();
     }
 
-    /// Includes the reserved input slot and buffered, unconsumed outcomes.
+    /// Slots in use: the reserved input slot, admitted jobs, and buffered,
+    /// unconsumed results.
     [[nodiscard]] std::size_t occupied() const noexcept
     {
         return occupied_;
     }
 
+    /// Request stop: no further admission, and stop requests to the pending
+    /// input read and every admitted job. Does not wait; a waiting read then
+    /// drains and throws `operation_cancelled`, and `close()` finishes the
+    /// teardown. Owner deck only.
     void stop() noexcept
     {
         stopping_ = true;
@@ -123,7 +167,13 @@ public:
         signal();
     }
 
-    /// Idempotent asynchronous teardown. Does not need a result consumer.
+    /// Stop, wait until the input read and every job have settled, and
+    /// discard all unconsumed results.
+    ///
+    /// Idempotent, and needs no consumer to make room. A stop request on the
+    /// awaiting task does not cut the wait short, so a job that ignores
+    /// cancellation keeps `close()` waiting. Reading after `close()` is not
+    /// supported.
     [[nodiscard]] task<void> close()
     {
         bind_deck();
@@ -472,8 +522,10 @@ void pool_slot<Idea>::task_completed() noexcept
 }
 
 /// Owned land for a pool of `capacity` slots: the slots, the farm's index
-/// land, and one output cell per slot. Keep it alive until the pool has
-/// drained.
+/// land, and one output cell per slot, all heap-allocated.
+///
+/// Pass `slots()` and `output()` to the @ref pool constructor, and keep the
+/// land alive until the pool has drained or closed. Not movable.
 template<idea Idea>
 class pool_land
 {
@@ -526,8 +578,12 @@ task<void> discard_results(pool<Idea> & work)
 } // namespace detail
 
 /// Run every idea from `ideas`, at most `capacity` at a time, discarding
-/// results. The first failure stops admission, cancels and drains the
-/// running jobs, and is rethrown.
+/// results.
+///
+/// Builds a @ref pool_land and a @ref pool, takes results until EOF, and
+/// always closes the pool. The first failure stops admission, cancels and
+/// drains the running jobs, and is rethrown. `ideas` must outlive the
+/// returned task.
 template<idea Idea>
 task<void> drain(feed<Idea> & ideas, std::size_t capacity)
 {

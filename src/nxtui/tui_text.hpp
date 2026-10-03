@@ -8,14 +8,27 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @namespace nxtui::tui::text_flow
+ * Word wrapping and a small Markdown subset for multi-line text blocks.
+ *
+ * `markdown_block` is the entry point: it wraps text to a width and
+ * renders `**bold**` and backtick-quoted code spans as a `styled_lines`
+ * layout.
+ * `sanitize_terminal_text` strips escape sequences and control characters
+ * from untrusted text before it reaches a raster.
+ */
 namespace nxtui::tui::text_flow {
 
+/// Remove trailing ASCII spaces in place.
 inline void trim_trailing_space(std::string & text)
 {
     while (!text.empty() && text.back() == ' ')
         text.pop_back();
 }
 
+/// Indent for wrapped lines of a list item: 2 after `- ` or `* `, the
+/// marker width after `N. `, otherwise 0.
 inline std::size_t markdown_list_continuation_indent(std::string_view text)
 {
     if (text.starts_with("- ") || text.starts_with("* "))
@@ -29,6 +42,13 @@ inline std::size_t markdown_list_continuation_indent(std::string_view text)
     return 0;
 }
 
+/// Greedy word wrap of `text` to `wrap_width` cells (at least 1).
+///
+/// Words are kept whole: a word longer than the width gets a line of its
+/// own and overflows it. Runs of spaces collapse to one, explicit line
+/// breaks are kept, paragraphs (split at blank lines) are separated by one
+/// empty line, and continuation lines of a Markdown list item are indented
+/// under its text. Always returns at least one line.
 inline std::vector<std::string>
 wrap_text(std::string_view text, width_t wrap_width)
 {
@@ -86,6 +106,10 @@ wrap_text(std::string_view text, width_t wrap_width)
     return lines;
 }
 
+/// Split one line into spans: `**bold**` adds bold to `base_style`,
+/// backtick-quoted code gets fixed code colors, and unmatched markers stay
+/// literal.
+/// No nesting or escaping.
 inline std::vector<Span>
 parse_inline_markdown(std::string_view text, Style base_style)
 {
@@ -144,6 +168,8 @@ parse_inline_markdown(std::string_view text, Style base_style)
     return spans;
 }
 
+/// Wrap `text` and parse each line's inline Markdown. A paragraph that is
+/// entirely `**...**` becomes a bold heading with a blank line around it.
 inline std::vector<std::vector<Span>> markdown_lines(
     std::string_view text,
     Style base_style,
@@ -189,6 +215,9 @@ inline std::vector<std::vector<Span>> markdown_lines(
     return lines;
 }
 
+/// Layout of `markdown_lines(text, base_style, wrap_width)` drawn with
+/// `styled_lines` over `clear`. Its width hint is the widest wrapped line,
+/// not `wrap_width`.
 inline auto markdown_block(
     std::string_view text,
     Style base_style,
@@ -199,6 +228,10 @@ inline auto markdown_block(
         markdown_lines(text, base_style, wrap_width), clear);
 }
 
+/// Make arbitrary text safe to write into a raster: drop ESC sequences
+/// (whole CSI sequences, or ESC plus one byte), expand tabs to four
+/// spaces, normalize `\r\n` to `\n`, and drop other control bytes,
+/// including a lone `\r`. `\n` is kept.
 inline std::string sanitize_terminal_text(std::string_view text)
 {
     auto out = std::string{};

@@ -50,11 +50,20 @@ take_poll_until_result(poll_until_outcomes & outcomes)
 
 } // namespace detail
 
-/// Wait until an fd is ready or a timeout expires.
+/// Wait until `fd` has any of the poll `events` (such as `POLLIN`), or until
+/// `timeout` passes, whichever comes first.
 ///
-/// This composes ordinary `op::poll` and `op::timeout` wishes in a fixed
-/// group. Completion stops the other task; the group drains the
-/// losing wish before the outcome is returned.
+/// Returns `{.events = revents, .timed_out = false}` when the fd became
+/// ready, or `{.events = 0, .timed_out = true}` when the deadline won. A
+/// timeout is a normal result here, not an exception (compare
+/// `with_timeout`).
+///
+/// An `op::poll` wish and an `op::timeout` wish run in a `settle` group with
+/// `first_completion_group`: the first to finish stops the other, and the
+/// task awaiting the losing wish has finished before this returns. If readiness and the deadline both complete, the
+/// readiness result wins. A poll failure other than cancellation is
+/// rethrown; stopping the awaiting task throws `operation_cancelled`. Needs
+/// a deck with a wand.
 [[nodiscard]] inline task<poll_until_result> poll_until_after(
     int fd,
     short events,

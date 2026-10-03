@@ -18,11 +18,25 @@
 #define NXT_RT_DESCRIBE_WISHES 0
 #endif
 
+/**
+ * @namespace nxtrt::debug
+ * Runtime dump of ready tasks and parked wishes, triggered by a signal.
+ *
+ * Call `install_signal_dump()` (the `nxtrt::runtime` constructor does) and
+ * send the process SIGUSR1: at its next round boundary, a running deck
+ * prints to stderr its ready task ids and every parked wish with its task,
+ * coin, and how long it has waited. The parked-wish registry is
+ * process-wide and mutex-protected. Wish descriptions are recorded only
+ * when the build defines `NXT_RT_DESCRIBE_WISHES=1`.
+ */
 namespace nxtrt::debug {
 
+/// Whether parked waits record a text description of their wish
+/// (`NXT_RT_DESCRIBE_WISHES`, off by default).
 inline constexpr bool describe_wishes = NXT_RT_DESCRIBE_WISHES != 0;
 
 
+/// One parked wish as recorded for the runtime dump.
 struct wait_snapshot
 {
     task_id task;
@@ -44,6 +58,9 @@ inline void signal_handler(int) noexcept
 
 } // namespace detail
 
+/// Installs a process-wide handler for `signal` that requests a runtime
+/// dump. The handler only sets a flag; a deck prints the dump at its next
+/// round boundary. Replaces any existing handler for that signal.
 inline void install_signal_dump(int signal = SIGUSR1)
 {
     struct sigaction action {};
@@ -53,6 +70,7 @@ inline void install_signal_dump(int signal = SIGUSR1)
     ::sigaction(signal, &action, nullptr);
 }
 
+/// Returns true once per received dump signal, clearing the request.
 [[nodiscard]] inline bool consume_signal_dump_request() noexcept
 {
     if (detail::dump_requested == 0)
@@ -61,6 +79,7 @@ inline void install_signal_dump(int signal = SIGUSR1)
     return true;
 }
 
+/// Records that `task` is parked on wish `token`; called by urges.
 inline void park_task(task_id task, std::uint64_t token, std::string wish)
 {
     auto parked_at = std::chrono::steady_clock::now();
@@ -94,6 +113,7 @@ inline void park_task(task_id task, std::uint64_t token, std::string wish)
         return {};
 }
 
+/// Removes `task` from the parked-wish registry; called by `need::resume`.
 inline void unpark_task(task_id task)
 {
     auto lock = std::scoped_lock{detail::waits_mutex};
@@ -102,6 +122,7 @@ inline void unpark_task(task_id task)
     });
 }
 
+/// Copies the current parked-wish registry.
 [[nodiscard]] inline std::vector<wait_snapshot> snapshot_waits()
 {
     auto lock = std::scoped_lock{detail::waits_mutex};
@@ -136,6 +157,7 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
         + "s";
 }
 
+/// Formats the runtime dump text from parked waits and ready task ids.
 [[nodiscard]] inline std::string format_runtime_dump(
     std::vector<wait_snapshot> waits,
     std::vector<task_id> ready_tasks)
@@ -165,6 +187,7 @@ inline std::string format_duration(std::chrono::steady_clock::duration duration)
     return out.str();
 }
 
+/// Writes `format_runtime_dump(...)` to stderr.
 inline void print_runtime_dump(
     std::vector<wait_snapshot> waits,
     std::vector<task_id> ready_tasks)

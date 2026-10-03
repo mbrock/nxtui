@@ -31,8 +31,10 @@
 namespace nxtrt {
 
 #if defined(__linux__)
+/// Seconds-plus-nanoseconds duration carried by timer wishes.
 using kernel_timespec = __kernel_timespec;
 #else
+/// Seconds-plus-nanoseconds duration carried by timer wishes.
 struct kernel_timespec
 {
     std::int64_t tv_sec = 0;
@@ -40,6 +42,7 @@ struct kernel_timespec
 };
 #endif
 
+/// Converts a duration to a `kernel_timespec`, clamping negatives to zero.
 inline kernel_timespec as_kernel_timespec(std::chrono::nanoseconds duration)
 {
     if (duration < std::chrono::nanoseconds::zero())
@@ -64,9 +67,15 @@ struct poll_until_result
 };
 
 #if defined(__linux__)
+/// Result of the `statx` wish: the kernel's `struct statx`.
 using statx_result = struct statx;
 #endif
 
+/// Exit status reported by the `wait_child` wish.
+///
+/// `code` is the raw `siginfo_t::si_code`. `exited`/`exit_code` are set for
+/// a normal exit; `signaled`/`signal` for a child killed by a signal
+/// (including a core dump).
 struct child_result
 {
     pid_t pid = -1;
@@ -169,10 +178,11 @@ struct pty_child
 
 namespace op {
 
-/// Closed operation type for deterministic/manual tests.
+/// Test wish with no platform effect; yields `void`.
 ///
-/// This is deliberately more like a tiny SQE recipe than a generic variant:
-/// the operation owns its input parameters and names its result type.
+/// Test wands key their parked tasks by `token` and complete them when the
+/// test says so. The shipped wands complete it at once (io_uring as a NOP
+/// SQE). Like every wish, it owns its inputs and names its result type.
 struct manual : wish<void, "manual">
 {
     coin_t token = 0;
@@ -187,6 +197,11 @@ struct manual : wish<void, "manual">
     }
 };
 
+/// Opens `path` relative to `dirfd` with openat(2); yields the new fd.
+///
+/// The caller owns the returned descriptor. io_uring opens it in the
+/// kernel; epoll and kqueue call openat(2) on the deck's thread during
+/// `wave`, so a slow disk blocks the deck (see `wand::asynchronous_files`).
 struct openat : wish<int, "openat">
 {
     int dirfd = AT_FDCWD;
@@ -212,9 +227,12 @@ struct openat : wish<int, "openat">
 };
 
 #if defined(__linux__)
-/// openat2(2). RESOLVE_* flags make the kernel confine resolution, e.g.
+/// Opens `path` with openat2(2) (Linux only); yields the new fd.
+///
+/// RESOLVE_* flags make the kernel confine resolution, e.g.
 /// RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS for paths that must stay inside
-/// DIRFD. The wish owns HOW for the lifetime of the operation.
+/// `dirfd`. The wish owns `how` for the lifetime of the operation. Kernel
+/// asynchronous on io_uring, a synchronous syscall on epoll.
 struct openat2 : wish<int, "openat2">
 {
     int dirfd = AT_FDCWD;
@@ -237,6 +255,9 @@ struct openat2 : wish<int, "openat2">
     }
 };
 
+/// Stats `path` relative to `dirfd` (Linux only); yields `statx_result`.
+///
+/// Kernel asynchronous on io_uring, a synchronous syscall on epoll.
 struct statx : wish<statx_result, "statx">
 {
     int dirfd = AT_FDCWD;
@@ -262,6 +283,11 @@ struct statx : wish<statx_result, "statx">
     }
 };
 
+/// Reads directory entries from `fd` into `buffer` (Linux only); yields
+/// the number of bytes filled, zero at the end of the directory.
+///
+/// Every wand runs getdents64(2) synchronously on the deck's thread;
+/// io_uring has no getdents operation.
 struct getdents64 : wish<std::size_t, "getdents64">
 {
     int fd = -1;
@@ -282,6 +308,11 @@ struct getdents64 : wish<std::size_t, "getdents64">
 
 #endif
 
+/// Spawns `argv` with stdout and stderr on one pipe; yields `piped_child`.
+///
+/// Spawn wishes run `posix_spawn` synchronously during `wave` on every
+/// wand; see `nxtrt/spawn.hpp`. `argv[0]` is looked up in `PATH`. On Linux
+/// the child is adopted as a pidfd before the result is delivered.
 struct spawn_piped : wish<piped_child, "spawn-piped">
 {
     std::vector<std::string> argv;
@@ -297,6 +328,8 @@ struct spawn_piped : wish<piped_child, "spawn-piped">
     }
 };
 
+/// Spawns `argv` as session leader on a new PTY of `columns` x `rows`;
+/// yields `pty_child`, which holds the master side.
 struct spawn_pty : wish<pty_child, "spawn-pty">
 {
     std::vector<std::string> argv;
@@ -337,6 +370,10 @@ struct wait_child : wish<child_result, "wait-child">
     }
 };
 
+/// Sends `signal` to a child named by `child_ref()`.
+///
+/// Linux uses pidfd_send_signal(2); elsewhere kill(2) on the still-unreaped
+/// pid. Runs synchronously during `wave`.
 struct signal_child : wish<void, "signal-child">
 {
     int child = -1; // child_ref(): a pidfd on Linux, the pid elsewhere
@@ -357,6 +394,13 @@ struct signal_child : wish<void, "signal-child">
     }
 };
 
+/// Reads at most `buffer.size()` bytes from `fd`; yields the count read,
+/// zero at end of file.
+///
+/// `offset < 0` reads at the file position (read(2)); otherwise pread(2) at
+/// `offset`. `buffer` is borrowed until the `co_await` returns. epoll and
+/// kqueue switch `fd` to `O_NONBLOCK`, try the syscall at once, and wait
+/// for readiness only on `EAGAIN`.
 struct read_some : wish<std::size_t, "read">
 {
     int fd = -1;
@@ -378,6 +422,9 @@ struct read_some : wish<std::size_t, "read">
     }
 };
 
+/// Writes at most `buffer.size()` bytes to `fd`; yields the count written.
+///
+/// Offset, buffer lifetime, and `O_NONBLOCK` behave as for `read_some`.
 struct write_some : wish<std::size_t, "write">
 {
     int fd = -1;
@@ -399,6 +446,8 @@ struct write_some : wish<std::size_t, "write">
     }
 };
 
+/// recv(2) on socket `fd` with `flags`; yields the count received, zero
+/// when the peer has shut down.
 struct recv_some : wish<std::size_t, "recv">
 {
     int fd = -1;
@@ -420,6 +469,7 @@ struct recv_some : wish<std::size_t, "recv">
     }
 };
 
+/// send(2) on socket `fd` with `flags`; yields the count sent.
 struct send_some : wish<std::size_t, "send">
 {
     int fd = -1;
@@ -441,6 +491,12 @@ struct send_some : wish<std::size_t, "send">
     }
 };
 
+/// Connects socket `fd` to `address`; completes when connected.
+///
+/// Build it with `connect::from(fd, sockaddr, length)`, which copies the
+/// address into the wish and throws `runtime_error` if it does not fit in
+/// `sockaddr_storage`. epoll and kqueue make `fd` non-blocking and report
+/// the final `SO_ERROR` as an `errno_error`.
 struct connect : wish<void, "connect">
 {
     int fd = -1;
@@ -484,6 +540,8 @@ struct connect : wish<void, "connect">
 ///
 /// The accepted file descriptor is returned as the wish result. The caller owns
 /// it immediately and should wrap it in an RAII file descriptor type.
+/// `flags` are accept4(2) flags such as `SOCK_CLOEXEC`; the epoll wand
+/// always adds `SOCK_CLOEXEC | SOCK_NONBLOCK`.
 struct accept : wish<int, "accept">
 {
     int fd = -1;
@@ -500,6 +558,13 @@ struct accept : wish<int, "accept">
     }
 };
 
+/// Waits once until `fd` is ready for `events` (`POLLIN`, `POLLOUT`, ...);
+/// yields the ready poll bits.
+///
+/// The reported bits differ by wand: io_uring and epoll include
+/// `POLLERR`/`POLLHUP`; kqueue reports only `POLLIN` or `POLLOUT`. With
+/// kqueue, at most one wish should wait on the same fd and direction at a
+/// time, since kqueue keys registrations by fd and filter.
 struct poll : wish<int, "poll">
 {
     int fd = -1;
@@ -518,6 +583,11 @@ struct poll : wish<int, "poll">
     }
 };
 
+/// Completes after `duration` has elapsed on a monotonic clock.
+///
+/// Build it with `timeout::after(duration)`; negative durations count as
+/// zero. Stopping the waiting task cancels the timer and throws
+/// `operation_cancelled` from the `co_await`.
 struct timeout : wish<void, "timeout">
 {
     kernel_timespec duration{};
@@ -541,6 +611,8 @@ struct timeout : wish<void, "timeout">
 ///
 /// Portable runtime code should prefer `poll_until_after`, which composes a
 /// poll wish and timeout wish and lets ordinary task racing choose the winner.
+/// epoll and kqueue implement this wish directly; io_uring rejects it with
+/// `runtime_error`.
 struct poll_until : wish<poll_until_result, "poll-until">
 {
     int fd = -1;
@@ -574,6 +646,10 @@ struct poll_until : wish<poll_until_result, "poll-until">
 
 } // namespace op
 
+/// Closed set of every wish a wand must be able to realize.
+///
+/// `wand::prepare` erases a wish into this variant before handing it to the
+/// backend, so a new wish type must be listed here.
 using wish_variant = std::variant<
     op::manual,
     op::openat,

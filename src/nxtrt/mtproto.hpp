@@ -23,6 +23,19 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @namespace nxtrt::mtproto
+ * Telegram MTProto over runtime byte streams: abridged transport framing,
+ * the auth-key exchange, and encrypted RPC on top of `nxt::mt`.
+ *
+ * Framing: `write_abridged_frame`/`read_abridged_frame` for awaiting code,
+ * and the `abridged_frame_view`/`plain_abridged_frame_view` scanners for
+ * `reel`/`chop` parsing of buffered chunks. Session: `perform_auth` (or
+ * `connect_and_auth`) creates an auth key, `make_session` turns it into an
+ * `nxt::mt::session`, and `invoke_raw` sends one TL request and waits for
+ * its result. The protocol state machines are in `nxt::mt`; this namespace
+ * only moves their bytes. Experimental.
+ */
 namespace nxtrt::mtproto {
 
 namespace detail {
@@ -57,6 +70,9 @@ inline std::uint64_t abridged_le(
 
 } // namespace detail
 
+/// One frame of the MTProto abridged transport: a 4-byte quick-ack token
+/// or a payload of whole 32-bit words. The payload borrows the scanned
+/// chunks. `scan` throws `nxt::mt::protocol_error` for oversized frames.
 struct abridged_frame_view
 {
     std::optional<std::uint32_t> quick_ack_token;
@@ -139,6 +155,9 @@ struct abridged_frame_view
 
 using abridged_reel = reel<std::byte, abridged_frame_view>;
 
+/// An abridged frame holding an unencrypted MTProto message (auth key id
+/// 0), split into message id and body; quick acks pass through. `scan`
+/// throws `nxt::mt::protocol_error` for an encrypted or malformed message.
 struct plain_abridged_frame_view
 {
     std::optional<std::uint32_t> quick_ack_token;
@@ -204,6 +223,8 @@ struct plain_abridged_frame_view
 
 using plain_abridged_reel = reel<std::byte, plain_abridged_frame_view>;
 
+/// The result of the auth-key exchange: the key, the first server salt, a
+/// fresh random session id, and the server's clock offset in seconds.
 struct auth_session
 {
     nxt::mt::auth_key key;
@@ -212,6 +233,8 @@ struct auth_session
     std::int64_t time_offset = 0;
 };
 
+/// A little-endian cursor over borrowed byte chunks; reading past the end
+/// throws `nxt::mt::protocol_error`.
 class chunk_reader
 {
 public:
@@ -279,6 +302,8 @@ private:
     std::size_t offset_ = 0;
 };
 
+/// Reads TL primitives (int, long, Bool, int128/256, bytes with padding)
+/// from borrowed byte chunks.
 class tl_chunk_reader
 {
 public:
@@ -349,6 +374,8 @@ private:
     chunk_reader input_;
 };
 
+/// Writes and flushes the one-byte prefix that opens an abridged-transport
+/// connection.
 inline task<void> write_abridged_client_prefix(bytesink & writer)
 {
     auto prefix = std::array{nxt::mt::abridged_client_prefix};
@@ -356,6 +383,8 @@ inline task<void> write_abridged_client_prefix(bytesink & writer)
     co_await writer.flush();
 }
 
+/// Writes PAYLOAD (a multiple of 4 bytes) as one abridged frame and
+/// flushes.
 inline task<void> write_abridged_frame(
     bytesink & writer,
     std::span<const std::byte> payload,
@@ -382,6 +411,9 @@ inline task<void> write_abridged_frame(
     co_await writer.flush();
 }
 
+/// Reads the next payload frame, skipping quick-ack tokens. The span
+/// borrows READER's buffer, which must be large enough for the frame, and
+/// is valid until the next read.
 template<typename Reader>
 task<std::span<const std::byte>> read_abridged_frame(Reader & reader)
 {
@@ -410,6 +442,9 @@ task<std::span<const std::byte>> read_abridged_frame(Reader & reader)
     }
 }
 
+/// Wraps BODY in an unencrypted message with the next message id after
+/// LAST_MESSAGE_ID (updated on success), builds it in STORAGE, and writes
+/// it as one frame.
 inline task<void> write_plain_abridged_frame(
     bytesink & writer,
     std::span<const std::byte> body,
@@ -542,6 +577,9 @@ inline std::int64_t random_i64()
 
 } // namespace detail
 
+/// Runs the MTProto auth-key exchange (req_pq_multi through
+/// set_client_DH_params) over an already opened abridged connection,
+/// checking the server against the built-in Telegram RSA keys.
 template<typename Reader>
 task<auth_session> perform_auth(bytesink & writer, Reader & reader)
 {
@@ -622,6 +660,11 @@ task<auth_session> perform_auth(bytesink & writer, Reader & reader)
     };
 }
 
+/// Connects to HOST:SERVICE (by default a Telegram production DC address),
+/// opens the abridged transport and runs `perform_auth`.
+///
+/// The connection is closed on return; only the key material is kept, so
+/// a session must reconnect to use it.
 inline task<auth_session> connect_and_auth(
     std::string host = "149.154.167.50",
     std::string service = "443")
@@ -638,6 +681,7 @@ inline task<auth_session> connect_and_auth(
     co_return co_await perform_auth(socket.output(), socket.input());
 }
 
+/// A fresh encrypted session state from an auth result.
 inline nxt::mt::session make_session(auth_session auth)
 {
     return nxt::mt::session{
@@ -680,6 +724,12 @@ task<std::vector<nxt::mt::session_effect>> receive_next_session_effects(
     co_return std::move(received.effects);
 }
 
+/// Sends one serialized TL request on SESSION and reads frames until its
+/// rpc_result arrives, returning the raw result.
+///
+/// Acks and other effects the session produces while waiting are written
+/// back; unrelated results and notifications are dropped. SESSION is
+/// updated in place. There is no timeout; bound it from outside.
 template<typename Reader>
 task<nxt::mt::bytes> invoke_raw(
     bytesink & writer,

@@ -11,6 +11,14 @@
 
 namespace nxtui::tui {
 
+/// Draw `values` as vertical eighth-block bars, one column per value, into
+/// a `size` area.
+///
+/// Blanks the area first (filling the channels set in `style`). When there
+/// are more values than columns, only the most recent ones are drawn;
+/// fewer values are right-aligned. Values are scaled to `range`, or to
+/// their own minimum and maximum when it is absent; a flat range is
+/// widened by one.
 inline void render_sparkline(
     RasterView & r,
     Size size,
@@ -66,7 +74,8 @@ inline auto sparkline(
         });
 }
 
-/// Create a sparkline layout of any fixed terminal height from borrowed values.
+/// Create a sparkline layout of any fixed terminal height from borrowed
+/// values, which must outlive every render of the layout.
 inline auto sparkline(
     std::span<const double> values,
     height_t height,

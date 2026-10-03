@@ -9,35 +9,66 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtai::responses
+ * OpenAI Responses API wire format: building the streaming request body
+ * from an `openai_responses_request`, and decoding the server-sent events
+ * of the reply into a `response_result` with `stream_decoder`.
+ *
+ * Nothing here does I/O. Items are kept as raw JSON (`openai::raw_json`) so
+ * fields this client does not know about survive a round trip.
+ */
 namespace nxtai::responses {
 
+/// Everything needed to build one `POST /v1/responses` request.
+///
+/// The body always asks for a streamed reply (`"stream": true`). Empty
+/// strings and vectors are left out of the body, except `input`, which is
+/// always sent.
 struct openai_responses_request
 {
+    /// Bearer token for the `Authorization` header; not part of the body.
     std::string api_key = {};
+    /// Model name. `nxtllm` overrides this default with its own.
     std::string model = "gpt-5-mini";
+    /// Plain-text user input, sent as the `input` string when
+    /// `input_items` is empty.
     std::string input = {};
+    /// Input items as raw JSON objects; when non-empty they are sent as the
+    /// `input` array and `input` is ignored.
     std::vector<openai::raw_json> input_items = {};
+    /// Function tools offered to the model.
     std::vector<openai::function_tool_definition> tools = {};
+    /// Extra output fields to include, e.g. `reasoning.encrypted_content`.
     std::vector<std::string> include = {};
+    /// Continue from a stored response (used with `store`).
     std::string previous_response_id = {};
+    /// Upper bound on generated tokens.
     std::size_t max_output_tokens = 6000;
+    /// `reasoning.effort`; empty leaves it out.
     std::string reasoning_effort = "medium";
+    /// `reasoning.summary`; empty leaves it out.
     std::string reasoning_summary = {};
+    /// Whether the server stores the response for `previous_response_id`.
     bool store = false;
 };
 
+/// Not used by the request builder.
 struct user_input_item
 {
     std::string role = "user";
     std::string content = {};
 };
 
+/// Not used by the request builder.
 struct reasoning_options
 {
     std::optional<std::string> effort = {};
     std::optional<std::string> summary = {};
 };
 
+/// Typed mirror of the request body. Not used by `openai_responses_body`,
+/// which writes JSON directly.
 struct openai_responses_body_payload
 {
     std::string model = {};
@@ -51,6 +82,9 @@ struct openai_responses_body_payload
     std::optional<reasoning_options> reasoning = {};
 };
 
+/// The request's input as a list of items: `input_items` if non-empty,
+/// otherwise one `{"role":"user","content":input}` item, or nothing when
+/// `input` is empty too.
 [[nodiscard]] inline std::vector<openai::raw_json>
 input_items_from_request(const openai_responses_request & request)
 {
@@ -72,6 +106,7 @@ input_items_from_request(const openai_responses_request & request)
     return input;
 }
 
+/// Write `values` as a JSON array of strings.
 inline void write_string_array(
     nxt::json::writer & json,
     const std::vector<std::string> & values)
@@ -85,6 +120,7 @@ inline void write_string_array(
     json.character(']');
 }
 
+/// Write already-serialized JSON values as a JSON array, verbatim.
 inline void write_raw_json_array(
     nxt::json::writer & json,
     const std::vector<openai::raw_json> & values)
@@ -98,6 +134,8 @@ inline void write_raw_json_array(
     json.character(']');
 }
 
+/// Write one function tool definition object; `parameters` is copied
+/// verbatim.
 inline void write_tool_definition(
     nxt::json::writer & json,
     const openai::function_tool_definition & tool)
@@ -133,6 +171,8 @@ inline void write_tools_array(
     json.character(']');
 }
 
+/// Write the `input` member: the `input_items` array, or the `input`
+/// string when there are no items.
 inline void write_responses_input(
     nxt::json::writer & json,
     const openai_responses_request & request)
@@ -145,6 +185,10 @@ inline void write_responses_input(
     }
 }
 
+/// Serialize `request` as the JSON body of a streaming Responses request.
+///
+/// Raw JSON in `input_items` and tool `parameters` is inserted without
+/// validation, so it must already be valid JSON.
 [[nodiscard]] inline std::string
 openai_responses_body(const openai_responses_request & request)
 {
@@ -205,6 +249,10 @@ openai_responses_body(const openai_responses_request & request)
     return std::move(json.out);
 }
 
+/// Complete `POST https://api.openai.com/v1/responses` request with SSE
+/// `Accept`, JSON body, and bearer authorization. `nxtllm` builds its own
+/// `nxtrt::http::request` instead, adding `Accept-Encoding` and
+/// `Connection: close`.
 [[nodiscard]] inline nxt::http::request
 openai_responses_http_request(const openai_responses_request & request)
 {

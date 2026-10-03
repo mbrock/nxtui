@@ -29,8 +29,22 @@
 #include <sys/vnode.h>
 #endif
 
+/**
+ * @namespace nxtrt::fs
+ * File status, directory listing and capability-confined file access.
+ *
+ * The main entry point is `files`: opens, stats, listings and positioned
+ * reads beneath a granted directory descriptor that never stall the deck.
+ * It uses io_uring kernel operations where the wand supports them and a
+ * `blocking_pool` otherwise. The synchronous `open_beneath`,
+ * `stat_beneath` and `list_entries` underneath it implement the
+ * confinement rules (plain names only, no symlinks followed) and can be
+ * called directly off the deck. `list_directory` and `list_path` are
+ * unconfined listings by path for tools.
+ */
 namespace nxtrt::fs {
 
+/// File type from a mode or directory entry.
 enum class file_kind
 {
     regular,
@@ -43,6 +57,7 @@ enum class file_kind
     other,
 };
 
+/// The subset of stat(2) results the runtime reports.
 struct file_status
 {
     file_kind kind = file_kind::other;
@@ -51,6 +66,8 @@ struct file_status
     std::int64_t modified_ms = 0; // Unix epoch milliseconds
 };
 
+/// A name in a directory and the status of that entry, not of any
+/// symlink target.
 struct directory_entry
 {
     std::string name;
@@ -161,6 +178,12 @@ inline task<std::vector<std::string>> read_directory_names(int fd)
 
 } // namespace detail
 
+/// Lists PATH (relative to the working directory, not confined) with every
+/// entry's status, sorted by name and including "." and "..".
+///
+/// On Linux the open, getdents64 and per-entry statx calls are wishes, run
+/// concurrently. On macOS the whole listing is synchronous on the deck
+/// thread, using getattrlistbulk. Symlinks are reported, not followed.
 inline task<std::vector<directory_entry>> list_directory(std::string path)
 {
     auto fd = co_await op::openat{
@@ -185,6 +208,8 @@ inline task<std::vector<directory_entry>> list_directory(std::string path)
     co_return entries;
 }
 
+/// `list_directory(PATH)` if PATH is a directory, else a single entry
+/// named PATH with its status. A symlink is listed as itself.
 inline task<std::vector<directory_entry>> list_path(std::string path)
 {
     auto status = co_await detail::stat_path(AT_FDCWD, path);
@@ -448,6 +473,10 @@ inline task<std::vector<directory_entry>> list_path(std::string path)
 // the deck or replaces them with io_uring operations. Failures are
 // errno_error for the OS and std::invalid_argument for a malformed path.
 
+/// Splits PATH at '/' into plain-name segments, borrowing from PATH.
+/// Empty PATH gives no segments; an empty, ".", ".." or NUL-containing
+/// segment (so also a leading or trailing '/') throws
+/// `std::invalid_argument`.
 inline std::vector<std::string_view> beneath_segments(std::string_view path)
 {
     auto segments = std::vector<std::string_view>{};
@@ -464,6 +493,7 @@ inline std::vector<std::string_view> beneath_segments(std::string_view path)
     return segments;
 }
 
+/// The parent directory of a confined path and its final name.
 struct beneath_entry
 {
     nxt::unique_fd parent;
@@ -481,6 +511,10 @@ namespace detail {
 
 } // namespace detail
 
+/// Opens each directory segment of PATH beneath DIRFD without following
+/// symlinks and returns the last directory with the final name. A symlink
+/// among the directories fails with ELOOP (`errno_error`). DIRFD is
+/// borrowed; the result owns a new descriptor.
 inline beneath_entry resolve_beneath(int dirfd, std::string_view path)
 {
     auto segments = beneath_segments(path);
@@ -594,16 +628,29 @@ inline std::vector<directory_entry> list_entries(nxt::unique_fd dir)
     return entries;
 }
 
-/// Filesystem calls that keep the deck responsive. On a wand whose
-/// asynchronous_files() holds (io_uring), opens and stats are kernel
-/// operations, and openat2 with RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS
-/// enforces the same confinement in the kernel. Otherwise the synchronous
+/// Confined filesystem calls that keep the deck responsive.
+///
+/// Each call takes a directory descriptor as the capability and a path
+/// beneath it, with the rules of `beneath_segments` and `open_beneath`:
+/// plain names only, and no symlink followed anywhere, including the last
+/// segment.
+///
+/// On a wand whose asynchronous_files() holds (io_uring), opens, stats and
+/// reads are kernel operations, and openat2 with RESOLVE_BENEATH |
+/// RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS enforces the same
+/// confinement in the kernel. Otherwise (epoll, kqueue) the synchronous
 /// functions above run on WORKERS, as does listing everywhere (io_uring has
 /// no getdents). Failures are errno_error; malformed paths are rejected on
 /// the deck with std::invalid_argument. DIRFD is borrowed until the call
-/// settles, and the files object must outlive its calls. One difference
-/// remains: io_uring opens a FIFO without waiting for its peer, as if
-/// O_NONBLOCK were given, where the pool's open(2) waits.
+/// settles, and the files object and WORKERS must outlive its calls. One
+/// difference remains: io_uring opens a FIFO without waiting for its peer,
+/// as if O_NONBLOCK were given, where the pool's open(2) waits.
+///
+/// @code
+/// auto confined = nxtrt::fs::files{workers}; // a blocking_pool
+/// auto fd = co_await confined.open_beneath(root.get(), "site/index.html");
+/// auto status = co_await confined.stat_beneath(root.get(), "site");
+/// @endcode
 class files
 {
 public:
@@ -611,9 +658,16 @@ public:
         : workers_(workers)
     {}
 
+    /// Opens PATH beneath DIRFD with FLAGS plus O_NOFOLLOW, O_NOCTTY and
+    /// O_CLOEXEC; a symlink anywhere fails with ELOOP. An empty PATH
+    /// duplicates DIRFD and ignores FLAGS.
     task<nxt::unique_fd>
     open_beneath(int dirfd, std::string path, int flags = O_RDONLY);
+    /// Status of PATH beneath DIRFD; a final symlink reports itself. An
+    /// empty PATH stats DIRFD.
     task<file_status> stat_beneath(int dirfd, std::string path);
+    /// Entries of the directory PATH beneath DIRFD, as `list_entries`
+    /// returns them. Always runs on the worker pool.
     task<std::vector<directory_entry>>
     list_beneath(int dirfd, std::string path);
     /// pread into BUFFER, which must stay alive until the call settles.

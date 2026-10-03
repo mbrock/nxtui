@@ -31,6 +31,9 @@
 #include <variant>
 #include <vector>
 
+// Timer data is passed in nanoseconds. Without NOTE_NSECONDS the fflags
+// are 0 and kqueue reads the data in milliseconds, so timers would run
+// a million times too long on such a platform.
 #ifndef NOTE_NSECONDS
 #define NOTE_NSECONDS 0
 #endif

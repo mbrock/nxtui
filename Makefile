@@ -215,13 +215,15 @@ spec-witnesses:
 	$(NXT_RACKET) nxtrt/model.rkt --run-all
 
 docs:
+	# Poxy copies some assets read-only out of the Nix store.
+	if [ -d docs/html ]; then chmod -R u+w docs/html; fi
 	rm -rf docs/html
 	mkdir -p docs/html
 	# Doxygen compares the main page path after resolving symlinks such as
 	# macOS's /tmp -> /private/tmp, so hand Poxy a resolved temp directory.
 	TMPDIR="$$(cd "$${TMPDIR:-/tmp}" && pwd -P)" \
 		poxy --output-dir docs docs/poxy.toml
-	chmod -R a+rX docs/html
+	chmod -R u+w,a+rX docs/html
 
 docs-publish:
 	gh workflow run docs.yml --ref main

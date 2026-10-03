@@ -24,11 +24,21 @@
 
 namespace nxtrt {
 
+/// Base of the errors thrown by feeds, sinks, and their buffers.
+///
+/// Thrown for protocol violations (a cold path that reports no progress or
+/// more progress than it made), for requests larger than a buffer can hold,
+/// and for overflow in size arithmetic.
 struct buffer_error : runtime_error
 {
     using runtime_error::runtime_error;
 };
 
+/// A read needed more input than the stream had before it ended.
+///
+/// Verbs that may legitimately hit the end (such as `feed::take()` or
+/// `feed::peek()`) report it as an empty result instead; this is for verbs that
+/// require a value or an exact count. See @ref value_end_of_stream.
 struct end_of_stream : buffer_error
 {
     using buffer_error::buffer_error;
@@ -44,11 +54,14 @@ as_string_view(std::span<const std::byte> bytes) noexcept
     };
 }
 
+/// View text as immutable bytes without copying.
 inline std::span<const std::byte> as_bytes(std::string_view text) noexcept
 {
     return std::as_bytes(std::span{text});
 }
 
+/// Index of the first occurrence of `needle` in `haystack`, or
+/// `haystack.size()` when there is none.
 inline std::size_t find_bytes(
     std::span<const std::byte> haystack, std::span<const std::byte> needle)
 {
@@ -57,15 +70,19 @@ inline std::size_t find_bytes(
         std::distance(haystack.begin(), match.begin()));
 }
 
+/// Tag type for @ref eof.
 struct eof_t
 {};
 
+/// End-of-stream marker; converts to a @ref fare_t that reports EOF.
 inline constexpr auto eof = eof_t{};
 
-/// Values accepted by the requested destination, or explicit EOF.
+/// Result of one cold-path stream step: a count of values moved, or EOF.
 ///
-/// A successful zero count is valid progresslessness; EOF is represented by
-/// the error alternative instead of by a count value.
+/// `fare_t{n}` (or a plain `std::size_t`) means `n` values moved; zero is a
+/// valid answer that means "no progress this time" and does not imply the
+/// end. `fare_t{eof}` means the source has ended. Use @ref value_count and
+/// @ref is_eof to read it; `operator bool` is true for a count.
 class fare_t
 {
 public:
@@ -98,16 +115,25 @@ private:
     std::expected<std::size_t, eof_t> result_;
 };
 
+/// The count in `result`, or zero when it reports EOF.
 inline std::size_t value_count(fare_t const & result) noexcept
 {
     return result ? *result : 0;
 }
 
+/// True when `result` reports EOF.
 inline bool is_eof(fare_t const & result) noexcept
 {
     return !result;
 }
 
+/// Borrowed view of up to `Inline` spans read as one sequence.
+///
+/// Feeds and sinks keep values in a ring, so their buffered contents are at
+/// most two spans (the tail of the storage, then its head). Empty spans are
+/// dropped on construction; adding more than `Inline` nonempty spans throws
+/// @ref buffer_error. The view borrows the spans and is invalidated by
+/// whatever invalidates them.
 template<typename T, std::size_t Inline = 2>
 class buffer_chunks
 {
@@ -161,6 +187,7 @@ public:
         return total;
     }
 
+    /// The first `n` values (fewer if the view is shorter).
     [[nodiscard]] buffer_chunks first(std::size_t n) const
     {
         auto out = buffer_chunks{};
@@ -196,6 +223,8 @@ public:
         return out;
     }
 
+    /// The whole view as one span, or `std::nullopt` when it is split
+    /// across more than one chunk. An empty view gives an empty span.
     [[nodiscard]] std::optional<chunk_type> single_span() const noexcept
     {
         if (count_ == 0)
@@ -219,6 +248,7 @@ private:
     std::size_t count_ = 0;
 };
 
+/// @ref buffer_chunks with a byte default.
 template<typename T = std::byte, std::size_t Inline = 2>
 using byte_chunks = buffer_chunks<T, Inline>;
 
@@ -246,9 +276,12 @@ struct frame_chop
     Frame frame;
 };
 
+/// What a chop scanner returns: a complete frame, or how much more stock
+/// it needs to see.
 template<typename Frame>
 using chop_scan_result = std::variant<frame_chop<Frame>, chop_need_more>;
 
+/// A callable that scans the front of a chunk view for one frame.
 template<typename Scanner, typename Stock, typename Frame>
 concept chop_scanner =
     requires(const Scanner & scanner, buffer_chunks<const Stock> stock) {
@@ -257,6 +290,7 @@ concept chop_scanner =
         } -> std::same_as<chop_scan_result<Frame>>;
     };
 
+/// Default scanner: calls the static `Frame::scan(stock)`.
 template<typename Stock, typename Frame>
 struct static_chop_scanner
 {
@@ -421,6 +455,7 @@ private:
     Scanner scanner_{};
 };
 
+/// Make a @ref chop_view over `stock`.
 template<
     typename Stock,
     typename Frame,
@@ -432,6 +467,7 @@ chop(buffer_chunks<const Stock> stock, Scanner scanner = {})
     return {stock, std::move(scanner)};
 }
 
+/// Sum of the extents of every chop in `chops`.
 template<std::ranges::input_range Chops>
 [[nodiscard]] std::size_t chop_extent(Chops && chops)
 {
@@ -494,6 +530,13 @@ template<typename T>
 /// knows about borrowed storage, two-span views, raw writable tail
 /// capacity, constructed prefixes, and destruction. It does not allocate,
 /// suspend, or know about higher-level runtime ownership.
+///
+/// The live values are the `size()` slots starting at a read cursor, wrapping
+/// at `capacity()`. `unused_capacity()` is the contiguous run of raw slots
+/// after them (not wrapping). Callers construct values there and then call
+/// `advance_constructed()`; `destroy_prefix()` ends the lifetime of values at
+/// the front. The ring never destroys values on its own, including in its
+/// destructor: owners call `destroy_all()`.
 template<typename T>
 class ring_region
 {

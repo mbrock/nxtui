@@ -9,14 +9,25 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @namespace nxtui::chart
+ * Unicode block-glyph charts as plain UTF-8 strings: progress and range
+ * bars from eighth-width blocks, and sparklines from eighth-height blocks.
+ *
+ * These functions only build strings; `tui::progress_bar` and
+ * `tui::sparkline` wrap them as layouts. Fractions are clamped to [0, 1]
+ * and rounded to the nearest eighth of a cell.
+ */
 namespace nxtui::chart {
 
+/// Closed value range mapped to the bottom and top of a chart.
 struct value_range
 {
     double lo = 0.0;
     double hi = 1.0;
 };
 
+/// The part [`begin`, `end`) of the unit interval covered by one cell.
 struct cell_slice
 {
     double begin = 0.0;
@@ -33,6 +44,7 @@ struct cell_slice
     }
 };
 
+/// Slice of [0, 1] covered by cell `index` of `cells` equal cells.
 inline cell_slice unit_cell(std::size_t index, std::size_t cells)
 {
     if (cells == 0)
@@ -68,6 +80,7 @@ inline std::string project_cells(std::size_t cells, Project && project)
     return out;
 }
 
+/// Lower-block glyph filled to `fraction` of the cell height.
 inline std::string_view vertical_eighth(double fraction)
 {
     static constexpr auto blocks = std::array<std::string_view, 9>{
@@ -76,6 +89,7 @@ inline std::string_view vertical_eighth(double fraction)
     return blocks[eighth_index(fraction)];
 }
 
+/// Left-block glyph filled to `fraction` of the cell width.
 inline std::string_view horizontal_eighth(double fraction)
 {
     static constexpr auto blocks = std::array<std::string_view, 9>{
@@ -95,6 +109,8 @@ inline std::string_view horizontal_eighth_from_right(double fraction)
     return blocks[eighth_index(fraction)];
 }
 
+/// Glyph for row `row` (0 at the top) of a `rows`-tall vertical bar filled
+/// to `fraction` of its height.
 inline std::string_view
 vertical_cell(double fraction, std::size_t row, std::size_t rows)
 {
@@ -107,6 +123,7 @@ vertical_cell(double fraction, std::size_t row, std::size_t rows)
     return vertical_eighth(local);
 }
 
+/// `cells`-wide bar filled from the left to `fraction`.
 inline std::string progress_bar(double fraction, std::size_t cells)
 {
     return project_cells(
@@ -116,6 +133,9 @@ inline std::string progress_bar(double fraction, std::size_t cells)
         });
 }
 
+/// `cells`-wide bar filled only over [`begin`, `end`] (fractions of the
+/// width). Unicode lacks most right-aligned eighth blocks, so the starting
+/// edge is approximate.
 inline std::string
 range_bar(double begin, double end, std::size_t cells)
 {
@@ -135,6 +155,8 @@ range_bar(double begin, double end, std::size_t cells)
         });
 }
 
+/// Minimum and maximum of `values`, widened by one when they are (nearly)
+/// equal. `values` must not be empty.
 inline value_range dynamic_range(std::span<const double> values)
 {
     auto [lo_it, hi_it] = std::minmax_element(values.begin(), values.end());
@@ -182,6 +204,8 @@ inline std::string sparkline(std::span<const double> values, std::size_t cells)
     return sparkline(values, cells, dynamic_range(values));
 }
 
+/// Multi-row sparkline: `rows` strings, top row first, each `cells` wide,
+/// showing the most recent values right-aligned and scaled to `range`.
 inline std::vector<std::string> sparkline_rows(
     std::span<const double> values,
     std::size_t cells,

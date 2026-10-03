@@ -1,8 +1,8 @@
 # The nxtrt runtime, as a story about holding work {#rt_holding}
 
 Some thoughts about the domain model under `src/nxtrt`, written as an
-exploratory companion to the dry reference page at @ref rt_overview. That
-page is a map; this one is the reasoning the map flattens. It builds the
+exploratory companion to the tour at @ref rt_overview. That page is a
+map; this one is the reasoning the map flattens. It builds the
 concepts up from intuition, as nouns and verbs, and is honest about where
 the code is still a seed.
 
@@ -51,21 +51,24 @@ So there is a **deck**. The deck is the cooperative scheduler, and its
 entire substance is a queue of resumptions:
 
 ```cpp
-std::deque<ready_item> ready_;
+std::span<deck_task_record> tasks_;   // registry: id -> handle + promise
+std::deque<task_id> ready_;           // the queue of resumptions
 wand * wand_ = nullptr;
 ```
 
-A `ready_item` is nothing but a coroutine handle and its promise. To
-*schedule* work is to `enqueue` a handle. To *run* work is to resume the
-handles that are waiting. That is the whole machine.
+A `task_id` names a row in the registry, and the row holds nothing but a
+coroutine handle and its promise. To *schedule* work is to `enqueue` an id.
+To *run* work is to resume the tasks those ids name. That is the whole
+machine; the registry exists so that ids stay meaningful (and stale ids
+harmless) when frames come and go.
 
 Now look at how a round is pumped, because the shape is the point:
 
 ```cpp
-auto round = std::deque<ready_item>{};
+auto round = std::deque<task_id>{};
 round.swap(ready_);                       // take everything ready NOW
-for (auto const & item : round)
-    item.resume_if_ready(*this);          // drain it
+for (auto id : round)
+    resume_if_ready(id);                  // drain it
 // tasks made ready DURING the round are left in ready_ for next time
 ```
 
@@ -188,7 +191,7 @@ buffered bytes never reach the socket. Don't forget to flush.
 > **Digression worth marking.** This is why task code stays portable. The
 > task names what it wants — the wish; the wand decides how to stage and
 > complete it on a particular platform. The concrete wands live at the edge:
-> `uring_wand`, `kqueue_wand`. Swap the wand and the same task participates
+> `uring_wand`, `epoll_wand`, `kqueue_wand`. Swap the wand and the same task participates
 > in a different I/O world, the way you swap an allocator to change where
 > memory lives. The wand is the allocator for *time*.
 

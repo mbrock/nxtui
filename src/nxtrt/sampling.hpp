@@ -10,6 +10,12 @@
 
 namespace nxtrt {
 
+/// An exponentially weighted moving average of a rate (units per second).
+///
+/// Each `sample` turns a count over an elapsed time into an instantaneous
+/// rate and blends it in with a weight that depends on the elapsed time,
+/// so a sample HALF_LIFE long moves the average halfway to it. The first
+/// sample sets the average directly; non-positive intervals are ignored.
 class ema_rate
 {
 public:
@@ -53,6 +59,12 @@ private:
     bool initialized_ = false;
 };
 
+/// Every INTERVAL, reads a running total with READ_TOTAL, turns its growth
+/// into an `ema_rate`, and passes the rate to PUBLISH_RATE.
+///
+/// Runs until stopped and then returns normally (cancellation is not
+/// rethrown). A total that goes down counts as no growth. Both callables
+/// are stored in the task frame and run on the deck.
 template<typename ReadTotal, typename PublishRate, typename Rep, typename Period>
 task<void> sample_ema_rate(
     std::chrono::duration<Rep, Period> interval,

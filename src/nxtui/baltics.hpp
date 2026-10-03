@@ -10,6 +10,11 @@
 
 #include "nxtui/raster.hpp"
 
+/**
+ * @namespace nxtui::theme
+ * Color palettes. `Palette` names every color slot; `baltic_birch` (light)
+ * and `baltic_church` (dark) fill it.
+ */
 namespace nxtui::theme {
 
 /// Complete color slot set shared by the Baltic light and dark themes.

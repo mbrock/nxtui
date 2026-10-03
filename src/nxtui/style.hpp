@@ -5,7 +5,7 @@
 
 namespace nxtui {
 
-/// Opaque 24-bit RGB color.
+/// Plain 24-bit RGB triple, used for true-color values and theme palettes.
 struct Rgb8
 {
     std::uint8_t r;
@@ -13,9 +13,23 @@ struct Rgb8
     std::uint8_t b;
 };
 
-/// Terminal color: packed into 32 bits.
+/// Cell color: a true-color RGB value, a 256-color palette index, or one
+/// of two sentinels, packed into 32 bits.
+///
+/// The encoding of `value` decides the kind:
+/// - `0x00..0xFF`: palette index (`palette(i)`, `red()`, `bright_cyan()`,
+///   ...); emitted as a 256-color SGR code.
+/// - `0x100`: `terminal_default()`, the terminal's own default color. This
+///   is `DEFAULT_COLOR`, which `tui::Style` also treats as "not set".
+/// - `0x200`: `transparent()`.
+/// - nonzero alpha byte (bits 24-31): true color, `r | g << 8 | b << 16`.
+///   `Rgba8(r, g, b)` defaults alpha to 255.
+///
+/// Keep alpha nonzero for RGB values: `Rgba8(r, g, b, 0)` fails
+/// `is_true_color()` and can collide with a palette index or sentinel.
 struct Rgba8
 {
+    /// Packed representation; see the type description.
     std::uint32_t value;
 
     constexpr Rgba8(
@@ -126,6 +140,9 @@ struct Rgba8
     friend std::ostream & operator<<(std::ostream & os, const Rgba8 & c);
 };
 
+/// Text attribute bits (SGR bold, faint, italic, ...), combinable with `|`.
+///
+/// `Emphasis::none` is the empty set. Test membership with `has_emphasis`.
 enum class Emphasis : std::uint8_t {
     none = 0,
     bold = 1 << 0,
@@ -155,12 +172,15 @@ constexpr Emphasis & operator|=(Emphasis & a, Emphasis b) noexcept
     return a = a | b;
 }
 
+/// True when any bit of `flag` is set in `set`.
 constexpr bool has_emphasis(Emphasis set, Emphasis flag) noexcept
 {
     return (set & flag) != Emphasis::none;
 }
 
+/// Emphasis of a freshly cleared cell: none.
 inline constexpr Emphasis DEFAULT_EMPHASIS = Emphasis::none;
+/// Color of a freshly cleared cell: the terminal default.
 inline constexpr Rgba8 DEFAULT_COLOR = Rgba8::terminal_default();
 
 } // namespace nxtui

@@ -12,8 +12,19 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtai::agent_tools
+ * The default tools for a local coding agent: `read_file`, `rg_search`,
+ * and `bash`, registered together by `for_agent()`.
+ *
+ * They run with the caller's filesystem and process permissions. Nothing
+ * restricts paths to a workspace, and `bash` is told, not forced, to stay
+ * read-only. See @ref ai_overview for the current limitations.
+ */
 namespace nxtai::agent_tools {
 
+/// Read up to `max_bytes` of `p` synchronously. Returns an empty string if
+/// the file cannot be opened; longer files are silently truncated.
 inline std::string read_file_to_string(
     const std::filesystem::path & p,
     std::size_t max_bytes)
@@ -28,6 +39,9 @@ inline std::string read_file_to_string(
     return out;
 }
 
+/// Convert a captured process into a tool result: failed if the capture
+/// failed, the process was killed by a signal, or it exited nonzero (with
+/// `process failed` as output when it printed nothing).
 inline tools::tool_result process_result_to_tool_result(
     tool_process::result captured)
 {
@@ -57,6 +71,8 @@ inline tools::tool_result process_result_to_tool_result(
     };
 }
 
+/// `bash`: run `bash -c command` and return combined stdout and stderr.
+/// Needs `bash` on `PATH`. Not sandboxed.
 struct bash_tool
 {
     static constexpr std::string_view name = "bash";
@@ -100,6 +116,9 @@ struct bash_tool
     }
 };
 
+/// `rg_search`: run `rg --no-heading --line-number --max-count 50
+/// --max-columns 200 -- pattern path`. Needs `rg` on `PATH`. Exit status 1
+/// (no matches) is reported as a failure.
 struct rg_search_tool
 {
     static constexpr std::string_view name = "rg_search";
@@ -154,6 +173,9 @@ struct rg_search_tool
     }
 };
 
+/// `read_file`: return up to 8 MiB of a file. Reads synchronously on the
+/// deck thread, silently truncates larger files, and fails only when the
+/// path is empty or does not exist.
 struct read_file_tool
 {
     static constexpr std::string_view name = "read_file";
@@ -202,6 +224,7 @@ struct read_file_tool
     }
 };
 
+/// Registry with `read_file`, `rg_search`, and `bash`, in that order.
 [[nodiscard]] inline auto for_agent()
 {
     return tools::make_tool_registry({

@@ -50,7 +50,12 @@ private:
 /// busy slots stay packed toward the front.
 ///
 /// `farm<T>` borrows its slots and index land, so its capacity can be chosen
-/// at run time. `farm<T, N>` keeps its index land inline.
+/// at run time; both must outlive the farm. `farm<T, N>` keeps its index land
+/// inline and borrows a `std::array<T, N>` of slots.
+///
+/// The slots are existing objects: the farm only tracks which are free. It
+/// never constructs, destroys, or resets a slot, and it does not check for
+/// double release. It is not thread-safe.
 template<typename T, std::size_t N = std::dynamic_extent>
 class farm;
 
@@ -120,6 +125,9 @@ public:
     }
 
     /// The next free slot, or null when every slot is handed out.
+    ///
+    /// Never waits for a slot to be released. With a nonzero hot ring the
+    /// result is always ready.
     [[nodiscard]] hope<value_type *> alloc()
     {
         auto index = this->take();
@@ -128,6 +136,8 @@ public:
         return alloc_slow(std::move(index));
     }
 
+    /// Return slot `index` to the free set: to the hot ring if it has room,
+    /// otherwise to the cold mask.
     void give(index_type index) noexcept
     {
         assert(index < slots_.size());
@@ -137,6 +147,7 @@ public:
             cold_.give(index);
     }
 
+    /// `give()` by pointer; `slot` must point into this farm's slots.
     void release(value_type * slot) noexcept
     {
         assert(slot >= slots_.data());

@@ -7,6 +7,26 @@
 
 namespace nxtrt {
 
+/// A top-level task created in its own root environment, for hosts that
+/// drive a deck themselves instead of calling `deck::sync_wait`.
+///
+/// The constructor calls `fn()` once, with `d` as the current deck, so the
+/// new task captures a fresh, empty env. `fn` is a temporary: it is invoked
+/// and then dropped, so it must return a task that does not refer to the
+/// closure itself. Use a plain lambda that calls a task function
+/// (`[&] { return serve(args); }`), not a capturing coroutine lambda.
+///
+/// `start()` queues the task on the deck; the host then pumps the deck (and
+/// usually its wand, for example with a wand's `run_until_done`) and reads
+/// the result through `inner()`. The root task is pinned in place and owns
+/// the task; stop it with `inner().request_stop()`.
+///
+/// @code
+/// auto root = nxtrt::root_task{deck, [&] { return serve(port); }};
+/// root.start();
+/// wand.run_until_done(deck, root.inner());
+/// std::move(root.inner()).result();
+/// @endcode
 template<typename T>
 class root_task
 {
@@ -30,11 +50,13 @@ public:
         task_ = std::invoke(factory_type{std::forward<Fn>(fn)});
     }
 
+    /// Queue the task on its deck. Does nothing if it is already done.
     void start()
     {
         deck_->start(task_);
     }
 
+    /// The owned task, for `done()`, `result()` and `request_stop()`.
     [[nodiscard]] task<T> & inner() noexcept
     {
         return task_;

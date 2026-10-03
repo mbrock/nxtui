@@ -8,6 +8,12 @@
 
 namespace nxtrt {
 
+/// A byte sink that hashes everything written to it with SHA-256.
+///
+/// Writes never suspend. `finalize` hashes only bytes the sink has
+/// drained, so flush first when the sink has a buffer (BUFFER_SIZE > 0 or
+/// a borrowed BUFFER, which must outlive the sink). `finalize` does not
+/// reset or consume the state: more writes continue the same message.
 class sha256_sink final : public bytesink
 {
 public:
@@ -27,6 +33,8 @@ private:
     nxt::crypto::sha256_state state_;
 };
 
+/// A byte sink that hashes everything written to it with SHA-1; the same
+/// contract as `sha256_sink`.
 class sha1_sink final : public bytesink
 {
 public:
@@ -46,6 +54,9 @@ private:
     nxt::crypto::sha1_state state_;
 };
 
+/// A byte sink that computes HMAC-SHA-256 under KEY over everything written
+/// to it; the same contract as `sha256_sink`. KEY is used during
+/// construction only.
 class hmac_sha256_sink final : public bytesink
 {
 public:

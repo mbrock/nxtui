@@ -18,17 +18,20 @@
 
 namespace nxtrt {
 
+/// A decompressor failed: corrupt input, input that ended before the
+/// compressed stream did, or a library initialization failure.
 struct compression_error : runtime_error
 {
     using runtime_error::runtime_error;
 };
 
+/// Container format a @ref zlib_reader expects.
 enum class zlib_format
 {
-    zlib,
-    gzip,
-    raw_deflate,
-    gzip_or_zlib,
+    zlib,         ///< RFC 1950 zlib wrapper.
+    gzip,         ///< RFC 1952 gzip wrapper.
+    raw_deflate,  ///< Bare RFC 1951 deflate data.
+    gzip_or_zlib, ///< Detect gzip or zlib from the header.
 };
 
 /// Streaming inflater reader backed by zlib or zlib-ng's zlib-compatible API.
@@ -39,6 +42,14 @@ enum class zlib_format
 /// other readers here: if a destination writer has no immediate capacity, the
 /// inflater parks output in its own reader buffer instead of allocating temporary
 /// storage.
+///
+/// The wrapped feed is borrowed and must outlive this one. Compressed input
+/// is consumed from it with `take_some()` as needed, so the wrapped feed
+/// must not be read by anyone else meanwhile. The feed reports EOF after
+/// the end of the compressed stream; input bytes after that end that were
+/// already taken from the wrapped feed are dropped. Corrupt data, or the
+/// wrapped feed ending first, throws @ref compression_error. Not movable;
+/// the factory functions below rely on guaranteed copy elision.
 class zlib_reader final : public bytefeed
 {
 public:
@@ -83,6 +94,7 @@ private:
     bool done_ = false;
 };
 
+/// A @ref zlib_reader for gzip data.
 inline zlib_reader gzip_reader(
     bytefeed & reader,
     std::size_t buffer_size = 4096)
@@ -97,6 +109,7 @@ inline zlib_reader gzip_reader(
     return zlib_reader{reader, zlib_format::gzip, buffer};
 }
 
+/// A @ref zlib_reader for zlib-wrapped deflate data (HTTP `deflate`).
 inline zlib_reader deflate_reader(
     bytefeed & reader,
     std::size_t buffer_size = 4096)
@@ -113,6 +126,11 @@ inline zlib_reader deflate_reader(
 
 #if defined(NXTRT_HAVE_ZSTD)
 
+/// Streaming Zstandard decompressing byte feed over a borrowed byte feed.
+///
+/// Built only when `NXTRT_HAVE_ZSTD` is defined. Reports EOF after the first
+/// complete frame. Input, ownership, and error behavior are as for
+/// @ref zlib_reader; library errors throw @ref compression_error.
 class zstd_reader final : public bytefeed
 {
 public:
@@ -145,6 +163,7 @@ private:
     bool done_ = false;
 };
 
+/// A @ref zstd_reader over `reader`.
 inline zstd_reader zstd_reader_for(
     bytefeed & reader,
     std::size_t buffer_size = 4096)
@@ -163,6 +182,10 @@ inline zstd_reader zstd_reader_for(
 
 #if defined(NXTRT_HAVE_BROTLI)
 
+/// Streaming Brotli decompressing byte feed over a borrowed byte feed.
+///
+/// Built only when `NXTRT_HAVE_BROTLI` is defined. Input, ownership, and
+/// error behavior are as for @ref zlib_reader.
 class brotli_reader final : public bytefeed
 {
 public:
@@ -196,6 +219,7 @@ private:
     bool done_ = false;
 };
 
+/// A @ref brotli_reader over `reader`.
 inline brotli_reader brotli_reader_for(
     bytefeed & reader,
     std::size_t buffer_size = 4096)

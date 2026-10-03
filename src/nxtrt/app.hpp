@@ -16,12 +16,24 @@
 
 namespace nxtrt {
 
-/// Small application-facing owner for the runtime.
+/// Application owner of the runtime: one deck, the platform wand, and a run
+/// entry.
 ///
-/// This is intentionally not the terminal UI runtime yet. It is the common
-/// owner the UI runtime can be built around: one `deck`, one platform `wand`,
-/// a root run entrypoint, and the app-level coordination primitives that
-/// the old `UIRuntime` currently gets from libcoro.
+/// A `runtime` owns an `arch::wand` (the build's default wand) and a `deck`
+/// driven by it, plus a few application coordination channels: a damage
+/// `bell`, a bounded `wire` of terminal sizes, and a bounded `wire` of key
+/// events (64 slots each). Call `run` with a task factory; the root and
+/// every task it starts run on the thread that called `run`. The
+/// constructor installs the SIGUSR1 runtime dump (see
+/// `debug::install_signal_dump`). Not copyable or movable. Only defined
+/// when the platform has a default wand (`NXTRT_ARCH_HAS_WAND`).
+///
+/// @code
+/// auto rt = nxtrt::runtime{};
+/// rt.run([&]() -> nxtrt::task<void> {
+///     co_await rt.sleep(std::chrono::milliseconds{10});
+/// });
+/// @endcode
 #if NXTRT_ARCH_HAS_WAND
 class runtime
 {
@@ -52,11 +64,15 @@ public:
         return wand_;
     }
 
+    /// Bell rung whenever the application should redraw: by
+    /// `signal_damage`, by published input or resize, and by
+    /// `request_stop`. It is manual-reset; see @ref nxtrt::bell "bell".
     [[nodiscard]] bell & damage_bell() noexcept
     {
         return damage_bell_;
     }
 
+    /// Rings the damage bell.
     void signal_damage()
     {
         damage_bell_.ring();
@@ -72,11 +88,15 @@ public:
         return input_wire_;
     }
 
+    /// Awaits the next key event; `std::nullopt` once the input wire is
+    /// closed (by `request_stop`) and drained.
     [[nodiscard]] task<std::optional<input_event>> next_input()
     {
         co_return co_await input_wire_.next();
     }
 
+    /// Sends a key event, waiting while the input wire is full, and rings
+    /// the damage bell. Returns false if the wire is closed.
     [[nodiscard]] task<bool> publish_input_event(input_event event)
     {
         auto published = co_await input_wire_.send(std::move(event));
@@ -85,6 +105,9 @@ public:
         co_return published;
     }
 
+    /// Queues a terminal size without waiting and rings the damage bell.
+    /// Returns false, dropping `size`, if the resize wire is full or
+    /// closed.
     [[nodiscard]] bool publish_resize(term_size size)
     {
         auto published = resize_wire_.try_send(size);
@@ -93,11 +116,14 @@ public:
         return published;
     }
 
+    /// Takes the oldest queued terminal size, if any, without waiting.
     [[nodiscard]] std::optional<term_size> next_resize_now()
     {
         return resize_wire_.try_next();
     }
 
+    /// Waits `duration` with a `timeout` wish on the running deck's wand.
+    /// Throws `operation_cancelled` if the task is stopped first.
     template<typename Rep, typename Period>
     [[nodiscard]] task<void>
     sleep(std::chrono::duration<Rep, Period> duration)
@@ -121,6 +147,11 @@ public:
 
     /// Create the root task by calling `fn(args...)` inside the runtime,
     /// then drive it to completion.
+    ///
+    /// Blocks the calling thread in the wand's `run_until_done` until the
+    /// root finishes, then returns its result or rethrows its exception.
+    /// The factory is moved into storage that outlives the root task, so a
+    /// capturing coroutine lambda is safe. Not reentrant.
     template<typename Fn, typename... Args>
         requires task_factory<std::decay_t<Fn> &, Args...>
     [[nodiscard]] task_result_t<
@@ -136,6 +167,11 @@ public:
         return drive(std::invoke(factory, std::forward<Args>(args)...));
     }
 
+    /// Marks the runtime as stopping, closes the input and resize wires,
+    /// and rings the damage bell.
+    ///
+    /// It does not stop the root task; application loops should check
+    /// `stop_requested()` or end when `next_input()` yields `std::nullopt`.
     void request_stop()
     {
         stopping_ = true;

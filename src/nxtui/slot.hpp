@@ -17,17 +17,18 @@ namespace nxtui::tui {
 /// slot by value each frame while a coroutine elsewhere keeps publishing
 /// fresh layouts into the same cell.
 ///
-/// Publishing uses the standard atomic shared_ptr operations and invokes
-/// an optional on-publish callback — typically `UIRuntime::signal_damage`.
+/// Publishing stores through `std::atomic<std::shared_ptr>` and then runs
+/// an optional on-publish callback on the publishing thread, typically one
+/// that asks the render loop for a new frame (for example
+/// `nxtrt::runtime::signal_damage`). A render holds its own reference to
+/// the layout it loaded, so a concurrent publish never frees it mid-render.
 template<Layout L>
 class Slot
 {
 public:
-    /// Construct a slot showing `initial`. `on_publish` is invoked after
-    /// every successful `publish()`; it is intended to wake the render
-    /// loop (e.g. `[&rt]{ rt.signal_damage(); }`). It can also be set
-    /// later via `set_on_publish` for cases where the runtime is not
-    /// available at construction time.
+    /// Construct a slot showing `initial`. `on_publish` runs after every
+    /// `publish()`, e.g. `[&rt] { rt.signal_damage(); }`; it can also be
+    /// installed later with `set_on_publish`.
     explicit Slot(L initial, std::function<void()> on_publish = {})
         : cell_(std::make_shared<Cell>())
     {
@@ -37,7 +38,9 @@ public:
             std::memory_order_release);
     }
 
-    /// Replace the current layout. Thread-safe.
+    /// Replace the current layout, then run the on-publish callback.
+    /// The store is atomic; the callback must be safe to call from the
+    /// publishing thread.
     void publish(L layout) const
     {
         cell_->current.store(
@@ -47,8 +50,8 @@ public:
             cell_->on_publish();
     }
 
-    /// Install or replace the on-publish callback. Not thread-safe; call
-    /// before any coroutine starts publishing.
+    /// Install or replace the on-publish callback. Not synchronized with
+    /// `publish`; call it before anything starts publishing.
     void set_on_publish(std::function<void()> fn) const
     {
         cell_->on_publish = std::move(fn);
@@ -84,7 +87,7 @@ private:
     std::shared_ptr<Cell> cell_;
 };
 
-/// Deduction helper: `slot(text("hi"), [&rt]{ rt.signal_damage(); })`.
+/// Make a `Slot<L>`: `slot(text("hi"), [&rt] { rt.signal_damage(); })`.
 template<Layout L>
 auto slot(L initial, std::function<void()> on_publish = {})
 {

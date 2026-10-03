@@ -4,17 +4,71 @@
 #include <nxtai/responses_stream.hpp>
 #include <nxtai/tool_batch.hpp>
 
+/**
+ * @namespace nxtai
+ * OpenAI Responses client pieces and a tool-calling agent loop, running as
+ * ordinary `nxtrt` tasks on a deck.
+ *
+ * `nxtai::responses` builds the JSON request body
+ * (`openai_responses_request`, `openai_responses_body`) and decodes
+ * streamed events into a completed response (`stream_decoder`).
+ * `nxtai::tools` defines function tools, the `tool_registry`, and the
+ * bounded batch runner that executes a response's tool calls.
+ * `run_agent` ties them together: request, run tools, send results, repeat.
+ * The transport itself (TLS connection, HTTP, SSE parsing over
+ * `nxtrt::tls` and `nxtrt::http`) lives in the `nxtllm` program, not in
+ * these headers. `nxtai::agent_tools` supplies the `read_file`,
+ * `rg_search`, and `bash` tools that `nxtllm` uses.
+ *
+ * See @ref ai_overview for the design, ownership, and current limits.
+ */
 namespace nxtai {
 
+/// Limits for `run_agent`. Both must be nonzero.
 struct agent_options
 {
+    /// Maximum number of model requests in one `run_agent` call.
     std::size_t max_turns = 32;
+    /// Maximum number of tool calls running at once within a turn.
     std::size_t tool_concurrency = 1;
 };
 
-// Transport and observer are borrowed through settlement. The task owns the
-// request/history; neither terminal rendering nor a second scheduler owns it.
-// Transport(request, observer) returns a completed response_result.
+/// Run the request/tool loop until the model answers without calling tools.
+///
+/// Each turn awaits `transport(request, observer)`, which must return an
+/// awaitable of `responses::response_result` holding the completed
+/// response's output items in order; the transport is also where streamed
+/// text reaches the observer (`nxtllm` calls `observer.text(delta)`). The
+/// loop then collects the `function_call` items. If there are none, it
+/// returns. Otherwise it awaits `observer.tool_started(call)` for each call,
+/// runs them with `tools::run_function_tool_batch` (at most
+/// `options.tool_concurrency` at once), awaits
+/// `observer.tool_finished(result)` for each result in call order, and
+/// sends the `function_call_output` items in the next request.
+///
+/// History: with `request.store == false`, every request carries the full
+/// transcript (the initial input, every output item as received, including
+/// opaque reasoning items, and every tool output). With `store == true`,
+/// the next request sets `previous_response_id` and carries only the new
+/// tool outputs.
+///
+/// Before the first turn, `request.tools` is replaced with the registry's
+/// definitions and, when `store` is false and the registry is not empty,
+/// `request.include` is replaced with `reasoning.encrypted_content`.
+///
+/// `request` is owned by the task. `registry`, `transport`, and `observer`
+/// are borrowed and must outlive it.
+///
+/// Errors: throws `nxtrt::runtime_error` for zero limits, an output item
+/// without a `type`, a malformed function call or one with empty
+/// arguments, duplicate call ids, a missing response id in `store` mode,
+/// and when the last allowed turn still asks for tools (those calls are not
+/// run). Tool failures do not throw; they become failed results sent back
+/// to the model. Transport and observer exceptions propagate.
+///
+/// Cancellation: a stop request is checked before each turn and otherwise
+/// reaches the transport and tool batch through the awaiting task; the
+/// batch drains running tools before the stop propagates.
 template<typename Transport, typename Observer>
 nxtrt::task<void> run_agent(
     responses::openai_responses_request request,

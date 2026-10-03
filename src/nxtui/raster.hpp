@@ -125,7 +125,7 @@ inline auto indexed_cell_row(
              });
 }
 
-/// Cell data for inspection
+/// Copy of one raster cell, returned by `RasterView::get_cell`.
 struct Cell
 {
     /// Glyph id stored at the cell.
@@ -138,13 +138,25 @@ struct Cell
     Emphasis em;
 };
 
-/// Non-owning view into raster storage. This is the primary working
-/// type for all rendering operations. Views can create sub-views
-/// (subraster) for hierarchical layout.
+/// Borrowed, possibly strided window onto a raster's cells; the type every
+/// layout renders into.
+///
+/// A cell holds a glyph id (from the shared `GlyphTable`), a foreground and
+/// background `Rgba8`, and `Emphasis` bits. Positions are relative to the
+/// view's own top-left corner, and every write outside the view is ignored,
+/// so a layout can draw without bounds checks. `subraster` carves out a
+/// child window for a nested layout.
+///
+/// The view is a cheap value holding pointers. It does not own the cells:
+/// it is valid while the `Raster` it came from is alive and has not been
+/// reassigned or resized, and the `GlyphTable` must outlive it. Writing
+/// through a `const RasterView` is allowed; constness does not protect the
+/// cells.
 class RasterView
 {
 public:
-    /// Construct from mdspan views and glyph table
+    /// Wrap existing cell arrays. All four views must have the same
+    /// extents. Most code gets views from `Raster::view()` instead.
     RasterView(
         glyph_view_t glyphs,
         color_view_t fgs,
@@ -159,7 +171,7 @@ public:
     {
     }
 
-    /// Dimensions
+    /// Width of the view in cells.
     [[nodiscard]] width_t width() const noexcept
     {
         return glyphs_.extent(1) * ch;
@@ -175,12 +187,14 @@ public:
         return {width(), height()};
     }
 
-    /// Create a sub-view of a rectangular region.
-    /// Coordinates are relative to this view.
+    /// View of the rectangle at `origin` with `size`, relative to this view.
+    /// The rectangle is clipped to this view, so the result may be smaller
+    /// than `size`, or empty.
     [[nodiscard]] RasterView
     subraster(Pos origin, Size size) const noexcept;
 
-    /// Set glyph at position. Silently ignores out-of-bounds.
+    /// Set the glyph id at `pos`. Out-of-bounds writes are ignored, as for
+    /// the other setters.
     void set_glyph(Pos pos, GlyphTable::GlyphId gid) const noexcept;
 
     /// Set foreground color at position
@@ -198,13 +212,24 @@ public:
         set_glyph(pos, static_cast<GlyphTable::GlyphId>(c));
     }
 
-    /// Write UTF-8 text. Returns ending column position.
+    /// Write UTF-8 text on row `pos.y` starting at column `pos.x`, one
+    /// grapheme cluster per glyph; returns the column after the last cell
+    /// written.
+    ///
+    /// Only glyphs change; colors and emphasis are left as they are. A
+    /// cluster `n` cells wide occupies its first cell plus `n - 1`
+    /// continuation cells holding the empty glyph. Writing stops at the
+    /// right edge, before a cluster that would not fit. Text is not
+    /// filtered: control characters such as `\n` are stored as glyphs, and
+    /// `tui::TerminalCompositor::present_frame` rejects them, so strip or
+    /// split them first.
     col_t write_text(Pos pos, std::string_view text) const noexcept;
 
-    /// Get cell data. Returns nullopt if out of bounds.
+    /// Copy of the cell at `pos`, or `std::nullopt` if out of bounds.
     [[nodiscard]] std::optional<Cell> get_cell(Pos pos) const noexcept;
 
-    /// 2D mdspan views for direct access
+    /// Glyph ids as a `[row, column]` mdspan. The `*_2d` accessors give
+    /// direct access to each channel.
     [[nodiscard]] glyph_view_t glyphs_2d() const noexcept
     {
         return glyphs_;
@@ -225,7 +250,9 @@ public:
         return ems_;
     }
 
-    /// Flat ranges for algorithms (row-major order)
+    /// Glyph ids as a flat row-major range of references, e.g. for
+    /// `std::ranges::fill`. `fgs()`, `bgs()`, and `ems()` do the same for
+    /// the other channels.
     [[nodiscard]] auto glyphs() const
     {
         return as_range(glyphs_);
@@ -246,7 +273,7 @@ public:
         return as_range(ems_);
     }
 
-    /// Access glyph table
+    /// Glyph table used to intern text written through this view.
     [[nodiscard]] GlyphTable & glyph_table() const noexcept
     {
         return *glyph_table_;
@@ -260,18 +287,26 @@ private:
     GlyphTable * glyph_table_;
 };
 
-/// Owning raster storage. Allocates and manages the underlying arrays.
-/// Use view() to get a RasterView for rendering operations.
+/// Owning grid of cells: glyph ids, foreground and background colors, and
+/// emphasis, stored as four row-major arrays.
+///
+/// Render into it through `view()`. A raster is copyable (copying the cell
+/// arrays, sharing the borrowed `GlyphTable`) and is what
+/// `tui::TerminalCompositor` and `ansi::render_raster` consume. Its size is
+/// fixed; resize by assigning a new raster, which invalidates outstanding
+/// views.
 class Raster
 {
 public:
-    /// Initialize with given dimensions.
-    /// All cells default to space (ASCII 32) with DEFAULT_COLOR.
+    /// Allocate a `width` x `height` raster of spaces with `DEFAULT_COLOR`
+    /// foreground and background and no emphasis. `glyphs` is borrowed and
+    /// must outlive the raster and its views.
     Raster(std::size_t width, std::size_t height, GlyphTable & glyphs);
     Raster(width_t width, height_t height, GlyphTable & glyphs);
     Raster(Size size, GlyphTable & glyphs);
 
-    /// Get a view of the entire raster
+    /// View of the whole raster, valid until the raster is reassigned or
+    /// destroyed.
     [[nodiscard]] RasterView view() noexcept;
 
     /// Implicit conversion to view (convenience)
@@ -280,7 +315,7 @@ public:
         return view();
     }
 
-    /// Dimensions
+    /// Width in cells.
     [[nodiscard]] width_t width() const noexcept
     {
         return width_;
@@ -296,10 +331,10 @@ public:
         return {width_, height_};
     }
 
-    /// Clear to spaces with default colors
+    /// Reset every cell to a space with default colors and no emphasis.
     void clear();
 
-    /// Direct access to storage (for diffing)
+    /// Row-major glyph storage, for diffing and tests.
     [[nodiscard]] std::span<const GlyphTable::GlyphId>
     glyphs() const noexcept
     {
@@ -321,7 +356,8 @@ public:
         return ems_storage_;
     }
 
-    /// Get a span of glyphs for a region on a row
+    /// `len` glyph ids starting at column `x` of row `y`. No bounds check
+    /// beyond `std::span::subspan`.
     [[nodiscard]] std::span<const GlyphTable::GlyphId>
     glyph_span(height_t y, width_t x, std::size_t len) const noexcept
     {
@@ -368,7 +404,7 @@ public:
                  });
     }
 
-    /// Access glyph table
+    /// Glyph table shared by this raster's cells.
     [[nodiscard]] GlyphTable & glyph_table() const noexcept
     {
         return *glyph_table_;
@@ -385,8 +421,8 @@ private:
 };
 
 /// Zip two rasters' rows together for comparison.
-/// Yields (height_t y, zipped_row) where zipped_row pairs corresponding
-/// cells.
+/// Yields `(height_t y, zipped_row)` where `zipped_row` pairs corresponding
+/// cells. Both rasters must have the same size and outlive the range.
 inline auto zip_rows(const Raster & front, const Raster & back)
 {
     return std::views::iota(

@@ -8,6 +8,16 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @namespace nxtui::input
+ * Keyboard input decoding: raw terminal bytes in, `KeyEvent` values out.
+ *
+ * `InputModeGuard` puts the terminal in raw mode and enables the Kitty
+ * keyboard protocol; `Parser` turns the bytes read from stdin into events,
+ * handling legacy control bytes, UTF-8 text, CSI cursor and function keys,
+ * Kitty `CSI ... u` key reports with modifiers and event types, and cursor
+ * position reports. Mouse reports are not decoded.
+ */
 namespace nxtui::input {
 
 /// Normalized key identity after terminal escape-sequence decoding.
@@ -74,6 +84,13 @@ struct Modifiers
 };
 
 /// One decoded keyboard input event.
+///
+/// `key` says what was pressed. For `Key::character`, `codepoint` is the
+/// key's Unicode codepoint (lowercase `c` for Ctrl-C, with `mods.ctrl`) and
+/// `text` is what it would insert. Use `is_text()` to decide whether to
+/// insert `text`. A cursor position report arrives as an event with
+/// `key == Key::unknown` and `cursor_position` set. Unrecognized sequences
+/// also arrive as `Key::unknown`, with their bytes in `raw`.
 struct KeyEvent
 {
     /// Logical key identity.
@@ -135,15 +152,25 @@ struct KeyEvent
     }
 };
 
-/// Incremental parser for terminal keyboard input bytes.
+/// Incremental decoder for terminal keyboard input.
+///
+/// Feed it whatever `read` returned; incomplete sequences are kept for the
+/// next call. A lone ESC is ambiguous (the Escape key or the start of a
+/// sequence), so it stays pending: call `flush()` after a short quiet
+/// period to deliver it. ESC followed by anything other than `[` is
+/// delivered as `Key::escape` followed by the next byte's own event (no
+/// Alt+key folding). Malformed CSI sequences become `Key::unknown` events.
 class Parser
 {
 public:
-    /// Feed bytes and return all complete decoded key events.
+    /// Append `bytes` and return every event that is now complete, in
+    /// order.
     [[nodiscard]] std::vector<KeyEvent> feed(std::string_view bytes);
-    /// Flush pending bytes as best-effort events.
+    /// Deliver all pending bytes as events now, one per byte: ESC as
+    /// `Key::escape`, control bytes as usual, anything else (such as a
+    /// partial UTF-8 sequence) as `Key::unknown`.
     [[nodiscard]] std::vector<KeyEvent> flush();
-    /// True when the parser is waiting for more bytes.
+    /// True when bytes are held back waiting for the rest of a sequence.
     [[nodiscard]] bool has_pending() const noexcept
     {
         return !pending_.empty();
@@ -163,19 +190,30 @@ private:
     std::string pending_;
 };
 
-/// RAII guard that puts stdin into the raw input mode used by the TUI.
+/// RAII guard that puts stdin into the raw input mode used by the TUI and
+/// enables the Kitty keyboard protocol.
+///
+/// Does nothing unless both stdin and stdout are terminals. Otherwise it
+/// disables echo, canonical mode, and input translation on stdin (keeping
+/// `ISIG`, so a legacy Ctrl-C byte still raises `SIGINT`), makes reads
+/// non-blocking at the termios level (`VMIN = VTIME = 0`), and pushes Kitty
+/// keyboard flags 31 (disambiguate, event types, alternate keys, all keys
+/// as escape codes, associated text) to stdout. The destructor pops the
+/// keyboard mode and restores the saved termios.
 class InputModeGuard
 {
 public:
-    /// Enter raw mode when possible.
+    /// Enter raw mode and push the Kitty keyboard mode, if on a terminal.
     InputModeGuard();
-    /// Restore the original terminal mode.
+    /// Pop the keyboard mode and restore the original terminal settings.
     ~InputModeGuard();
 
     InputModeGuard(const InputModeGuard &) = delete;
     InputModeGuard & operator=(const InputModeGuard &) = delete;
 
-    /// True when raw mode was successfully enabled.
+    /// True when both stdin and stdout are terminals and the keyboard mode
+    /// was pushed. Raw termios mode is attempted but its failure is not
+    /// reported here.
     [[nodiscard]] bool enabled() const noexcept
     {
         return enabled_;

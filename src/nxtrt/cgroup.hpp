@@ -21,6 +21,17 @@
 #include <system_error>
 #include <unordered_map>
 
+/**
+ * @namespace nxtrt::cgroup
+ * Best-effort sampling of Linux cgroup v2 resource counters.
+ *
+ * `find_unit_scope` locates a systemd scope's cgroup directory and
+ * `read_sample` reads its memory, pid, CPU and pressure files into a
+ * `sample`. Reads go through file wishes, so they suspend only the calling
+ * task. Missing or unreadable files read as zero rather than failing, which
+ * also makes everything here return empty results off Linux. Used by
+ * `nxtrt::scoped_process`.
+ */
 namespace nxtrt::cgroup {
 
 namespace detail {
@@ -86,20 +97,26 @@ struct usec_t
     std::uint64_t v = 0;
 };
 
+/// One reading of a cgroup's counters; zero where a file was missing.
 struct sample
 {
     std::chrono::steady_clock::time_point at;
-    bytes_t memory_current;
-    bytes_t memory_peak;
-    count_t pids;
-    usec_t cpu_usage;
-    usec_t cpu_user;
-    usec_t cpu_system;
-    double psi_mem = 0.0;
-    double psi_cpu = 0.0;
-    double psi_io = 0.0;
+    bytes_t memory_current; ///< memory.current
+    bytes_t memory_peak;    ///< memory.peak
+    count_t pids;           ///< pids.current
+    usec_t cpu_usage;       ///< cpu.stat usage_usec
+    usec_t cpu_user;        ///< cpu.stat user_usec
+    usec_t cpu_system;      ///< cpu.stat system_usec
+    double psi_mem = 0.0;   ///< memory.pressure "some avg10" (percent)
+    double psi_cpu = 0.0;   ///< cpu.pressure "some avg10" (percent)
+    double psi_io = 0.0;    ///< io.pressure "some avg10" (percent)
 };
 
+/// The whole contents of PATH, or an empty string on any error.
+///
+/// Every `runtime_error` is swallowed, and `operation_cancelled` is one, so
+/// a cancelled read also returns an empty string instead of propagating
+/// the stop.
 inline task<std::string> read_text_file(std::filesystem::path path)
 {
     try {
@@ -177,6 +194,8 @@ inline double parse_psi_some_avg10(std::string_view text)
     }
 }
 
+/// Reads the counter files of the cgroup directory DIR concurrently.
+/// DIR is borrowed until the task completes.
 inline task<sample> read_sample(const std::filesystem::path & dir)
 {
     auto out = sample{};
@@ -217,6 +236,10 @@ inline task<sample> read_sample(const std::filesystem::path & dir)
     co_return out;
 }
 
+/// Finds the directory named UNIT_NAME + ".scope" under ROOT by a
+/// depth-first walk of the whole tree, trying to open every entry as a
+/// directory. Returns nullopt when not found, on errors, and off Linux.
+/// Cost grows with the size of the cgroup hierarchy.
 inline task<std::optional<std::filesystem::path>> find_unit_scope(
     std::string unit_name,
     std::filesystem::path root = "/sys/fs/cgroup")

@@ -23,6 +23,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+/// Minimal io_uring ring used by `nxtrt::uring_wand` in place of liburing.
+///
+/// This header implements, directly on the io_uring syscalls and mmapped
+/// rings, the small liburing-compatible subset the wand needs: queue
+/// setup and teardown, SQE allocation and submission, CQE peek/wait/seen,
+/// user-data helpers, and the `io_uring_prep_*` functions for the
+/// operations wishes use. The names live in the global namespace to match
+/// liburing's API. Not available under Fil-C.
 struct io_uring
 {
     int ring_fd = -1;

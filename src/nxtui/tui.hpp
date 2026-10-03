@@ -20,6 +20,41 @@
 #include <variant>
 #include <vector>
 
+/**
+ * @namespace nxtui::tui
+ * Composable layout values: build a tree of small value types for each
+ * frame, measure it, and render it into a `RasterView`.
+ *
+ * Every layout satisfies the `Layout` concept: it reports a `WidthHint` and
+ * `HeightHint` (minimum extent plus flex factor) and renders into whatever
+ * `Size` its parent assigns. Leaves draw content: `text`, `styled_text`,
+ * `flex_text`, `text_lines`, `progress_bar`, `hrule`, `fill`, `spinner`,
+ * `sparkline`, `text_field`, `vterm_screen`, or any callback via `leaf`.
+ * Containers place children: `row` and `column` (flex stacks), `each` and
+ * `list` (one child per data item). Decorators adjust one child:
+ * `surface`, `fixed_width`, `fixed_height`, `grow_width`. Conditionals
+ * (`either`, `when`, `OneOf`) pick between statically typed alternatives.
+ *
+ * Compositions keep their concrete types, so a frame is one stack value
+ * with no allocation for the tree itself. Use `AnyLayout` where the shape
+ * really varies at runtime, and `Slot` for a cell another task updates.
+ *
+ * Styles compose with `|`: `fg(Rgba8::red()) | bold`. A channel left at its
+ * default (`DEFAULT_COLOR`, `Emphasis::none`) is not written, so the cell
+ * keeps what an enclosing `surface` or earlier write put there.
+ *
+ * @code
+ * auto layout = nxtui::tui::column(
+ *     nxtui::tui::text("build", nxtui::tui::bold),
+ *     nxtui::tui::progress_bar(42 * nxtui::percent),
+ *     nxtui::tui::hrule());
+ * auto & buffer = compositor.back_buffer();
+ * buffer.clear();
+ * auto view = buffer.view();
+ * layout.render(view, buffer.extent());
+ * compositor.present_frame(std::cout);
+ * @endcode
+ */
 namespace nxtui::tui {
 
 /// Leaf layout backed by a render callback.
@@ -52,7 +87,11 @@ struct Leaf
     }
 };
 
-/// Create a callback-backed leaf layout.
+/// Leaf with fixed hints `w` and `h` that renders by calling
+/// `f(RasterView &, Size)`.
+///
+/// `f` is stored by value. If it captures references, the referents must
+/// outlive every render of the leaf.
 template<typename F>
 auto leaf(WidthHint w, HeightHint h, F && f)
 {
@@ -88,6 +127,7 @@ constexpr Empty empty()
 template<Layout... Alternatives>
 struct OneOf
 {
+    /// The alternative being shown.
     std::variant<Alternatives...> chosen;
 
     /// Build the layout showing alternative `I`.
@@ -122,7 +162,8 @@ struct OneOf
 template<Layout FalseLayout, Layout TrueLayout>
 using Either = OneOf<FalseLayout, TrueLayout>;
 
-/// Create a conditional layout from two alternatives.
+/// Show `true_layout` if `choose_true`, else `false_layout`. Both are built
+/// eagerly; the result type is the same either way.
 template<Layout FalseLayout, Layout TrueLayout>
 constexpr auto either(
     bool choose_true,
@@ -167,7 +208,7 @@ constexpr auto when(bool condition, MakeChild make_child)
     return either(condition, [] { return empty(); }, std::move(make_child));
 }
 
-/// Write UTF-8 text into a raster.
+/// Free-function form of `RasterView::write_text`.
 inline col_t write_text(RasterView & r, Pos pos, std::string_view text)
 {
     return r.write_text(pos, text);
@@ -191,7 +232,12 @@ inline RasterView subraster(RasterView & r, Pos pos, Size size)
     return r.subraster(pos, size);
 }
 
-/// Foreground, background, and emphasis style overlay.
+/// Foreground, background, and emphasis to apply over a cell.
+///
+/// `DEFAULT_COLOR` in `fg` or `bg` means "leave this channel alone" when
+/// layouts render, not "reset to the terminal default", and so does
+/// `Emphasis::none` in `em`. Build styles with `fg`, `bg`, `em`, and the
+/// predefined `bold`, `faint`, ... constants, and combine them with `|`.
 struct Style
 {
     /// Foreground color, or `DEFAULT_COLOR` to inherit/reset.
@@ -201,8 +247,8 @@ struct Style
     /// Emphasis bitset.
     Emphasis em = DEFAULT_EMPHASIS;
 
-    /// Merge styles, letting explicit colors in `other` override this
-    /// style.
+    /// Combine two styles: colors set in `other` win, emphasis bits are
+    /// unioned. `fg(c) | bold` sets a color and bold.
     constexpr Style operator|(const Style & other) const
     {
         return {
@@ -231,7 +277,8 @@ constexpr Style em(Emphasis e)
     return {DEFAULT_COLOR, DEFAULT_COLOR, e};
 }
 
-/// Predefined emphasis-only styles.
+/// Emphasis-only style: bold. `faint`, `italic`, `underline`, `reverse`,
+/// and `strikethrough` follow the same pattern.
 inline constexpr Style bold{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::bold};
 inline constexpr Style faint{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::faint};
 inline constexpr Style italic{
@@ -258,7 +305,11 @@ inline Span span(std::string text, Style s = {})
     return {std::move(text), s};
 }
 
-/// Layout decorator that clears its raster before rendering a child.
+/// Layout decorator that paints its whole raster with `style` and blank
+/// glyphs, then renders the child on top.
+///
+/// Unlike most leaves it writes every channel, including ones at their
+/// defaults, so it gives children a known background to inherit.
 template<Layout Child>
 struct Surface
 {
@@ -373,7 +424,9 @@ constexpr auto fixed_width(width_t width, Child && child)
 template<Layout Child>
 struct GrowWidth
 {
+    /// Wrapped layout.
     Child child;
+    /// Minimum flex factor reported for the child.
     ratio_t factor{1.0 * one};
 
     constexpr WidthHint width_hint() const
@@ -394,7 +447,8 @@ struct GrowWidth
     }
 };
 
-/// Keep the child's minimum width but make it participate in row flex.
+/// Keep the child's minimum width but raise its width flex to at least
+/// `factor`, so it takes a share of leftover row width.
 template<Layout Child>
 constexpr auto grow_width(Child && child, ratio_t factor = 1.0 * one)
 {
@@ -402,7 +456,9 @@ constexpr auto grow_width(Child && child, ratio_t factor = 1.0 * one)
         std::forward<Child>(child), factor};
 }
 
-/// Render one styled span and return the column after the written text.
+/// Write one styled span at `pos` and return the column after it. Only the
+/// style channels that are set are written, and only on the cells the
+/// text covers.
 inline col_t render_span(RasterView & r, Pos pos, const Span & s)
 {
     const auto start_x = pos.x;
@@ -433,14 +489,18 @@ inline void clear_line(RasterView & r, Style style = {})
         std::ranges::fill(r.ems(), style.em);
 }
 
-/// Clear and render one styled line of text.
+/// Clear `r` with `clear_line(r, style)` and write `text` at its origin.
 inline col_t render_line(RasterView & r, std::string text, Style style = {})
 {
     clear_line(r, style);
     return render_span(r, Pos::origin(), Span{std::move(text), style});
 }
 
-/// Create a one-line layout from a pure assigned-width-to-text function.
+/// One-line leaf whose text is computed from the width it is given.
+///
+/// `make_text(width)` runs on every render; the line is cleared (see
+/// `clear_line`) and the result written from column 0. The `width`
+/// parameter is the leaf's width hint.
 template<typename MakeText>
     requires requires(const std::decay_t<MakeText> & make_text, width_t w) {
         { make_text(w) } -> std::convertible_to<std::string>;
@@ -468,18 +528,19 @@ inline std::string repeat(std::string_view glyph, width_t w)
     return result;
 }
 
-/// Display width of UTF-8 text in terminal cells.
+/// Display width of UTF-8 text in terminal cells (see
+/// `utf8::display_width`).
 inline width_t utf8_width(std::string_view s)
 {
     return utf8::display_width(s);
 }
 
-/// Create a one-line text leaf using default style.
+/// One-line leaf showing `s`, with a fixed width equal to its display
+/// width.
 ///
-/// Channels at their default (fg/bg = `DEFAULT_COLOR`, em =
-/// `DEFAULT_EMPHASIS`) are left untouched on the underlying cells — they
-/// inherit whatever the parent painted. Only explicitly-set channels are
-/// written.
+/// Colors and emphasis are left untouched, so the text inherits whatever
+/// the parent painted. The text should not contain line breaks; use
+/// `text_lines` for multi-line text.
 inline auto text(std::string s)
 {
     auto w = utf8_width(s);
@@ -488,10 +549,10 @@ inline auto text(std::string s)
         [s = std::move(s)](width_t) { return s; });
 }
 
-/// Create a one-line text leaf using `style`.
+/// One-line leaf showing `s` in `style`.
 ///
-/// Channels at their default in `style` inherit from the parent surface;
-/// explicitly-set channels are filled across the leaf's rectangle.
+/// Channels set in `style` are filled across the leaf's whole assigned
+/// rectangle; channels left at their default inherit from the parent.
 inline auto text(std::string s, Style style)
 {
     auto w = utf8_width(s);
@@ -501,10 +562,12 @@ inline auto text(std::string s, Style style)
         style);
 }
 
-/// Create a one-line text leaf that grows to fill its assigned width
-/// and truncates with an ellipsis when the assigned width is shorter
-/// than the string. Inherit semantics for unset style channels are the
-/// same as `text(s, style)`.
+/// One-line leaf that grows to fill its assigned width and truncates with
+/// an ellipsis when the text is longer. Style channels behave as in
+/// `text(s, style)`.
+///
+/// Truncation counts bytes, not cells, so it is exact only for
+/// single-width ASCII and can cut a multi-byte character.
 inline auto flex_text(std::string s, Style style = {})
 {
     return line_text(
@@ -530,6 +593,12 @@ inline auto flex_text(std::string s, Style style = {})
         style);
 }
 
+/// Multi-line leaf: one line per inner vector of spans.
+///
+/// Fixed width is the widest line; fixed height is the number of lines (at
+/// least one). Rendering blanks the glyphs, fills the channels set in
+/// `clear`, then writes each line's spans from column 0, stopping at the
+/// assigned height.
 inline auto
 styled_lines(std::vector<std::vector<Span>> lines, Style clear = {})
 {
@@ -571,6 +640,9 @@ styled_lines(std::vector<std::vector<Span>> lines, Style clear = {})
         });
 }
 
+/// Multi-line leaf splitting `s` at line breaks (`\n`, `\r\n`, `\r`),
+/// each line in `style`. Lines are not wrapped; see
+/// `text_flow::markdown_block` for wrapping.
 inline auto text_lines(std::string s, Style style = {})
 {
     std::vector<std::vector<Span>> lines;
@@ -599,7 +671,7 @@ inline auto text_lines(std::string s, Style style = {})
     return styled_lines(std::move(lines), style);
 }
 
-/// Create a compact one-line spinner frame.
+/// One-line, three-cell braille spinner showing frame `tick % 10`.
 inline auto spinner(
     std::size_t tick,
     Style style = bold | fg(Rgba8::black()) | bg(Rgba8::white()))
@@ -622,7 +694,8 @@ inline auto spinner(
     return text(" " + std::string{frame} + " ", style);
 }
 
-/// Create a one-line text leaf from several styled spans.
+/// One-line leaf writing several styled spans left to right; fixed width
+/// is their total display width.
 template<typename... Spans>
     requires(std::same_as<std::decay_t<Spans>, Span> && ...)
 inline auto styled_text(Spans &&... spans)
@@ -646,7 +719,8 @@ inline auto styled_text(Spans &&... spans)
         });
 }
 
-/// Fill available space with a background color.
+/// Leaf that grows in both directions and sets the background of its
+/// area to `color`, leaving glyphs as they are.
 inline auto fill(Rgba8 color = Rgba8(60, 60, 60))
 {
     return leaf(
@@ -688,7 +762,7 @@ inline std::string hrule_string(width_t w)
     return repeat("─", w);
 }
 
-/// Create a one-line horizontal rule layout.
+/// One-line `─` rule that grows to the assigned width.
 inline auto hrule()
 {
     return line_text(
@@ -712,7 +786,8 @@ inline std::string range_bar_string(
     return chart::range_bar(begin, end, width.count());
 }
 
-/// Create a one-line progress bar layout.
+/// One-line bar that grows to the assigned width and fills `pct` of it
+/// (clamped to 0-100%) with eighth-cell block glyphs in `fg` over `bg`.
 inline auto progress_bar(
     percent_t pct,
     Rgba8 fg = Rgba8(100, 180, 255),
@@ -724,7 +799,8 @@ inline auto progress_bar(
         Style{fg, bg, DEFAULT_EMPHASIS});
 }
 
-/// Create a one-line progress bar for a subrange of [0,1].
+/// One-line bar like `progress_bar` that fills only the fraction range
+/// [`begin`, `end`] of the width (both clamped to [0, 1]).
 inline auto range_progress_bar(
     double begin,
     double end,
@@ -838,8 +914,17 @@ struct axis_traits<Axis::column>
 ///
 /// `Children` is either a `std::tuple` of layouts, for compositions whose
 /// shape is known statically, or a `LayoutRange` for runtime-sized ones.
-/// Along the main axis, children get their minimum extent plus a share of
-/// the leftover space proportional to their flex factor.
+/// Usually built with `row` or `column`.
+///
+/// Measuring: the main-axis hint sums the children's minimums and flex
+/// factors. Across the axis a row is a fixed height equal to its tallest
+/// child's minimum (at least one line); a column is at least as wide as its
+/// widest child and always grows.
+///
+/// Rendering: each child gets its minimum plus a share of the leftover
+/// space proportional to its flex (rounded down), and the full cross
+/// extent. Children are not shrunk when space is short; later ones are
+/// clipped instead. Children whose share is zero are skipped.
 template<Axis A, typename Children>
 struct Stack
 {
@@ -918,7 +1003,7 @@ using Row = Stack<Axis::row, std::tuple<Children...>>;
 template<Layout... Children>
 using Column = Stack<Axis::column, std::tuple<Children...>>;
 
-/// Create a horizontal flex row.
+/// Horizontal flex row of statically known children; see `Stack`.
 template<Layout... Children>
 constexpr Row<std::decay_t<Children>...> row(Children &&... children)
 {
@@ -926,7 +1011,8 @@ constexpr Row<std::decay_t<Children>...> row(Children &&... children)
         std::forward<Children>(children)...}};
 }
 
-/// Create a horizontal flex row from a runtime-sized range of children.
+/// Horizontal flex row from a runtime-sized range of children, which is
+/// stored by value (moved or copied in).
 template<LayoutRange Children>
 constexpr auto row(Children && children)
 {
@@ -934,7 +1020,7 @@ constexpr auto row(Children && children)
         std::forward<Children>(children)};
 }
 
-/// Create a vertical flex column.
+/// Vertical flex column of statically known children; see `Stack`.
 template<Layout... Children>
 constexpr Column<std::decay_t<Children>...> column(Children &&... children)
 {
@@ -942,7 +1028,8 @@ constexpr Column<std::decay_t<Children>...> column(Children &&... children)
         std::forward<Children>(children)...}};
 }
 
-/// Create a vertical flex column from a runtime-sized range of children.
+/// Vertical flex column from a runtime-sized range of children, which is
+/// stored by value.
 template<LayoutRange Children>
 constexpr auto column(Children && children)
 {
@@ -955,10 +1042,17 @@ constexpr auto column(Children && children)
 /// Each item is mapped to a concrete layout when measured or rendered. This
 /// is the multi-line counterpart to `list`: item layouts may have arbitrary
 /// heights, and no vector of materialized child layouts is retained.
+///
+/// Measuring and rendering call `view(item)` again for each item. Width is
+/// the widest child's minimum and grows; height is fixed at the sum of the
+/// children's minimum heights. Each child is rendered at its minimum
+/// height, and rendering stops at the first child that does not fit.
 template<typename T, typename ViewFn>
 struct Each
 {
+    /// Borrowed items; must outlive the layout's last render.
     std::span<const T> items;
+    /// Maps one item to a layout.
     ViewFn view;
 
     WidthHint width_hint() const
@@ -999,6 +1093,7 @@ struct Each
     }
 };
 
+/// Vertical layout of `view(item)` for each borrowed item; see `Each`.
 template<typename T, typename ViewFn>
 auto each(std::span<const T> items, ViewFn && view)
 {
@@ -1007,6 +1102,7 @@ auto each(std::span<const T> items, ViewFn && view)
         std::forward<ViewFn>(view)};
 }
 
+/// `each` over a borrowed vector, which must outlive the layout.
 template<typename T, typename ViewFn>
 auto each(const std::vector<T> & items, ViewFn && view)
 {
@@ -1037,6 +1133,7 @@ struct OwningEach
     }
 };
 
+/// `each` that takes ownership of the items; see `OwningEach`.
 template<typename T, typename ViewFn>
 auto each(std::vector<T> && items, ViewFn && view)
 {
@@ -1046,6 +1143,9 @@ auto each(std::vector<T> && items, ViewFn && view)
 }
 
 /// Render a span of items by mapping each item to a one-line layout.
+///
+/// Unlike `each`, every item gets exactly one line regardless of its
+/// layout's height hint, and the list always grows horizontally.
 template<typename T, typename ViewFn>
 struct List
 {

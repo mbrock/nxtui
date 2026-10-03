@@ -13,6 +13,7 @@
 
 namespace nxtrt {
 
+/// Terminal modes `terminal_app` sets up for its lifetime.
 struct terminal_app_options
 {
     bool raw_input = true;
@@ -22,6 +23,8 @@ struct terminal_app_options
     nxtui::Size fallback_size{96 * nxtui::ch, 26 * nxtui::ln};
 };
 
+/// The size of the terminal on stdout in cells, or FALLBACK when stdout is
+/// not a terminal or reports zero.
 inline nxtui::Size current_terminal_size(
     nxtui::Size fallback = {96 * nxtui::ch, 26 * nxtui::ln})
 {
@@ -37,6 +40,13 @@ inline nxtui::Size current_terminal_size(
     return fallback;
 }
 
+/// RAII raw mode for a terminal input descriptor.
+///
+/// When ENABLED and FD is a terminal, turns off echo, canonical input,
+/// signal keys (so Ctrl-C arrives as a byte) and flow control, and makes
+/// reads return immediately (VMIN = VTIME = 0). It also sets O_NONBLOCK on
+/// FD (whenever ENABLED and FD is a terminal). The destructor restores the
+/// saved attributes and file status flags.
 class raw_terminal_mode
 {
 public:
@@ -80,6 +90,17 @@ private:
     bool flags_active_ = false;
 };
 
+/// RAII setup of stdin/stdout for a full-screen nxtui program.
+///
+/// Construction puts stdin in raw mode (if `raw_input`), enables ANSI
+/// output, optionally switches to the alternate screen, hides the cursor
+/// and clears the screen, and creates a `TerminalCompositor` at the current
+/// size. Destruction shows the cursor again if it was hidden, resets
+/// attributes, leaves the alternate screen if it entered it, and restores
+/// stdin. Writes go to `std::cout`. Use one at a time; not copyable.
+///
+/// The size is not tracked automatically: call `refresh_size` (for example
+/// on SIGWINCH or before each frame) to pick up a new terminal size.
 class terminal_app
 {
 public:
@@ -124,6 +145,8 @@ public:
         return compositor_;
     }
 
+    /// Re-reads the terminal size and resizes the compositor; true if it
+    /// changed.
     [[nodiscard]] bool refresh_size()
     {
         auto next = current_terminal_size(options_.fallback_size);

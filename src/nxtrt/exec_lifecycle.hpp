@@ -5,6 +5,27 @@
 #include <concepts>
 #include <variant>
 
+/// Shared execution lifecycle for wand backends.
+///
+/// Every wish a wand prepares becomes one execution record whose state is
+/// `lifecycle<P, S>::state`: prepared, then parked (holding the waiting
+/// task's `need` and a backend parked phase), then settled (result stored,
+/// task requeued, backend settled phase), then retired (erased at a sync
+/// point). Each step only moves forward.
+///
+/// The executable model of these rules is `nxtrt/runtime.rkt`, checked with
+/// `make spec`. Its vocabulary maps onto this file: `prepared-state`,
+/// `parked-state`, `settled-state`, and `retired-state` are the four
+/// alternatives here; `queued-phase` is `queued`; `submitted-phase` and
+/// `cancelling-phase` are backend parked phases (`submitted`;
+/// `cancel_queued`, `cancel_submitted`, `cancel_drained` in io_uring and
+/// `delete_queued` in kqueue); `ready-to-retire-phase` is `ready_to_retire`;
+/// `draining-phase` is a settled phase that waits on the kernel
+/// (`waiting_cancel_cqe` in io_uring, `delete_pending`/`delete_applied` in
+/// kqueue). The model checks, among others, that an execution retires only
+/// from settled + ready-to-retire, that draining follows only a cancel, and
+/// that a settled execution never parks again. Update the model when these
+/// rules change.
 namespace nxtrt::detail::wand_exec {
 
 /// Allocated by `prep`; not yet parked by the urge.
@@ -31,7 +52,9 @@ concept phase_accepts = std::constructible_from<Phase, Alternative>;
 ///
 /// Backends provide their own parked and settled phase variants, but they must
 /// accept `queued` and `ready_to_retire` so the shared lifecycle has a common
-/// start and compaction point.
+/// start and compaction point. A record may be freed only once
+/// `is_retirable` holds, which is when the kernel can no longer deliver an
+/// event naming it.
 template<typename ParkedPhase, typename SettledPhase>
     requires phase_accepts<ParkedPhase, queued>
           && phase_accepts<SettledPhase, ready_to_retire>

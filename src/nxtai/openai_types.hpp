@@ -3,10 +3,23 @@
 #include <string>
 #include <vector>
 
+/**
+ * @namespace nxtai::openai
+ * Plain structs mirroring OpenAI Responses API JSON objects. `raw_json`
+ * carries a serialized JSON value through unchanged; it is how this client
+ * keeps output items, including fields it does not model, intact between
+ * requests.
+ *
+ * Only `raw_json` and `function_tool_definition` are used by the current
+ * request builder and agent; the other structs describe event and item
+ * shapes but are not decoded into.
+ */
 namespace nxtai::openai {
 
+/// One serialized JSON value, kept verbatim.
 struct raw_json
 {
+    /// The JSON text.
     std::string str;
 };
 
@@ -63,6 +76,7 @@ struct function_call_item
     std::string status;
 };
 
+/// A function tool as offered to the model in the request's `tools` array.
 struct function_tool_definition
 {
     std::string type = "function";

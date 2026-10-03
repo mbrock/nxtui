@@ -16,6 +16,12 @@
 
 namespace nxtrt {
 
+/// @name Base exception types
+/// The runtime's exception bases. With cpptrace (`NXT_HAVE_CPPTRACE`) these
+/// are cpptrace's types, which record a stack trace where they are thrown;
+/// otherwise they are the `std` types of the same names. Catch them by
+/// these aliases, not by the cpptrace names.
+/// @{
 #ifdef NXT_HAVE_CPPTRACE
 using exception = cpptrace::exception;
 using runtime_error = cpptrace::runtime_error;
@@ -29,9 +35,12 @@ using logic_error = std::logic_error;
 using invalid_argument = std::invalid_argument;
 using out_of_range = std::out_of_range;
 #endif
+/// @}
 
 [[noreturn]] inline void rethrow(std::exception_ptr failure);
 
+/// A wish's system call was interrupted (`EINTR`). Stream code catches it
+/// and retries.
 class interrupted_system_call : public runtime_error
 {
 public:
@@ -59,6 +68,13 @@ private:
     int code_;
 };
 
+/// Several exceptions reported together, for example every failure of a
+/// `wait_any`, or a `finally` whose body and cleanup both failed.
+///
+/// `exceptions()` holds the members in order; `summary()` is the short
+/// message given at construction, and `what()` renders the summary plus
+/// each member, nested groups indented. Usually thrown through
+/// `throw_exceptions`, which avoids wrapping a single exception.
 class exception_group : public runtime_error
 {
 public:
@@ -82,6 +98,8 @@ private:
     std::vector<std::exception_ptr> exceptions_;
 };
 
+/// Limits for `format_exception_tree`: how many members of each group to
+/// print before summarizing the rest as "... N <overflow_label>".
 struct exception_tree_options
 {
     std::size_t max_group_children = 5;
@@ -133,6 +151,10 @@ inline void append_exception_tree(
 
 } // namespace detail
 
+/// Render `failure` as indented text, one line per exception, expanding
+/// `exception_group`s into their members (up to
+/// `options.max_group_children` each). Non-`std::exception` values print as
+/// `<non-std exception>`. Returns an empty string for a null pointer.
 [[nodiscard]] inline std::string format_exception_tree(
     const std::exception_ptr & failure,
     std::string_view indent = "  ",
@@ -179,6 +201,12 @@ inline exception_group::exception_group(
     , exceptions_(std::move(exceptions))
 {}
 
+/// The exception a stopped operation ends with.
+///
+/// Thrown when a cancelled wish resumes, by `throw_if_stop_requested()`,
+/// and by groups (`settle`, `when_all`, ...) whose awaiting task was
+/// stopped. Groups also report it in the outcome of a job stopped before
+/// it started. Test an `exception_ptr` with `is_operation_cancelled`.
 class operation_cancelled : public runtime_error
 {
 public:
@@ -187,6 +215,9 @@ public:
     {}
 };
 
+/// The exception `timeout_after` throws, and therefore what `with_timeout`
+/// throws when its deadline passes first. Distinct from
+/// `operation_cancelled`, which means an outside stop request.
 class timeout_error : public runtime_error
 {
 public:
@@ -195,6 +226,9 @@ public:
     {}
 };
 
+/// Rethrow `failure`, preserving its stack trace when built with
+/// cpptrace. Use instead of `std::rethrow_exception`. `failure` must not be
+/// null.
 [[noreturn]] inline void rethrow(std::exception_ptr failure)
 {
 #ifdef NXT_HAVE_CPPTRACE
@@ -204,6 +238,8 @@ public:
 #endif
 }
 
+/// Rethrow the exception being handled, like `throw;`, preserving its
+/// stack trace when built with cpptrace. Only valid inside a `catch`.
 [[noreturn]] inline void rethrow_current_exception()
 {
 #ifdef NXT_HAVE_CPPTRACE
@@ -213,6 +249,8 @@ public:
 #endif
 }
 
+/// True if `failure` holds an `operation_cancelled` (or a type derived from
+/// it); false for null. Does not look inside `exception_group`s.
 [[nodiscard]] inline bool is_operation_cancelled(std::exception_ptr failure)
 {
     if (!failure)
@@ -226,6 +264,9 @@ public:
     }
 }
 
+/// Throw a list of failures as one: a single exception is rethrown as is,
+/// two or more are thrown as an `exception_group` with summary `message`.
+/// Throws `logic_error` for an empty list.
 [[noreturn]] inline void throw_exceptions(
     std::string message,
     std::vector<std::exception_ptr> exceptions)

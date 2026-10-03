@@ -16,50 +16,77 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @namespace nxtrt::http
+ * HTTP/1.1 pieces: a small client toolkit and a plain origin server.
+ *
+ * The client side is a set of composable parts, not a client object:
+ * `parse_url`, `serialize` a `request`, write it to a socket or
+ * `nxtrt::tls::tls13_client_session`, then `read_response_head` and wrap the
+ * same byte feed in `response_body_decoding_reader` (de-chunked and
+ * decompressed) or `http_body_reader` (de-chunked only). `sse_feed` parses a
+ * `text/event-stream` body into events. Connection setup lives in
+ * `nxtrt::net` (`connect_tcp`) and TLS in `nxtrt::tls`.
+ *
+ * The server side is `serve` in `nxtrt/http-server.hpp`: a bounded HTTP/1.1
+ * server for use behind a TLS-terminating proxy. See @ref wisp for how Wisp
+ * exposes both.
+ */
 namespace nxtrt::http {
 
+/// Malformed or unsupported HTTP on the wire, or an unsupported URL.
 struct protocol_error : runtime_error
 {
     using runtime_error::runtime_error;
 };
 
+/// One header field. Order and duplicates are kept as received or given.
 struct header
 {
     std::string name;
     std::string value;
 };
 
+/// An `http://` or `https://` URL split by `parse_url`.
 struct url
 {
-    bool tls = false;
-    std::string host;
-    std::string port;
-    std::string target = "/";
+    bool tls = false;     ///< True for `https://`.
+    std::string host;     ///< Host name or IPv4 literal, without the port.
+    std::string port;     ///< Explicit port, or "80"/"443" by scheme.
+    std::string target = "/"; ///< Path and query; "/" when the URL has none.
 };
 
+/// An HTTP/1.1 request message.
+///
+/// The client serializes it with `serialize`; `serve` fills one per request
+/// and passes it to the handler, with `host` taken from the Host header and
+/// `body` fully read and de-chunked.
 struct request
 {
     std::string method = "GET";
     std::string target = "/";
-    std::string host;
+    std::string host; ///< Host header value; omitted by `serialize` if empty.
     std::vector<header> headers;
     std::string body;
 };
 
+/// Status line and header fields of a response, as `parse_response_head`
+/// reads them.
 struct response_head
 {
-    std::string version;
+    std::string version; ///< For example "HTTP/1.1".
     int status = 0;
     std::string reason;
     std::vector<header> headers;
 };
 
+/// One event of a `text/event-stream` body (see `parse_sse_event`).
 struct server_sent_event
 {
-    std::string type = "message";
-    std::string data;
-    std::string id;
-    std::optional<int> retry_ms;
+    std::string type = "message"; ///< The `event:` field, or "message".
+    std::string data;             ///< `data:` lines joined by newlines.
+    std::string id;               ///< Last `id:` field without a NUL.
+    std::optional<int> retry_ms;  ///< A valid `retry:` field, if any.
 };
 
 inline char ascii_lower(char c)
@@ -69,12 +96,20 @@ inline char ascii_lower(char c)
     return c;
 }
 
+/// ASCII case-insensitive equality, as header names compare.
 inline bool iequals(std::string_view a, std::string_view b)
 {
     return a.size() == b.size()
         && std::ranges::equal(a, b, {}, ascii_lower, ascii_lower);
 }
 
+/// Splits an `http://` or `https://` URL into host, port and target.
+///
+/// The authority ends at the first '/', and its last ':' separates the port,
+/// which is not checked to be numeric. There is no support for userinfo,
+/// bracketed IPv6 literals or fragments, and a query must follow a '/'
+/// ("http://h/?q", not "http://h?q"). Throws `protocol_error` for another
+/// scheme, an empty host or an empty port.
 inline url parse_url(std::string_view text)
 {
     auto tls = false;
@@ -129,6 +164,8 @@ inline bool is_default_port(const url & parsed)
         || (parsed.tls && parsed.port == "443");
 }
 
+/// The Host header value for PARSED: the host, plus ":port" unless the port
+/// is the scheme's default.
 inline std::string host_header(const url & parsed)
 {
     if (is_default_port(parsed))
@@ -136,6 +173,13 @@ inline std::string host_header(const url & parsed)
     return parsed.host + ":" + parsed.port;
 }
 
+/// Encodes REQ as HTTP/1.1 request bytes, body included.
+///
+/// Adds `Content-Length` (the body size, also 0) unless REQ has one, and
+/// `Connection: close` unless REQ sets Connection, so by default the
+/// response ends the connection. Header names and values are written as
+/// given: callers that take them from untrusted input must reject CR, LF
+/// and other control characters themselves.
 inline std::string serialize(const request & req)
 {
     auto out = std::string{};
@@ -177,6 +221,9 @@ inline std::string serialize(const request & req)
     return out;
 }
 
+/// Parses a response status line and header fields (CRLF-separated, without
+/// the blank line). Field values are trimmed; lines without ':' are
+/// skipped. Throws `protocol_error` for a malformed status line.
 inline response_head parse_response_head(std::span<const std::byte> bytes)
 {
     auto text = as_string_view(bytes);
@@ -236,11 +283,20 @@ inline response_head parse_response_head(std::span<const std::byte> bytes)
     return head;
 }
 
+/// Reads one response head from READER, consuming through the blank line
+/// and leaving the body in READER.
+///
+/// The whole head must fit in READER's buffer, which therefore bounds the
+/// head size; a longer head fails with a buffer error, and end of input
+/// before the blank line throws an end-of-stream error. Interim 1xx
+/// responses are returned like any other head, not skipped.
 inline task<response_head> read_response_head(bytefeed & reader)
 {
     co_return parse_response_head(co_await reader.take_until("\r\n\r\n"));
 }
 
+/// The value of the first header named NAME (case-insensitive), borrowed
+/// from RESPONSE.
 inline std::optional<std::string_view>
 header_value(const response_head & response, std::string_view name)
 {
@@ -251,6 +307,8 @@ header_value(const response_head & response, std::string_view name)
     return std::nullopt;
 }
 
+/// Whether the first NAME header's comma-separated list contains TOKEN,
+/// compared case-insensitively.
 inline bool has_header_token(
     const response_head & response,
     std::string_view name,
@@ -272,6 +330,8 @@ inline bool has_header_token(
     }
 }
 
+/// The Content-Length, if present; throws `protocol_error` if it is not a
+/// plain decimal number.
 inline std::optional<std::size_t>
 content_length(const response_head & response)
 {
@@ -301,6 +361,8 @@ enum class content_encoding
     brotli,
 };
 
+/// The response's single Content-Encoding. `identity` entries are ignored;
+/// stacked encodings and unknown codings throw `protocol_error`.
 inline content_encoding response_content_encoding(const response_head & response)
 {
     auto value = header_value(response, "content-encoding");
@@ -354,6 +416,19 @@ inline std::size_t parse_chunk_size(std::span<const std::byte> line)
     return size;
 }
 
+/// A byte feed of one response body with the transfer framing removed.
+///
+/// The framing comes from HEAD: chunked if Transfer-Encoding lists
+/// "chunked", else Content-Length, else everything until READER ends. It
+/// does not decode Content-Encoding (see `response_body_decoding_reader`)
+/// and does not know about bodiless responses: for HEAD requests and
+/// 1xx/204/304 statuses, do not read a body at all.
+///
+/// READER is borrowed and must outlive this reader; it should be the feed
+/// that `read_response_head` consumed the head from. HEAD is only read
+/// during construction. Truncated bodies, malformed chunk framing and
+/// chunk trailers throw `protocol_error`. Reading stops at the end of this
+/// body, so a kept-alive READER is left at the next response.
 class http_body_reader final : public bytefeed
 {
 public:
@@ -377,6 +452,11 @@ public:
         configure(head);
     }
 
+    /// The next piece of body, at most LIMIT bytes, or nullopt at the end.
+    ///
+    /// The span borrows from the underlying reader's buffer and is valid
+    /// until the next read from it. Bytes taken this way bypass this
+    /// feed's own buffer; do not mix `next` with the bytefeed reads.
     task<std::optional<std::span<const std::byte>>>
     next(std::size_t limit = std::numeric_limits<std::size_t>::max())
     {
@@ -512,6 +592,22 @@ private:
     bool done_ = false;
 };
 
+/// A byte feed of one response body, de-framed and decompressed.
+///
+/// Wraps an `http_body_reader` and, by the response's Content-Encoding, a
+/// gzip, deflate (zlib-wrapped), zstd or brotli decoder; zstd and brotli
+/// are available only when the build defines `NXTRT_HAVE_ZSTD` /
+/// `NXTRT_HAVE_BROTLI`. Construction throws `protocol_error` for an
+/// encoding it cannot decode. The same caveats as `http_body_reader`
+/// apply: READER is borrowed and must outlive this reader, and bodiless
+/// responses must not be read. The size limit for the decoded body is the
+/// caller's to enforce.
+///
+/// @code
+/// auto head = co_await http::read_response_head(transport);
+/// auto body = http::response_body_decoding_reader{transport, head};
+/// auto bytes = co_await body.take_some(4096); // nullopt at the end
+/// @endcode
 class response_body_decoding_reader final : public bytefeed
 {
 public:
@@ -596,6 +692,13 @@ private:
     bytefeed * active_;
 };
 
+/// Reads the next server-sent event from READER, or nullopt at a clean end.
+///
+/// Follows the event-stream rules: LF or CRLF line ends, ':' comments,
+/// `data` lines joined by newlines, and blocks without `data` skipped. A
+/// final event without its blank line is still returned at end of input;
+/// end of input in a block that has fields but no data throws
+/// `protocol_error`.
 inline task<std::optional<server_sent_event>>
 parse_sse_event(bytefeed & reader)
 {
@@ -666,6 +769,8 @@ parse_sse_event(bytefeed & reader)
     }
 }
 
+/// A `feed` of server-sent events parsed from a borrowed byte feed (usually
+/// a decoded response body), which must outlive it.
 class sse_feed final : public feed<server_sent_event>
 {
 public:
@@ -688,6 +793,7 @@ private:
     bytefeed * reader_;
 };
 
+/// Makes an `sse_feed` over READER, buffering BUFFER_SIZE events.
 inline sse_feed sse_event_parser(
     bytefeed & reader,
     std::size_t buffer_size = 1)

@@ -15,10 +15,18 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtai::tool_process
+ * Run a child process for a tool and capture its combined stdout and
+ * stderr, with a size cap, cleanup on cancellation, and optional cgroup
+ * sampling when the child runs in a systemd user scope. `capture` is the
+ * entry point.
+ */
 namespace nxtai::tool_process {
 
 using namespace std::chrono_literals;
 
+/// Outcome of `capture`.
 struct result
 {
     nxtrt::child_result status;
@@ -29,6 +37,7 @@ struct result
     std::string output;
 };
 
+/// Shared state between the capture and monitor jobs of one `capture`.
 struct capture_state
 {
     nxtrt::subprocess::piped_child child;
@@ -38,12 +47,15 @@ struct capture_state
     bool done = false;
 };
 
+/// Options for `capture`.
 struct capture_options
 {
     std::size_t max_capture_bytes = 8 * 1024 * 1024;
     nxtrt::scoped_process::options scope = {};
 };
 
+/// Cleanup for `capture`: if the child has not been waited for, close the
+/// pipe and terminate it, escalating after 500 ms, then reap it.
 inline nxtrt::task<void>
 finish_child(std::shared_ptr<capture_state> state)
 {
@@ -57,6 +69,8 @@ finish_child(std::shared_ptr<capture_state> state)
     state->done = true;
 }
 
+/// Read the child's output until EOF, keeping at most `max_capture_bytes`
+/// and flagging any excess, then wait for the child to exit.
 inline nxtrt::task<void>
 capture_output(
     std::shared_ptr<capture_state> state,
@@ -94,6 +108,8 @@ capture_output(
     state->done = true;
 }
 
+/// If the output was truncated, mark the result failed and prefix the
+/// captured output with a message naming the limit.
 inline result mark_output_too_large_failed(result captured, std::size_t max_bytes)
 {
     if (!captured.output_too_large)
@@ -112,6 +128,18 @@ inline result mark_output_too_large_failed(result captured, std::size_t max_byte
     return captured;
 }
 
+/// Spawn `argv` (looked up on `PATH`) with stdout and stderr on one pipe,
+/// read all output, and wait for the child.
+///
+/// Output beyond `options.max_capture_bytes` (8 MiB by default) is
+/// discarded but still drained; the result is then marked failed with an
+/// explanatory prefix. A nonzero exit status does not set `failed`; check
+/// `status`. With `options.scope.systemd_user_scope`, the child runs in a
+/// transient systemd scope and its cgroup is sampled until it exits.
+///
+/// If the awaiting task is stopped or the read fails, the child is
+/// terminated and reaped before the exception propagates. Spawn failures
+/// throw.
 inline nxtrt::task<result>
 capture(
     std::vector<std::string> argv,
@@ -152,6 +180,7 @@ capture(
         options.max_capture_bytes);
 }
 
+/// `capture` with only a byte limit.
 inline nxtrt::task<result>
 capture(
     std::vector<std::string> argv,

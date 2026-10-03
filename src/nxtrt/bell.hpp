@@ -21,7 +21,14 @@ namespace nxtrt {
 ///
 /// `ring()` makes the bell readable and wakes tasks waiting through the active
 /// wand's ordinary poll machinery. `reset()` silences the bell and drains the
-/// readiness token so future waits block again.
+/// readiness token so future waits block again. `wait()` (or `co_await bell`)
+/// is ready while the bell is ringing; otherwise it awaits an `op::poll` on
+/// the bell's fd, so it needs a wand that supports polling.
+///
+/// The bell owns an `eventfd` on Linux and a nonblocking pipe elsewhere;
+/// construction throws `runtime_error` if the pipe cannot be made. It is not
+/// a cross-thread primitive. Destruction rings it before closing the fd.
+/// See RFC 0008 (@ref runtime_rfcs).
 class bell
 {
 public:

@@ -7,6 +7,13 @@
 
 namespace nxtrt {
 
+/// A task that awaits `child` without forwarding stop requests to it.
+///
+/// Stopping the task that awaits the shield does not stop `child` and does
+/// not cancel wishes it is parked on, so `child` runs to completion and the
+/// shield returns or rethrows its result. Use it for cleanup and other work
+/// that must finish even while its owner is being cancelled. `child` can
+/// still be stopped directly.
 template<typename T>
 [[nodiscard]] task<T> shield(task<T> child)
 {
@@ -52,6 +59,13 @@ using let_value_result_t = typename let_value_result<T, F>::type;
 
 } // namespace detail
 
+/// A task that awaits `child` and returns `fn(value)` (or `fn()` for a
+/// void child).
+///
+/// `fn` is synchronous and runs on the deck right after `child` finishes.
+/// If `child` throws, `fn` is not called and the exception propagates.
+/// Unlike `map`, the result is a real `task` that can be stored and handed
+/// to groups. Also available as a pipe: `child | then(fn)`.
 template<typename T, typename F>
 [[nodiscard]] task<detail::then_result_t<T, F>> then(task<T> child, F fn)
 {
@@ -96,17 +110,19 @@ using awaiter_t = decltype(get_awaiter(std::declval<A>()));
 
 } // namespace detail
 
-/// Awaitable adaptor that applies a synchronous transform to the result of an
-/// inner awaitable, fused into `await_resume`. Readiness and suspension are
-/// forwarded unchanged, so the transform rides whatever the inner awaitable
-/// already does: a synchronously-ready source stays ready (no suspension), and
-/// a suspending source pays exactly its own one round-trip. This is `then`
-/// from the sender algebra, over any awaitable -- wishes, `hope`, tasks.
+/// An awaitable that applies a synchronous `fn` to another awaitable's
+/// result, without creating a coroutine frame.
 ///
-/// Unlike `then(task<T>, F)`, the result is a co-await-only awaitable, not a
-/// `task<U>`: it cannot be forked or stored as a task. It is coherent here
-/// because awaitables are single-shot (consumed at one `co_await`), unlike a
-/// multiply-observed task.
+/// Readiness and suspension are forwarded unchanged and `fn` runs inside
+/// `await_resume`, so a ready source (a ready `hope`) stays ready and a
+/// suspending source (a task or wish) costs only its own suspension. Works
+/// over any awaitable: wishes, `hope`, tasks. If the source throws, `fn` is
+/// not called.
+///
+/// The result can only be `co_await`ed, once, as an rvalue; it is not a
+/// `task` and cannot be stored in a group. Use `then` for that. Make one
+/// with `map(awaitable, fn)` or `awaitable | map(fn)` (the pipe accepts only
+/// a `task` on the left).
 template<typename Awaitable, typename F>
 class mapped
 {
@@ -156,7 +172,13 @@ private:
     F fn_;
 };
 
-/// Map an awaitable's result through a synchronous `fn`.
+/// Map an awaitable's result through a synchronous `fn`; see
+/// @ref nxtrt::mapped "mapped".
+///
+/// @code
+/// auto doubled = co_await nxtrt::map(
+///     nxtrt::hope<int>::ready(21), [](int x) { return x * 2; });
+/// @endcode
 template<typename Awaitable, typename F>
 [[nodiscard]] auto map(Awaitable awaitable, F fn)
 {
@@ -182,13 +204,21 @@ private:
     F fn_;
 };
 
-/// Closure form for the existing `task | adaptor` pipe: `bar() | map(f)`.
+/// Pipe form: `make_task() | map(f)` gives a @ref nxtrt::mapped "mapped"
+/// awaitable over the task.
 template<typename F>
 [[nodiscard]] auto map(F fn)
 {
     return map_closure<std::decay_t<F>>{std::move(fn)};
 }
 
+/// A task that awaits `child`, then awaits and returns the task made by
+/// `fn(value)` (or `fn()` for a void child).
+///
+/// This is the asynchronous form of `then`: `fn` returns a `task`, which is
+/// created only after `child` succeeds. If `child` throws, `fn` is not
+/// called. Stop requests reach whichever of the two is running. Also
+/// available as a pipe: `child | let_value(fn)`.
 template<typename T, typename F>
 [[nodiscard]] task<detail::let_value_result_t<T, F>>
 let_value(task<T> child, F fn)
@@ -214,6 +244,24 @@ let_value(task<T> child, F fn)
     }
 }
 
+/// A task that awaits `child`, then always runs the cleanup task made by
+/// `cleanup()`, and finally returns or rethrows `child`'s result.
+///
+/// The cleanup task is created after `child` settles (success or failure)
+/// and runs shielded: stopping the `finally` task does not stop or cancel
+/// the cleanup, so it runs to completion. Errors:
+/// - only `child` failed: its exception is rethrown after cleanup;
+/// - only cleanup failed: the cleanup exception is thrown, and `child`'s
+///   value is discarded;
+/// - both failed: an `exception_group` holding both (body first) is thrown.
+///
+/// Also available as a pipe: `child | finally(cleanup)`.
+///
+/// @code
+/// // use_session() returns task<int>; end_session() returns task<void>.
+/// int n = co_await nxtrt::finally(
+///     use_session(session), [&] { return end_session(session); });
+/// @endcode
 template<typename T, typename Cleanup>
     requires stored_task_factory<Cleanup>
         && std::is_void_v<stored_task_result_t<Cleanup>>
@@ -293,6 +341,7 @@ private:
     Cleanup cleanup_;
 };
 
+/// Pipe form of `then`: `child | then(fn)`.
 template<typename F>
 [[nodiscard]] auto then(F fn)
 {
@@ -317,12 +366,14 @@ private:
     F fn_;
 };
 
+/// Pipe form of `let_value`: `child | let_value(fn)`.
 template<typename F>
 [[nodiscard]] auto let_value(F fn)
 {
     return let_value_closure<std::decay_t<F>>{std::forward<F>(fn)};
 }
 
+/// Pipe form of `finally`: `child | finally(cleanup)`.
 template<typename Cleanup>
 [[nodiscard]] auto finally(Cleanup cleanup)
 {
@@ -330,6 +381,18 @@ template<typename Cleanup>
         std::forward<Cleanup>(cleanup)};
 }
 
+/// Apply a pipe adaptor to a task: `child | adaptor` is
+/// `std::move(adaptor)(std::move(child))`. Adaptors come from the one-argument
+/// forms of `then`, `let_value`, `finally` and `map`, and chain left to
+/// right. `map` can only come last, since it yields an awaitable rather than
+/// a task.
+///
+/// @code
+/// auto n = co_await (
+///     fetch_count()
+///     | nxtrt::then([](int n) { return n * 2; })
+///     | nxtrt::finally([&] { return log_done(); }));
+/// @endcode
 template<typename T, typename Adaptor>
     requires requires(task<T> child, Adaptor adaptor) {
         std::move(adaptor)(std::move(child));

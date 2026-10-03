@@ -34,6 +34,8 @@ namespace nxtrt {
 #endif
 #endif
 
+/// One socket address from name resolution, with the family, socket type
+/// and protocol to create a socket for it. Self-contained; copy freely.
 struct resolved_address
 {
     int family = AF_UNSPEC;
@@ -48,6 +50,7 @@ struct resolved_address
     }
 };
 
+/// Copies the usable entries of a getaddrinfo(3) result list.
 inline std::vector<resolved_address>
 resolved_addresses_from(addrinfo * result)
 {
@@ -70,6 +73,12 @@ resolved_addresses_from(addrinfo * result)
     return addresses;
 }
 
+/// Name resolution through the C library's getaddrinfo(3).
+///
+/// The call is synchronous: awaiting `getaddrinfo` blocks the deck thread,
+/// and every other task on the deck, until the lookup finishes, and it
+/// cannot be cancelled. It is the fallback when c-ares is not built in.
+/// Throws `runtime_error` with the gai_strerror(3) text on failure.
 class libc_resolver
 {
 public:
@@ -103,6 +112,23 @@ public:
 
 #if defined(NXTRT_HAVE_CARES)
 
+/// Asynchronous name resolution through c-ares, driven by runtime wishes.
+///
+/// Each resolver owns one c-ares channel, configured from the system
+/// resolver settings. `getaddrinfo` starts a lookup and then waits on the
+/// channel's sockets with poll wishes and c-ares's own timeouts, so only
+/// the awaiting task suspends. It waits on one socket at a time (the
+/// lowest-numbered one c-ares reports), so activity on other sockets is
+/// noticed only when the c-ares timeout expires. Sockets are tracked in an
+/// `fd_set`, so descriptors must stay below FD_SETSIZE. Not copyable or
+/// movable; deck-confined.
+/// Throws `runtime_error` with the c-ares error text on failure.
+///
+/// Cancellation is not safe mid-lookup: the pending query's completion
+/// state lives in the cancelled `getaddrinfo` frame, and c-ares still
+/// writes to it when the channel is later processed or destroyed. Let a
+/// lookup finish; c-ares's default timeouts and retries bound how long it
+/// takes.
 class cares_resolver
 {
 public:

@@ -19,14 +19,21 @@
 
 namespace nxtrt {
 
+/// A callable taking `junk<std::byte>` and returning `task<fare_t>` or
+/// `task<std::size_t>`; see @ref nxtrt::taskfeed "taskfeed".
 template<typename Read>
 concept byte_read_task = detail::value_read_task<std::byte, Read>;
 
+/// Send some of `buffer` on socket `fd` with one `op::send_some` wish.
+/// Returns the count sent, which may be short.
 task<std::size_t> send_some(
     int fd,
     std::span<const std::byte> buffer,
     int flags = 0);
 
+/// Write some of `buffer` to `fd` with one `op::write_some` wish, at
+/// `offset` or, when it is -1, at the current file position. Returns the
+/// count written, which may be short.
 task<std::size_t> write_some(
     int fd,
     std::span<const std::byte> buffer,
@@ -143,8 +150,14 @@ inline std::span<std::byte> first_nonempty(
 
 } // namespace detail
 
+/// Byte sink: @ref sink of `std::byte`, the writer side of byte I/O.
+///
+/// Text is written as its bytes with the `write(sink, std::string_view)`
+/// helpers, and formatted with @ref print.
 using bytesink = sink<std::byte>;
 
+/// Write each chunk of a range of strings, string views, or byte spans.
+/// Does not flush.
 template<detail::bytesink_chunk_range Chunks>
 task<void> write(bytesink & writer, Chunks && chunks)
 {
@@ -153,7 +166,14 @@ task<void> write(bytesink & writer, Chunks && chunks)
             detail::sink_chunk_bytes(std::forward<decltype(chunk)>(chunk)));
 }
 
-/// Writer for a file descriptor.
+/// Buffered byte sink over a file descriptor.
+///
+/// Each drain is one `op::write_some` wish of the first nonempty staged
+/// chunk, retried on `EINTR`; a short write leaves the rest buffered. Other
+/// write errors propagate as exceptions from the awaited write or flush. The
+/// fd is borrowed: the sink never closes it, and it must stay open while the
+/// sink is used. Remember to `flush()` before the sink goes away. The
+/// default buffer is 4096 bytes.
 class fd_sink final : public bytesink
 {
 public:
@@ -185,11 +205,17 @@ private:
     int fd_ = -1;
 };
 
+/// An @ref fd_sink over standard output, with an owned buffer.
 fd_sink standard_output(std::size_t buffer_size = 4096);
 
+/// Same as @ref standard_output.
 fd_sink standard_output_sink(std::size_t buffer_size = 4096);
 
-/// Writer for a connected socket.
+/// Buffered byte sink over a connected socket.
+///
+/// Like @ref fd_sink, but each drain is one `op::send_some` wish with the
+/// given `send(2)` flags, and the sink counts bytes sent. The socket is
+/// borrowed and never closed by the sink.
 class socket_sink final : public bytesink
 {
 public:
@@ -237,6 +263,7 @@ private:
     std::size_t sent_ = 0;
 };
 
+/// Write text, bytes, or a range of chunks, then flush.
 template<typename Chunks>
     requires std::convertible_to<Chunks, std::string_view>
         || std::convertible_to<Chunks, std::span<const std::byte>>
@@ -297,23 +324,23 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 // and that property is viral, so an async parser must be a coroutine and reads
 // must be awaited -- we cannot make suspension invisible the way fibers do.
 //
-// The mandatory feed cold path is now `stream_more()`, the Zig-shaped verb:
+// The feed cold path is `stream_more()`, the Zig-shaped verb:
 // push up to `limit` bytes into a `bytesink`. Like Zig, an implementation may
 // also choose to put bytes in its own reader buffer and return zero streamed
 // bytes; the next public `stream()`/`take()` call will consume those buffered
 // bytes through the hot path. Pull-shaped refill is derived by pointing a fixed
-// sink at the feed's unused capacity, so source bytes still land in
-// `buffer_` before borrowed-span APIs (`peek`/`take`) expose them. This gives us
+// sink at the feed's unused capacity, so source bytes still land in the
+// feed's own buffer before borrowed-span APIs (`peek`/`take`) expose them. This gives us
 // the structure of Zig's "stream into a sink, and refill is just streaming into
 // my own buffer" without yet caring about fd-to-fd sendfile-style optimization.
 //
-// The remaining divergence is that nxt readers still require at least one byte
-// of storage. Zig can express "fill my Reader.buffer" through `readVec`'s
-// special empty-slice convention; our concrete refill has nowhere to put source
-// bytes unless the reader owns or borrows a real span, even if it is only one
-// byte. A zero-buffer bytefeed can make sense once the cold surface is rich
-// enough to avoid pull-shaped refill entirely, but today's `peek`/`take` APIs
-// need a place to park bytes.
+// The remaining divergence is that most nxt reader verbs still require at
+// least one value of storage. Zig can express "fill my Reader.buffer" through
+// `readVec`'s special empty-slice convention; our concrete refill has nowhere
+// to put source bytes unless the reader owns or borrows a real span. With zero
+// capacity `take()` still works through a temporary cell, and `stream()` /
+// `read()` can bypass the buffer, but the borrowing verbs (`peek`, `take(n)`,
+// ...) throw.
 //
 // The hot/cold split is mirrored by `hope<T>` (see task.hpp). The buffered case
 // returns `hope<...>::ready(span)` -- a synchronous value, no coroutine frame,
@@ -331,20 +358,22 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 // feeds (socket -> tls -> http_body -> sse). It is the "eager wish" idea
 // applied to the cold verb, achieved without any wand change.
 //
-// The wider Zig vocabulary is now structural: `stream()` and `read_vec()` use
-// buffered bytes when they have them and otherwise call the corresponding cold
-// virtual (`stream_more()` / `read_vec_more()`). `discard()` uses buffered bytes
-// when it has them and otherwise calls overridable `discard_more()`. Refill is
-// just `read_vec_more({unused_capacity()})`, i.e. readVec into this reader's
-// own buffer.
+// The wider Zig vocabulary is structural: `stream()` and `read_vec()` use
+// buffered bytes when they have them and otherwise call `stream_more()`
+// directly (`read_vec()` through a fixed sink over the caller's span).
+// `discard()` uses buffered bytes when it has them and otherwise calls
+// overridable `discard_more()`. Refill is `stream_more()` into a fixed sink
+// over this reader's own unused capacity. There is no separate `readVec` or
+// `rebase` virtual.
 //
-// On the sink side we intentionally one-up Zig a little: `bytesink` has a
-// feed-like `seek_` as well as `end_`, so partially drained buffered output
-// is represented honestly as `buffer_[seek_..end_]`. That makes Zig-style
-// `rebase(preserve, capacity)` direct: drain only the non-preserved prefix,
-// keep the recent suffix staged, and compact when contiguous capacity is needed.
-// Zig's writer source has a TODO wishing for this because its default rebase
-// logic temporarily hides preserved bytes by mutating `end`.
+// On the sink side the staging buffer is a ring (`ring_region`) with a read
+// cursor as well as a write cursor, so partially drained buffered output is
+// represented honestly. That makes Zig-style `rebase(preserve, capacity)`
+// direct: drain only the non-preserved prefix and keep the recent suffix
+// staged. It does not compact, so it can fail when free space is split
+// around the preserved values. Zig's writer source has a TODO wishing for
+// this because its default rebase logic temporarily hides preserved bytes by
+// mutating `end`.
 //
 // --- What we still owe to fully adopt the paradigm --------------------------
 //
@@ -352,13 +381,13 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 //   other so `stream_more()` can eventually use sendfile/readv/writev-shaped
 //   paths. Today it has the right API shape but still moves ordinary spans.
 // TODO(zig-readvec): teach fd/socket/task-backed sources real scatter reads.
-//   The virtual slot exists, but the generic default still streams into only
-//   the first non-empty destination, matching Zig's simple default.
+//   `read_vec()` still streams into only the first non-empty destination,
+//   matching Zig's simple default; a virtual slot for it does not exist yet.
 // TODO(zig-discard): optimized `discard_more(limit)` overrides so protocols can
 //   skip bytes (chunked trailers, body skip-to-end) without buffering and
 //   copying them through a sink-shaped shim.
-// TODO(zig-rebase): use the virtual `rebase_more` slot for a ring- or
-//   mmap-backed reader that can make room differently from memmove.
+// TODO(zig-rebase): add a virtual rebase slot for a ring- or mmap-backed
+//   reader that can make room differently from memmove.
 // TODO(eager-wand): push the synchronous-completion idea of `stream_more()` down
 //   to the wish layer -- an honest `urge::await_ready()` plus a sync path in
 //   `wand::prepare` -- so a warm `read_some` on the fd also skips the
@@ -367,6 +396,12 @@ inline task<void> write_all(bytesink & writer, Chunks && chunks)
 //   shared by wishes and readers alike. That is the endgame this whole family
 //   is shaped toward.
 
+/// Byte feed: @ref feed of `std::byte`, the reader side of byte I/O.
+///
+/// Adds the span-borrowing verbs (`take(n)`, `peek_span`, `take_some`,
+/// `take_until`, `read`). Concrete sources include @ref fd_source,
+/// @ref socket_source, @ref byte_span_feed, @ref task_bytefeed, and the
+/// decompressors in compression.hpp.
 using bytefeed = feed<std::byte>;
 
 /// Causal frame facade over a `feed<Stock>`.
@@ -401,6 +436,11 @@ public:
         return chop<Stock, Frame>(source_.buffered(), scanner_);
     }
 
+    /// Fill the source until at least `minimum_count` complete frames are
+    /// visible, or it ends; then return the visible frames.
+    ///
+    /// The end of the source is not an error here: the view may hold fewer
+    /// frames than asked for.
     hope<view_type> peek(std::size_t minimum_count = 1)
     {
         try {
@@ -416,6 +456,8 @@ public:
         return hope<view_type>::ready(visible());
     }
 
+    /// Consume `extent` source values. Throws `value_end_of_stream` if a
+    /// discard step makes no progress, as at the end of the source.
     hope<void> discard_prefix(std::size_t extent)
     {
         if (extent == 0)
@@ -438,6 +480,7 @@ public:
         return discard_prefix_slow(std::move(discarded), extent);
     }
 
+    /// Consume the source values occupied by `frame`.
     hope<void> discard(frame_chop<Frame> const & frame)
     {
         return discard_prefix(frame.extent);
@@ -519,8 +562,9 @@ private:
     Scanner scanner_;
 };
 
-/// Reader backed by a callable returning `task<fare_t>` or
-/// `task<std::size_t>`. Count-only reads treat zero bytes as EOF.
+/// Byte feed backed by a callable returning `task<fare_t>` or
+/// `task<std::size_t>`. Count-only reads treat zero bytes as EOF. See
+/// @ref nxtrt::taskfeed "taskfeed".
 template<byte_read_task Read>
 class task_bytefeed final : public taskfeed<std::byte, Read>
 {
@@ -536,10 +580,14 @@ task_bytefeed(Read, std::span<std::byte, Extent>) -> task_bytefeed<Read>;
 template<typename Read>
 task_bytefeed(Read, value_storage_ref<std::byte>) -> task_bytefeed<Read>;
 
-/// Borrowed in-memory byte reader over a single-pass range of byte-like chunks.
+/// In-memory byte feed over a range of byte-like chunks.
 ///
-/// Chunks may be byte spans or UTF-8 text views; text chunks are treated as
-/// their underlying bytes.
+/// Chunks may be byte spans or text views; text chunks are treated as their
+/// underlying bytes. The range is wrapped with `std::views::all`, so an
+/// lvalue range is borrowed, and the bytes each chunk refers to must outlive
+/// the feed. Ready writes keep `stream_more()` from suspending, so reads
+/// never need a deck turn. The range is traversed once. The default buffer
+/// is 4096 bytes.
 template<std::ranges::input_range Chunks>
     requires std::ranges::view<Chunks>
         && detail::bytefeed_chunk_range<Chunks>
@@ -652,7 +700,12 @@ template<std::ranges::viewable_range Range>
 byte_span_feed(Range &&, std::size_t)
     -> byte_span_feed<std::views::all_t<Range>>;
 
-/// Reader for a file descriptor.
+/// Buffered byte feed over a file descriptor.
+///
+/// Each refill is one `op::read_some` wish, retried on `EINTR`, straight into
+/// the destination's free space. A zero-byte read is EOF. Other read errors
+/// propagate as exceptions. The fd is borrowed and never closed by the feed.
+/// The default buffer is 4096 bytes.
 class fd_source final : public detail::taskfeed_base<std::byte, fd_source>
 {
     using base = detail::taskfeed_base<std::byte, fd_source>;
@@ -676,7 +729,11 @@ private:
     int fd_ = -1;
 };
 
-/// Reader for a connected socket.
+/// Buffered byte feed over a connected socket.
+///
+/// Like @ref fd_source, but each refill is one `op::recv_some` wish with the
+/// given `recv(2)` flags, and the feed counts bytes received. A zero-byte
+/// receive (orderly shutdown) is EOF.
 class socket_source final : public detail::taskfeed_base<std::byte, socket_source>
 {
     using base = detail::taskfeed_base<std::byte, socket_source>;

@@ -6,11 +6,14 @@
 
 namespace nxtrt {
 
-/// Stable, opaque identity for a coroutine task.
+/// Identity of a task in its deck's task table, packed in one 32-bit word.
 ///
-/// `0` means "no task". Real task ids are compact table identities with a
-/// 24-bit one-based row index and an 8-bit era. The exact packing stays behind
-/// helpers so traces and backend tickets can treat the id as one 32-bit word.
+/// The value `0` (the default) means "no task"; test with `if (id)`. A real
+/// id holds a 24-bit one-based row index and an 8-bit era. The era changes
+/// each time a row is reused, so a stale id stops resolving once its task is
+/// destroyed (until the 8-bit era wraps around). Ids are meaningful only
+/// within the deck that assigned them, and a task has no id until a deck
+/// first queues it. Traces print the raw `value`.
 struct task_id
 {
     static constexpr std::uint32_t index_bits = 24;

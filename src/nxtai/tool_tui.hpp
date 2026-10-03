@@ -12,6 +12,17 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtai::tool_tui
+ * `nxtui::tui` layouts for showing an agent turn: the model's thinking or
+ * answer as wrapped Markdown, and each tool call as a header with status
+ * and elapsed time (plus memory for `bash`), followed by its arguments and
+ * output.
+ *
+ * Fill a `turn_view` (or `call_view`) from whatever the observer has seen
+ * and call `render_turn` (or `render_call`) each frame. `nxtllm`'s console
+ * observer does not use these; they are for richer front ends.
+ */
 namespace nxtai::tool_tui {
 
 using namespace nxtui;
@@ -37,14 +48,17 @@ constexpr Rgba8 rose_300{253, 164, 175};
 constexpr Rgba8 page_bg = slate_950;
 constexpr Rgba8 band_bg = slate_900;
 
+/// State of one tool call in the view.
 enum class status { running, ok, error };
 
+/// Display label and accent color for a tool name; see `classify`.
 struct tool_kind
 {
     std::string_view display;
     Rgba8 accent;
 };
 
+/// Display snapshot of one tool call.
 struct call_view
 {
     std::string name;
@@ -55,6 +69,7 @@ struct call_view
     int elapsed_ms = -1;
 };
 
+/// Display snapshot of one model turn: its reasoning text and tool calls.
 struct turn_view
 {
     std::string thought;
@@ -318,6 +333,8 @@ inline auto render_generic_call(const call_view & c)
             [&] { return result_window(c); }));
 }
 
+/// Layout for one call: a shell-style view for `bash`, a generic one for
+/// other tools.
 inline auto render_call(const call_view & c)
 {
     return either(
@@ -348,6 +365,8 @@ inline auto assistant_block(std::string_view s)
     return labeled_markdown_block("assistant", emerald_300, s);
 }
 
+/// Layout for a whole turn on the page background: the thought block, then
+/// each call. Copies the calls, so `t` need not outlive the layout.
 inline auto render_turn(const turn_view & t)
 {
     auto has_thought = !t.thought.empty();

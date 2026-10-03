@@ -17,8 +17,26 @@
 #include <system_error>
 #include <utility>
 
+/**
+ * @namespace nxtrt::net
+ * TCP sockets for runtime tasks: listen, accept, resolve and connect.
+ *
+ * `connect_tcp(host, service)` (in `nxtrt/net_dns.hpp`) resolves a name and
+ * connects; `listen_tcp_loopback` and `accept` serve. All return owned
+ * descriptors with close-on-exec and TCP_NODELAY set. Wrap a connected
+ * descriptor in `socket` to get a buffered feed and sink for protocol code
+ * such as `nxtrt::http` and `nxtrt::tls`. Connects and accepts are wishes
+ * that suspend only the awaiting task; name resolution uses c-ares when
+ * the build has it and blocking getaddrinfo otherwise.
+ */
 namespace nxtrt::net {
 
+/// An owned connected socket with a buffered input feed and output sink.
+///
+/// The transmit and receive buffers are borrowed and must outlive the
+/// socket; FLAGS are passed to every send(2) and recv(2) (for example
+/// `MSG_NOSIGNAL`). The descriptor closes when the socket is destroyed, so
+/// no operation on it may still be pending then.
 class socket
 {
 public:
@@ -54,6 +72,7 @@ private:
     socket_sink output_;
 };
 
+/// Throws `runtime_error` with WHAT and the message for the current errno.
 inline void throw_errno(std::string_view what)
 {
     throw runtime_error{
@@ -95,9 +114,11 @@ inline sockaddr_in socket_address(int fd)
     return address;
 }
 
-/// Create a TCP listener bound to loopback.
+/// Create a TCP listener bound to 127.0.0.1, with SO_REUSEADDR and
+/// close-on-exec.
 ///
-/// The default port of zero asks the kernel to choose an ephemeral port.
+/// The default port of zero asks the kernel to choose an ephemeral port;
+/// read it back with `socket_address`. Throws `runtime_error` on failure.
 inline nxt::unique_fd listen_tcp_loopback(
     std::uint16_t port = 0,
     int backlog = SOMAXCONN)
@@ -125,7 +146,11 @@ inline nxt::unique_fd listen_tcp_loopback(
     return fd;
 }
 
-/// Accept one TCP connection and return it as an owned descriptor.
+/// Accept one TCP connection and return it as an owned descriptor, with
+/// close-on-exec (where SOCK_CLOEXEC exists) and TCP_NODELAY.
+///
+/// Suspends the awaiting task until a connection arrives; cancellation
+/// cancels the accept wish.
 inline task<nxt::unique_fd> accept(int listener)
 {
     auto flags = int{0};
@@ -139,7 +164,9 @@ inline task<nxt::unique_fd> accept(int listener)
     co_return std::move(fd);
 }
 
-/// Connect a TCP socket to an IPv4 address.
+/// Connect a new TCP socket to an IPv4 address, suspending until the
+/// connection is established. Errors from the wand propagate as
+/// exceptions; the socket is closed on failure.
 inline task<nxt::unique_fd> connect(sockaddr_in address)
 {
     auto fd = nxt::unique_fd{::socket(AF_INET, SOCK_STREAM, 0)};

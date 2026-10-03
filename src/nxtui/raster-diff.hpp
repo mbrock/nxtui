@@ -8,8 +8,8 @@
 
 namespace nxtui {
 
-/// A detected change: position, glyphs, colors, emphasis (before
-/// optimization).
+/// A run of adjacent changed cells on one row that share one style, before
+/// style deltas are computed. `glyphs` points into the new raster.
 struct RawChange
 {
     /// Origin of the changed run.
@@ -46,8 +46,13 @@ struct ChangeRun
     bool em_reset = false;
 };
 
-/// Tracks terminal style state, converting RawChange → ChangeRun with
-/// deltas.
+/// Tracks the SGR state already emitted in this frame and turns each
+/// `RawChange` into a `ChangeRun` carrying only the needed changes.
+///
+/// State starts unknown (treated as terminal defaults). A run whose color
+/// is `terminal_default()` gets a reset flag. An emphasis change between two
+/// non-empty sets is reported as `em_change` with the new set and no reset,
+/// so a writer that only adds attributes leaves the old bits on.
 struct StyleState
 {
     /// Current emitted foreground state.
@@ -147,8 +152,10 @@ inline auto raw_changes(const Raster & front, const Raster & back)
            | std::views::join;
 }
 
-/// Iterate changed regions, tracking style state for minimal ANSI
-/// output.
+/// Call `emit(const ChangeRun &)` for each changed run between `front`
+/// (what the terminal shows) and `back` (the new frame), row by row, left
+/// to right. Both rasters must have the same size. Runs split wherever the
+/// change status or the new cell style changes.
 template<typename F>
 void diff_rasters(const Raster & front, const Raster & back, F && emit)
 {

@@ -19,7 +19,15 @@ class wire_tx;
 /// Values are buffered in caller-provided raw storage. Receives use a `hope`
 /// fast path when a value is already available and otherwise block by awaiting
 /// bell readiness through the active wand. This is intentionally not a
-/// broadcast channel.
+/// broadcast channel. With zero capacity the wire is a rendezvous: a send
+/// completes only once the receiver has taken the value.
+///
+/// Receive with `next()` or `try_next()`; these return `std::nullopt` once the
+/// wire is closed and empty, and ring the space bell that wakes a waiting
+/// sender. The inherited @ref feed verbs also work, but consuming
+/// already-buffered values through them does not wake a waiting sender.
+/// The storage must outlive the receiver; destruction closes the wire.
+/// See RFC 0008 (@ref runtime_rfcs).
 template<typename T>
 class wire_rx : public feed<T>
 {
@@ -87,6 +95,8 @@ public:
         return value;
     }
 
+    /// The next value, waiting for one if necessary; `std::nullopt` once
+    /// the wire is closed and empty.
     [[nodiscard]] hope<std::optional<value_type>> next()
     {
         if (auto value = try_next())
@@ -96,6 +106,8 @@ public:
         return next_slow();
     }
 
+    /// Close the wire and wake both sides. Buffered values can still be
+    /// received; sends fail from now on.
     void close()
     {
         if (closed_)
@@ -235,7 +247,16 @@ private:
     bool closed_ = false;
 };
 
-/// Transmit endpoint for a bounded typed wire.
+/// Transmit endpoint for a bounded typed wire; a borrowed view of a
+/// @ref wire_rx.
+///
+/// `send()` resolves to `true` once the value is in the wire (or, with zero
+/// capacity, once the receiver took it), and `false` if the wire is closed.
+/// `try_send()` never waits. As a @ref sink it has no buffer of its own:
+/// `write()` sends each value and throws @ref nxtrt::value_buffer_error "value_buffer_error" when the
+/// wire is closed before any value was accepted. `flush()` waits until the
+/// receiver has emptied the wire or closed it. The receiver must outlive
+/// the transmitter.
 template<typename T>
 class wire_tx : public sink<std::remove_cv_t<T>>
 {
@@ -339,7 +360,10 @@ private:
     wire_rx<value_type> * receiver_;
 };
 
-/// Owning lifetime bundle for a wire receive feed and transmit sink.
+/// A @ref wire_rx and a @ref wire_tx bound to it, in one object.
+///
+/// The storage is borrowed and must outlive the wire. The members forward to
+/// the two endpoints. See RFC 0008 (@ref runtime_rfcs).
 template<typename T>
 class wire
 {

@@ -30,12 +30,28 @@ struct idea_result<hope<T>>
 
 } // namespace detail
 
-/// A movable recipe invoked as a mutable stored lvalue to produce a task
-/// or hope by value. This is a constraint, not an owning erased wrapper.
+/// A movable recipe for asynchronous work: a callable that, invoked as a
+/// stored mutable lvalue with no arguments, returns a `task<T>` or
+/// `hope<T>` by value.
 ///
-/// Consumers invoke each admitted recipe once and keep its storage alive
-/// through settlement of the returned work, including cancellation/failure.
-/// The concept alone cannot enforce that lifetime or invocation count.
+/// Ideas are what pools and `drain` consume from a `feed`: the work is not
+/// created until a consumer has capacity for it. This is a constraint, not
+/// a type-erased wrapper. Consumers invoke each admitted idea once and keep
+/// the idea object alive until the work it returned has settled, including
+/// by failure or cancellation, so the returned task may refer to the
+/// idea's members. The concept cannot check that contract.
+///
+/// Only exact by-value `task<T>` and `hope<T>` results qualify; references
+/// and other awaitables do not.
+///
+/// @code
+/// struct fetch_idea
+/// {
+///     std::string url;
+///     nxtrt::task<int> operator()() & { return fetch(url); }
+/// };
+/// static_assert(nxtrt::idea_of<fetch_idea, int>);
+/// @endcode
 template<typename Fn>
 concept idea =
     std::move_constructible<Fn>
@@ -49,6 +65,7 @@ template<idea Fn>
 using idea_result_t =
     typename detail::idea_result<std::invoke_result_t<Fn &>>::type;
 
+/// An `idea` whose work produces exactly `T`.
 template<typename Fn, typename T>
 concept idea_of = idea<Fn> && std::same_as<idea_result_t<Fn>, T>;
 

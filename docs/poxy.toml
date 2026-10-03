@@ -8,6 +8,17 @@ stylesheets = ['technical.css']
 main_page = true
 show_includes = true
 generate_tagfile = true
+navbar = [
+    '<a href="rt_overview.html">Runtime</a>',
+    '<a href="wisp.html">Wisp</a>',
+    'pages',
+    'namespaces',
+    'classes',
+    'concepts',
+    'files',
+    'repo',
+    'theme',
+]
 
 [sources]
 extract_all = true
@@ -42,6 +53,13 @@ strip_paths = [
 strip_includes = [
     '../src/',
 ]
+
+# Document every backend: the wands are selected by platform macros, and
+# Doxygen otherwise sees none of them (nor nxtrt::runtime, which embeds one).
+[macros]
+'__linux__' = 1
+'__APPLE__' = 1
+'NXTRT_ARCH_HAS_WAND' = 1
 
 [warnings]
 treat_as_errors = false

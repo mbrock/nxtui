@@ -19,6 +19,16 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace nxtui::vterm
+ * Thin C++ wrapper over libvterm: `Terminal` is an in-memory terminal
+ * emulator that consumes the bytes a child program writes and exposes the
+ * resulting screen cells and cursor.
+ *
+ * Used to show a PTY-backed program inside a layout (see
+ * `tui::vterm_screen`) and, in tests, to check what escape output actually
+ * produces on a screen.
+ */
 namespace nxtui::vterm {
 
 /// Terminal color as reported by libvterm.

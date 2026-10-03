@@ -28,7 +28,7 @@ computation that is coherent, checkable, and cheap at once. The vocabulary
 ## What's here
 
 - [`nxtrt`][nxtrt] — the coroutine runtime: [tasks][nxtrt-task], the
-  [deck][nxtrt-deck] scheduler, [wand][nxtrt-wand] I/O backends (io_uring,
+  [deck][nxtrt-deck] scheduler, [wand][nxtrt-wand] I/O backends (%io_uring,
   epoll, kqueue), structured groups over a bounded [pool][nxtrt-pool], byte
   streams, [files][nxtrt-fs], [HTTP][nxtrt-http]/[TLS][nxtrt-tls], and
   [subprocesses][nxtrt-subprocess].
@@ -43,10 +43,11 @@ computation that is coherent, checkable, and cheap at once. The vocabulary
 
 | Page | What it is |
 | --- | --- |
-| [Runtime overview][rt-overview] | The map: every core runtime type and how they fit. Start here. |
-| [A story about holding work][rt-holding] | The reasoning behind the map: deck, wand, streams, and `hope<T>` as one idea. |
+| [A tour of the runtime][rt-overview] | Tasks, the deck, wishes and wands, cancellation, groups, pools, and streams, with working examples. Start here. |
+| [Wisp][wisp] | The Lisp machine: the language, `await`, checkpoints and tapes, capabilities, HTTP. |
+| [The quest][quest] | What the project is searching for, and the open questions. |
+| [A story about holding work][rt-holding] | The essay behind the runtime: deck, wand, streams, and `hope<T>` as one idea. |
 | [Runtime RFCs][runtime-rfcs] | The design notebook, current and speculative. |
-| [Wisp][wisp] | The Lisp guest: CLI, language, files, processes, HTTP. |
 | [Building and tooling][building] | Meson, Nix, CI, coverage, editors, the runtime spec, docs. |
 
 ## Quick start

@@ -26,8 +26,16 @@ extern char ** environ; // NOLINT(readability-redundant-declaration)
 /// Synchronous child creation shared by the wands' spawn wishes. Each
 /// function returns 0 or a negated errno and never leaves a child behind on
 /// failure. Wands wrap the pid in their own child handle (a pidfd on Linux).
+///
+/// Children get the parent's environment and search PATH for ARGV[0].
+/// `piped` children on macOS inherit only the descriptors set up here
+/// (`POSIX_SPAWN_CLOEXEC_DEFAULT`). Other children (`piped` elsewhere, and
+/// `pty`, which forks) also inherit any parent descriptor not marked
+/// close-on-exec, so open descriptors with O_CLOEXEC. Task code should use
+/// `nxtrt::subprocess` or `nxtrt::pty` rather than these functions.
 namespace nxtrt::spawn {
 
+/// A started child: its pid and the parent's end of its output.
 struct spawned
 {
     pid_t pid = -1;

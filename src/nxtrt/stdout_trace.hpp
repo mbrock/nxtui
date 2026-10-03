@@ -19,6 +19,10 @@
 
 namespace nxtrt {
 
+/// Where `trace_stdout_write` logs, from the `NXT_STDOUT_TRACE` environment
+/// variable: empty (off) when unset or empty,
+/// `/tmp/nxt-stdout-trace.PID.log` for "1", "true", "yes" or "on", and the
+/// value itself as a path otherwise.
 inline std::string stdout_trace_path()
 {
     auto const * raw = std::getenv("NXT_STDOUT_TRACE");
@@ -36,6 +40,7 @@ inline std::string stdout_trace_path()
     return std::string{value};
 }
 
+/// BYTES with newlines, tabs, ESC and other non-printing bytes escaped.
 inline std::string escaped_stdout_bytes(std::string_view bytes)
 {
     auto out = std::ostringstream{};
@@ -68,6 +73,12 @@ inline std::string escaped_stdout_bytes(std::string_view bytes)
     return out.str();
 }
 
+/// Debug aid for finding stray writes to the terminal: appends a record of
+/// a stdout write (size, call site, an escaped preview of up to 4 KiB, and
+/// a stack trace when built with cpptrace) to the `stdout_trace_path` file.
+///
+/// Does nothing when tracing is off. The path is read once per process.
+/// Thread-safe, and slow: it opens the file for every call.
 inline void trace_stdout_write(
     std::string_view bytes,
     std::source_location where = std::source_location::current())

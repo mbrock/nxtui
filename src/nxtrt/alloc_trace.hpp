@@ -5,6 +5,15 @@
 #include <cstdio>
 #include <unistd.h>
 
+/**
+ * @namespace nxtrt::alloc_trace
+ * Opt-in allocation logging to stderr, enabled by `NXT_ALLOC_TRACE`.
+ *
+ * Set `NXT_ALLOC_TRACE` to a value not starting with '0' to log one line
+ * per event: global `operator new`/`delete` (replaced in alloc_trace.cpp)
+ * and runtime allocators that call `event`. Lines go straight to stderr
+ * with write(2), unbuffered and without allocating.
+ */
 namespace nxtrt::alloc_trace {
 
 /// Read once: tracing is chosen at process start, and events fire on hot
@@ -18,7 +27,11 @@ inline bool enabled() noexcept
     return on;
 }
 
-// The pointer is logged as an address; its storage need not be initialized.
+/// Logs one allocation event if tracing is enabled: ACTION ("new", "del"
+/// and so on), SOURCE (which allocator), size, alignment, address, and the
+/// allocator's used/capacity counts. Events raised while one is being
+/// logged on the same thread are dropped. The pointer is logged as an
+/// address; its storage need not be initialized.
 #if defined(__GNUC__) && !defined(__clang__)
 [[gnu::access(none, 3)]]
 #endif

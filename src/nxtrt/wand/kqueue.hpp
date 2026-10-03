@@ -16,6 +16,7 @@
 
 namespace nxtrt {
 
+/// True when `kqueue_wand` is available (macOS and the BSDs).
 inline constexpr bool has_kqueue_wand = NXT_RT_HAS_KQUEUE != 0;
 
 #if NXT_RT_HAS_KQUEUE
@@ -24,13 +25,37 @@ namespace detail {
 class kqueue_impl;
 } // namespace detail
 
-/// kqueue-backed wand for BSD runtime wishes.
+/// kqueue-backed wand for macOS and the BSDs; the default there.
 ///
 /// Each awaited wish becomes one hub-stored execution record. Kevent `udata`
 /// points at that record while variant phases make prepared, parked, settled,
 /// delayed-delete, and retired states explicit. The implementation lives in
 /// kqueue.cpp: the wand interface is already type-erased, so none of it needs
 /// to be compiled into every user of this header.
+///
+/// Batching: like epoll, `wave` tries each queued wish's syscall at once on
+/// the deck's thread and makes the fd non-blocking first. A wish that would
+/// block adds a one-shot `EV_ADD` change; the batched changes from one
+/// wave, including cancellation deletes, go to the kernel in one `kevent`
+/// call.
+/// A retried I/O call that still reports `EAGAIN` is armed again.
+///
+/// Limitations: kqueue keys registrations by fd and filter, so two wishes
+/// waiting on the same fd in the same direction at once conflict. `openat`
+/// and spawns are synchronous syscalls, `asynchronous_files()` is false,
+/// and the Linux-only file wishes do not exist here. Children are named by
+/// pid; `wait_child` registers `EVFILT_PROC` `NOTE_EXIT`, falling back to a
+/// short retry timer while a child is mid-exit, and reads the status with
+/// `WNOWAIT` (see `child_handle`). `poll` reports `POLLIN` or `POLLOUT`.
+///
+/// Timers: `timeout` and `poll_until` use `EVFILT_TIMER` with
+/// `NOTE_NSECONDS`; a zero duration fires after one nanosecond.
+///
+/// Cancellation: a queued wish settles with `operation_cancelled` at the
+/// next wave. A registered wish is settled with `operation_cancelled` at
+/// the next wave, which stages `EV_DELETE` for its events; its record is
+/// retired only after those deletes are applied and one more receive pass
+/// has drained any stale events naming it.
 class kqueue_wand final : public wand
 {
 public:
@@ -45,10 +70,16 @@ public:
     void suspend(wait_token token, need task) override;
     void cancel(wait_token token) override;
     void wave(deck & d) override;
+    /// Applies pending changes, handles ready events without blocking, and
+    /// requeues settled tasks.
     void poll(deck & d);
+    /// Blocks until at least one event arrives, then handles ready events.
     void wait(deck & d);
 
     /// Pump the deck and the kqueue until `root` has finished.
+    ///
+    /// Throws `runtime_error` ("deadlock") if `root` is unfinished while
+    /// nothing is ready, staged, or registered.
     void run_until_done(deck & d, std::coroutine_handle<> root);
 
     template<typename T>
@@ -57,7 +88,12 @@ public:
         run_until_done(d, std::coroutine_handle<>{root.handle()});
     }
 
+    /// Settles the parked execution `token` with a scalar `result` (a count,
+    /// fd, or negative errno) and requeues its task.
     void complete(deck & d, wait_token token, int result);
+    /// Requeues the task parked on `token` without storing a result or
+    /// settling its record, so the await throws `runtime_error`. Not for
+    /// normal use.
     void fulfill(deck & d, wait_token token);
 
 protected:
@@ -70,6 +106,11 @@ private:
     std::unique_ptr<detail::kqueue_impl> impl_;
 };
 
+/// Runs an already-created `root` task on a fresh `kqueue_wand` and deck.
+///
+/// Prefer the factory overload: a task captures the runtime environment
+/// when it is created, and only the factory overload creates the root
+/// inside the root environment.
 template<typename T>
 [[nodiscard]] inline T run_with_kqueue(task<T> root)
 {
@@ -85,6 +126,9 @@ template<typename T>
     }
 }
 
+/// Creates the root task by calling `fn()` inside a fresh `kqueue_wand`
+/// deck, drives it to completion, and returns its result. `fn` outlives the
+/// task, so a capturing coroutine lambda is safe here.
 template<task_factory Fn>
 [[nodiscard]] inline task_result_t<std::invoke_result_t<Fn>>
 run_with_kqueue(Fn && fn)

@@ -1,5 +1,6 @@
 #pragma once
 
+/// @file
 /// Land: bounded regions of storage, and the bookkeeping that hands them out.
 ///
 /// Storage comes in three holdings that lend the same borrowed view:
@@ -24,6 +25,13 @@
 
 namespace nxtrt {
 
+/// Borrowed pointer and size of raw storage for up to `size` values of `T`.
+///
+/// The usual way to lend storage to a feed, sink, or pool. It does not own
+/// the memory and does not claim any `T` lives there; the borrower constructs
+/// and destroys values itself. The storage must outlive every borrower and
+/// must not be lent to two borrowers at once. Obtain one from a `rack`, a
+/// `static_value_storage`, or a `std::span`.
 template<typename T>
 struct value_storage_ref
 {
@@ -45,6 +53,12 @@ struct value_storage_ref
     std::size_t size = 0;
 };
 
+/// Owned heap land for `size()` values of `T`, uninitialized.
+///
+/// Allocates with `std::allocator<T>` but constructs nothing, and frees
+/// without destroying anything: whoever constructed values in it must destroy
+/// them first. Move-only. Converts to a `value_storage_ref` only as an
+/// lvalue, so a temporary rack cannot be lent.
 template<typename T>
 class rack
 {
@@ -138,6 +152,11 @@ private:
     std::size_t size_ = 0;
 };
 
+/// Inline land for `N` values of `T`, uninitialized.
+///
+/// Like @ref rack but stored in the object itself (no allocation), so it
+/// cannot move or copy. Lend it with `ref()` or by implicit conversion from
+/// an lvalue; it must outlive the borrower.
 template<typename T, std::size_t N>
 class static_value_storage
 {
@@ -381,6 +400,7 @@ public:
         return index;
     }
 
+    /// Puts `index` back in the set.
     void give(std::size_t index) noexcept
     {
         assert(index < N);
@@ -392,6 +412,7 @@ public:
         return layout_.contains(words_.data(), index);
     }
 
+    /// Puts every index in the set.
     void fill() noexcept
     {
         layout_.fill(words_.data());

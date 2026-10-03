@@ -7,6 +7,16 @@
 #include "nxtui/raster.hpp"
 #include "nxtui/units.hpp"
 
+/**
+ * @namespace nxtui::ansi
+ * ANSI escape-sequence output: `Writer` appends sequences to a string, the
+ * free functions write them straight to `std::cout`, and `mode` decides
+ * whether sequences are real, shown in a readable debug form, or omitted.
+ *
+ * Coordinates are zero-based `Pos`/`row_t`/`col_t` values; the writer
+ * converts to the one-based numbers in the sequences. Call `init()` early
+ * in `main` so `mode` matches the output device.
+ */
 namespace nxtui::ansi {
 
 /// ANSI output modes
@@ -16,7 +26,8 @@ enum class Mode {
     enabled    // Real ANSI escape sequences (default for TTY)
 };
 
-/// Current ANSI output mode
+/// Current ANSI output mode, shared process-wide and read on every escape
+/// written. `disabled` until `init()` runs or it is assigned.
 extern Mode mode;
 
 /// Initialize the ANSI module. Sets mode based on TTY detection,
@@ -47,7 +58,11 @@ enum class TerminalColor : int {
     bright_white = 97,
 };
 
-/// ANSI escape sequence builder that writes to a string buffer.
+/// Appends escape sequences, formatted per `mode`, to a borrowed string.
+///
+/// Every method returns `*this` for chaining. The buffer must outlive the
+/// writer. Text written with `text` is appended raw, without escaping and
+/// regardless of `mode`.
 class Writer
 {
 public:
@@ -56,18 +71,19 @@ public:
     {
     }
 
-    /// Move cursor to terminal position (1-based coordinates)
+    /// Move the cursor to a zero-based position (CUP). Note the
+    /// row-then-column argument order of the first overload.
     Writer & move_to(ansi_row_t y, ansi_col_t x);
     Writer & move_to(Pos pos);
 
-    /// Move cursor relatively (positive deltas)
+    /// Move the cursor relatively; a zero count writes nothing.
     Writer & move_up(height_t n = 1 * ln);
     Writer & move_down(height_t n = 1 * ln);
     Writer & move_right(width_t n = 1 * ch);
     Writer & move_left(width_t n = 1 * ch);
     Writer & move(Size delta); // right and down only
 
-    /// Move to column (1-based)
+    /// Move to a zero-based column on the current row (CHA).
     Writer & move_to_column(ansi_col_t col);
 
     /// Clear operations
@@ -78,7 +94,8 @@ public:
     Writer & clear_line_from_cursor();
     Writer & clear_line_to_cursor();
 
-    /// Scroll region (INCLUSIVE bounds [top, bottom])
+    /// Set the scroll region (DECSTBM) to the inclusive zero-based rows
+    /// [`top`, `bottom`]. Terminals home the cursor when this runs.
     Writer & set_scroll_region(row_t top, row_t bottom);
     Writer & reset_scroll_region();
     Writer & scroll_up(height_t n = 1 * ln);
@@ -97,7 +114,9 @@ public:
     Writer & save_cursor();
     Writer & restore_cursor();
 
-    /// Request cursor position report (DSR 6). Response comes via stdin.
+    /// Request a cursor position report (DSR 6). The reply arrives on stdin
+    /// as `CSI row ; col R`; `input::Parser` decodes it into
+    /// `KeyEvent::cursor_position`.
     Writer & request_cursor_position();
 
     /// Colors (24-bit RGB)
@@ -118,7 +137,8 @@ public:
     Writer & fg_default();
     Writer & bg_default();
 
-    /// Text emphasis.
+    /// Turn on each attribute in `e`. Attributes already on stay on; use
+    /// `reset()` (SGR 0, which also resets colors) to clear them.
     Writer & style(Emphasis e);
     Writer & reset();
     Writer & bold();
@@ -154,13 +174,12 @@ private:
     void csi(std::string_view params, char final_byte);
 };
 
-/// Standalone functions for immediate output (writes directly to
-/// stdout)
-
 /// Render a raster as inline SGR-styled text suitable for scrollback
 /// output.
 [[nodiscard]] std::string render_raster(const Raster & raster);
 
+/// Write a cursor move straight to `std::cout`. The free functions below
+/// mirror the `Writer` methods of the same names.
 void move_to(ansi_row_t row, ansi_col_t col);
 void move_to(Pos pos);
 void clear_screen();
@@ -174,15 +193,18 @@ void reset_scroll_region();
 void scroll_up(height_t n = 1 * ln);
 void scroll_down(height_t n = 1 * ln);
 
-/// Query current cursor position (blocking).
-/// Sends DSR 6 and reads CPR response from stdin.
-/// Returns nullopt if query fails (not a TTY, timeout, parse error).
-/// Requires terminal to be in raw mode for reliable response reading.
+/// Ask the terminal for the cursor position and wait for the reply.
+///
+/// Sends DSR 6 to stdout and reads the reply from stdin synchronously,
+/// temporarily turning off canonical mode and echo, giving up after about
+/// 100 ms without input. Returns a zero-based position, or `std::nullopt`
+/// if stdout is not a TTY, nothing arrives, or the reply does not parse.
+/// Other input arriving meanwhile is consumed and lost.
 [[nodiscard]] std::optional<Pos> query_cursor_position();
 
-/// RAII guard that hides cursor on construction, restores terminal
-/// state on destruction. Resets scroll region, shows cursor, clears
-/// screen.
+/// RAII guard for a TUI session: the constructor calls `init()` and hides
+/// the cursor; the destructor resets the scroll region (keeping the cursor
+/// position), resets SGR attributes, and shows the cursor.
 struct TerminalGuard
 {
     /// Enter application-friendly terminal state.
