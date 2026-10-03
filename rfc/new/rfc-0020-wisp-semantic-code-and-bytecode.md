@@ -238,6 +238,9 @@ optional, and rest/body behavior; an arity count alone is insufficient.
 visible together. Nested scope ownership must reflect that rule. Preserve the
 interpreter's lookup order when a scope contains duplicate names; do not
 silently impose a uniqueness rule or change which occurrence is referenced.
+The two binders differ today: a duplicated parameter resolves to its first
+occurrence, while a duplicated `LET` name resolves to its last, because `LET`
+builds its scope from a reversed accumulator.
 
 `ir-closure` evaluates to a runtime closure sharing the analyzed function's
 code and capturing the current lexical environment. Repeated evaluation of
@@ -335,8 +338,8 @@ A prepared named call reads its callee's function cell when the call begins,
 before evaluating any argument, and keeps that value for the rest of the call,
 including across suspension and repeated resumption. It classifies the value
 at that point. A function, function jet, or continuation is invoked with the
-evaluated arguments. A macro, special operator, or invalid value signals a
-condition before any argument runs; adopting a new macro means preparing the
+evaluated arguments. A macro, special operator, or invalid value signals the
+existing `INVALID-FUNCTION` condition before any argument runs; adopting a new macro means preparing the
 caller again. No call site keeps source for an alternative path.
 
 Special forms compile to their built-in meaning without a guard. That is the
@@ -599,14 +602,20 @@ runtime checks until publication or versioning makes a cached result valid.
 
 Catalog current source behavior and add focused tests where the compiler needs
 an explicit distinction: callee resolution timing, function and macro
-redefinition, parameter handling (including when `&optional` defaults run and
-which bindings they see), source mutation, and assignment through exposed
-environments. Record the liveness contract, prepared-mode snapshot, and
+redefinition, parameter handling, source mutation, and assignment through
+exposed environments. Wisp's optional parameters have no default forms; a
+missing optional argument is `NIL`. Record the liveness contract, prepared-mode snapshot, and
 inspection differences from this RFC. Refresh the benchmark baseline on the actual build
 used for the experiment.
 
 Acceptance: a named semantic corpus and a documented mode/behavior matrix. No
 runtime default changes and no performance claims from historical timings.
+
+Status: done. The corpus is the table in
+[`test/wisp-compiler-test.cpp`](https://github.com/mbrock/nxtui/blob/main/test/wisp-compiler-test.cpp).
+Each case runs in a fresh base image and records its source-mode result; the
+cases where prepared mode deliberately differs record that outcome and the
+reason, which makes the table the mode/behavior matrix.
 
 ### 1. Analyze into records in Wisp
 
@@ -732,7 +741,18 @@ is a historical baseline, not proof of the current bottleneck. It reports TAK
 at roughly 93 ms for C++ Wisp and 2.2 ms for CPython under its recorded setup,
 but its semantic
 counters do not establish the fraction of time attributable to lookup or
-allocation. Use
+allocation.
+
+The stage 0 baseline, taken at `15b3350` with the release benchmark build
+(Clang 23.1, macOS), measures TAK 18/12/6 at 30.6 ms per iteration over ten
+iterations after three warmups, about three times faster than the historical
+report. One counter-enabled iteration made 127,219 guest function calls in
+1,463,015 evaluator steps, about 11.5 steps per call. Each call also scanned
+about ten list spines, pushed about 2.9 frames, made three lexical lookups,
+and allocated about 8.6 vector words. Collection took 1.3 ms of the 32.5 ms
+counted run. These counts support the RFC's premise that the interpreter's
+cost is rediscovering structure at every step, not heap-resident control or
+collection, but they are not a timing breakdown. Use
 [the benchmark harness](https://github.com/mbrock/nxtui/blob/2b6f13f/bench/wisp/README.md)
 to measure current revisions and separate preparation cost, steady execution,
 GC, capture/resume, tape size/restore time, and end-to-end process cost. Include
@@ -763,15 +783,80 @@ is a later reference for making native execution follow an inspectable VM
 model. These are implementation precedents; the Wisp contracts above decide
 which techniques can transfer.
 
-## First implementation slice
+## Implementation plan
 
-After the contract fixtures in stage 0, the first compiler patch should deliver
-stage 1 only: compiler records, an analyzer for a small explicit subset,
-binding-identity tests, and an inspectable saved code graph. It should end with
-a Wisp programmer holding the analyzed form of `(if x (foo x) 17)` and seeing
-both uses of `x` point to the same binding.
+Reading the evaluator at `15b3350` turned up two facts that shape the first
+executor.
 
-The next slice should make that representation execute in the existing run,
-then grow immediately toward the suspended-argument example. Delay instruction
-packing until we can inspect, save, restore, and resume that computation with
-the intended semantics.
+The source evaluator already keeps the activation this RFC asks for. An
+argument frame is a `ktx` row holding the resolved callee in `fun`, a progress
+vector `[position, values...]` in `acc`, and the remaining argument source in
+`arg`, and `copy_continuation_frame` clones that vector when it writes a frozen
+frame. The defining multi-shot example therefore already passes in source mode;
+prepared frames copy this shape rather than inventing one.
+
+The evaluator also has an obvious place for prepared code. `once()` dispatches
+on the tag of the current expression, and a record is currently an invalid
+expression.
+
+### IR nodes are expressions
+
+When the evaluator meets a record whose descriptor is an IR node type, it runs
+that node's transition. Most of the integration follows from that rule:
+
+- `(eval (analyze '...))` runs prepared code, under public `EVAL`'s scope.
+- A prepared closure is an ordinary `fun` row whose `exp` is its root node.
+  `bind()` already parses parameters and enters the body, which is then a
+  node. No new callable type is needed.
+- A prepared frame is an ordinary `ktx` row with the node in `fun`, a progress
+  vector in `acc`, and a phase or index in `arg`. Multi-shot ownership needs one
+  change: `copy_continuation_frame` also clones `acc` when `fun` is a record.
+- Calls between source and prepared code work in both directions, and a
+  prepared tail call does what a source tail call does today.
+- Tape validation already treats a `ktx` row's callee, accumulator, and
+  argument fields as data, apart from boundary kinds. A node-shape check is
+  still needed before native dispatch trusts a restored frame.
+- Lexical references first resolve by name through the same environment chain
+  that source evaluation builds, so they are correct by construction. Binding
+  identity serves analysis and inspection until lexical addresses arrive.
+
+The IR structs live in the `WISP` package with an `IR-` prefix, and their names
+join `known_names`. The executor recognizes a node by its descriptor's name and
+finds slot positions by name in the descriptor's slot list, as the host does
+for its structs, so no slot order is duplicated in C++. A `WISP-COMPILER`
+package can follow once the API settles.
+
+During stage 2, `CODE` on a prepared closure returns its root node, which links
+back to the source. Stage 3 chooses between keeping that arrangement and
+adding an executable column to `fun`, which would change the tape version.
+
+### Steps
+
+Each step is a small, separately tested commit.
+
+1. **Compiler skeleton.** Add `src/wisp/compiler.wisp`, embedded like
+   `base.wisp`, and a test helper that loads it once on top of the base tape.
+   Define the IR structs and analyze constants and `QUOTE`, references, free
+   lookups, `IF`, `DO`, named calls, and `FUNCTION`, with a readable printer.
+2. **Binders and expansion.** Analyze `LET`, `%FN` with structured parameters,
+   and `%SET!`. Expand macros as the walker reaches them, use source escapes
+   for `%MACRO-FN` and other unsupported forms, and analyze captures. This step
+   ends with `(analyze '(fn (x) (if x (foo x) 17)))` showing both references to
+   `x` sharing one binding.
+3. **Persistence and checking.** A graph survives collection and a tape round
+   trip with its identities intact, and a graph checker written in Wisp
+   rejects malformed nodes.
+4. **Minimal executor.** Add the record case to `once()` and execute
+   constants, lookups, references, branches, and sequences.
+5. **Calls and closures.** Execute calls with a progress vector holding the
+   resolved callee, position, and values; `ir-closure` building `fun` rows
+   with node bodies; `LET`; assignment; and source escapes. Extend the
+   continuation copy rule.
+6. **Acceptance.** The suspended-argument example passes in both modes, with
+   collection between every step and a tape restore before the first
+   resumption. Mixed recursion works, a deep tail loop keeps a flat frame
+   depth, and the whole corpus runs in prepared mode.
+
+Stages 3 through 6 then proceed as described above, with a working executor
+to measure. Delay instruction packing until we can inspect, save, restore, and
+resume the suspended-argument computation with the intended semantics.

@@ -7,3 +7,4 @@
 #include "wisp-load-test.cpp"
 #include "wisp-runtime-test.cpp"
 #include "wisp-tape-test.cpp"
+#include "wisp-compiler-test.cpp"
