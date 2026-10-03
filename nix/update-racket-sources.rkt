@@ -14,22 +14,29 @@
 
 (define-runtime-path forge "../vendor/racket/forge")
 (define-runtime-path something "../vendor/racket/something-src")
-(define bundled (installed-pkg-names #:scope 'installation))
+;; The minimal distribution supplies just these packages. Keep the lock
+;; independent of the updater's installed packages (including Darwin's full
+;; distribution), so it remains complete for the Linux headless build.
+(define bundled '("base" "racket-lib"))
 (define sources (make-hash))
 (define seen (make-hash))
 
 (define (archive-url source rev)
   (define u (string->url source))
-  (define parts (map path/param-path (url-path u)))
-  (define owner (car parts))
-  (define repo (regexp-replace #rx"[.]git$" (cadr parts) ""))
-  (define host (url-host u))
-  (unless (and (member (url-scheme u) '("https" "git" "github"))
-               (regexp-match? #px"^[0-9a-f]{40}$" rev))
-    (error 'archive-url "expected a Git source and commit: ~a ~a" source rev))
-  (if (equal? host "gitlab.com")
-      (format "https://~a/~a/~a/-/archive/~a/~a-~a.tar.gz" host owner repo rev repo rev)
-      (format "https://~a/~a/~a/archive/~a.tar.gz" host owner repo rev)))
+  (cond
+    ;; Release-catalog packages are already archives, not Git repositories.
+    [(and (equal? (url-scheme u) "https") (regexp-match? #rx"[.]zip$" source)) source]
+    [else
+     (unless (and (member (url-scheme u) '("https" "git" "github"))
+                  (regexp-match? #px"^[0-9a-f]{40}$" rev))
+       (error 'archive-url "expected an HTTPS archive or Git source and commit: ~a ~a" source rev))
+     (define parts (map path/param-path (url-path u)))
+     (define owner (car parts))
+     (define repo (regexp-replace #rx"[.]git$" (cadr parts) ""))
+     (define host (url-host u))
+     (if (equal? host "gitlab.com")
+         (format "https://~a/~a/~a/-/archive/~a/~a-~a.tar.gz" host owner repo rev repo rev)
+         (format "https://~a/~a/~a/archive/~a.tar.gz" host owner repo rev))]))
 
 (define (visit dep)
   (define name (if (pair? dep) (car dep) dep))
@@ -45,7 +52,10 @@
     (hash-set! packages (string->symbol name) subdir)
     (for-each visit (hash-ref details 'dependencies))))
 
-(parameterize ([current-pkg-catalogs (list (string->url "https://pkgs.racket-lang.org"))])
+(parameterize ([current-pkg-catalogs
+                (list (string->url (format "https://download.racket-lang.org/releases/~a/catalog/" (version)))
+                      (string->url "https://pkgs.racket-lang.org"))])
+  (visit "compiler-lib") ; supplies `raco make` in the minimal environment
   (for ([dir (list forge something)])
     (for-each visit (extract-pkg-dependencies (get-info/full dir) #:build-deps? #t))))
 

@@ -774,6 +774,9 @@ nix develop -c make spec
 ```
 
 Racket, Java, and the compiled Racket libraries all come from Nix.
+On Linux the spec environment uses `racket-minimal`, avoiding the full Racket
+distribution's GTK and desktop wrappers. Darwin retains full Racket because
+the pinned Nixpkgs marks its minimal package broken there.
 `nix/racket-sources.json` pins the external package closure to source revisions
 and Nix content hashes; `nix/spec-racket.nix` installs and compiles those inputs
 offline, including the patched Forge and Something sources in `vendor/racket/`.
@@ -796,7 +799,10 @@ Editing a model does not rebuild the dependency package. `nix flake check`
 also runs the specs in a clean Nix build sandbox.
 
 To deliberately refresh the dependency lock from the Racket catalog (this is
-the networked update step, not part of normal builds):
+the networked update step, not part of normal builds), the updater prefers the
+catalog for the installed Racket version, then the community catalog. It locks
+every dependency not supplied by minimal Racket, including libraries that
+would otherwise be bundled with the full distribution:
 
 ```sh
 nix develop -c racket nix/update-racket-sources.rkt > nix/racket-sources.json.new &&

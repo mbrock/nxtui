@@ -1,5 +1,957 @@
 [
   {
+    "hash": "sha256-qAXbRS754S9mDYzZYGkccl+R8Ifcm9lSfcE7aBqHZIw=",
+    "packages": {
+      "2d-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/2d-lib.zip"
+  },
+  {
+    "hash": "sha256-ntDdzPGaxYR21Qn6RLm81I7si1EqxyKRXvwZw3286Bk=",
+    "packages": {
+      "at-exp-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/at-exp-lib.zip"
+  },
+  {
+    "hash": "sha256-HTgRaXGLsu/ybfIO1Y47s3KxpChb8HuTfKec9HWqhgY=",
+    "packages": {
+      "cext-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/cext-lib.zip"
+  },
+  {
+    "hash": "sha256-PWVJmHBBlUxe+kHnQ5ujfefaVZBKyzhbNuewv0j/F54=",
+    "packages": {
+      "class-iop-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/class-iop-lib.zip"
+  },
+  {
+    "hash": "sha256-9agTIEPat+Uzoksx/oQPC3Bra5tBOFnMUn/G8LlrRto=",
+    "packages": {
+      "compatibility-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/compatibility-doc.zip"
+  },
+  {
+    "hash": "sha256-gR0aKy+j2x6pVUPdOFlpfsKqlmoE7+FhARc7NqHUSVI=",
+    "packages": {
+      "compatibility-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/compatibility-lib.zip"
+  },
+  {
+    "hash": "sha256-1IC7HNEb3ucvpkMGWKgjIcHdBDdwEv0zPuwbcGtDIgY=",
+    "packages": {
+      "compiler-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/compiler-lib.zip"
+  },
+  {
+    "hash": "sha256-dYhk5cb6ueRrs6XfarWvaY6IEOIoag6Ba66cjrXtBGM=",
+    "packages": {
+      "data-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/data-doc.zip"
+  },
+  {
+    "hash": "sha256-wv+VAr3l0ViC+f8vsj09VpQ0LTtghjy3IfgjGeEow98=",
+    "packages": {
+      "data-enumerate-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/data-enumerate-lib.zip"
+  },
+  {
+    "hash": "sha256-pBWbKn6glwRt9MT7COibUnTLabVgogfYEQ1RSJC33tU=",
+    "packages": {
+      "data-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/data-lib.zip"
+  },
+  {
+    "hash": "sha256-HmzZUM6W1Yzytx3I1EyEKKKdUdoQelhu0Tcnse/Ugto=",
+    "packages": {
+      "db-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/db-doc.zip"
+  },
+  {
+    "hash": "sha256-TK9JQgKuAtWwy6y1Z4QXx6Ua/ZC5NLCEuT+NVC/eLo4=",
+    "packages": {
+      "db-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/db-lib.zip"
+  },
+  {
+    "hash": "sha256-e6rccIoiQ3CRsD4xb4z9I0W5Ryq6wPiBE8391NNIYH8=",
+    "packages": {
+      "deinprogramm-signature": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/deinprogramm-signature.zip"
+  },
+  {
+    "hash": "sha256-YSSO8u83OY3Vre6LvRFI5ZdoFt29UqqzEDe4WhfbCFQ=",
+    "packages": {
+      "distributed-places-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/distributed-places-doc.zip"
+  },
+  {
+    "hash": "sha256-T4jAlzhcB8eLIolVuhFVAUhRwpBZPh+ePiUEhMoSK+I=",
+    "packages": {
+      "distributed-places-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/distributed-places-lib.zip"
+  },
+  {
+    "hash": "sha256-Y3bELImoQ9roGCEM8hJBFWEBu6exLdrW64fRMytvD1w=",
+    "packages": {
+      "draw-aarch64-linux-natipkg-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-aarch64-linux-natipkg-3.zip"
+  },
+  {
+    "hash": "sha256-NyXRgEcWo5Yh7PpuMEb1ShnIcUQS+R7O0/UOnUj3G+8=",
+    "packages": {
+      "draw-aarch64-macosx-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-aarch64-macosx-3.zip"
+  },
+  {
+    "hash": "sha256-ZGxo62XF/92mfQTcE2JLG7vdCQnssCUF5Y4W7pmaG78=",
+    "packages": {
+      "draw-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-doc.zip"
+  },
+  {
+    "hash": "sha256-Y4Jj6gZ4X69q+gR6sdVEVD4jBx07LziGvb3TlPBMuM8=",
+    "packages": {
+      "draw-i386-macosx-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-i386-macosx-3.zip"
+  },
+  {
+    "hash": "sha256-TsVwj3gFX3RiLZNO1YT9gJAsMNu2TDR2xAQpPyvjCvk=",
+    "packages": {
+      "draw-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-lib.zip"
+  },
+  {
+    "hash": "sha256-w6Xgi8o5cCawj9A3FCG3Qh/em+rKX2R2wU2VFXj4Gf4=",
+    "packages": {
+      "draw-ppc-macosx-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-ppc-macosx-3.zip"
+  },
+  {
+    "hash": "sha256-GH/ngW6UWG21QCNFl/F1ATtrETqUuaQCjXu2m0vsd4Q=",
+    "packages": {
+      "draw-ttf-aarch64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-ttf-aarch64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-NFHF3TwCQO1BQ+2NE3RJy03l/mmZ6im2wMW0VxVPhXI=",
+    "packages": {
+      "draw-ttf-x86_64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-ttf-x86_64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-FTZuUhQzz/N9cKSrbj5QyEV3+EieKhuNicXCYA2YhNk=",
+    "packages": {
+      "draw-win32-arm64-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-win32-arm64-3.zip"
+  },
+  {
+    "hash": "sha256-tMYa4d5DRsMWdvnph1csDVcth3EC7w9OBxtt3B5aZQU=",
+    "packages": {
+      "draw-win32-i386-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-win32-i386-3.zip"
+  },
+  {
+    "hash": "sha256-OpfpLKm54LouHSepPoUP5gZUoEJUmIfGshIiscvqXm8=",
+    "packages": {
+      "draw-win32-x86_64-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-win32-x86_64-3.zip"
+  },
+  {
+    "hash": "sha256-mmQho+fCk4mQbcCZmUN3ZK2RboHI77Ifhmo0RryPF+U=",
+    "packages": {
+      "draw-x11-aarch64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-x11-aarch64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-irLdTLmIF5RDiqy1Z53QXM1sO5HBR0dL1mtctI5F+8Y=",
+    "packages": {
+      "draw-x11-x86_64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-x11-x86_64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-G9LYyCGDtfwWXryEYBMwvuFUF7rKhvhZzumtBUbICuA=",
+    "packages": {
+      "draw-x86_64-linux-natipkg-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-x86_64-linux-natipkg-3.zip"
+  },
+  {
+    "hash": "sha256-G4Ms9ymHiTJRI05HTz/yGQfCI4mvurL0fvgYEfds4/I=",
+    "packages": {
+      "draw-x86_64-macosx-3": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/draw-x86_64-macosx-3.zip"
+  },
+  {
+    "hash": "sha256-/VOY9YVqnpaqw8jz+ZxaGdrMBVbUVkmHAJydcdBcagA=",
+    "packages": {
+      "drracket-plugin-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/drracket-plugin-lib.zip"
+  },
+  {
+    "hash": "sha256-EP572dV3+qd/KId8ru2o1MOjizlrcpksqvL9J+Oit+Y=",
+    "packages": {
+      "drracket-tool-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/drracket-tool-lib.zip"
+  },
+  {
+    "hash": "sha256-1bRbKDspCGbvu1CxyS/dJ2TvUM8OMQlB48zrsZvXhC0=",
+    "packages": {
+      "drracket-tool-text-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/drracket-tool-text-lib.zip"
+  },
+  {
+    "hash": "sha256-fbbTIGi9aWw8HQIPSy4+/L+NI+pffDkCH+PmlHQ0YEo=",
+    "packages": {
+      "dynext-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/dynext-lib.zip"
+  },
+  {
+    "hash": "sha256-IPjB6r/x/FmRjfiQf+diruTHs3v2xTsokHGfroTNKX8=",
+    "packages": {
+      "eli-tester": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/eli-tester.zip"
+  },
+  {
+    "hash": "sha256-fXvN3nRpEfhZCfzB3y7o4oQUP7bSc2Jq4J9ePepBgD4=",
+    "packages": {
+      "errortrace-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/errortrace-doc.zip"
+  },
+  {
+    "hash": "sha256-qMM7q7CeWlZg4RbePqf+DLbCINyaEyPjs5VtXjUK8EQ=",
+    "packages": {
+      "errortrace-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/errortrace-lib.zip"
+  },
+  {
+    "hash": "sha256-uMKaY35Yuvv9dcmi9r04dGRs0MU/wUsKFAuuJ9iZUPU=",
+    "packages": {
+      "future-visualizer-pict": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/future-visualizer-pict.zip"
+  },
+  {
+    "hash": "sha256-B+PsAEN/YfY6oadaIFZxxSdEwN1yNiXSZJhNFlF5W7Y=",
+    "packages": {
+      "future-visualizer": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/future-visualizer.zip"
+  },
+  {
+    "hash": "sha256-bWx3EO32A2Yd+jgHT2wCi9NftWi9eNBt3jqi3dGoplY=",
+    "packages": {
+      "gui-aarch64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-aarch64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-LM5bPuM3sRkAjncEhwgWNmfTnVq33Enas9fqNfEtlHk=",
+    "packages": {
+      "gui-aarch64-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-aarch64-macosx.zip"
+  },
+  {
+    "hash": "sha256-kMaA/p6whK/w6hXbWU5uvj2jYgJ6fGQYnGpCxzZkooc=",
+    "packages": {
+      "gui-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-doc.zip"
+  },
+  {
+    "hash": "sha256-xU43HevbVbjJwt/AsfqOuIM0jKbvC3jlQERE/aaYLTg=",
+    "packages": {
+      "gui-i386-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-i386-macosx.zip"
+  },
+  {
+    "hash": "sha256-GakB9BE7nkPdlInsw02m/BKSwCcb98sXQHaRkvVsY2c=",
+    "packages": {
+      "gui-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-lib.zip"
+  },
+  {
+    "hash": "sha256-U5wzLKMbZT6TL2E70cuDDB9ypZi/vsYuXEPoWvogf34=",
+    "packages": {
+      "gui-ppc-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-ppc-macosx.zip"
+  },
+  {
+    "hash": "sha256-faI8lJADTW147YrSWzMOWUonrQAiARuwST6/csYt8KA=",
+    "packages": {
+      "gui-win32-arm64": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-win32-arm64.zip"
+  },
+  {
+    "hash": "sha256-Bw/a6vVZrdLcOPbun3DEENMOEjgKkW0pluwfZQL1VUw=",
+    "packages": {
+      "gui-win32-i386": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-win32-i386.zip"
+  },
+  {
+    "hash": "sha256-R4irjvxKtThaR1PJbd7IZa6DGKuGpD2fzEGc1kcEFGU=",
+    "packages": {
+      "gui-win32-x86_64": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-win32-x86_64.zip"
+  },
+  {
+    "hash": "sha256-plnl0s0z2viVXlBoYUX5FOBofFcKOH4xXV7Gy7323l8=",
+    "packages": {
+      "gui-x86_64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-x86_64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-LWGtZBCJD9DjqjaRtp36OPPkOKMDZzC+Jt1E17IygkM=",
+    "packages": {
+      "gui-x86_64-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/gui-x86_64-macosx.zip"
+  },
+  {
+    "hash": "sha256-JPv6NRBQHrniThWD6wXDt9WzMVgrRxZ5vRS70J6I5Qw=",
+    "packages": {
+      "htdp-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/htdp-lib.zip"
+  },
+  {
+    "hash": "sha256-plTB6GzcOa9ucWbYXVQa8E5jM9H/DpMG/6lOnNOzDN4=",
+    "packages": {
+      "html-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/html-lib.zip"
+  },
+  {
+    "hash": "sha256-VQH5Hzbge54nrLU3IZb5jk/6rmPDzMCpjtQKixuT8I8=",
+    "packages": {
+      "icons": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/icons.zip"
+  },
+  {
+    "hash": "sha256-K31tk453pvRL6d2rDpfJwFb+ndG0t/rgj2rz/9j4lqo=",
+    "packages": {
+      "images-gui-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/images-gui-lib.zip"
+  },
+  {
+    "hash": "sha256-2VLVUzKOIqT2bdUzQprTREaiLq1E7VmDmB17eYPFwvA=",
+    "packages": {
+      "images-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/images-lib.zip"
+  },
+  {
+    "hash": "sha256-5nuUrViSqxAgaQfTOhFEATGMR9Na7VSbd8z56aktcmo=",
+    "packages": {
+      "macro-debugger-text-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/macro-debugger-text-lib.zip"
+  },
+  {
+    "hash": "sha256-sgLZSzDY23YXYlgHcnnQUTCAUHsihvRtW6ypzlh5SQU=",
+    "packages": {
+      "macro-debugger": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/macro-debugger.zip"
+  },
+  {
+    "hash": "sha256-AmaUEuZL20hTne+rCX7t67nQrZD/HvgTz+K5Xugjvbo=",
+    "packages": {
+      "math-aarch64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-aarch64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-oEtBuF2NE68+PZW+cdD3Q/+NHO/qt3uItMJFeXcqYeE=",
+    "packages": {
+      "math-aarch64-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-aarch64-macosx.zip"
+  },
+  {
+    "hash": "sha256-Z1/x8EbpBbrAEmGPtoM9Q8BLbBdLRXY2RG5iW0vXMoM=",
+    "packages": {
+      "math-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-doc.zip"
+  },
+  {
+    "hash": "sha256-GF5DBtxPt/5S2v5vD3fCYD/jTYyn2yIW+0YrmWog3eU=",
+    "packages": {
+      "math-i386-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-i386-macosx.zip"
+  },
+  {
+    "hash": "sha256-x4rlTgQHNfM/siA0GUZzJTUMjmvnASiIcTavlnLNTck=",
+    "packages": {
+      "math-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-lib.zip"
+  },
+  {
+    "hash": "sha256-yS2UNegystx4z557xEwfcfbbJ5vzCBjSLfC2MRMZqHI=",
+    "packages": {
+      "math-ppc-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-ppc-macosx.zip"
+  },
+  {
+    "hash": "sha256-v1EW96LzXsZKs1IOtnGaQtN9wvRvOP8FJwCBrPM2D2Q=",
+    "packages": {
+      "math-win32-arm64": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-win32-arm64.zip"
+  },
+  {
+    "hash": "sha256-2RTxn5TjX37mTUzHXbvJDSWSYLYCTri4gXSmuy2NAMU=",
+    "packages": {
+      "math-win32-i386": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-win32-i386.zip"
+  },
+  {
+    "hash": "sha256-eRTzRvL2qrCHL09+KkYXFJCtudYZ0xOvK6RrW2oV/YE=",
+    "packages": {
+      "math-win32-x86_64": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-win32-x86_64.zip"
+  },
+  {
+    "hash": "sha256-tjrSaHcUwDxDbCDd5sy9uRwqCkZNBXNKU/hkpGf8HQ8=",
+    "packages": {
+      "math-x86_64-linux-natipkg": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-x86_64-linux-natipkg.zip"
+  },
+  {
+    "hash": "sha256-WTIx+yvM1SXv8l4Q+/v+JYaHZkHSB24WjA7YQx7/VSI=",
+    "packages": {
+      "math-x86_64-macosx": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/math-x86_64-macosx.zip"
+  },
+  {
+    "hash": "sha256-AAL8ZH7uqqnHgA1QjMJaWwIi+cbj2lL7uRE3tdp/Zj0=",
+    "packages": {
+      "mzscheme-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/mzscheme-doc.zip"
+  },
+  {
+    "hash": "sha256-iI5lEx6Oo0iGYqqJaX6fYq5RfBYac2fjKRosKhvZA6Q=",
+    "packages": {
+      "net-cookies-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/net-cookies-doc.zip"
+  },
+  {
+    "hash": "sha256-96OLwbkCPZnh05VJO/tC++7tsIm7KfAZ9Q1Dzq8jfU0=",
+    "packages": {
+      "net-cookies-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/net-cookies-lib.zip"
+  },
+  {
+    "hash": "sha256-jLpZnhahX8Diby7+UbxBkDSIlvGvV2IdZMRwduzMRno=",
+    "packages": {
+      "net-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/net-doc.zip"
+  },
+  {
+    "hash": "sha256-fevyRpLRSHlq23T2fxlHUcQPRaK1v1AQyXvOeRosb0k=",
+    "packages": {
+      "net-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/net-lib.zip"
+  },
+  {
+    "hash": "sha256-uBKEUb2xbaMCyc8tCHAezV7LP3Y7ylH2RWAV75iiJuY=",
+    "packages": {
+      "option-contract-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/option-contract-lib.zip"
+  },
+  {
+    "hash": "sha256-iebct8tPwwpepXBTErlFQ+xkzx9yxw3UgKuWDG3q9z0=",
+    "packages": {
+      "parser-tools-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/parser-tools-lib.zip"
+  },
+  {
+    "hash": "sha256-/iO5sczciUYXJ8PB6DgtFgvsEgUWlv69y07LUns+tb4=",
+    "packages": {
+      "pconvert-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/pconvert-doc.zip"
+  },
+  {
+    "hash": "sha256-vDiWyO2eKF7sJG9rSRgPID9TcHfvUseOo+Kh+FHHsI8=",
+    "packages": {
+      "pconvert-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/pconvert-lib.zip"
+  },
+  {
+    "hash": "sha256-30ZnoOYz9IXjghEtEjoGpwmMmcylIahu8IWRxhpymbk=",
+    "packages": {
+      "pict-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/pict-doc.zip"
+  },
+  {
+    "hash": "sha256-2rbKCafyBTre0SUIM/6FUxm9jOObSrX50WOnoPnF3fU=",
+    "packages": {
+      "pict-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/pict-lib.zip"
+  },
+  {
+    "hash": "sha256-NEPDjTnTW0T6egW2PdS9rh2mM8yg+D6vW5j/EyUknys=",
+    "packages": {
+      "plai-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/plai-lib.zip"
+  },
+  {
+    "hash": "sha256-cMvYwI0w9rwOQLptPpjg4OkRK7JPN0kvzcqKKZYn0mE=",
+    "packages": {
+      "planet-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/planet-doc.zip"
+  },
+  {
+    "hash": "sha256-TNWtSN/0azBoV6rL0BDBZQajMcaCPyFP1wqMx7ah4c8=",
+    "packages": {
+      "planet-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/planet-lib.zip"
+  },
+  {
+    "hash": "sha256-8hqaplW+Nl2vkBgvd4Z2HYz8Z7tapO3gE05SkRfb5bk=",
+    "packages": {
+      "plot-compat": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/plot-compat.zip"
+  },
+  {
+    "hash": "sha256-4KXb+wF8SG6u29RAFubi5i/PuY+2p/mNOoPvEPiV05o=",
+    "packages": {
+      "plot-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/plot-doc.zip"
+  },
+  {
+    "hash": "sha256-BwWMo3CrYANI7mey+GVytDFYDxqe5KdCkYl8DpdLzhk=",
+    "packages": {
+      "plot-gui-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/plot-gui-lib.zip"
+  },
+  {
+    "hash": "sha256-d9HyIaSOcYqqTK3oNLd0MqHeGImvjjzh8kqSakt2I9A=",
+    "packages": {
+      "plot-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/plot-lib.zip"
+  },
+  {
+    "hash": "sha256-y8LBUo9sB5x/mHajMi055eSSOKzQXcjDyuO8yDAhkHM=",
+    "packages": {
+      "profile-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/profile-doc.zip"
+  },
+  {
+    "hash": "sha256-WyV1mlnwHwco+z0LhK2WhQsYzZwU0//dt5bLSRFluV8=",
+    "packages": {
+      "profile-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/profile-lib.zip"
+  },
+  {
+    "hash": "sha256-xY0M8r4OMEFDqye3R+CCWg1Fd22g6O1WAxkjZYhoJpc=",
+    "packages": {
+      "r5rs-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/r5rs-doc.zip"
+  },
+  {
+    "hash": "sha256-GHKLnv+uk+Mr+mMVD3Dtz845fdSPIOJp9NdlILbkeTQ=",
+    "packages": {
+      "r5rs-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/r5rs-lib.zip"
+  },
+  {
+    "hash": "sha256-Av+hwUdNAuxf602oID7ZIPTLqjAQfu3nSo9cDEGaWS0=",
+    "packages": {
+      "r6rs-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/r6rs-doc.zip"
+  },
+  {
+    "hash": "sha256-rhiOcntNNp3L85+JU7mjAk/kFBOTgk1gnL3RziK1yWc=",
+    "packages": {
+      "r6rs-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/r6rs-lib.zip"
+  },
+  {
+    "hash": "sha256-GzC1/AW1ZogysVqKleJHI5tWL8QKVl40jb4U4B+7hAY=",
+    "packages": {
+      "racket-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/racket-doc.zip"
+  },
+  {
+    "hash": "sha256-l+KDENQWVh6HOvhn23qdb3Smdkk9Un/avx5PqoRyZbo=",
+    "packages": {
+      "racket-index": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/racket-index.zip"
+  },
+  {
+    "hash": "sha256-03a4ePCMi7lMnLBakBf0mJKzH6i8ZTVIOv2ygS7yb0w=",
+    "packages": {
+      "rackunit-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/rackunit-doc.zip"
+  },
+  {
+    "hash": "sha256-0rbdcYfcSEl8qpCdYH2dafIdTsRuRxnudkSiuEI/nA8=",
+    "packages": {
+      "rackunit-gui": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/rackunit-gui.zip"
+  },
+  {
+    "hash": "sha256-ya+imXR5qATBPc0+RfcRoyew36dDQa1N0LoaLvbKMX0=",
+    "packages": {
+      "rackunit-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/rackunit-lib.zip"
+  },
+  {
+    "hash": "sha256-1iPx6aEXhJTy8bMSxwxwuHEhaOMDicbWeWkndeIOKeU=",
+    "packages": {
+      "rackunit-typed": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/rackunit-typed.zip"
+  },
+  {
+    "hash": "sha256-PXx9F0qSQQ6E+3yWSHKGEBssHjYME4ZeLAAvpjRaCtI=",
+    "packages": {
+      "readline-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/readline-doc.zip"
+  },
+  {
+    "hash": "sha256-C9Dx4du0G2VSzwL/VMivaO1hQQjh9FWo+eoOgitS8c0=",
+    "packages": {
+      "readline-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/readline-lib.zip"
+  },
+  {
+    "hash": "sha256-Is8i4EKz8cw0XxRSepY0TgMHbx6XVjYYmUWR+VyJ4Gk=",
+    "packages": {
+      "sandbox-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/sandbox-lib.zip"
+  },
+  {
+    "hash": "sha256-I7BwqrSOVnD/nFnEnClE8Gwk5YwKwi66PBWRvjG2+d8=",
+    "packages": {
+      "sasl-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/sasl-lib.zip"
+  },
+  {
+    "hash": "sha256-ado7weApHJiYdgr+Kmb4zYvfOpbY5VNoaEt/es3YYgk=",
+    "packages": {
+      "scheme-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/scheme-doc.zip"
+  },
+  {
+    "hash": "sha256-Ju6jMZflWqcpgGnbyqj5yceQByN7hYGZhi3uUCxt7oU=",
+    "packages": {
+      "scheme-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/scheme-lib.zip"
+  },
+  {
+    "hash": "sha256-YcJWPOTwg1pzzHr6NbX6zaBWRUcuJZkFLbb7zXonRtQ=",
+    "packages": {
+      "scribble-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/scribble-doc.zip"
+  },
+  {
+    "hash": "sha256-O/UmeJ7rm7jmRZ+rRA7XfZl7EJ94a+9t1ZhRQkzxiBA=",
+    "packages": {
+      "scribble-html-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/scribble-html-lib.zip"
+  },
+  {
+    "hash": "sha256-i0GVURqv5re0hPY6530XMTfoQLueiTOmVl0BSavXH5M=",
+    "packages": {
+      "scribble-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/scribble-lib.zip"
+  },
+  {
+    "hash": "sha256-pczpg1JgcwdY3QKD79zPE8iYaE5DauFk+erVDlSfbLo=",
+    "packages": {
+      "scribble-text-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/scribble-text-lib.zip"
+  },
+  {
+    "hash": "sha256-oxrlR+kLCO5FgCrSIqPOo3oNSvoqMj88mIKJGgTzU3Q=",
+    "packages": {
+      "sequence-tools-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/sequence-tools-lib.zip"
+  },
+  {
+    "hash": "sha256-U1KZ+z9mGTK1JsnrvOAaDdRmd8vXwQBpyeVTED9qOdI=",
+    "packages": {
+      "serialize-cstruct-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/serialize-cstruct-lib.zip"
+  },
+  {
+    "hash": "sha256-aZGOMvMT34Ss5bjj284fvivP0PexBsJDy1tUw7MVj8A=",
+    "packages": {
+      "simple-tree-text-markup-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/simple-tree-text-markup-doc.zip"
+  },
+  {
+    "hash": "sha256-S4WiY5mnKXUMLXSUEQUAw6qIodDFaKDwHXE2+AQO+D0=",
+    "packages": {
+      "simple-tree-text-markup-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/simple-tree-text-markup-lib.zip"
+  },
+  {
+    "hash": "sha256-ovL8Xp+gkP6lx9jE62rF7HBo31YkhaY0gu41E/iu6eM=",
+    "packages": {
+      "slideshow-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/slideshow-doc.zip"
+  },
+  {
+    "hash": "sha256-DsUAaKYLKsDegLkxMdxwQmsZ+tZdDyHO/+oCVpsZDZA=",
+    "packages": {
+      "slideshow-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/slideshow-lib.zip"
+  },
+  {
+    "hash": "sha256-+4LXZJ4axTMJm1X1oqlEoW61m0nxhomU+Q2Fv5dNp2o=",
+    "packages": {
+      "snip-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/snip-lib.zip"
+  },
+  {
+    "hash": "sha256-Vs7yPL3GOUZZYSDugQr5e3XfI817ZXmEL4zFzdfrR8s=",
+    "packages": {
+      "source-syntax": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/source-syntax.zip"
+  },
+  {
+    "hash": "sha256-MZg4nZVsQxdnBEz3MNuVTLbI2ze1Uo7X5w1OB/tlZIY=",
+    "packages": {
+      "srfi-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/srfi-doc.zip"
+  },
+  {
+    "hash": "sha256-RcjkWWEvkExOrpUchuznoqUkUrKyin1kpCdZVVR8lJo=",
+    "packages": {
+      "srfi-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/srfi-lib.zip"
+  },
+  {
+    "hash": "sha256-n6+c7VvaK+KpvaTmlSvTVpsWzmtDaXo9oHtn2Fcbr6g=",
+    "packages": {
+      "srfi-lite-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/srfi-lite-lib.zip"
+  },
+  {
+    "hash": "sha256-VweR++6h+nS8EWmDo94AjP/zHluIy1CkPCS4yc53SuM=",
+    "packages": {
+      "string-constants-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/string-constants-doc.zip"
+  },
+  {
+    "hash": "sha256-DT9nltT1qxCiQcwdoDZHaZe7vBny4zudgJCfVLQn5Qs=",
+    "packages": {
+      "string-constants-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/string-constants-lib.zip"
+  },
+  {
+    "hash": "sha256-JSoZAbERV0JdJbeQjQZOnR6fpOdBrDMf3x80EDRKUFo=",
+    "packages": {
+      "syntax-color-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/syntax-color-doc.zip"
+  },
+  {
+    "hash": "sha256-cM+fyTBPE8nOeX9cv0Wq3uH7dADcrhx0QXD/vOAFr6I=",
+    "packages": {
+      "syntax-color-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/syntax-color-lib.zip"
+  },
+  {
+    "hash": "sha256-tnOmGzrcqz3wIwbX532BWhrsTZpjF8AaLKDkF6YV8LU=",
+    "packages": {
+      "testing-util-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/testing-util-lib.zip"
+  },
+  {
+    "hash": "sha256-mXbecTpSNUTtt/bxWzVm6jsLhgbfElYBj3Zvk+sZFA8=",
+    "packages": {
+      "tex-table": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/tex-table.zip"
+  },
+  {
+    "hash": "sha256-5LwWPn+22aWFAr6jEXR2dgDG4JEyi4YT2YeRL6kIUu0=",
+    "packages": {
+      "typed-racket-compatibility": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/typed-racket-compatibility.zip"
+  },
+  {
+    "hash": "sha256-JzrBpqSIAFhP6MeZh/RiSxX0jaxPzXE3h+HkUEgKYOM=",
+    "packages": {
+      "typed-racket-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/typed-racket-doc.zip"
+  },
+  {
+    "hash": "sha256-31LrXsT77z5NRgQp0BVaKzosq4kBu475OJ8CIiwtstQ=",
+    "packages": {
+      "typed-racket-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/typed-racket-lib.zip"
+  },
+  {
+    "hash": "sha256-ArkOLSGPwY3PTaN6T11ryGhAY+X2pVcsFp5mvPht3GE=",
+    "packages": {
+      "typed-racket-more": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/typed-racket-more.zip"
+  },
+  {
+    "hash": "sha256-jhQNZFZTZuluAbQKcmtK2DKJoqbbFghiRpTr4Cx/Uro=",
+    "packages": {
+      "unix-socket-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/unix-socket-lib.zip"
+  },
+  {
+    "hash": "sha256-yR6FWBHrveyUuwukd4yZC2IE+Kr/6L7Hm4gUc2gKY8I=",
+    "packages": {
+      "web-server-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/web-server-doc.zip"
+  },
+  {
+    "hash": "sha256-zkW/T9NWovC5IUUBMuR+rKiqcaUy/HHPrtWR5GN9pGA=",
+    "packages": {
+      "web-server-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/web-server-lib.zip"
+  },
+  {
+    "hash": "sha256-IFeAqKVmf2fw8f5j9qlSXYDL4XY5yBzsT0EjL+0aEEE=",
+    "packages": {
+      "wxme-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/wxme-lib.zip"
+  },
+  {
+    "hash": "sha256-OI9e+YatIXr1csmI6ZvoGlFKLN4rA4xU+HEmOcWrEsU=",
+    "packages": {
+      "xrepl-doc": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/xrepl-doc.zip"
+  },
+  {
+    "hash": "sha256-s8OUYw5YNPNfoO2I6A3Oiayue3RWN4bMMYKcmUc/rLU=",
+    "packages": {
+      "xrepl-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/xrepl-lib.zip"
+  },
+  {
+    "hash": "sha256-Za/3IfNKW4mfkeHvKn4TIduKjOd9oxGTLOgCLzHmV+g=",
+    "packages": {
+      "zo-lib": "."
+    },
+    "url": "https://download.racket-lang.org/releases/9.3/pkgs/zo-lib.zip"
+  },
+  {
     "hash": "sha256-LV0GyGOP5N8iJQ9DdspDJbgKs9xcVI612Q2paNXzxK8=",
     "packages": {
       "tabular": "."

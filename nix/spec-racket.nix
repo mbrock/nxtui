@@ -5,17 +5,25 @@
   stdenvNoCC,
   fetchzip,
   racket,
+  racket-minimal,
   jdk21_headless,
   makeWrapper,
 }:
 
 let
+  # Command-line Racket avoids GTK and desktop wrapper dependencies on Linux.
+  # Nixpkgs currently marks the minimal package broken on Darwin.
+  racketRuntime = if stdenvNoCC.hostPlatform.isDarwin then racket else racket-minimal;
   sources = lib.importJSON ./racket-sources.json;
   packages = lib.mergeAttrsList (
     map (
       source:
       let
-        src = fetchzip { inherit (source) url hash; };
+        src = fetchzip {
+          inherit (source) url hash;
+          # Racket release ZIPs contain the package files at the archive root.
+          stripRoot = !(lib.hasSuffix ".zip" source.url);
+        };
       in
       lib.mapAttrs (_: subdir: "${src}/${subdir}") source.packages
     ) sources
@@ -34,7 +42,7 @@ stdenvNoCC.mkDerivation {
   dontUnpack = true;
 
   nativeBuildInputs = [
-    racket
+    racketRuntime
     makeWrapper
   ];
 
@@ -57,9 +65,11 @@ stdenvNoCC.mkDerivation {
 
     # All dependencies are explicit local inputs. Missing dependencies fail
     # rather than silently fetching from a mutable Racket package catalog.
-    raco pkg install --batch --no-setup --deps fail "$out"/sources/*
-    raco setup --no-docs --avoid-main -j "$NIX_BUILD_CORES" \
-      --pkgs ${lib.concatStringsSep " " (builtins.attrNames packages)} forge
+    # Darwin's full Racket already supplies some of the locked libraries.
+    raco pkg install --batch --no-setup --deps fail --skip-installed "$out"/sources/*
+    # Compile Forge and the libraries it uses, not every dependency's GUI
+    # examples, test tools, and documentation helpers.
+    raco setup --no-docs --avoid-main -j "$NIX_BUILD_CORES" --pkgs compiler-lib forge
     # Something's experimental shells/examples do not compile in this
     # snapshot. Compile the supported DSL modules and their dependencies,
     # not those unused experiments (previously linked with --no-setup).
@@ -73,7 +83,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     mkdir -p "$out/bin"
     for tool in racket raco; do
-      makeWrapper ${racket}/bin/$tool "$out/bin/$tool" \
+      makeWrapper ${racketRuntime}/bin/$tool "$out/bin/$tool" \
         --set PLTADDONDIR "$out/share/racket" \
         --prefix PATH : ${lib.makeBinPath [ jdk21_headless ]}
     done
