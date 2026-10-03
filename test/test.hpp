@@ -10,6 +10,7 @@
 #include <functional>
 #include <type_traits>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -278,14 +279,59 @@ inline void print_summary(double elapsed_ms)
     std::cout << " out of " << tests_run << timing << slow_note << '\n';
 }
 
+/// Runs a test body that returns something to run rather than finishing
+/// when called, such as a coroutine task. A header that defines such a type
+/// specializes this; see task-test.hpp for `nxtrt::task<void>`.
+template<typename Result>
+struct test_body_runner;
+
 template<typename F>
-void run_group(
-    std::string_view name, std::vector<int> path, bool slow, F && body)
+void run_body(F & body)
+{
+    using result_type = std::invoke_result_t<F &>;
+    if constexpr (std::is_void_v<result_type>)
+        body();
+    else
+        test_body_runner<result_type>::run(
+            std::function<result_type()>{std::ref(body)});
+}
+
+/// A borrowed test or group body. Erasing it keeps the runner below to one
+/// copy per file instead of one per test: each test instantiates only a
+/// small thunk that calls its own body.
+struct body_ref
+{
+    void * body = nullptr;
+    void (*call)(void *) = nullptr;
+    bool returns_void = true;
+
+    void operator()() const
+    {
+        call(body);
+    }
+};
+
+template<typename F>
+body_ref make_body_ref(F & body)
+{
+    using body_type = std::remove_reference_t<F>;
+    return {
+        .body = const_cast<void *>(
+            static_cast<const void *>(std::addressof(body))),
+        .call = [](void * body) {
+            run_body(*static_cast<body_type *>(body));
+        },
+        .returns_void = std::is_void_v<std::invoke_result_t<F &>>,
+    };
+}
+
+inline void run_group(
+    std::string_view name, std::vector<int> path, bool slow, body_ref body)
 {
     open_groups.push_back(
         {.name = name, .path = std::move(path), .slow = slow});
     try {
-        if constexpr (std::is_void_v<std::invoke_result_t<F &>>) {
+        if (body.returns_void) {
             body();
         } else {
             ++failures;
@@ -304,29 +350,11 @@ void run_group(
     open_groups.pop_back();
 }
 
-/// Runs a test body that returns something to run rather than finishing
-/// when called, such as a coroutine task. A header that defines such a type
-/// specializes this; see task-test.hpp for `nxtrt::task<void>`.
-template<typename Result>
-struct test_body_runner;
-
-template<typename F>
-void run_body(F & body)
-{
-    using result_type = std::invoke_result_t<F &>;
-    if constexpr (std::is_void_v<result_type>)
-        body();
-    else
-        test_body_runner<result_type>::run(
-            std::function<result_type()>{std::ref(body)});
-}
-
-template<typename F>
-void run_test(
+inline void run_test(
     std::string_view name,
     const std::vector<int> & path,
     std::chrono::seconds timeout,
-    F && body)
+    body_ref body)
 {
     auto failures_before = failures;
     arm_test_timeout(
@@ -335,7 +363,7 @@ void run_test(
     inside_test = true;
     auto start = std::chrono::steady_clock::now();
     try {
-        run_body(body);
+        body();
     } catch (const std::exception & e) {
         ++failures;
         std::cerr << name << ": unexpected exception: " << e.what() << '\n';
@@ -395,6 +423,11 @@ struct test_case
     template<typename F>
     void operator=(F && f) const
     {
+        declare(make_body_ref(f));
+    }
+
+    void declare(body_ref body) const
+    {
         if (inside_test) {
             ++failures;
             std::cerr << "\"" << name
@@ -416,13 +449,13 @@ struct test_case
         }
 
         if (is_group) {
-            run_group(name, std::move(path), slow, std::forward<F>(f));
+            run_group(name, std::move(path), slow, body);
             return;
         }
         // A test cannot hold a deeper selection, so only selected tests run.
         if (!selected_path(path) || (only_slow && !slow))
             return;
-        run_test(name, path, timeout, std::forward<F>(f));
+        run_test(name, path, timeout, body);
     }
 };
 
