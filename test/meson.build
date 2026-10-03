@@ -80,10 +80,13 @@ if get_option('tests')
 
   # Append the new suites so existing dotted selectors keep their numbers.
   nxt_test_sources += files('function-ref-test.cpp', 'ai-agent-test.cpp')
-  # Wisp test files are read from the source tree at run time, so editing
-  # them needs no rebuild.
+  # Wisp test files and the guest compiler are read from the source tree at
+  # run time, so editing them needs no rebuild.
   nxt_test_sources += files('wisp-script-test.cpp')
-  nxt_test_cpp_args += '-DNXT_WISP_TEST_DIR="' + meson.current_source_dir() / 'wisp' + '"'
+  nxt_test_cpp_args += [
+    '-DNXT_WISP_TEST_DIR="' + meson.current_source_dir() / 'wisp' + '"',
+    '-DNXT_WISP_SOURCE_DIR="' + meson.project_source_root() / 'src' / 'wisp' + '"',
+  ]
 
   nxt_tests = executable('nxt-tests',
     nxt_test_sources,

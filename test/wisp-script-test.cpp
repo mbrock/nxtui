@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Runs the Wisp test files in test/wisp/*-test.wisp as nested tests. The
-// files are read from the source tree when the suite runs, so editing a
-// Wisp test needs no C++ rebuild. Each file is a group and each DEFTEST a
-// test; every test runs in its own fresh machine.
+// test files and the guest compiler are read from the source tree when the
+// suite runs, so editing either needs no C++ rebuild. Each file is a group
+// and each DEFTEST a test; every test runs in its own fresh machine.
 #include <wisp/load.hpp>
 #include <wisp/printer.hpp>
 
@@ -18,8 +18,8 @@
 #include <string>
 #include <vector>
 
-#ifndef NXT_WISP_TEST_DIR
-#error "the build defines NXT_WISP_TEST_DIR as test/wisp in the source tree"
+#if !defined(NXT_WISP_TEST_DIR) || !defined(NXT_WISP_SOURCE_DIR)
+#error "the build defines NXT_WISP_TEST_DIR and NXT_WISP_SOURCE_DIR"
 #endif
 
 namespace wisp::test {
@@ -28,6 +28,7 @@ namespace {
 using namespace boost::ut;
 
 const std::filesystem::path script_dir{NXT_WISP_TEST_DIR};
+const std::filesystem::path source_dir{NXT_WISP_SOURCE_DIR};
 
 std::string read_file(const std::filesystem::path & path)
 {
@@ -46,13 +47,14 @@ std::string_view keep(std::string text)
     return names.emplace_back(std::move(text));
 }
 
-/// A machine with the base library, the compiler, the harness, and one
-/// test file.
+/// A machine with the base library, the compiler from the source tree, the
+/// harness, and one test file.
 struct script_machine
 {
     explicit script_machine(const std::filesystem::path & file)
-        : owner(compiler_image())
+        : owner(base_image())
     {
+        load(read_file(source_dir / "compiler.wisp"), "compiler.wisp");
         load(read_file(script_dir / "harness.wisp"), "harness.wisp");
         load(read_file(file), file.filename().string());
     }

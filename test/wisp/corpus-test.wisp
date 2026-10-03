@@ -236,3 +236,19 @@
        (fn (v k) (set! again k) 'grabbed)))
    (list initial (call again nil) (call again nil) *p*))
   (grabbed (1 2) (2 2) 0))
+
+;;; Analysis coverage
+
+(defun %tree-includes? (tree x)
+  (cond ((eq? tree x) t)
+        ((pair? tree) (or (%tree-includes? (head tree) x)
+                          (%tree-includes? (tail tree) x)))
+        (t nil)))
+
+(deftest "every corpus form analyzes into known records"
+  (for-each *corpus*
+    (fn (case)
+      (for-each (second case)
+        (fn (form)
+          (expect (not (%tree-includes? (ir-show (analyze form))
+                                        :unknown))))))))

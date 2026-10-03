@@ -9,6 +9,10 @@
 ;; (analyze form) returns the record for one form, and
 ;; (ir-show node) describes a record graph as a readable list.
 ;;
+;; Analysis builds records mutably while it walks; a finished
+;; graph is treated as stable. Derived facts such as captures
+;; are computed from the graph rather than stored in it.
+;;
 ;; This file is part of Wisp.
 ;;
 ;; Wisp is free software: you can redistribute it and/or modify
@@ -59,14 +63,34 @@
 ;; position.
 (defstruct ir-sequence forms)
 
+;; BINDINGS and INITIALIZERS are vectors in clause order. The
+;; initializers run left to right in the enclosing scope, and the
+;; bindings become visible together in BODY. The LET node owns
+;; its bindings.
 (defstruct ir-let bindings initializers body)
+
+;; The code of a function literal. PARAMETERS is an
+;; IR-PARAMETERS; BINDINGS is a vector of every parameter binding
+;; in source order. The function owns its parameter bindings.
 (defstruct ir-function name parameters bindings body)
+
+;; REQUIRED and OPTIONAL are vectors of bindings, and REST is a
+;; binding or NIL. Missing optional arguments are NIL; Wisp has
+;; no default forms. SOURCE keeps the original parameter list,
+;; which runtime argument binding still interprets.
+(defstruct ir-parameters required optional rest source)
+
+;; Evaluating a function literal makes a closure: FUNCTION's code
+;; with the current lexical environment. Each evaluation makes a
+;; new closure over the same code.
 (defstruct ir-closure function)
 
 ;; An explicit escape to source evaluation, for forms the
 ;; analyzer does not support. Malformed forms escape too, so they
-;; fail when and how source evaluation fails.
-(defstruct ir-source form)
+;; fail when and how source evaluation fails. SCOPE lists the
+;; bindings visible at the escape, all of which the source form
+;; may name.
+(defstruct ir-source form scope)
 
 
 
@@ -122,7 +146,7 @@
   (cond ((%ir-self-evaluating? form) (make-ir-constant form))
         ((symbol? form) (%ir-resolve form scope))
         ((pair? form) (%ir-analyze-form form scope))
-        (t (make-ir-source form))))
+        (t (make-ir-source form scope))))
 
 (defun %ir-analyze-list (forms scope)
   (map (fn (form) (analyze form scope)) forms))
@@ -130,13 +154,20 @@
 ;; A list form is a special form, a macro use, or a call. As in
 ;; Common Lisp, a head that names neither a special operator nor
 ;; a macro at analysis time is a call, defined yet or not.
+;; %SET! is an ordinary primitive, but it is open-coded: with a
+;; quoted name it is an assignment.
 (defun %ir-analyze-form (form scope)
   (let ((operator (head form))
         (count (%ir-list-length (tail form))))
     (cond ((not (and (%ir-name? operator) count))
-           (make-ir-source form))
+           (make-ir-source form scope))
           ((ir-special-operator? operator)
            (%ir-analyze-special operator form count scope))
+          ((and (eq? operator '%set!) (eq? count 2)
+                (%ir-quoted-name? (second form)))
+           (make-ir-assignment
+            (%ir-resolve (second (second form)) scope)
+            (analyze (third form) scope)))
           ((eq? 'macro (type-of (symbol-function operator)))
            (analyze (macroexpand-1 form) scope))
           (t (make-ir-call
@@ -157,7 +188,19 @@
                            (analyze (third arguments) scope)))
           ((eq? operator 'do)
            (%ir-analyze-body arguments scope))
-          (t (make-ir-source form)))))
+          ((and (eq? operator 'let) (> count 0))
+           (%ir-analyze-let form (head arguments) (tail arguments) scope))
+          ((and (eq? operator '%fn) (eq? count 3))
+           (%ir-analyze-function form (head arguments) (second arguments)
+                                 (third arguments) scope))
+          (t (make-ir-source form scope)))))
+
+(defun %ir-quoted-name? (x)
+  (and (pair? x)
+       (eq? (head x) 'quote)
+       (pair? (tail x))
+       (nil? (tail (tail x)))
+       (%ir-name? (second x))))
 
 (defun %ir-analyze-body (forms scope)
   (cond ((nil? forms) (make-ir-constant nil))
@@ -167,14 +210,179 @@
 
 
 
+;;; * Binders
+
+;; Each LET clause is a list of a name and an initializer.
+(defun %ir-let-clauses? (clauses)
+  (and (%ir-list-length clauses)
+       (not (some? (fn (clause)
+                     (not (and (eq? (%ir-list-length clause) 2)
+                               (%ir-name? (head clause)))))
+                   clauses))))
+
+;; Source LET builds its scope from a reversed accumulator, so a
+;; duplicated name resolves to its last clause. Putting the
+;; bindings into SCOPE in reverse keeps that lookup order.
+(defun %ir-analyze-let (form clauses body scope)
+  (cond
+    ((not (%ir-let-clauses? clauses)) (make-ir-source form scope))
+    ((nil? clauses) (%ir-analyze-body body scope))
+    (t (let* ((node (make-ir-let nil nil nil))
+              (bindings (map (fn (clause)
+                               (make-ir-binding (head clause) node))
+                             clauses)))
+         (set-ir-let-bindings! node (vector-from-list bindings))
+         (set-ir-let-initializers!
+          node
+          (vector-from-list
+           (map (fn (clause) (analyze (second clause) scope))
+                clauses)))
+         (set-ir-let-body!
+          node
+          (%ir-analyze-body body (reverse-append bindings scope)))
+         node))))
+
+;; Parse a parameter list as source argument binding does: a
+;; (REQUIRED OPTIONAL REST) list of names, or NIL when the list
+;; is malformed. &OPTIONAL makes every later name optional, and
+;; &REST or &BODY must precede exactly one final name.
+(defun %ir-parse-parameters (parameters)
+  (when (%ir-list-length parameters)
+    (%ir-parse-parameters-loop parameters nil nil nil)))
+
+(defun %ir-parse-parameters-loop (parameters optional? required optional)
+  (if (nil? parameters)
+      (list (reverse required) (reverse optional) nil)
+    (%ir-parse-parameter (head parameters) parameters optional?
+                         required optional)))
+
+(defun %ir-parse-parameter (p parameters optional? required optional)
+  (cond
+    ((eq? p '&optional)
+     (%ir-parse-parameters-loop (tail parameters) t required optional))
+    ((or (eq? p '&rest) (eq? p '&body))
+     (when (and (pair? (tail parameters))
+                (nil? (tail (tail parameters)))
+                (%ir-name? (second parameters)))
+       (list (reverse required) (reverse optional)
+             (second parameters))))
+    ((not (%ir-name? p)) nil)
+    (optional?
+     (%ir-parse-parameters-loop (tail parameters) t required
+                                (cons p optional)))
+    (t
+     (%ir-parse-parameters-loop (tail parameters) nil
+                                (cons p required) optional))))
+
+;; Source argument binding scans parameters in order, so a
+;; duplicated parameter resolves to its first occurrence: the
+;; bindings enter SCOPE in source order.
+(defun %ir-analyze-function (form name parameters body scope)
+  (let ((parsed (%ir-parse-parameters parameters)))
+    (if (or (nil? parsed)
+            (not (or (nil? name) (%ir-name? name))))
+        (make-ir-source form scope)
+      (let* ((function (make-ir-function name nil nil nil))
+             (bind (fn (parameter) (make-ir-binding parameter function)))
+             (required (map bind (head parsed)))
+             (optional (map bind (second parsed)))
+             (rest (when (third parsed) (call bind (third parsed))))
+             (bindings (append required optional
+                               (if rest (list rest) nil))))
+        (set-ir-function-parameters!
+         function
+         (make-ir-parameters (vector-from-list required)
+                             (vector-from-list optional)
+                             rest
+                             parameters))
+        (set-ir-function-bindings! function (vector-from-list bindings))
+        (set-ir-function-body! function
+                               (analyze body (append bindings scope)))
+        (make-ir-closure function)))))
+
+
+
+;;; * Captures
+
+;; The bindings that NODE uses without introducing them, each
+;; once, in order of first use. A source escape may name any
+;; binding visible where it occurs, so it uses all of them.
+(defun ir-free-bindings (node)
+  (reverse (%ir-free node nil nil)))
+
+;; The bindings a closure or function literal captures from its
+;; enclosing scopes, including those that nested functions use.
+(defun ir-captures (node)
+  (ir-free-bindings
+   (if (ir-closure? node) (ir-closure-function node) node)))
+
+(defun %ir-memq (x xs)
+  (find xs (fn (y) (eq? x y))))
+
+;; ACC holds the free bindings found so far, newest first.
+(defun %ir-note-free (binding introduced acc)
+  (if (or (%ir-memq binding introduced) (%ir-memq binding acc))
+      acc
+    (cons binding acc)))
+
+(defun %ir-free-each (nodes introduced acc)
+  (if (nil? nodes) acc
+    (%ir-free-each (tail nodes) introduced
+                   (%ir-free (head nodes) introduced acc))))
+
+(defun %ir-free (node introduced acc)
+  (cond
+    ((ir-reference? node)
+     (%ir-note-free (ir-reference-binding node) introduced acc))
+    ((ir-assignment? node)
+     (%ir-free-each (list (ir-assignment-target node)
+                          (ir-assignment-value node))
+                    introduced acc))
+    ((ir-call? node)
+     (%ir-free-each (list-from-vector (ir-call-arguments node))
+                    introduced
+                    (%ir-free (ir-call-callee node) introduced acc)))
+    ((ir-branch? node)
+     (%ir-free-each (list (ir-branch-test node)
+                          (ir-branch-consequent node)
+                          (ir-branch-alternative node))
+                    introduced acc))
+    ((ir-sequence? node)
+     (%ir-free-each (list-from-vector (ir-sequence-forms node))
+                    introduced acc))
+    ((ir-let? node)
+     (%ir-free (ir-let-body node)
+               (append (list-from-vector (ir-let-bindings node))
+                       introduced)
+               (%ir-free-each
+                (list-from-vector (ir-let-initializers node))
+                introduced acc)))
+    ((ir-closure? node)
+     (%ir-free (ir-closure-function node) introduced acc))
+    ((ir-function? node)
+     (%ir-free (ir-function-body node)
+               (append (list-from-vector (ir-function-bindings node))
+                       introduced)
+               acc))
+    ((ir-source? node)
+     (%ir-free-each (map #'make-ir-reference (ir-source-scope node))
+                    introduced acc))
+    (t acc)))
+
+
+
 ;;; * Inspection
 
 ;; (ir-show node) describes a graph as nested lists headed by
 ;; keywords. Bindings are numbered in order of first appearance,
 ;; so every reference to one binding shows the same number:
 ;;
-;;   (:IF (:REFERENCE X 1) (:CALL FOO (:REFERENCE X 1))
-;;        (:CONSTANT 17))
+;;   (:FN NIL ((X 1))
+;;     (:IF (:REFERENCE X 1) (:CALL FOO (:REFERENCE X 1))
+;;          (:CONSTANT 17)))
+;;
+;; A function shows its parameters, then :CAPTURES and the
+;; bindings it captures, if any, then its body.
 (defun ir-show (node)
   (%ir-show node (cons nil nil)))
 
@@ -194,6 +402,38 @@
 
 (defun %ir-show-all (nodes seen)
   (map (fn (node) (%ir-show node seen)) (list-from-vector nodes)))
+
+(defun %ir-show-let (node seen)
+  (list :let
+        (map (fn (pair)
+               (list (%ir-show-binding (head pair) seen)
+                     (%ir-show (tail pair) seen)))
+             (%ir-zip (list-from-vector (ir-let-bindings node))
+                      (list-from-vector (ir-let-initializers node))))
+        (%ir-show (ir-let-body node) seen)))
+
+(defun %ir-zip (xs ys)
+  (if (nil? xs) nil
+    (cons (cons (head xs) (head ys))
+          (%ir-zip (tail xs) (tail ys)))))
+
+(defun %ir-show-parameters (parameters seen)
+  (let ((show (fn (binding) (%ir-show-binding binding seen)))
+        (optional (list-from-vector (ir-parameters-optional parameters)))
+        (rest (ir-parameters-rest parameters)))
+    (append (map show (list-from-vector
+                       (ir-parameters-required parameters)))
+            (if optional (cons '&optional (map show optional)) nil)
+            (if rest (list '&rest (call show rest)) nil))))
+
+(defun %ir-show-function (kind function seen)
+  (let* ((parameters (%ir-show-parameters
+                      (ir-function-parameters function) seen))
+         (captures (map (fn (binding) (%ir-show-binding binding seen))
+                        (ir-captures function))))
+    (append (list kind (ir-function-name function) parameters)
+            (if captures (list :captures captures) nil)
+            (list (%ir-show (ir-function-body function) seen)))))
 
 (defun %ir-show-callee (callee seen)
   (if (ir-function-reference? callee)
@@ -222,6 +462,14 @@
            (%ir-show (ir-branch-alternative node) seen)))
     ((ir-sequence? node)
      (cons :do (%ir-show-all (ir-sequence-forms node) seen)))
+    ((ir-assignment? node)
+     (list :set
+           (%ir-show (ir-assignment-target node) seen)
+           (%ir-show (ir-assignment-value node) seen)))
+    ((ir-let? node) (%ir-show-let node seen))
+    ((ir-closure? node)
+     (%ir-show-function :fn (ir-closure-function node) seen))
+    ((ir-function? node) (%ir-show-function :code node seen))
     ((ir-source? node)
      (list :source (ir-source-form node)))
     (t (list :unknown node))))

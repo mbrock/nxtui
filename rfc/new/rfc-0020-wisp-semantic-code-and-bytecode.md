@@ -849,9 +849,14 @@ Each step is a small, separately tested commit.
    `(ir-show (analyze '...))` works at the REPL.
 2. **Binders and expansion.** Analyze `LET`, `%FN` with structured parameters,
    and assignment through `%SET!`. Use source escapes for `%MACRO-FN` and other
-   unsupported forms, and analyze captures. This step
-   ends with `(analyze '(fn (x) (if x (foo x) 17)))` showing both references to
-   `x` sharing one binding.
+   unsupported forms, and analyze captures. This step ends with
+   `(analyze '(fn (x) (if x (foo x) 17)))` showing both references to `x`
+   sharing one binding. Done: parameters parse into an `ir-parameters` record and enter scope in
+   source order, `LET` bindings enter in reverse, so both duplicate-name rules
+   hold. `ir-captures` computes captures from the graph, transitively through
+   nested functions. A source escape records the bindings visible where it
+   occurs and counts as using all of them. Every corpus form analyzes into
+   known records.
 3. **Persistence and checking.** A graph survives collection and a tape round
    trip with its identities intact, and a graph checker written in Wisp
    rejects malformed nodes.
