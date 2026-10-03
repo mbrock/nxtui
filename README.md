@@ -512,7 +512,8 @@ Useful source entry points:
 - [`src/wisp/nxt.hpp`](src/wisp/nxt.hpp): optional `drive` adapter for bounded
   evaluator turns; the executable host runs guest activations to explicit await.
 - [`src/nxtrt/http-server.hpp`](src/nxtrt/http-server.hpp): native server contract
-  and limits; its implementation uses Boost.Beast for request parsing.
+  and limits; request parsing and response serialization use local HTTP/1.1
+  code over NXT byte feeds and sinks, with no Beast or Asio dependency.
 - [`src/nxtrt/http.hpp`](src/nxtrt/http.hpp),
   [`net_dns.hpp`](src/nxtrt/net_dns.hpp), and [`tls.hpp`](src/nxtrt/tls.hpp): the
   client serializer, response/body readers, connection and TLS layers also

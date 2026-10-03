@@ -51,8 +51,8 @@ if not cpp.compiles('''
 endif
 
 # Related sources compile through unity translation units, sharing header
-# parsing and template instantiation. The HTTP server is the largest source
-# and stays on its own so it builds in parallel with the rest.
+# parsing and template instantiation. The HTTP server stays on its own so
+# it builds in parallel with the rest.
 nxt_core_sources = files(
   'nxt-core-rt.cpp',
   'nxt-core-ui.cpp',

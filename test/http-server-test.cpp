@@ -254,6 +254,28 @@ task<void> fragmented_pipeline(sockaddr_in address)
     co_await expect_closed(client);
 }
 
+task<void> fragmented_chunks(sockaddr_in address)
+{
+    auto client = client_socket{co_await nxtrt::net::connect(address)};
+    co_await send(
+        client,
+        "POST /chunks HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n");
+    // Suspend between every size, extension, data and delimiter byte.
+    auto chunks = std::string{
+        "1;quoted=\"a;\\\"b\"\r\nx\r\n1\r\ny\r\n0\r\n"
+        "Host: evil\r\nConnection: close\r\n\r\n"};
+    for (auto c : chunks) {
+        co_await send(client, std::string_view{&c, 1});
+        co_await nxtrt::op::timeout::after(20us);
+    }
+    co_await send(client, get("/after"));
+    auto first = co_await read_reply(client);
+    expect(first.head.status == 200 && first.body == "/chunks:xy");
+    expect(!http::has_header_token(first.head, "Connection", "close"));
+    expect((co_await read_reply(client)).body == "/after:");
+    co_await expect_closed(client);
+}
+
 task<void> head_and_no_body(sockaddr_in address)
 {
     auto client = client_socket{co_await nxtrt::net::connect(address)};
@@ -534,6 +556,42 @@ void server_tests()
         for (auto const & h : server.state.requests[1].headers)
             expect(!http::iequals(h.name, "ETag"));
     };
+    "chunk framing survives byte fragmentation and trailer close tokens"_test =
+        [] {
+            auto server = server_fixture<Wand>{};
+            server.run(fragmented_chunks, server.address);
+            server.stop();
+            expect(server.state.requests.size() == 2);
+            expect(server.state.requests[0].host == "h");
+            expect(server.state.requests[0].headers.size() == 2);
+        };
+    "initial headers and trailers share an exact field budget"_test = [] {
+        auto head = std::string{
+            "POST / HTTP/1.1\r\nHost: h\r\n"
+            "Connection: close\r\nTransfer-Encoding: chunked\r\n\r\n"};
+        auto options = http::server_options{};
+        options.max_header_bytes = head.size();
+        auto server = server_fixture<Wand>{options};
+        server.run(exchange, server.address, head + "0\r\n\r\n", 200, "/:");
+        server.run(
+            exchange, server.address, head + "0\r\nX: y\r\n\r\n", 431, "");
+        server.stop();
+        options.max_header_bytes = head.size() + 6;
+        auto with_trailer = server_fixture<Wand>{options};
+        with_trailer.run(
+            exchange,
+            with_trailer.address,
+            head + "0\r\nX: y\r\n\r\n",
+            200,
+            "/:");
+        with_trailer.run(
+            exchange,
+            with_trailer.address,
+            head + "0\r\nX: yy\r\n\r\n",
+            431,
+            "");
+        with_trailer.stop();
+    };
     "HEAD and bodyless statuses do not desynchronize pipeline"_test = [] {
         auto server = server_fixture<Wand>{};
         server.run(head_and_no_body, server.address);
@@ -608,6 +666,94 @@ void server_tests()
         expect(server.state.requests.empty());
         server.stop();
     };
+    "local parser accepts extension methods and case-insensitive fields"_test =
+        [] {
+            auto server = server_fixture<Wand>{};
+            server.run(
+                exchange,
+                server.address,
+                "CUSTOM /custom?q=1 HTTP/1.1\r\nhOsT: backend\r\n"
+                "cOnTeNt-LeNgTh: \t0003 \t\r\nConnection: CLOSE\r\n\r\nabc",
+                200,
+                "/custom?q=1:abc");
+            server.run(
+                exchange,
+                server.address,
+                "OPTIONS * HTTP/1.1\r\nHost: backend\r\nConnection: close\r\n\r\n",
+                200,
+                "*:");
+            expect(server.state.requests.size() == 2);
+            expect(server.state.requests[0].method == "CUSTOM");
+            server.stop();
+        };
+    "local parser rejects malformed request lines and numeric overflow"_test =
+        [] {
+            auto server = server_fixture<Wand>{};
+            for (auto line :
+                 {"GET  / HTTP/1.1",
+                  "G(ET / HTTP/1.1",
+                  "GET / HTTP/1.1 extra",
+                  "GET / HTTP/11.1",
+                  "GET / HTTP/1.x",
+                  "GET /with\tcontrol HTTP/1.1",
+                  "GET /fragment#x HTTP/1.1",
+                  "GET * HTTP/1.1"})
+                server.run(
+                    exchange,
+                    server.address,
+                    std::string{line} + "\r\nHost: h\r\n\r\n",
+                    400,
+                    "");
+            for (auto field :
+                 {"Content-Length: ",
+                  "Content-Length: 18446744073709551616",
+                  "Content-Length: 1 0",
+                  "Connection: bad token",
+                  "Connection: upgrade",
+                  "Host: bad/host"})
+                server.run(
+                    exchange,
+                    server.address,
+                    std::string{"POST / HTTP/1.1\r\nHost: h\r\n"} + field
+                        + "\r\n\r\n",
+                    400,
+                    "");
+            expect(server.state.requests.empty());
+            server.stop();
+        };
+    "local chunk parser validates extensions and discards trailer policy"_test =
+        [] {
+            auto server = server_fixture<Wand>{};
+            auto prefix = std::string{
+                "POST / HTTP/1.1\r\nHost: h\r\n"
+                "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"};
+            server.run(
+                exchange,
+                server.address,
+                prefix + "1 \t; flag ; quoted = \"a;\\\"b\\\\c\" ; token=xyz\r\nx\r\n"
+                "00;done\r\nHost: evil\r\nConnection: keep-alive\r\n\r\n",
+                200,
+                "/:x");
+            expect(server.state.requests.size() == 1);
+            expect(server.state.requests[0].host == "h");
+            for (auto chunks :
+                 {"1;\r\nx\r\n0\r\n\r\n",
+                  "1;foo=\r\nx\r\n0\r\n\r\n",
+                  "1;foo=\"unterminated\r\nx\r\n0\r\n\r\n",
+                  "1;foo=\"closed\"junk\r\nx\r\n0\r\n\r\n",
+                  "1;foo=bar \r\nx\r\n0\r\n\r\n",
+                  "1 \r\nx\r\n0\r\n\r\n",
+                  "+1\r\nx\r\n0\r\n\r\n",
+                  "10000000000000000\r\n",
+                  "1\r\nxX\n0\r\n\r\n",
+                  "0\r\nBad Name: x\r\n\r\n",
+                  "0\r\n folded: x\r\n\r\n",
+                  "0\r\nTransfer-Encoding: chunked\r\n\r\n"})
+                server.run(
+                    exchange, server.address, prefix + chunks, 400, "");
+            expect(server.state.requests.size() == 1);
+            server.stop();
+        };
     "expectations rejected without waiting for body"_test = [] {
         auto server = server_fixture<Wand>{};
         server.run(

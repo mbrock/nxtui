@@ -1047,8 +1047,9 @@ and process restart inside nested loads after deleting already-buffered files.
 ### C++ HTTP owns protocol policy; Wisp owns request handlers
 
 [`nxtrt::http::serve`](../../src/nxtrt/http-server.hpp) borrows a listener and
-accepts a `task<response>(request)` handler. Beast parses and serializes bytes;
-NXT alone schedules I/O, timers, and cancellation. There is no Asio event loop.
+accepts a `task<response>(request)` handler. Local HTTP/1.1 code parses and
+serializes bytes over NXT byte feeds and sinks; NXT schedules I/O, timers, and
+cancellation. The server does not use Beast or Asio.
 An async feed accepts connections only after a bounded `pool` reserves a slot.
 Each recipe owns an accepted descriptor and borrows the serving task's handler
 and options. Exactly one accept can be pending, including on kqueue; there are
