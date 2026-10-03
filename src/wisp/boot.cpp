@@ -43,6 +43,7 @@ int main(int argc, char ** argv)
         auto booted = image::fresh();
         for (auto [source, path] :
              {std::pair{base_library(), "base.wisp"},
+              std::pair{compiler_library(), "compiler.wisp"},
               std::pair{host_source, "host.wisp"}}) {
             {
                 loader load{booted->storage, booted->machine, source, path};

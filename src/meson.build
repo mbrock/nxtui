@@ -151,7 +151,7 @@ if get_option('wisp_tool')
   )
   wisp_boot_tape = custom_target('wisp-boot-tape',
     output : 'wisp-boot.tape',
-    input : files('wisp/base.wisp', 'wisp/host.wisp'),
+    input : files('wisp/base.wisp', 'wisp/compiler.wisp', 'wisp/host.wisp'),
     command : [wisp_boot, '@OUTPUT@',
       get_option('wisp_boot_compression') ? 'zlib' : 'none'],
     # The generator uses the embedded sources and the current evaluator
@@ -239,6 +239,7 @@ nxt_header_install_excludes = {
     'load.cpp',
     'tape.cpp',
     'base.wisp',
+    'compiler.wisp',
     'boot.cpp',
     'main.cpp',
     'host.wisp',

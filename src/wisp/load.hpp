@@ -9,6 +9,10 @@ namespace wisp {
 /// constructing an evaluator installs only primitives.
 std::string_view base_library() noexcept;
 
+/// The guest compiler from RFC 0020, which analyzes source forms into
+/// semantic records. Load it after the base library.
+std::string_view compiler_library() noexcept;
+
 /// Read and evaluate one top-level form at a time. Owns the input and roots
 /// the current run, so callers may collect between advance() calls. The
 /// heap and evaluator must outlive this loader. Guest GC requests collect

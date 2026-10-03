@@ -124,7 +124,7 @@ it. It adopts the same shape of contract for prepared code:
 
 | Operation | Effect on prepared code |
 | --- | --- |
-| Redefine a core special operator: `QUOTE`, `FUNCTION`, `%FN`, `%MACRO-FN`, `IF`, `DO`, `LET`, `%SET!` | Unsupported. Prepared code keeps the built-in meaning |
+| Redefine a core special operator: `QUOTE`, `FUNCTION`, `%FN`, `%MACRO-FN`, `IF`, `DO`, `LET` | Unsupported. Prepared code keeps the built-in meaning |
 | Redefine a macro, including `FN`, `SET!`, and `DEFUN` | Affects code prepared afterward; prepare existing callers again to update them |
 | Redefine a global function with `DEFUN` or `SET-SYMBOL-FUNCTION!` | Takes effect at the next callee resolution in every caller |
 | A prepared call site finds a macro or special operator in the function cell | Signals a condition at callee resolution, before any argument runs |
@@ -136,6 +136,11 @@ it. It adopts the same shape of contract for prepared code:
 The core special operators are the builtins that receive their arguments
 unevaluated in the evaluator's builtin table. `FN`, `SET!`, `DEFUN`, and the
 rest of the surface syntax are macros over them, so they follow the macro rule.
+`SET!` expands to a call of `%SET!`, an ordinary primitive that receives a
+quoted symbol and assigns it in the caller's lexical environment. Analysis may
+treat `(%SET! 'x value)` as an assignment because `%SET!` is the first member
+of the declared open-coded set: like `ENV`, its meaning depends on the caller's
+environment.
 The base library already relies on that rule while it bootstraps: it redefines
 `FN` and `DEFUN` as it loads, and code prepared later sees the later
 definitions. Source interpretation keeps its present behavior; the table only
@@ -838,9 +843,13 @@ Each step is a small, separately tested commit.
    `base.wisp`, and a test helper that loads it once on top of the base tape.
    Define the IR structs and analyze constants and `QUOTE`, references, free
    lookups, `IF`, `DO`, named calls, and `FUNCTION`, with a readable printer.
+   Done: the analyzer also expands macros as it walks, and sends malformed,
+   improper, and cyclic forms to source escapes so that they fail when and how
+   source evaluation fails. The CLI's boot tape includes the compiler, so
+   `(ir-show (analyze '...))` works at the REPL.
 2. **Binders and expansion.** Analyze `LET`, `%FN` with structured parameters,
-   and `%SET!`. Expand macros as the walker reaches them, use source escapes
-   for `%MACRO-FN` and other unsupported forms, and analyze captures. This step
+   and assignment through `%SET!`. Use source escapes for `%MACRO-FN` and other
+   unsupported forms, and analyze captures. This step
    ends with `(analyze '(fn (x) (if x (foo x) 17)))` showing both references to
    `x` sharing one binding.
 3. **Persistence and checking.** A graph survives collection and a tape round

@@ -256,6 +256,126 @@ static suite compiler_tests{
             for (const auto & c : corpus)
                 expect(c.prepared.empty() == c.differs.empty()) << c.name;
         };
+
+        "analysis"_group = [] {
+            "IR nodes are DEFSTRUCT records"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((list (type-of (analyze 1))
+                             (type-of (analyze 'x))
+                             (ir-constant? (analyze "s"))))",
+                    "(IR-CONSTANT IR-LOOKUP T)");
+            };
+
+            "self-evaluating atoms and quotations become constants"_test =
+                [] {
+                    source_machine m{compiler_image()};
+                    m.check(
+                        R"((ir-show
+                             (analyze '(list 1 "two" :three nil t 'four '(5)))))",
+                        R"((:CALL LIST (:CONSTANT 1) (:CONSTANT "two") (:CONSTANT :THREE) (:CONSTANT NIL) (:CONSTANT T) (:CONSTANT FOUR) (:CONSTANT (5))))");
+                };
+
+            "both uses of a binding share one binding object"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((let* ((x (make-ir-binding 'x nil))
+                              (node (analyze '(if x (foo x) 17) (list x)))
+                              (call-node (ir-branch-consequent node)))
+                         (list (ir-show node)
+                               (eq? x (ir-reference-binding
+                                       (ir-branch-test node)))
+                               (eq? x (ir-reference-binding
+                                       (vector-get
+                                        (ir-call-arguments call-node)
+                                        0))))))",
+                    "((:IF (:REFERENCE X 1) (:CALL FOO (:REFERENCE X 1)) "
+                    "(:CONSTANT 17)) T T)");
+            };
+
+            "the innermost binding of a name wins"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((let* ((outer (make-ir-binding 'x nil))
+                              (inner (make-ir-binding 'x nil))
+                              (y (make-ir-binding 'y nil))
+                              (node (analyze '(list x y z)
+                                             (list inner y outer))))
+                         (list (ir-show node)
+                               (eq? inner
+                                    (ir-reference-binding
+                                     (vector-get (ir-call-arguments node)
+                                                 0))))))",
+                    "((:CALL LIST (:REFERENCE X 1) (:REFERENCE Y 2) "
+                    "(:LOOKUP Z)) T)");
+            };
+
+            "DO bodies collapse when short"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((map (fn (form) (ir-show (analyze form)))
+                            '((do) (do 1) (do (f) 2))))",
+                    "((:CONSTANT NIL) (:CONSTANT 1) "
+                    "(:DO (:CALL F) (:CONSTANT 2)))");
+            };
+
+            "function references read the function cell"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((ir-show (analyze '(call #'car (function cdr)))))",
+                    "(:CALL CALL (:FUNCTION CAR) (:FUNCTION CDR))");
+            };
+
+            "macros expand during analysis"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((defmacro twice (x) (list 'do x x))
+                       (ir-show (analyze '(if (twice (f)) (unless a b) c))))",
+                    "(:IF (:DO (:CALL F) (:CALL F)) "
+                    "(:IF (:LOOKUP A) (:CONSTANT NIL) (:LOOKUP B)) "
+                    "(:LOOKUP C))");
+            };
+
+            "undefined operators are analyzed as calls"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((ir-show (analyze '(not-defined-yet 1 x))))",
+                    "(:CALL NOT-DEFINED-YET (:CONSTANT 1) (:LOOKUP X))");
+            };
+
+            "unsupported and malformed forms escape to source"_test = [] {
+                source_machine m{compiler_image()};
+                m.check(
+                    R"((let ((cyclic (list 'f 1 2)))
+                         (set-tail! (tail (tail cyclic)) (tail cyclic))
+                         (map (fn (form) (head (ir-show (analyze form))))
+                              (list '(if 1 2)
+                                    '(quote)
+                                    '(function 1)
+                                    '(%fn nil (x) x)
+                                    '(let ((x 1)) x)
+                                    '(f . 1)
+                                    '((fn (x) x) 1)
+                                    '(nil 1)
+                                    cyclic))))",
+                    "(:SOURCE :SOURCE :SOURCE :SOURCE :SOURCE :SOURCE :SOURCE "
+                    ":SOURCE :SOURCE)");
+            };
+
+            "analyzed graphs keep their binding identity in a tape"_test = [] {
+                auto from = compiler_image();
+                source_machine m{std::move(from)};
+                m.load(R"((defvar x (make-ir-binding 'x nil))
+                          (defvar node (analyze '(if x (foo x) 17) (list x))))");
+                source_machine copy{tape::decode(tape::encode(m.vm))};
+                copy.check(
+                    R"((list (ir-show node)
+                             (eq? x (ir-reference-binding (ir-branch-test node)))
+                             (eq? (record-type node) <ir-branch>)))",
+                    "((:IF (:REFERENCE X 1) (:CALL FOO (:REFERENCE X 1)) "
+                    "(:CONSTANT 17)) T T)");
+            };
+        };
     }};
 
 } // namespace

@@ -15,6 +15,9 @@ namespace {
 constexpr unsigned char base_source[] = {
 #embed "base.wisp"
 };
+constexpr unsigned char compiler_source[] = {
+#embed "compiler.wisp"
+};
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)
@@ -27,6 +30,13 @@ std::string_view base_library() noexcept
 {
     return {
         reinterpret_cast<const char *>(base_source), sizeof(base_source)};
+}
+
+std::string_view compiler_library() noexcept
+{
+    return {
+        reinterpret_cast<const char *>(compiler_source),
+        sizeof(compiler_source)};
 }
 
 loader::loader(
