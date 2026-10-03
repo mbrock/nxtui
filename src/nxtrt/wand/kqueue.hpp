@@ -27,29 +27,35 @@ class kqueue_impl;
 
 /// kqueue-backed wand for macOS and the BSDs; the default there.
 ///
-/// Each awaited wish becomes one hub-stored execution record. Kevent `udata`
-/// points at that record while variant phases make prepared, parked, settled,
-/// delayed-delete, and retired states explicit. The implementation lives in
-/// kqueue.cpp: the wand interface is already type-erased, so none of it needs
-/// to be compiled into every user of this header.
+/// Each awaited wish becomes one hub-stored execution record. Kevent
+/// `udata` points at that record while variant phases make prepared,
+/// parked, settled, delayed-delete, and retired states explicit. The
+/// implementation lives in kqueue.cpp: the wand interface is already
+/// type-erased, so none of it needs to be compiled into every user of this
+/// header.
 ///
 /// Batching: like epoll, `wave` tries each queued wish's syscall at once on
-/// the deck's thread and makes the fd non-blocking first. A wish that would
-/// block adds a one-shot `EV_ADD` change; the batched changes from one
-/// wave, including cancellation deletes, go to the kernel in one `kevent`
-/// call.
-/// A retried I/O call that still reports `EAGAIN` is armed again.
+/// the deck's thread. Socket send/receive use `MSG_DONTWAIT`; generic I/O,
+/// connect, and accept temporarily enable `O_NONBLOCK` and restore it after
+/// each syscall. The temporary flag is visible to other threads sharing
+/// that open-file description. Accepted sockets honor the wish's flags.
+/// A wish that would block adds a one-shot `EV_ADD` change; changes from
+/// one wave, including cancellation deletes, go to the kernel in one
+/// `kevent` call. A retried I/O call that still reports `EAGAIN` is armed
+/// again.
 ///
-/// Limitations: kqueue keys registrations by fd and filter, so two wishes
-/// waiting on the same fd in the same direction at once conflict. `openat`
+/// FD-readiness wishes use privately duplicated fds so waiters on the same
+/// fd and direction do not conflict. `openat`
 /// and spawns are synchronous syscalls, `asynchronous_files()` is false,
 /// and the Linux-only file wishes do not exist here. Children are named by
 /// pid; `wait_child` registers `EVFILT_PROC` `NOTE_EXIT`, falling back to a
 /// short retry timer while a child is mid-exit, and reads the status with
-/// `WNOWAIT` (see `child_handle`). `poll` reports `POLLIN` or `POLLOUT`.
+/// `WNOWAIT` (see `child_handle`). `poll` reports `POLLIN`/`POLLOUT` and
+/// maps `EV_EOF`/`EV_ERROR` to `POLLHUP`/`POLLERR`.
 ///
 /// Timers: `timeout` and `poll_until` use `EVFILT_TIMER` with
-/// `NOTE_NSECONDS`; a zero duration fires after one nanosecond.
+/// `NOTE_NSECONDS` where available, or milliseconds rounded up otherwise;
+/// a zero duration fires after the smallest positive delay in those units.
 ///
 /// Cancellation: a queued wish settles with `operation_cancelled` at the
 /// next wave. A registered wish is settled with `operation_cancelled` at

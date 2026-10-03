@@ -312,8 +312,7 @@ private:
 #  else
         // Fall back to milliseconds, rounding up to preserve positive
         // delays.
-        return {
-            0, std::max<std::int64_t>(1, (value + 999'999) / 1'000'000)};
+        return {0, value / 1'000'000 + (value % 1'000'000 != 0)};
 #  endif
     }
 
@@ -587,9 +586,14 @@ private:
                 return false;
             }
 
+            auto registration = poll_registration_fd(op.fd);
+            if (registration < 0) {
+                finish_error(errno);
+                return false;
+            }
             set_event(
                 changes,
-                op.fd,
+                static_cast<uintptr_t>(registration),
                 EVFILT_WRITE,
                 EV_ADD | EV_ONESHOT,
                 0,
@@ -1053,7 +1057,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::read_some & op)
         {
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                poll_registration_identity(op.fd),
+                EVFILT_READ,
+                EV_DELETE,
+                0,
+                0,
+                token);
         }
 
         void delete_op_events(
@@ -1061,7 +1072,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::write_some & op)
         {
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                poll_registration_identity(op.fd),
+                EVFILT_WRITE,
+                EV_DELETE,
+                0,
+                0,
+                token);
         }
 
         void delete_op_events(
@@ -1069,7 +1087,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::recv_some & op)
         {
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                poll_registration_identity(op.fd),
+                EVFILT_READ,
+                EV_DELETE,
+                0,
+                0,
+                token);
         }
 
         void delete_op_events(
@@ -1077,7 +1102,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::send_some & op)
         {
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                poll_registration_identity(op.fd),
+                EVFILT_WRITE,
+                EV_DELETE,
+                0,
+                0,
+                token);
         }
 
         void delete_op_events(
@@ -1085,7 +1117,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::connect & op)
         {
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                poll_registration_identity(op.fd),
+                EVFILT_WRITE,
+                EV_DELETE,
+                0,
+                0,
+                token);
         }
 
         void delete_op_events(
@@ -1093,7 +1132,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::accept & op)
         {
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
+            set_event(
+                changes,
+                poll_registration_identity(op.fd),
+                EVFILT_READ,
+                EV_DELETE,
+                0,
+                0,
+                token);
         }
 
         void delete_op_events(
@@ -1203,7 +1249,19 @@ private:
                 finish_result(-errno);
                 return false;
             }
-            set_event(changes, fd, filter, EV_ADD | EV_ONESHOT, 0, 0, token);
+            auto registration = poll_registration_fd(fd);
+            if (registration < 0) {
+                finish_error(errno);
+                return false;
+            }
+            set_event(
+                changes,
+                static_cast<uintptr_t>(registration),
+                filter,
+                EV_ADD | EV_ONESHOT,
+                0,
+                0,
+                token);
             return true;
         }
 
@@ -1223,7 +1281,10 @@ private:
                 finish_result(-errno);
                 return true;
             }
-            wand.arm(token, fd, filter);
+            wand.arm(
+                token,
+                static_cast<int>(poll_registration_identity(fd)),
+                filter);
             return false;
         }
 

@@ -190,6 +190,38 @@ nxtrt::task<void> drive_both_direction_waiters(int tx, int rx)
     co_await std::move(waiters);
 }
 
+nxtrt::task<char> kqueue_read_byte(int fd)
+{
+    auto buffer = std::array<std::byte, 1>{};
+    auto count = co_await nxtrt::op::read_some{fd, buffer};
+    if (count != 1)
+        throw std::runtime_error{"short same-fd read"};
+    co_return std::to_integer<char>(buffer[0]);
+}
+
+nxtrt::task<void> send_separate_bytes(int fd)
+{
+    for (auto byte : {std::string_view{"a"}, std::string_view{"b"}}) {
+        co_await nxtrt::op::timeout::after(1ms);
+        auto sent = co_await nxtrt::send_some(fd, nxtrt::as_bytes(byte));
+        if (sent != 1)
+            throw std::runtime_error{"short same-fd read send"};
+    }
+}
+
+nxtrt::task<void> drive_same_fd_reads(int tx, int rx)
+{
+    auto results = co_await nxtrt::when_all(
+        kqueue_read_byte(rx),
+        kqueue_read_byte(rx),
+        send_separate_bytes(tx));
+    auto first = std::get<0>(results);
+    auto second = std::get<1>(results);
+    if (!((first == 'a' && second == 'b')
+          || (first == 'b' && second == 'a')))
+        throw std::runtime_error{"same-fd readers lost bytes"};
+}
+
 nxtrt::task<void> native_poll_until_cancelled(int rx)
 {
     try {
@@ -346,6 +378,21 @@ static suite kqueue_wand_tests{
             kqueue_pump_until_done(deck, wand, root.inner());
             expect(root.inner().done());
         };
+
+        "same-fd reads rearm independently after stale readiness"_test =
+            [] {
+                auto sockets = make_socketpair();
+                auto wand = nxtrt::kqueue_wand{};
+                auto deck = nxtrt::deck{&wand};
+                auto root = nxtrt::root_task{deck, [&] {
+                                                 return drive_same_fd_reads(
+                                                     sockets[0].get(),
+                                                     sockets[1].get());
+                                             }};
+                root.start();
+                kqueue_pump_until_done(deck, wand, root.inner());
+                expect(root.inner().done());
+            };
 
         "poll wishes are cancelled when their task stops"_test = [] {
             auto sockets = make_socketpair();
