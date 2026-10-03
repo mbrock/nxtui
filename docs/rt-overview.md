@@ -67,14 +67,15 @@ Concrete API:
 
 Fixed concurrency is a group of tasks awaited by a task. An idea is a
 callable that returns `task<T>` (or `hope<T>`) when invoked; a task is work
-that has already been created. A group runs its jobs concurrently in a pool,
-applies a stop rule as each job settles, and settles every job before the
-awaiting task resumes. There is no fork, join, or child record: a group owns
-exactly the jobs it was given, and they cannot outlive it.
+that has already been created. A group directly owns its tasks in a tuple or
+vector, observes completion through stable observers, and drains every started
+task before the awaiting task resumes. It has no pool backing, recipe wrappers,
+or separate intermediate results tuple. There is no fork, join, or public deed:
+a group owns exactly the tasks it was given, and they cannot outlive it.
 
 `settle(std::tuple{tasks...}, rule)` runs a fixed heterogeneous set of tasks,
-one pool slot per job. Tasks are created before entering the group; their
-coroutine bodies begin when their jobs start. Factories are not accepted. The
+owned directly in the tuple. Tasks are created before entering the group; their
+coroutine bodies begin when they start. Factories are not accepted. The
 result is `std::tuple<outcome<T>...>` in tuple order, where `outcome<T>` is
 `std::expected<T, std::exception_ptr>` (including `outcome<void>`); a job
 stopped before it started settles as cancelled. `settle_range(range, rule)` does
@@ -90,8 +91,15 @@ The stop rule decides, as each job settles, whether to stop the rest:
 - `stop_after_first` stops the companions when job 0, the primary, settles;
 - any `noexcept` callable `bool(std::size_t index, bool failed)`.
 
-A stop chosen by the rule is a normal finish. Stopping the awaiting task also
-stops the group's jobs; the group drains them and then reports cancellation.
+Stop rules see the task promise's success or failure at final suspension.
+Results stay in their promises until all started tasks have drained, then move
+into the returned outcomes. Initial extraction errors become exception outcomes
+without changing the stop rule's decision. Subsequent moves while constructing
+or delivering the result tuple/vector can still throw; children are already
+drained at that point.
+
+A stop chosen by the rule is a normal finish. Outside cancellation stops the
+group's tasks and drains them before propagating cancellation.
 
 The usual helpers are written over `settle`. `when_all(tuple)` /
 `when_all(tasks...)` and `when_all_range` return every value in order (void
@@ -112,7 +120,7 @@ if (!page)
 ```
 
 Cancellation belongs to tasks. Stop propagates from an awaiting task to the
-task it awaits, and a group stops its own jobs through its pool.
+task it awaits, and a group stops its own directly owned tasks.
 `current_stop_token()`, `stop_requested()`, and `throw_if_stop_requested()`
 read the running task's stop state.
 
@@ -123,8 +131,8 @@ move-constructible callable invoked as a mutable stored lvalue, returning
 wrapper. Consumers invoke each admitted recipe once and preserve its storage
 through settlement, including failure and cancellation; the concept itself
 cannot enforce those obligations. Hope-producing ideas may complete without
-allocating a coroutine. The tuple and range groups accept tasks and
-task-returning factories only.
+allocating a coroutine. Tuple and range groups accept tasks only; call factories
+before entering a group and keep any borrowed factory state alive yourself.
 
 Concrete API:
 
@@ -139,7 +147,7 @@ A [bounded idea pool](rt-pool.md) turns a homogeneous feed of recipes into a
 completion-order result feed. It borrows farm slots and output land; consuming
 results returns admission capacity. Pool jobs are owned directly by their
 slots. Ready hopes stay synchronous, while pending tasks use the existing deck.
-Every group above runs in a pool.
+Unlike fixed groups, pools are streaming, bounded idea-factory evaluators.
 
 `drain(ideas, capacity)` runs a feed of ideas through a pool, at most
 `capacity` at once, and discards the results; the first failure stops

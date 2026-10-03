@@ -17,7 +17,7 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Groups: `settle`, `settle_range`, stop rules | Implemented: a fixed set or range of tasks/ideas runs in a pool with one slot per job; every job settles before the group returns, with typed `outcome<T>` results |
+| Groups: `settle`, `settle_range`, stop rules | Task-only public APIs; direct tuple/vector task ownership with stable completion observers, drain before result extraction, and typed `outcome<T>` results |
 | `when_all`, `wait_any`, `with_timeout`, `poll_until_after` | Implemented over `settle` |
 | `drain(feed, capacity)`, `pool_land<Idea>` | Implemented: bounded evaluation of a feed of ideas, and owned land for a pool |
 | Cancellation | Per task: stop propagates to the awaited task, and a group stops its own jobs |
@@ -43,11 +43,10 @@ Several relationships used to hide behind “this task belongs to a firm”:
 These often have the same surrounding scope, but they are not the same
 relationship. The runtime now keeps them apart. Frames come from the ordinary
 allocator. A pool owns pending task handles directly in its slots. The deck
-identifies and schedules those tasks without owning their frames. Fixed tuple
-composition (`settle`) uses the same pool: each finite indexed recipe starts
-one task and writes its typed `outcome<T>` into the matching tuple position,
-and the group's stop rule sees each settlement as it happens, so cancellation
-policy does not need a second ownership system. Stop belongs to tasks: it
+identifies and schedules those tasks without owning their frames. Fixed
+composition (`settle`) directly owns tuple/vector tasks and observes completion
+through stable observers. It does not lower through a pool, `group_recipe`,
+wrapper tasks, or a separate intermediate results tuple. Stop belongs to tasks: it
 propagates from an awaiting task to the task it awaits, and a group stops its
 own jobs. Nothing spawns into an ambient scope; work is owned by the group it
 was handed to.
@@ -149,13 +148,13 @@ and consumption so that releasing capacity does not require acquiring more.
 Detecting that no queued or active work can discover more URLs is a property of
 that feedback composition, not ordinary temporary emptiness of a feed.
 
-## Fixed tuple lowering and pools describe different shapes
+## Fixed groups and pools describe different shapes
 
 | | Fixed tuple batch | Stream pool |
 | --- | --- | --- |
 | Membership | Fixed heterogeneous positions | Changing occupants of bounded slots |
 | Result shape | Typed product of named/positional results | One homogeneous output type |
-| Storage geometry | Typed outcome tuple, populated by indexed recipes | Slots plus completion order and output ring |
+| Storage geometry | Direct task tuple; results stay in promises until drain | Slots plus completion order and output ring |
 | Typical use | Capture plus monitor; fixed sample fields | Requests, tool calls, connection attempts |
 | Observation | Settled positional outcomes or aggregate | Consuming a result stream |
 
@@ -165,8 +164,15 @@ execution. The existing frame allocator uses nonmoving chunks or explicit
 borrowed land; a ring with prefix retirement was rejected because long-lived
 frames pin the prefix.
 
-The tuple helpers use a finite batch in the pool, with no per-child records.
-This shares execution machinery with pool jobs, but is not a strict transitive
+The task-only tuple and range helpers own their fixed membership directly,
+without pool backing or a public deed. Stable observers let stop rules see
+promise success/failure at final suspension. All started tasks drain before
+results move from promises into the returned outcomes. Initial extraction errors
+become exception outcomes without changing the rule's observation; subsequent
+moves of the result tuple/vector can throw after drain.
+Outside cancellation stops and drains the group before propagating.
+
+This shares lifetime discipline with pool jobs, but is not a strict transitive
 static team: a job may await nested groups of its own. Nor is it an
 allocation-free claim; task frames and result values retain their ordinary
 allocation behavior. A stronger static-team guarantee would have to account
@@ -313,7 +319,7 @@ comparison remains intelligible after those applications change.
 
 Many former firms were only resource or cancellation scopes, with no
 explicitly owned children. [RFC 0019](../rfc/new/rfc-0019-firms-without-bodies.md)
-removed firms entirely in favour of groups of ideas awaited by a task.
+removed firms entirely; current fixed groups accept tasks, not idea factories.
 
 ## Next decisions and verification
 

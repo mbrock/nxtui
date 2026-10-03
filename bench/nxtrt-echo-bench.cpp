@@ -2,6 +2,7 @@
 #include <nxtrt/buffers.hpp>
 #include <nxtrt/bell.hpp>
 #include <nxtrt/net.hpp>
+#include <nxtrt/pool.hpp>
 #include <nxt/unique-fd.hpp>
 
 #include <algorithm>

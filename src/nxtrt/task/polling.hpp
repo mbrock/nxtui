@@ -53,7 +53,7 @@ take_poll_until_result(poll_until_outcomes & outcomes)
 /// Wait until an fd is ready or a timeout expires.
 ///
 /// This composes ordinary `op::poll` and `op::timeout` wishes in a fixed
-/// pool-backed batch. Completion stops the scope; pool close drains the
+/// group. Completion stops the other task; the group drains the
 /// losing wish before the outcome is returned.
 [[nodiscard]] inline task<poll_until_result> poll_until_after(
     int fd,

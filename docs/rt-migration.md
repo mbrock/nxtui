@@ -68,6 +68,18 @@ shape of its concurrency:
 - `catching_deed` / `.cope()` collection becomes reading the `outcome<T>`
   values a group returns.
 
+Fixed groups now directly own tuple/vector tasks and observe completion through
+stable observers, rather than lowering through pool recipes or wrapper tasks.
+There is no `group_recipe`, separate intermediate results tuple, or public deed.
+The task-only `settle`, `when_all`, and `wait_any` APIs remain unchanged; pools
+remain streaming bounded idea-factory evaluators.
+
+Stop rules see promise success/failure at final suspension. Results stay in
+promises until all started tasks have drained, then move into returned outcomes.
+Initial extraction errors become exception outcomes without changing the rule's
+decision; subsequent moves of the result tuple/vector can throw after drain.
+Outside cancellation stops and drains the tasks before propagation.
+
 Root entry takes a factory directly: `deck.sync_wait(fn, args...)`,
 `runtime.run(fn, args...)`, `run_with_kqueue(fn)`, or the io_uring
 `nxtrt::run(fn)`.

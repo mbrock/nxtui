@@ -6,6 +6,9 @@ ontology nxt "https://swa.sh/nxt#"
   class pool
   class pool-slot
   class pool-close
+  class fixed-group
+  class group-stop
+  class group-return
   class blocking-work
   class blocking-worker
   class blocking-stop
@@ -42,21 +45,27 @@ ontology nxt "https://swa.sh/nxt#"
   property blocking-lifecycle
   property worker-access
   property blocking-stopped
+  property children
+  property started
+  property completed-at-entry
+  property finished
+  property stop-requested
+  property stopping
+  property returned
+  property stop-trigger
 
 model runtime-model
   signature deck
     has-ready var set task
-  // Concurrent work is always held by a pool. Groups (settle, when_all,
-  // wait_any, their range forms) admit their N jobs into an N-slot pool;
-  // drain admits a feed of ideas into a bounded pool. There is no fork,
-  // child record or deed. Stop belongs to tasks: stopping a task stops the
-  // pool it awaits, which drains its jobs before the group returns. Once
+  // Fixed task-only groups directly own their children; bounded streams
+  // admit a feed of ideas into a pool. Stop belongs to tasks: stopping an
+  // owner drains its started children/jobs before returning. Once
   // wishes exist, both timeouts and outside stops drain their execs under
   // the same lifecycle below. HTTP connections use a pool; Wisp callbacks
   // await native tasks directly, and guest continuations stay in the Wisp
   // heap. Coroutine frames use the ordinary allocator and are not modeled.
-  // This model describes pool ownership and close/drain; group value types
-  // and positional writes are intentionally not modeled.
+  // This model describes ownership and close/drain. Group results stay in
+  // child promises; values and positional collection are not modeled.
   // slots is fixed capacity; consuming/discarding are events on this step.
   // admitted records job provenance, not current occupancy; slot.job is the
   // live/result identity. Result values, cancellation delivery,
@@ -75,6 +84,182 @@ model runtime-model
   signature pool-slot
     job var lone task
   signature pool-close
+  signature fixed-group
+    children set task
+    // Already-completed handles keep their results without being scheduled.
+    completed-at-entry set task
+    started var set task
+    finished var set task
+    stop-requested var set task
+    stopping var lone group-stop
+    returned var lone group-return
+    // Abstract completion events accepted by a completion-driven stop rule.
+    // An empty set represents a rule that waits for all children.
+    stop-trigger set task
+  signature group-stop
+  signature group-return
+
+  predicate group-shape
+    all ([g fixed-group])
+      in (g started) (g children)
+      in (g completed-at-entry) (g children)
+      no (intersect (g started) (g completed-at-entry))
+      in (g completed-at-entry) (g finished)
+      in (g finished) (union (g started) (g completed-at-entry))
+      in (g stop-requested) (g started)
+      in (g stop-trigger) (g children)
+    all ([g fixed-group] [t (g children)])
+      one (matching children t)
+      no (matching admitted t)
+
+  predicate groups-start
+    all ([g fixed-group])
+      no (g started)
+      == (g finished) (g completed-at-entry)
+      no (g stop-requested)
+      no (g stopping)
+      no (g returned)
+
+  predicate group-transitions
+    all ([g fixed-group])
+      in (g started) (g (prime started))
+      in (g finished) (g (prime finished))
+      in (g stop-requested) (g (prime stop-requested))
+      // Outside stop is nondeterministic; completion-driven stop uses the
+      // same drain path. Delivery and child execution are abstract events.
+      (=> (some (intersect (g finished) (g stop-trigger)))
+          (next-state (some (g stopping))))
+      (=> (some (g stopping))
+          (block
+            (next-state (some (g stopping)))
+            (== (g started) (g (prime started)))
+            (all ([t (g started)])
+              (=> (no (intersect t (g finished)))
+                  (next-state (in t (g stop-requested)))))))
+      // Return is permitted, not required: no fairness/progress assumption.
+      (=> (next-state (some (g returned)))
+          (block
+            (in (g (prime started)) (g (prime finished)))
+            (either
+              (next-state (some (g stopping)))
+              (== (g (prime finished)) (g children)))))
+      (=> (some (g returned))
+          (block
+            (next-state (some (g returned)))
+            (== (g started) (g (prime started)))))
+
+  predicate group-return-drained
+    all ([g fixed-group])
+      (=> (some (g returned)) (in (g started) (g finished)))
+
+  predicate group-stop-freezes-starts
+    all ([g fixed-group])
+      (=> (some (g stopping))
+          (== (g started) (g (prime started))))
+
+  predicate group-stop-requests-siblings
+    all ([g fixed-group])
+      (=> (some (g stopping))
+          (all ([t (g started)])
+            (=> (no (intersect t (g finished)))
+                (next-state (in t (g stop-requested))))))
+
+  check fixed-group-return-drains :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 6
+    assume groups-start
+    assume always group-shape
+    assume always group-transitions
+    show always group-return-drained
+
+  check fixed-group-stop-prevents-start :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 6
+    assume groups-start
+    assume always group-shape
+    assume always group-transitions
+    show always group-stop-freezes-starts
+
+  check fixed-group-stop-requests-siblings :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 6
+    assume groups-start
+    assume always group-shape
+    assume always group-transitions
+    show always group-stop-requests-siblings
+
+  // a is a completed failing input accepted by the stop rule; b is a
+  // later unfinished input and c a later already-completed input. Ordering
+  // and failure values are abstracted by stop-trigger, not modeled here.
+  run fixed-group-completed-input-stop-witness :for ([1 fixed-group group-stop group-return] [3 task] [0 pool]) :trace-length 4
+    groups-start
+    always group-shape
+    always group-transitions
+    some ([g fixed-group] [a (g children)] [b (g children)] [c (g children)])
+      no (intersect a b)
+      no (intersect a c)
+      no (intersect b c)
+      == (g completed-at-entry) (union a c)
+      == (g stop-trigger) a
+      next-state
+        some (g stopping)
+        no (g started)
+        no (g returned)
+        next-state
+          some (g returned)
+          no (g started)
+          == (g finished) (union a c)
+          no (g stop-requested)
+
+  run fixed-group-completion-stop-drains-witness :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 6
+    groups-start
+    always group-shape
+    always group-transitions
+    some ([g fixed-group] [a (g children)] [b (g children)])
+      no (intersect a b)
+      == (g stop-trigger) a
+      next-state
+        == (g started) (g children)
+        == (g finished) a
+        next-state
+          some (g stopping)
+          no (g returned)
+          == (g finished) a
+          next-state
+            in b (g stop-requested)
+            == (g finished) a
+            no (g returned)
+            next-state
+              == (g finished) (g children)
+              some (g returned)
+
+  run fixed-group-never-started-cancels-witness :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 4
+    groups-start
+    always group-shape
+    always group-transitions
+    some ([g fixed-group])
+      some (g children)
+      next-state
+        some (g stopping)
+        no (g started)
+        next-state
+          some (g returned)
+          no (g started)
+
+  run fixed-group-outside-stop-drains-witness :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 5
+    groups-start
+    always group-shape
+    always group-transitions
+    some ([g fixed-group] [a (g children)] [b (g children)])
+      no (intersect a b)
+      no (g stop-trigger)
+      next-state
+        == (g started) a
+        some (g stopping)
+        no (g finished)
+        next-state
+          in a (g stop-requested)
+          no (g returned)
+          no (g finished)
+          next-state
+            == (g finished) a
+            some (g returned)
+            no (intersect b (g started))
+
   // Blocking work has ordinary heap-owned input, not a migrating task.
   // prepared = waiting for credit; parked = admitted/queued or running;
   // settled = publication complete; retired = owner delivered/discarded.
@@ -293,13 +478,12 @@ model runtime-model
     always pool-transitions
     pool-reuse
 
-  // Two indexed group jobs occupy distinct ordinary-pool slots. At close
+  // Two stream jobs occupy distinct ordinary-pool slots. At close
   // start one result is ready while the other job is still running; close
   // then discards both results as they become ready and returns both slots.
-  // This witnesses early policy completion using the same pool drain, not a
-  // second ownership mechanism. It makes no fairness or general
+  // This witnesses bounded-stream close/drain. It makes no fairness or general
   // cancellation-liveness claim.
-  predicate tuple-close-drains
+  predicate stream-close-drains
     some ([p pool] [s1 (p slots)] [s2 (p slots)] [a (p admitted)] [b (p admitted)])
       no (intersect s1 s2)
       no (intersect a b)
@@ -326,11 +510,11 @@ model runtime-model
                 in s1 (p free-slots)
                 in s2 (p free-slots)
 
-  run tuple-close-drains-witness :for ([1 pool pool-close] [2 pool-slot task] [0 deck wish exec]) :trace-length 6
+  run stream-close-drains-witness :for ([1 pool pool-close] [2 pool-slot task] [0 deck wish exec]) :trace-length 6
     always structural-invariants
     always pool-shape
     always pool-transitions
-    tuple-close-drains
+    stream-close-drains
 
   // Bounded safety checks: at most two slots/jobs, eight steps; ownership
   // and slot shape are premises, as are the transition rules under test.

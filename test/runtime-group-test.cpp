@@ -42,6 +42,54 @@ nxtrt::task<std::unique_ptr<int>> owned_value_after_yield(
     co_return std::move(value);
 }
 
+struct extraction_value
+{
+    bool * fail_moves;
+
+    explicit extraction_value(bool & fail)
+        : fail_moves(&fail)
+    {}
+
+    extraction_value(const extraction_value &) = delete;
+
+    extraction_value(extraction_value && other)
+        : fail_moves(other.fail_moves)
+    {
+        if (*fail_moves)
+            throw std::domain_error{"result extraction failed"};
+    }
+};
+
+nxtrt::task<extraction_value> value_before_extraction(bool & fail_moves)
+{
+    co_return extraction_value{fail_moves};
+}
+
+nxtrt::task<void> fail_later_moves(bool & fail_moves)
+{
+    co_await nxtrt::yield();
+    fail_moves = true;
+}
+
+struct later_move_value
+{
+    int moves_left = 2;
+
+    later_move_value() = default;
+    later_move_value(const later_move_value &) = delete;
+    later_move_value(later_move_value && other)
+        : moves_left(other.moves_left - 1)
+    {
+        if (moves_left < 0)
+            throw std::domain_error{"aggregate move failed"};
+    }
+};
+
+nxtrt::task<later_move_value> value_with_later_move_failure()
+{
+    co_return later_move_value{};
+}
+
 struct drain_probe
 {
     int active = 0;
@@ -317,7 +365,7 @@ void declare_runtime_group_tests()
             expect(ranged.empty());
         };
 
-        "groups reject empty tasks before awaiting them"_test = [] {
+        "groups reject empty tasks before starting children"_test = [] {
             auto deck = nxtrt::deck{};
             auto events = std::vector<int>{};
             auto rejected = false;
@@ -333,7 +381,7 @@ void declare_runtime_group_tests()
                            == "nxtrt group received an empty task";
             }
             expect(rejected);
-            expect(events == std::vector<int>{43});
+            expect(events.empty());
         };
 
         "when_all accepts cancellation at every startup turn"_test = [] {
@@ -472,6 +520,113 @@ void declare_runtime_group_tests()
             expect(probe.finished == 10);
             expect(probe.peak == 3);
             expect(probe.active == 0);
+        };
+
+        "groups read already completed tasks without replaying completion"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto first = value_after_yield(17);
+            auto second = value_after_yield(23);
+            deck.start(first);
+            deck.start(second);
+            deck.run_until_idle();
+            expect(first.done() && second.done());
+
+            auto outcomes = deck.sync_wait([&] {
+                return nxtrt::settle(
+                    std::tuple{std::move(first), std::move(second)},
+                    nxtrt::stop_on_completion{});
+            });
+            expect(std::get<0>(outcomes).value() == 17);
+            expect(std::get<1>(outcomes).value() == 23);
+        };
+
+        "completed failure stops unstarted tasks"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto failed = throw_int_after_yield();
+            deck.start(failed);
+            deck.run_until_idle();
+            expect(failed.done());
+
+            auto starts = 0;
+            auto outcomes = deck.sync_wait([&] {
+                return nxtrt::settle(
+                    std::tuple{
+                        std::move(failed),
+                        owned_value_after_yield(
+                            std::make_unique<int>(29), starts),
+                    },
+                    nxtrt::stop_on_failure{});
+            });
+            expect(!std::get<0>(outcomes));
+            expect(!std::get<1>(outcomes));
+            expect(nxtrt::is_operation_cancelled(
+                std::get<1>(outcomes).error()));
+            expect(starts == 0);
+        };
+
+        "result extraction failure does not change completion policy"_test =
+            []() -> nxtrt::task<void> {
+                auto fail_moves = false;
+                auto failures = 0;
+                auto completions = 0;
+                auto outcomes = co_await nxtrt::settle(
+                    std::tuple{
+                        value_before_extraction(fail_moves),
+                        fail_later_moves(fail_moves),
+                    },
+                    [&](std::size_t, bool failed) noexcept {
+                        ++completions;
+                        failures += failed;
+                        return failed;
+                    });
+                expect(completions == 2);
+                expect(failures == 0);
+                expect(!std::get<0>(outcomes));
+                expect(std::get<1>(outcomes).has_value());
+                auto extraction_failed = false;
+                try {
+                    nxtrt::rethrow(std::get<0>(outcomes).error());
+                } catch (const std::domain_error & error) {
+                    extraction_failed =
+                        std::string_view{error.what()} == "result extraction failed";
+                }
+                expect(extraction_failed);
+            };
+
+        "later result moves can throw only after children drain"_test =
+            []() -> nxtrt::task<void> {
+                auto events = std::vector<int>{};
+                auto failed = false;
+                try {
+                    (void)co_await nxtrt::settle(std::tuple{
+                        value_with_later_move_failure(),
+                        record_after_yield(events, 7),
+                    });
+                } catch (const std::domain_error & error) {
+                    failed = std::string_view{error.what()} == "aggregate move failed";
+                }
+                expect(failed);
+                expect(events == std::vector<int>{71, 72});
+            };
+
+        "startup failure drains scheduled children before rethrow"_test = [] {
+            auto storage = nxtrt::static_deck_task_storage<3>{};
+            auto deck = nxtrt::deck{storage};
+            auto events = std::vector<int>{};
+            auto failed = false;
+            try {
+                (void)deck.sync_wait([&] {
+                    auto tasks = std::vector<nxtrt::task<int>>{};
+                    for (auto i = 0; i != 8; ++i)
+                        tasks.push_back(tuple_wait_for_stop(events, i));
+                    return nxtrt::settle_range(std::move(tasks));
+                });
+            } catch (const nxtrt::runtime_error &) {
+                failed = true;
+            }
+            expect(failed);
+            expect(!events.empty());
+            expect(deck.empty());
         };
     };
 }

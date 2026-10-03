@@ -1,11 +1,10 @@
 #pragma once
 
-// Groups: run a fixed set or a range of tasks concurrently in a pool, with a
+// Groups: run a fixed set or a range of tasks concurrently, with a
 // stop rule deciding when the rest are cancelled. A group settles every job
 // before it returns. Include nxtrt/task.hpp for the complete runtime API.
 
 #include "nxtrt/task/compose.hpp"
-#include "nxtrt/pool.hpp"
 
 #include <expected>
 #include <span>
@@ -85,8 +84,6 @@ struct group_control
     const void * rule = nullptr;
     bool (*should_stop)(const void *, std::size_t, bool) noexcept = nullptr;
     bool stopped = false;
-    void * jobs = nullptr;
-    void (*stop_jobs)(void *) noexcept = nullptr;
 
     template<typename Rule>
     explicit group_control(const Rule & rule) noexcept
@@ -103,107 +100,61 @@ struct group_control
         if (stopped || !should_stop(rule, index, failed))
             return;
         stopped = true;
-        if (stop_jobs != nullptr)
-            stop_jobs(jobs);
     }
 };
 
-/// One job of a group: an index into the group and the function that starts
-/// it. Every group uses this one recipe type, so one pool type serves all.
-struct group_recipe
+struct group_coordinator;
+
+/// Stable observers borrow tasks owned by the settle frame. Values stay in
+/// their promises until every started task has reached final suspension.
+struct group_child final : completion_observer
 {
-    void * group = nullptr;
+    std::coroutine_handle<> handle;
+    promise_base * promise = nullptr;
+    bool (*failed)(promise_base *) noexcept = nullptr;
+    group_coordinator * owner = nullptr;
     std::size_t index = 0;
-    task<void> (*invoke)(void * group, std::size_t index) = nullptr;
+    bool started = false;
+    bool completed = false;
 
-    task<void> operator()() &
+    template<typename T>
+    void bind(task<T> & child) noexcept
     {
-        return invoke(group, index);
+        handle = child.handle();
+        if (handle)
+            promise = &child.handle().promise();
+        failed = [](promise_base * base) noexcept {
+            try {
+                static_cast<detail::promise<T> *>(base)->result();
+                return false;
+            } catch (...) {
+                return true;
+            }
+        };
     }
+
+    void task_completed() noexcept override;
 };
+
+task<void> run_group(std::span<group_child> children, group_control & control);
 
 template<typename T>
-task<void> settle_job(
-    group_control & control,
-    std::size_t index,
-    std::optional<outcome<T>> & result,
-    task<T> child)
+outcome<T> extract_outcome(task<T> & child)
 {
+    if (!child.done())
+        return cancelled_outcome<T>();
     try {
         if constexpr (std::is_void_v<T>) {
-            co_await child;
-            result.emplace(std::in_place);
+            child.handle().promise().result();
+            return outcome<T>{std::in_place};
         } else {
-            result.emplace(std::in_place, co_await child);
+            return outcome<T>{
+                std::in_place, std::move(child.handle().promise()).result()};
         }
     } catch (...) {
-        result.emplace(std::unexpected{std::current_exception()});
+        return outcome<T>{std::unexpected{std::current_exception()}};
     }
-    control.settled(index, !*result);
 }
-
-template<typename T>
-task<void> start_job(
-    group_control & control,
-    std::size_t index,
-    std::optional<outcome<T>> & result,
-    task<T> child)
-{
-    if (!child.handle())
-        throw runtime_error{"nxtrt group received an empty task"};
-    return settle_job(control, index, result, std::move(child));
-}
-
-/// Run a group's recipes in a pool with one slot per recipe. A stop chosen
-/// by the rule is a normal finish; outside cancellation is not. Defined in
-/// nxtrt/group.cpp, so it is compiled once rather than in every user.
-task<void> run_group(std::span<group_recipe> recipes, group_control & control);
-
-// Heterogeneity lives in the result tuple, not the pool: every indexed
-// recipe produces void work for the same ordinary pool.
-template<typename... Tasks>
-struct tuple_group
-{
-    group_control & control;
-    std::tuple<Tasks...> & tasks;
-    std::tuple<std::optional<outcome<task_result_t<Tasks>>>...> results;
-
-    template<std::size_t I>
-    static task<void> start(void * group, std::size_t)
-    {
-        auto & self = *static_cast<tuple_group *>(group);
-        return start_job(
-            self.control,
-            I,
-            std::get<I>(self.results),
-            std::move(std::get<I>(self.tasks)));
-    }
-
-    template<std::size_t... Is>
-    auto recipes(std::index_sequence<Is...>)
-    {
-        return std::array<group_recipe, sizeof...(Is)>{
-            group_recipe{this, Is, start<Is>}...};
-    }
-};
-
-template<typename T>
-struct range_group
-{
-    group_control & control;
-    std::vector<task<T>> tasks;
-    std::vector<std::optional<outcome<T>>> results;
-
-    static task<void> start(void * group, std::size_t index)
-    {
-        auto & self = *static_cast<range_group *>(group);
-        return start_job(
-            self.control,
-            index,
-            self.results[index],
-            std::move(self.tasks[index]));
-    }
-};
 
 template<typename T>
 [[nodiscard]] auto take_outcome(outcome<T> value)
@@ -288,18 +239,18 @@ template<typename... Tasks, stop_rule Rule = settle_all>
 settle(std::tuple<Tasks...> tasks, Rule rule = {})
 {
     auto control = detail::group_control{rule};
-    auto group = detail::tuple_group<Tasks...>{control, tasks, {}};
-    auto recipes = group.recipes(std::index_sequence_for<Tasks...>{});
-    co_await detail::run_group(
-        std::span<detail::group_recipe>{recipes}, control);
+    auto children = std::array<detail::group_child, sizeof...(Tasks)>{};
+    auto index = std::size_t{0};
+    std::apply([&](auto &... child) {
+        (children[index++].bind(child), ...);
+    }, tasks);
+    co_await detail::run_group(std::span{children}, control);
     co_return std::apply(
-        []<typename... T>(std::optional<T> &... result) {
+        [](auto &... child) {
             return std::tuple{
-                (result ? std::move(*result)
-                        : T{std::unexpected{std::make_exception_ptr(
-                              operation_cancelled{})}})...};
+                detail::extract_outcome(child)...};
         },
-        group.results);
+        tasks);
 }
 
 /// Run a range of tasks concurrently and settle all of it.
@@ -311,26 +262,19 @@ template<std::ranges::input_range Range, stop_rule Rule = settle_all>
         task_result_t<std::ranges::range_value_t<Range>>>>>
 {
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
-    using group_type = detail::range_group<result_type>;
-
     auto control = detail::group_control{rule};
-    auto group = group_type{control, {}, {}};
+    auto tasks = std::vector<task<result_type>>{};
     for (auto && item : range)
-        group.tasks.push_back(std::move(item));
-    group.results.resize(group.tasks.size());
-    auto recipes = std::vector<detail::group_recipe>{};
-    recipes.reserve(group.tasks.size());
-    for (auto i = std::size_t{0}; i < group.tasks.size(); ++i)
-        recipes.push_back({&group, i, group_type::start});
-
-    co_await detail::run_group(std::span{recipes}, control);
+        tasks.push_back(std::move(item));
+    auto children = std::vector<detail::group_child>(tasks.size());
+    for (auto i = std::size_t{0}; i < tasks.size(); ++i)
+        children[i].bind(tasks[i]);
+    co_await detail::run_group(std::span{children}, control);
 
     auto out = std::vector<outcome<result_type>>{};
-    out.reserve(group.results.size());
-    for (auto & result : group.results)
-        out.push_back(
-            result ? std::move(*result)
-                   : detail::cancelled_outcome<result_type>());
+    out.reserve(tasks.size());
+    for (auto & child : tasks)
+        out.push_back(detail::extract_outcome(child));
     co_return out;
 }
 

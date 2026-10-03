@@ -164,21 +164,22 @@ storage. Reading after close is not supported.
 ## Relation to groups and future work
 
 Fixed groups accept tasks only; the stream pool still accepts idea factories.
-The pool is the execution owner for every group. `settle(tuple, rule)` lowers
-each indexed position to a finite `task<void>` recipe in a pool with one slot
-per job; that recipe stores its typed `outcome<T>`
-(`expected<T, exception_ptr>`) at the matching tuple position and reports the
-settlement to the group's stop rule. When the rule says stop, the group calls
-the pool's `stop()` and then closes it, so stopped jobs are drained like any
-other. `settle_range` does the same for a range, and `when_all`, `wait_any`,
-and `with_timeout` are written over `settle`. Stopping the task that awaits a
-group stops the pool's jobs the same way.
+Groups directly own tuple/vector tasks, without pool backing, `group_recipe`,
+wrapper tasks, or a separate intermediate results tuple. Stable observers
+report completion at final suspension, where stop rules see promise success or
+failure. Results remain in promises until all started tasks have drained, then
+move into positional `outcome<T>` values (`expected<T, exception_ptr>`).
+Initial extraction errors become exception outcomes without changing the stop
+rule. Subsequent moves of the result tuple/vector can throw after drain.
+Outside cancellation stops and drains before propagation.
+`settle_range`, `when_all`, `wait_any`, and `with_timeout` retain their public
+task-only composition contracts.
 
-This is a real unification of ownership and drain, not a strict transitive
-static team or an allocation-free guarantee. Work a job starts in its own
-nested group is outside the batch's finite bound. The homogeneous stream pool
-remains a distinct API shape with slots, completion-order output, and borrowed
-feed/land contracts described above.
+Groups and pools share lifetime discipline, not one execution container. This
+is neither a strict transitive static team nor an allocation-free guarantee:
+work a job starts in its own nested group is outside the batch's finite bound.
+The homogeneous stream pool remains a bounded idea-factory evaluator with
+slots, completion-order output, and borrowed feed/land contracts described above.
 
 The slot lifecycle is modeled in `nxtrt/runtime.rkt`, including consumption,
 close/discard, and reuse. The model abstracts frame bytes and cancellation
@@ -186,5 +187,5 @@ progress; tests exercise the concrete feed and coroutine lifetimes.
 
 Generic feed mapping, feedback channels for crawlers, per-item error values,
 and strict transitive static teams are separate follow-up work. The existing
-fixed tuple lowering provides a concrete heterogeneous batch without claiming
+fixed tuple ownership provides a concrete heterogeneous batch without claiming
 that nested ambient work is bounded by its tuple size.
