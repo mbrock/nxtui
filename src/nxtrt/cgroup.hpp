@@ -125,13 +125,15 @@ inline task<std::string> read_text_file(std::filesystem::path path)
 
 inline task<std::uint64_t> read_uint_file(std::filesystem::path path)
 {
-    auto text = co_await read_text_file(std::move(path));
-    auto value = std::uint64_t{};
-    auto [ptr, ec] =
-        std::from_chars(text.data(), text.data() + text.size(), value);
-    if (ec != std::errc{})
-        co_return 0;
-    co_return value;
+    return read_text_file(std::move(path))
+        | then([](std::string text) {
+              auto value = std::uint64_t{};
+              auto [ptr, ec] =
+                  std::from_chars(text.data(), text.data() + text.size(), value);
+              if (ec != std::errc{})
+                  return std::uint64_t{};
+              return value;
+          });
 }
 
 inline std::unordered_map<std::string, std::uint64_t>
