@@ -19,7 +19,6 @@ paths = [
     'rt-concurrency-direction.md',
     'ai-overview.md',
     'rt-holding.md',
-    'rt-game.md',
     'rt-occurrents.md',
     '../rfc/cur',
     '../rfc/new',

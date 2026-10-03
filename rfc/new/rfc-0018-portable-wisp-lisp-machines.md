@@ -67,10 +67,9 @@ body, or abort. The richer operation-defined restart protocol in
 is a design proposal. It should be developed as an extension after the port
 reproduces existing behavior.
 
-NXT already contains a behavioral coordinator, `game<Event>`, whose
-[documentation identifies Swash 2024 as its ancestor](../../docs/rt-game.md).
-This provides an existing place to explore temporal rules around guest requests
-and application events.
+NXT once contained a behavioral coordinator, `game<Event>`, descended from
+Swash 2024. It has been removed; temporal rules around guest requests and
+application events would need a new home.
 
 ## Proposed integration boundary
 

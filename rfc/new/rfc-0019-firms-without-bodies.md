@@ -172,8 +172,6 @@ favour of pool slots, which it already models.
 
 ## Open questions
 
-- **Games.** `with_game` and `sync_wait_game` bind a game scope around a body
-  in the same way. They should become root-entry options or a bound value.
 - **Cancellation of a group from outside.** A group's jobs observe the
   awaiting task's stop token; a stop rule stops the group's pool. Is an
   explicit `stop()` handle on a running group ever needed?

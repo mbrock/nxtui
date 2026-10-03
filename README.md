@@ -61,13 +61,6 @@ awaitable holds *either a value or the work to get it*. Same shape, four sizes
 — the [holding essay][rt-holding] is the long version, and it ends on the
 moment those four collapse into one.
 
-The likeliest **crown jewel** is the [`game`][rt-game]: behavioral programming
-(request / wait / block) as a pile of tiny independent tasks coordinating
-through events. It may be the coordination semantics the runtime has been
-missing — the thing that makes `deck`, `wand`, and `firm` facets of one idea
-rather than three good ideas in a trench coat. (More context, plus the
-async-`exec` extension I haven't ported yet, lives in `etc/bthreads-ts/`.)
-
 And because I refuse to *only* hand-wave, the model is also written down
 formally. `nxtrt/runtime.rkt` is `#lang rdf-forge` — a small homemade language
 that is at once an OWL **ontology**, an Alloy-style **relational model**, and a
@@ -85,8 +78,7 @@ So the open questions, right now, are roughly:
    buffers, with the byte streams as the `<byte>` specialization — feeds,
    sinks, and the `hope<T>` hot path that makes the buffered case free. (See
    `src/nxtrt/value-buffers.hpp` and the [holding essay][rt-holding].)
-2. **A coherent unifying theory of `deck` / `wand` / `firm`** — and whether
-   the [`game`][rt-game] is the missing piece that fuses them into one.
+2. **A coherent unifying theory of `deck` / `wand` / `firm`.**
 3. **Modeling without a pile of tools** — domain + ontology + time in a single
    language (`rdf-forge`), pointed back at the runtime it describes.
 4. **Much, much more.** This list is not closed, and neither is the vocabulary.
@@ -105,7 +97,6 @@ conceptual spine of the project:
 | [**A story about holding work**][rt-holding] | The narrative. Why the deck, the wand, the byte streams, and `hope<T>` are all the *same* idea — a holder with a release policy — and the endgame where they merge. |
 | [**Runtime RFCs**][runtime-rfcs] | The design notebook. Current and speculative RFCs for firms, wands, feeds, reels, buffer land, and the runtime vocabulary. |
 | [**RFC 0001: Reels**][rfc-reels] | The framing note. Reels are frame-shaped projections over `bytefeed` stock: raw bytes becoming marked frames, before anything turns into owned values. |
-| [**The game**][rt-game] | The one programming model in the runtime: behavioral programming (request / waitFor / block) as small composable `task`s, built on top of the same machinery. |
 | [**Occurrent structure**][rt-occurrents] | The ontology note. Behavioral threads, coroutines, and structured concurrency as process parts, boundaries, and shared happenings. |
 
 ## nxtrt — the runtime
@@ -122,7 +113,6 @@ conceptual spine of the project:
   fork child tasks, join them, stop them together, recover their results.
 - [`channel<T>`][nxtrt-channel] and [`event`][nxtrt-event] — coordination
   primitives; low-level awaitables live under [`nxtrt::op`][nxtrt-op].
-- [`game<Event>`][nxtrt-game] — [behavioral programming][rt-game] over tasks.
 
 Above the scheduler core sit byte streams (Zig-`std.Io`-shaped feeds and sinks
 with a `hope<T>` hot path — see [the holding essay][rt-holding]) and protocol
@@ -783,7 +773,6 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 <!-- Concept pages -->
 [rt-overview]: https://swa.sh/nxt/rt_overview.html
 [rt-holding]: https://swa.sh/nxt/rt_holding.html
-[rt-game]: https://swa.sh/nxt/rt_game.html
 [rt-occurrents]: https://swa.sh/nxt/rt_occurrents.html
 [runtime-rfcs]: https://swa.sh/nxt/runtime_rfcs.html
 [rfc-reels]: https://swa.sh/nxt/rfc_reels.html
@@ -797,7 +786,6 @@ needs `libvirt-daemon-system`, `virtinst`, and `cloud-image-utils`.
 [nxtrt-deed]: https://swa.sh/nxt/classnxtrt_1_1deed.html
 [nxtrt-channel]: https://swa.sh/nxt/classnxtrt_1_1channel.html
 [nxtrt-event]: https://swa.sh/nxt/classnxtrt_1_1event.html
-[nxtrt-game]: https://swa.sh/nxt/classnxtrt_1_1game.html
 [nxtrt-op]: https://swa.sh/nxt/namespacenxtrt_1_1op.html
 [nxtrt-fs]: https://swa.sh/nxt/namespacenxtrt_1_1fs.html
 [nxtrt-http]: https://swa.sh/nxt/namespacenxtrt_1_1http.html

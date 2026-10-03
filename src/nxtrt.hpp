@@ -13,7 +13,6 @@
 #include "nxtrt/exceptions.hpp"
 #include "nxtrt/farm.hpp"
 #include "nxtrt/fs.hpp"
-#include "nxtrt/game.hpp"
 #include "nxtrt/http.hpp"
 #include "nxtrt/http-server.hpp"
 #include "nxtrt/idea.hpp"

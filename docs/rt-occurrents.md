@@ -1,6 +1,9 @@
 # Behavioral threads as occurrent structure {#rt_occurrents}
 
-This note sits beside @ref rt_holding and @ref rt_game. It is a place to keep
+The runtime's behavioral-programming coordinator, `game<Event>`, has been
+removed; this note keeps the ideas it explored.
+
+This note sits beside @ref rt_holding. It is a place to keep
 one of the stranger and more promising ideas in the runtime model: behavioral
 threads, coroutines, and structured concurrency look less like a pile of
 control-flow tricks when they are read as a small logic of **occurrents**.

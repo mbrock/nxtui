@@ -142,9 +142,6 @@ struct promise_base
         return final_awaitable{};
     }
 
-    template<typename Yielded>
-    decltype(auto) yield_value(Yielded && yielded);
-
     /// Remember the coroutine that should continue after this task completes.
     void set_continuation(
         std::coroutine_handle<> handle,
