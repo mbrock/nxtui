@@ -13,7 +13,7 @@ DEPS_FILE ?=
 DEPS_DEPTH ?= 4
 DEPS_FLAGS ?=
 NXT_MESON_LINK_ARGS ?= $(shell command -v mold >/dev/null 2>&1 && printf '%s' '-Dc_link_args=-fuse-ld=mold -Dcpp_link_args=-fuse-ld=mold')
-# Run in `nix develop .#spec`: packages and their bytecode live in the Nix
+# Run in `nix develop`: packages and their bytecode live in the Nix
 # store. Only editable repo sources use a local, version-keyed bytecode cache.
 NXT_RACKET_CACHE_DIR ?= $(CURDIR)/.racket
 NXT_RACKET_VERSION_DIR = $(NXT_RACKET_CACHE_DIR)/$(shell racket -e '(display (version))')

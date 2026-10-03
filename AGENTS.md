@@ -71,7 +71,7 @@ capacity.
 Run the model with:
 
 ```sh
-nix develop .#spec -c make spec
+nix develop -c make spec
 ```
 
 `make spec` is pass/fail: every `run` block must be satisfiable (a witness that
@@ -101,7 +101,7 @@ vacuously true when the exec has no settled phase. Test phase membership with
 check that it can fail: delete the rule it depends on and confirm `make spec`
 reports it.
 
-or, inside `nix develop .#spec`, directly with:
+or, inside `nix develop`, directly with:
 
 ```sh
 racket nxtrt/model.rkt --run-all
@@ -118,8 +118,8 @@ networked updater for `nix/racket-sources.json`.
 
 Meson is the build system; the Nix flake (`flake.nix`, `nix/package.nix`)
 only wraps it. `nix develop` gives the C++ and docs toolchain, including AWS-LC
-for the crypto cross-check tests. Racket and Forge's JDK are opt-in via
-`nix develop .#spec`; basic orb setup does not install spec dependencies.
+for the crypto cross-check tests, plus the cached Racket dependencies and
+Forge's JDK for runtime model work.
 `nix build` builds the installable package with tests, and `nix flake check`
 also checks the runtime specs offline and builds a small pkg-config consumer
 (`nix/consumer.cpp`) against the install. When adding a public header

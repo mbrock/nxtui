@@ -43,6 +43,7 @@
                   llvm.clang-tools
                   nixd
                   gnumake
+                  self.packages.${stdenv.hostPlatform.system}.spec-racket
 
                   # `make docs`
                   uv
@@ -52,6 +53,14 @@
                   mold
                   gdb
                 ];
+
+              shellHook = ''
+                # Only editable model/DSL bytecode is local. Dependencies and
+                # their compiled code come from the immutable Nix package.
+                export PLTCOLLECTS="$PWD:"
+                # The empty suffix preserves Racket's installed bytecode roots.
+                export PLTCOMPILEDROOTS="$PWD/.racket/$(racket -e '(display (version))')/compiled:"
+              '';
             };
         in
         rec {
@@ -59,22 +68,6 @@
           clang = mkDevShell clangStdenv;
           # Keep GCC's libstdc++ separate from Clang's toolchain.
           gcc = mkDevShell gccStdenv;
-
-          # Opt-in model development; basic orbs do not realize these tools.
-          spec = pkgs.mkShell {
-            packages = [
-              self.packages.${stdenv.hostPlatform.system}.spec-racket
-              pkgs.gnumake
-            ];
-
-            shellHook = ''
-              # Only editable model/DSL bytecode is local. Dependencies and
-              # their compiled code come from the immutable Nix package.
-              export PLTCOLLECTS="$PWD:"
-              # The empty suffix preserves Racket's installed bytecode roots.
-              export PLTCOMPILEDROOTS="$PWD/.racket/$(racket -e '(display (version))')/compiled:"
-            '';
-          };
         }
       );
 

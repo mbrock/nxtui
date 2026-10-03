@@ -665,17 +665,16 @@ The flake is optional and wraps the same Meson build:
 ```sh
 nix build            # ./result: libnxt-core, headers, nxt.pc, nxtllm, demos
 nix flake check      # the package (with tests) plus a pkg-config consumer build
-nix develop          # Clang, Meson, AWS-LC, clangd, docs tools
+nix develop          # Clang, Meson, AWS-LC, clangd, docs tools, Racket + JDK
 nix develop .#clang  # explicit Clang shell (also the default on Linux and macOS)
 nix develop .#gcc    # GCC 16 and libstdc++ from the pinned Nixpkgs
-nix develop .#spec   # optional Racket + JDK environment for the runtime model
 ```
 
 Inside `nix develop`, the plain C++ build/test and docs commands above work
 as-is. `.envrc` uses this flake through direnv and then loads `.env` if present.
 Meson keeps the compiler chosen at setup time; use a new build directory when
-switching toolchains. The independent `spec` shell shares the same `flake.lock`
-but is not part of the default development environment.
+switching toolchains. Both compiler shells include the cached Racket and Java
+environment for runtime model development.
 
 To try either compiler without entering a shell manually:
 
@@ -726,15 +725,16 @@ Keep a configured Meson `build` directory, as with the normal build workflow.
 ### In Amp orbs
 
 `.agents/setup` installs Nix, realizes the development shell from `flake.lock`,
-caches Poxy, and configures Meson. It does not download Racket or Java, install
-Racket packages, or compile the model. Amp snapshots the base dependencies for
+caches Poxy, and configures Meson. Racket, Java, and the compiled model
+dependencies are included in the development shell. Setup does not compile
+the editable model sources. Amp snapshots the base dependencies for
 reuse by fresh orbs. Repeated setup runs reuse installed packages;
 `.agents/resume` does not install anything.
 
 Setup adds a repository-scoped login-shell hook so agents can run `make build`,
 `make test`, and `make docs` directly from the repository root, without manually
-entering `nix develop`. Model work is opt-in with
-`nix develop .#spec -c make spec`. No API credentials are needed for these local
+entering `nix develop`. Run model checks with `make spec` in the same
+environment. No API credentials are needed for these local
 workflows.
 
 The separate Bun graph-documentation workflow requires the sibling checkout
@@ -767,10 +767,10 @@ example scenarios must be satisfiable and its lifecycle properties must hold
 (for instance, that an exec only retires once its cancel CQE has drained, as
 `is_retirable` requires); `make spec-witnesses` prints the example traces. It
 needs Racket and a Java runtime (Forge's Pardinus solver runs on the JVM);
-enter `nix develop .#spec` or run:
+enter `nix develop` or run:
 
 ```sh
-nix develop .#spec -c make spec
+nix develop -c make spec
 ```
 
 Racket, Java, and the compiled Racket libraries all come from Nix.
@@ -799,7 +799,7 @@ To deliberately refresh the dependency lock from the Racket catalog (this is
 the networked update step, not part of normal builds):
 
 ```sh
-nix develop .#spec -c racket nix/update-racket-sources.rkt > nix/racket-sources.json.new &&
+nix develop -c racket nix/update-racket-sources.rkt > nix/racket-sources.json.new &&
   mv nix/racket-sources.json.new nix/racket-sources.json
 nix build .#checks.x86_64-linux.spec # use your system's check attribute
 ```

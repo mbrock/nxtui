@@ -81,4 +81,4 @@ else
   step 'Configure Meson build' make setup
 fi
 printf '\nReady: make build, make test, and make docs.\n'
-printf 'Optional model checks: nix develop .#spec -c make spec\n'
+printf 'Model checks: make spec\n'

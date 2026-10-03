@@ -9,10 +9,10 @@ single `#lang rdf-forge` source file.
 - `model.rkt` is a compatibility entrypoint that runs the model through
   Forge's functional API without generating `.frg` text.
 
-On a fresh machine, enter the reproducible spec environment:
+On a fresh machine, enter the reproducible development environment:
 
 ```sh
-nix develop .#spec
+nix develop
 ```
 
 The `forge` and `something` packages used by this model are vendored under
