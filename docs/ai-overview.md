@@ -30,8 +30,8 @@ not yet connected into subsequent model requests. The older HTTP request
 helper also returns `nxt::http::request`, while the CLI separately constructs
 an `nxtrt::http::request`; that duplication is a future consolidation target.
 
-The tool-turn renderer and trace-rendering sources are not built into
-`nxtllm`. They should not be mistaken for an active tool UI.
+`tool_tui.hpp` and `trace_tui.hpp` provide tool-turn and span-waterfall layouts,
+exercised by raster tests. They are not connected to `nxtllm`'s text consumer.
 
 ## Tools as pool work
 

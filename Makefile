@@ -1,4 +1,4 @@
-.PHONY: all setup setup-unity build dev full test setup-gcc15 build-gcc15 test-gcc15 gcc15 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec spec-witnesses docs docs-publish clean traces
+.PHONY: all setup setup-unity build dev full test setup-gcc15 build-gcc15 test-gcc15 gcc15 freebsd-test deps deps-dot bench-build bench bench-plain bench-residency bench-perf bench-perf-report bench-perf-hot bench-perf-duck bench-uring-stat bench-uring-record bench-uring-duck bench-uring-trace spec spec-witnesses docs docs-publish clean
 
 BENCH_BUILD_DIR ?= build-bench-release
 BENCH_BIN ?= $(BENCH_BUILD_DIR)/bench/nxt-echo-bench
