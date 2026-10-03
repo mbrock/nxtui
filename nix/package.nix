@@ -15,6 +15,9 @@
   c-ares,
   aws-lc,
   python3,
+  bash,
+  coreutils,
+  procps,
   doCheck ? true,
 }:
 
@@ -55,7 +58,15 @@ stdenv.mkDerivation {
 
   # AWS-LC's libcrypto validates TLS certificates and also supplies the
   # crypto test fixtures and ML-KEM-768 cross-checks.
-  nativeCheckInputs = [ python3 ];
+  nativeCheckInputs = [ python3 ] ++ lib.optionals stdenv.hostPlatform.isLinux [ procps ];
+
+  postPatch = ''
+    # These tests exercise explicit executable paths, rather than PATH lookup.
+    # Use store paths in the sandbox, where /bin/sleep does not exist.
+    substituteInPlace test/process-test.cpp test/uring-wand-test.cpp \
+      --replace-fail '"/bin/sh"' '"${bash}/bin/sh"' \
+      --replace-fail '"/bin/sleep"' '"${coreutils}/bin/sleep"'
+  '';
 
   mesonBuildType = "release";
 
