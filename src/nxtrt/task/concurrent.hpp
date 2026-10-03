@@ -459,7 +459,7 @@ template<typename T>
             std::move(body),
             timeout_after(duration)},
         first_completion_group{});
-    auto body_result = std::move(std::get<0>(outcomes));
+    auto & body_result = std::get<0>(outcomes);
     if (body_result) {
         if constexpr (std::is_void_v<T>) {
             co_return;
@@ -468,7 +468,7 @@ template<typename T>
         }
     }
 
-    auto timeout_result = std::move(std::get<1>(outcomes));
+    auto & timeout_result = std::get<1>(outcomes);
     // An ordinary body failure cancels the timer; do not replace that
     // failure with the timer's cancellation. A real deadline wins over
     // cancellation of the body, while external stop remains cancellation.

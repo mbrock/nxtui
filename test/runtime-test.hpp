@@ -894,9 +894,9 @@ struct echo_tool
 
 struct tool_batch_probe
 {
-    std::vector<int> delays;
-    std::set<int> failures;
-    std::vector<int> completed;
+    std::vector<int> delays{};
+    std::set<int> failures{};
+    std::vector<int> completed{};
     int started = 0;
     int active = 0;
     int peak = 0;

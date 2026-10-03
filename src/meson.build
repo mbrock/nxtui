@@ -21,7 +21,7 @@ nxt_libvterm = static_library('nxt-vterm',
   override_options : ['warning_level=0'],
 )
 
-nxt_libvterm_inc = include_directories('../vendor/libvterm/include')
+nxt_libvterm_inc = include_directories('../vendor/libvterm/include', is_system : true)
 
 nxt_libvterm_dep = declare_dependency(
   link_with : nxt_libvterm,

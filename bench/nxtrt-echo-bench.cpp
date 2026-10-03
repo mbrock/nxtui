@@ -218,7 +218,7 @@ nxtrt::task<void> run_echo_load(
 {
     // The clients are the primary job: when they finish, or when anything
     // fails (including the timeout), the rest are stopped.
-    auto [clients, server, deadline] = co_await nxtrt::settle(
+    auto outcomes = co_await nxtrt::settle(
         std::tuple{
             run_clients(options, address, payload, stats),
             echo_server(
@@ -228,6 +228,7 @@ nxtrt::task<void> run_echo_load(
                     options.timeout)),
         },
         echo_load_group{});
+    auto & [clients, server, deadline] = outcomes;
 
     if (!deadline && !nxtrt::is_operation_cancelled(deadline.error()))
         nxtrt::rethrow(deadline.error());

@@ -18,6 +18,10 @@ inline bool enabled() noexcept
     return on;
 }
 
+// The pointer is logged as an address; its storage need not be initialized.
+#if defined(__GNUC__) && !defined(__clang__)
+[[gnu::access(none, 3)]]
+#endif
 inline void event(
     const char * source,
     const char * action,
@@ -49,9 +53,11 @@ inline void event(
         capacity);
     if (n > 0) {
         auto len = static_cast<std::size_t>(n);
-        if (len > sizeof(line))
-            len = sizeof(line);
-        (void)::write(STDERR_FILENO, line, len);
+        if (len >= sizeof(line))
+            len = sizeof(line) - 1;
+        // Tracing is best effort: do not retry or allocate on this hot path.
+        const auto written = ::write(STDERR_FILENO, line, len);
+        (void)written;
     }
     tracing = false;
 }

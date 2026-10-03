@@ -174,8 +174,8 @@ inline std::uint64_t adjusted_now_nanoseconds(
     std::uint64_t now_ns)
 {
     constexpr auto ns_per_second = std::int64_t{1'000'000'000};
-    auto adjusted = static_cast<__int128>(now_ns)
-                  + static_cast<__int128>(state.time_offset) * ns_per_second;
+    auto adjusted = static_cast<__int128_t>(now_ns)
+                  + static_cast<__int128_t>(state.time_offset) * ns_per_second;
     if (adjusted < 0)
         return 0;
     if (adjusted > std::numeric_limits<std::uint64_t>::max())

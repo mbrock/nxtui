@@ -124,13 +124,16 @@ inline std::string format_path(const std::vector<int> & path)
 
 inline void write_signal_text(std::string_view text)
 {
-    (void)::write(STDERR_FILENO, text.data(), text.size());
+    const auto written = ::write(STDERR_FILENO, text.data(), text.size());
+    (void)written;
 }
 
 inline void write_signal_cstr(const char * text)
 {
-    if (text != nullptr)
-        (void)::write(STDERR_FILENO, text, std::strlen(text));
+    if (text != nullptr) {
+        const auto written = ::write(STDERR_FILENO, text, std::strlen(text));
+        (void)written;
+    }
 }
 
 [[noreturn]] inline void test_timeout_handler(int)

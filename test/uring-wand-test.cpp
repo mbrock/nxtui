@@ -179,7 +179,8 @@ struct linux_dirent64
     std::int64_t d_off;
     unsigned short d_reclen;
     unsigned char d_type;
-    char d_name[];
+    // The name continues through the variable-length getdents64 record.
+    char d_name[1];
 };
 
 nxtrt::task<std::vector<std::string>> read_current_directory_names()

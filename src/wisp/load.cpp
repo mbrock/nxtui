@@ -4,9 +4,22 @@
 namespace wisp {
 namespace {
 
+// #embed is intentionally used as a C++23 extension.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++26-extensions"
+#endif
 constexpr unsigned char base_source[] = {
 #embed "base.wisp"
 };
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 } // namespace
 

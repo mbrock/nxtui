@@ -181,22 +181,22 @@ inline task<sample> read_sample(const std::filesystem::path & dir)
 {
     auto out = sample{};
 
-    auto
+    auto values = co_await when_all(
+        read_uint_file(dir / "memory.current"),
+        read_uint_file(dir / "memory.peak"),
+        read_uint_file(dir / "pids.current"),
+        read_text_file(dir / "cpu.stat"),
+        read_text_file(dir / "memory.pressure"),
+        read_text_file(dir / "cpu.pressure"),
+        read_text_file(dir / "io.pressure"));
+    auto &
         [memory_current,
          memory_peak,
          pids,
          cpu_text,
          mem_pressure,
          cpu_pressure,
-         io_pressure] =
-            co_await when_all(
-                read_uint_file(dir / "memory.current"),
-                read_uint_file(dir / "memory.peak"),
-                read_uint_file(dir / "pids.current"),
-                read_text_file(dir / "cpu.stat"),
-                read_text_file(dir / "memory.pressure"),
-                read_text_file(dir / "cpu.pressure"),
-                read_text_file(dir / "io.pressure"));
+         io_pressure] = values;
 
     out.at = std::chrono::steady_clock::now();
     out.memory_current = bytes_t{memory_current};

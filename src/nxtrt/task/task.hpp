@@ -15,7 +15,7 @@ template<typename Fn>
     requires std::is_nothrow_invocable_v<Fn &>
              && std::same_as<std::invoke_result_t<Fn &>, void>
              && std::is_nothrow_move_constructible_v<Fn>
-class [[nodiscard]] completion_link : private detail::completion_observer
+class [[nodiscard]] completion_link final : private detail::completion_observer
 {
 public:
     /// Construct unbound so storage can be prepared before starting tasks.

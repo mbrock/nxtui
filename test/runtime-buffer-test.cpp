@@ -201,6 +201,8 @@ void declare_runtime_buffer_tests()
                 auto tools = nxtai::tools::make_tool_registry(
                     {nxtai::tools::function_tool_entry{
                         .name = "echo",
+                        .description = {},
+                        .parameters = {},
                         .run = [&state](std::string_view arguments) {
                             auto text =
                                 nxtai::tools::json_string_member(

@@ -2,7 +2,7 @@ project('nxtui', 'cpp', 'c',
   version : '0.1.0',
   default_options : [
     'cpp_std=c++23',
-    'warning_level=2',
+    'warning_level=3',
     'buildtype=debugoptimized',
     'default_library=shared',
   ],
@@ -23,6 +23,21 @@ else
 endif
 
 cpp = meson.get_compiler('cpp')
+
+# Keep useful diagnostics on for both compilers, including checks that Meson's
+# -Wall/-Wextra/-Wpedantic baseline does not enable.
+add_project_arguments(cpp.get_supported_arguments(
+  '-Wformat=2',
+  '-Wundef',
+  '-Wimplicit-fallthrough',
+  '-Wextra-semi',
+), language : 'cpp')
+
+if cpp.get_id() == 'gcc'
+  # GCC diagnoses compiler-generated coroutine frames and generic lambda
+  # closures containing local types, although those types never cross a TU.
+  add_project_arguments('-Wno-subobject-linkage', language : 'cpp')
+endif
 
 nxt_wand = get_option('default_wand')
 nxt_wand_args = []
@@ -81,11 +96,12 @@ nxt_mdspan_args = [
   '-DMDSPAN_USE_PAREN_OPERATOR=0',
 ]
 
-nxt_inc = include_directories(
-  'src',
-  'vendor/hub/include',
-  'vendor/mdspan/include',
-)
+# Diagnostics belong to project sources, not bundled dependency headers.
+nxt_inc = [
+  include_directories('src'),
+  include_directories('vendor/hub/include', 'vendor/mdspan/include',
+    is_system : true),
+]
 
 subdir('src')
 

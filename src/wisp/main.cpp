@@ -27,9 +27,22 @@
 namespace wisp {
 namespace {
 
+// #embed is intentionally used as a C++23 extension.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++26-extensions"
+#endif
 constexpr unsigned char boot_tape[] = {
 #embed "wisp-boot.tape"
 };
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 using namespace std::chrono;
 
@@ -578,8 +591,8 @@ struct host
 
     nxtrt::task<void> read_file(word argument, root & result)
     {
-        auto [fd, size] =
-            co_await open_regular(guest_path(argument, "read-file"));
+        auto opened = co_await open_regular(guest_path(argument, "read-file"));
+        auto & [fd, size] = opened;
         effect_require(size <= tape::default_limit, "file exceeds 64 MiB");
         std::string bytes(size, '\0');
         std::size_t offset = 0;
@@ -751,7 +764,7 @@ struct host
         const auto path = request.target.substr(0, query);
         const auto decoded = path_segments(path);
         if (!decoded)
-            co_return nxtrt::http::response{400, {}, "Bad Request\n"};
+            co_return nxtrt::http::response{400, {}, "Bad Request\n", {}};
         auto segments = nil;
         for (const auto & segment : *decoded | std::views::reverse)
             segments = h.cons(h.newv08(segment), segments);
@@ -787,7 +800,7 @@ struct host
         // registry.
         if (!co_await execute(state))
             co_return nxtrt::http::response{
-                500, {}, "Internal Server Error\n"};
+                500, {}, "Internal Server Error\n", {}};
         const auto result = vector(h, state.get(), 7)[5];
         const auto status = slot(result, "HTTP-RESPONSE", "STATUS");
         effect_require(tag_of(status) == tag::integer, "invalid HTTP status");
@@ -833,7 +846,8 @@ struct host
             list = rest;
         }
         if (file) {
-            auto [fd, size] = co_await open_regular(std::move(*file));
+            auto opened = co_await open_regular(std::move(*file));
+            auto & [fd, size] = opened;
             response.file = nxtrt::http::file_body{std::move(fd), 0, size};
         }
         co_return response;

@@ -276,7 +276,7 @@ factor_pq(std::span<const std::byte> pq_bytes)
         auto y = std::uint64_t{2};
         for (auto steps = 0; steps < 250'000; steps++) {
             auto step = [&](std::uint64_t v) {
-                return (static_cast<unsigned __int128>(v) * v + c) % value;
+                return (static_cast<__uint128_t>(v) * v + c) % value;
             };
             x = step(x);
             y = step(step(y));

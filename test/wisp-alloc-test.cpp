@@ -39,12 +39,14 @@ void * operator new(std::size_t size)
     throw std::bad_alloc{};
 }
 
-void operator delete(void * p) noexcept
+// Keep replacement deallocators opaque to allocation-family diagnostics:
+// these operator new/delete pairs deliberately use malloc/free.
+[[gnu::noinline]] void operator delete(void * p) noexcept
 {
     std::free(p);
 }
 
-void operator delete(void * p, std::size_t) noexcept
+[[gnu::noinline]] void operator delete(void * p, std::size_t) noexcept
 {
     std::free(p);
 }

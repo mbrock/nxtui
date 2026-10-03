@@ -15,6 +15,14 @@ namespace {
 using namespace wisp;
 using clock_type = std::chrono::steady_clock;
 
+// #embed is intentionally used as a C++23 extension.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++26-extensions"
+#endif
 constexpr unsigned char micro_bytes[] = {
 #embed "wisp/micro.wisp"
 };
@@ -24,6 +32,11 @@ constexpr unsigned char program_bytes[] = {
 constexpr unsigned char repo_bytes[] = {
 #embed "wisp/repo-benchmarks.wisp"
 };
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 template<std::size_t N>
 std::string_view source(const unsigned char (&bytes)[N])

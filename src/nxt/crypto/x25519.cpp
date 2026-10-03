@@ -17,7 +17,7 @@ namespace nxt::crypto {
 namespace {
 
 using u64 = std::uint64_t;
-using u128 = unsigned __int128;
+using u128 = __uint128_t;
 
 struct fe { u64 v[5]; };  // field element, radix 2^51
 

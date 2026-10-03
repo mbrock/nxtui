@@ -667,7 +667,8 @@ task<void> connection(
             file.reset();
             keep_alive = false;
             out = make_response(
-                response{.status = status}, false, false, options, file);
+                response{.status = status, .headers = {}, .body = {}, .file = {}},
+                false, false, options, file);
         }
         // Never attempt a second response after a partial write or timeout.
         co_await with_timeout(
