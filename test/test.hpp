@@ -622,7 +622,8 @@ struct config
         auto start = std::chrono::steady_clock::now();
 
         // The registered suites are the root's children.
-        open_groups.push_back({.name = test_root_name, .printed = true});
+        open_groups.push_back(
+            {.name = test_root_name, .path = {}, .printed = true});
         for (const auto & definition : test_definitions())
             test_case{.name = definition.name, .is_group = true} =
                 definition.body;

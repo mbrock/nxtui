@@ -943,7 +943,8 @@ run_tool_batch_probe(tool_batch_probe & state, int id)
     state.completed.push_back(id);
     if (state.failures.contains(id))
         throw nxtrt::runtime_error{"probe failure " + std::to_string(id)};
-    co_return nxtai::tools::tool_result{.output = std::to_string(id)};
+    co_return nxtai::tools::tool_result{
+        .output = std::to_string(id), .observed = {}};
 }
 
 struct batch_probe_tool : echo_tool
