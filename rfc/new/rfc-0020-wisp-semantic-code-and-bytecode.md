@@ -22,11 +22,20 @@ example is a prepared call suspended halfway through argument evaluation,
 saved to tape, restored, and resumed twice with correctly shared lexical
 mutation. Performance work follows that semantic foundation.
 
+Wisp is a live language, and the compiler must keep it one, but liveness
+needs a contract that a compiler can honor. For redefinition this proposal
+takes Common Lisp as its reference rather than the source interpreter's habit
+of consulting every function cell at every step: special operators are fixed,
+macros expand when code is prepared, and calls to global functions stay late
+bound. Wisp's heap-resident, multi-shot, tapeable control has no Common Lisp
+counterpart. The compiler preserves it exactly, and most of the care in this
+proposal goes there.
+
 The recommended sequence is:
 
 ```text
 source forms
-    → existing macroexpansion, with explicit residual source
+    → macroexpansion driven by the analyzer, with explicit source escapes
     → semantic records with binding identities
     → record execution on the existing heap control machine
     → lowered operations with storage and continuation layouts
@@ -68,11 +77,83 @@ segment, frames are linked heap rows. Packing several activations into one
 contiguous allocation is a separate optimization, with additional copying and
 ownership decisions.
 
+## Common Lisp as the reference for liveness
+
+The source interpreter answers every redefinition question by accident. It
+looks up `IF`, `LET`, and every named operator in its function cell each time
+it reaches a form, so any redefinition, including of the control structures
+themselves, takes effect on the next step. Carrying that into compiled code
+would put a guard in front of every special form and keep a source fallback
+at every call site. Nobody relies on that property, and keeping it would make
+the compiler both slower and harder to reason about.
+
+Common Lisp is the better reference. It is one of the most thoroughly live
+systems in practical use, and its liveness was settled by implementers and
+users more than derived from a calculus. The standard states the goal
+directly: its
+[semantic constraints](https://www.lispworks.com/documentation/HyperSpec/Body/03_bbc.htm)
+exist "to minimize the observable differences between compiled and
+interpreted programs", not to erase them. The working rules are few:
+
+- Special operators are fixed. Redefining a symbol of the `COMMON-LISP`
+  package is
+  [undefined](https://www.lispworks.com/documentation/HyperSpec/Body/11_abab.htm),
+  and implementations such as SBCL lock the package. The compiler may treat
+  `IF` as `IF`, and may open-code standard functions.
+- Macros are expanded when code is compiled. A list form whose head names
+  neither a special operator nor a macro known at compile time is a function
+  call, and an operator undefined at compile time is not an error. Redefining
+  a macro affects code compiled afterward; existing compiled callers keep their
+  expansion until they are compiled again.
+- Calls to global functions go through the function definition at run time, so
+  redefining a function updates existing callers. Inline declarations and the
+  assumption that a file's own functions do not change underneath it are the
+  explicit exceptions.
+- Redefining a structure incompatibly is undefined. Where redefinition pays
+  for real engineering it gets some:
+  [CLOS updates the instances of a redefined class](https://www.lispworks.com/documentation/HyperSpec/Body/f_upda_1.htm),
+  and the metaobject protocol lets dependents register for changes.
+
+Few experienced users could recite these rules. They redefine something,
+observe whether callers changed, and compile again when they did not. The rules
+make that loop predictable while leaving the compiler room to work, and that
+is the property Wisp wants.
+
+Wisp is not a Common Lisp implementation and does not seek compatibility with
+it. It adopts the same shape of contract for prepared code:
+
+| Operation | Effect on prepared code |
+| --- | --- |
+| Redefine a core special operator: `QUOTE`, `FUNCTION`, `%FN`, `%MACRO-FN`, `IF`, `DO`, `LET`, `%SET!` | Unsupported. Prepared code keeps the built-in meaning |
+| Redefine a macro, including `FN`, `SET!`, and `DEFUN` | Affects code prepared afterward; prepare existing callers again to update them |
+| Redefine a global function with `DEFUN` or `SET-SYMBOL-FUNCTION!` | Takes effect at the next callee resolution in every caller |
+| A prepared call site finds a macro or special operator in the function cell | Signals a condition at callee resolution, before any argument runs |
+| Redefine a primitive in the compiler's declared open-coded set | Unsupported, like the `COMMON-LISP` package |
+| Redefine a struct with the same slots | Preserves descriptor identity, as today |
+| Redefine a struct with different slots | Creates a new descriptor; existing instances and code keep the old one |
+| Edit a function's source conses | No effect on installed code until it is prepared again |
+
+The core special operators are the builtins that receive their arguments
+unevaluated in the evaluator's builtin table. `FN`, `SET!`, `DEFUN`, and the
+rest of the surface syntax are macros over them, so they follow the macro rule.
+The base library already relies on that rule while it bootstraps: it redefines
+`FN` and `DEFUN` as it loads, and code prepared later sees the later
+definitions. Source interpretation keeps its present behavior; the table only
+states what prepared code promises.
+
+Wisp goes beyond Common Lisp in its control. Common Lisp has no first-class
+continuations, and SBCL keeps compiled activations on the native stack. Wisp
+keeps every activation in the heap, resumes continuations any number of times,
+steps runs under a budget, and saves suspended computations to tape. The
+compiler must preserve those properties exactly, including in the middle of a
+prepared call. Redefinition is where this proposal borrows Common Lisp's
+pragmatism; control is where it spends its rigor.
+
 ## Semantic commitments
 
 Prepared execution must preserve evaluation results, observable mutation,
-condition delivery, dynamic scope, and continuation composition for the
-supported language. An explicitly compiled definition also needs a documented
+condition delivery, dynamic scope, and continuation composition, within the
+liveness contract above. An explicitly compiled definition also needs a documented
 policy for its source and inspection interfaces. Those policies cannot be
 inferred from a successful arithmetic benchmark.
 
@@ -207,12 +288,20 @@ Add a separate opt-in operation for installing prepared code. Only reconsider
 the old name and bootstrap policy after mixed execution, reflection, and tape
 tests pass.
 
-Preparation may execute macros, just as the current guest expander does; it is
-not a pure parsing operation. Keep its errors and effects in the guest machine.
-The bounded expander can leave residual macros, so “after macroexpansion” does
-not guarantee a closed core language. `ir-source` is an explicit escape to
-ordinary source evaluation in the same run and call-site environment. It must
-not silently use public `EVAL`, which has different lexical scope.
+The analyzer expands macros as it reaches each form position, as a Common
+Lisp compiler does, rather than trusting a separate expansion pass over the
+body. Because the special operators are fixed, it knows every form position:
+a list whose head names a macro at preparation time is expanded and analyzed
+again, a core special operator is analyzed by its own rule, and any other named
+head is a function call, whether or not it has a definition yet. Preparation
+therefore executes macros; it is not a pure parsing operation. Keep its errors
+and effects in the guest machine.
+
+`ir-source` remains for forms the analyzer does not support yet. It is an
+explicit escape to ordinary source evaluation in the same run and call-site
+environment, a scaffold for growing the compiler incrementally rather than a
+semantic fallback. It must not silently use public `EVAL`, which has different
+lexical scope.
 
 ### Definition snapshots
 
@@ -236,27 +325,31 @@ Recommend the following initial, opt-in contract:
   while evaluating its arguments, including across suspension.
 
 These rules make compilation reviewable without requiring a mutation journal
-for every source cons. Transparent automatic compilation would require a
-stronger compatibility/invalidation design and is deferred.
+for every source cons. Like Common Lisp's `COMPILE`, preparation is an explicit
+act. Transparent automatic compilation would require a stronger
+compatibility/invalidation design and is deferred.
 
-### Late binding and source fallback
+### Late binding at call sites
 
-A function-cell reference may yield a normal function, a macro, a control jet,
-or an invalid value. The compiled call site must classify it before evaluating
-arguments. Keep the relevant raw source form alongside analyzed arguments so
-that a changed callee kind can take the source path without executing an
-argument twice. Errors must occur at the same semantic point as source
-evaluation. Macro expansions already incorporated into the prepared snapshot
-follow the compilation-time policy above.
+A prepared named call reads its callee's function cell when the call begins,
+before evaluating any argument, and keeps that value for the rest of the call,
+including across suspension and repeated resumption. It classifies the value
+at that point. A function, function jet, or continuation is invoked with the
+evaluated arguments. A macro, special operator, or invalid value signals a
+condition before any argument runs; adopting a new macro means preparing the
+caller again. No call site keeps source for an alternative path.
 
-Apply the same discipline to recognized special forms: their current meaning
-comes through Wisp's function cells. Initially guard the expected control jet
-and fall back before starting the form if it has changed. Lowering an apparent
-`IF` or `LET` unconditionally would otherwise freeze a redefinable operation.
+Special forms compile to their built-in meaning without a guard. That is the
+liveness contract's main simplification: the analyzer and later lowering stages
+may treat `IF`, `LET`, and the other core operators as fixed control
+structure.
 
-Primitive specialization later requires both the expected callee and the
-expected operand types. Overflow and type failures use the existing condition
-path. No primitive may become non-redefinable merely because it has an opcode.
+Primitive specialization later needs only the expected operand types, for
+primitives in an explicitly declared open-coded set; the contract fixes the
+callee. Overflow and type failures use the existing condition path. Functions
+outside that set stay late bound even when an instruction exists that could
+implement them. Declare the set when the first specialized instruction lands,
+and keep it short.
 
 ## Code, closures, and activations
 
@@ -272,7 +365,7 @@ Prefer adding an optional executable reference to the existing callable
 representation over making every record callable. Today `call()` accepts
 functions, macros, jets, and continuations; a `compiled-function` struct alone
 would not change dispatch. Keep the existing source body for reflection and
-fallback. Changes to the shared `fun`/`mac` schema, call accounting, and tape
+preparing again. Changes to the shared `fun`/`mac` schema, call accounting, and tape
 version must be made together.
 
 The first production executor should be a C++ transition engine over the
@@ -351,22 +444,29 @@ using the current lookup rules. Semantic analysis does not require immediately
 replacing environments with registers or flat closures.
 
 `ENV` and `KTX-ENV` expose actual storage, and existing tests assert environment
-identity. Its vectors and spines are mutable. An index calculated at compile
-time is therefore only a candidate location until the runtime establishes that
-the relevant shape and shadowing assumptions still hold. Checking only the
-symbol in a target slot is insufficient if an earlier scope can acquire a
-matching key.
+identity. Common Lisp offers nothing comparable; its debuggers show the locals
+that the compilation policy kept. Wisp keeps the access, with a contract in the
+same spirit as redefinition. Assigning a value through an exposed environment
+is supported and visible to prepared code. Changing the shape of a prepared
+activation's environment, by adding, removing, or reordering names in its
+vectors or spine, is unsupported. Stage 0 confirms that no built-in operation
+extends a lexical environment in place. Prepared code may then use lexical
+addresses computed by analysis without a shape guard.
 
-Begin with correct lookup, then introduce guarded lexical addresses. A future
-shape/version scheme must account for every exposed mutation path; on a guard
-failure, use the existing lookup and validation behavior. External environments
-supplied to `start()` and runtime-created syntax remain valid fallback cases.
+Begin with the current lookup through the shared store, then introduce those
+addresses. Environments supplied from outside to `start()` and runtime-created
+syntax keep the existing lookup.
 
 Flat captures, boxing, and unboxed locals come later. Storage analysis must
-include closures, continuation capture, reflective environment escape, and
-mutation through aliases. “Assigned and captured by a nested function” is not
-sufficient: a local can remain observable through repeated continuations or an
-exposed environment even without such a nested function.
+include closures, continuation capture, reflective environment escape, source
+escapes, and mutation through aliases. “Assigned and captured by a nested
+function” is not sufficient: a local can remain observable through repeated
+continuations or an exposed environment even without such a nested function,
+and an `ir-source` escape can name any visible local. A scope that calls `ENV`
+or contains a source escape keeps materialized storage. Beyond that, follow a
+Common Lisp style debug policy rather than promising that every local is always
+inspectable: a high debug setting keeps every local in an inspectable
+environment, and lower settings show what the chosen storage retains.
 
 Keep the existing `KTX-*` view unchanged for source frames. Give prepared
 frames a documented inspection view with code, position, lexical environment,
@@ -419,7 +519,7 @@ and continuation layouts. Binding identities remain linked to their lowered
 storage decisions. A modest ANF-like sequence of operations and blocks is
 sufficient initially; a general CPS optimizer is not required.
 
-The first operations should cover constants, value lookup/assignment, guarded
+The first operations should cover constants, value lookup/assignment,
 lexical access, function-cell resolution, branches, closure construction,
 calls, tail calls, returns, and the source escape. Existing jets implement
 control/effect operations through the common runtime. Specialized effect or
@@ -498,10 +598,11 @@ runtime checks until publication or versioning makes a cached result valid.
 ### 0. Establish the contracts and comparison harness
 
 Catalog current source behavior and add focused tests where the compiler needs
-an explicit distinction: callee resolution timing, function/control-jet
-redefinition, parameter handling, source mutation, reflective environment
-mutation, and macro fallback. Record the prepared-mode snapshot and inspection
-differences from this RFC. Refresh the benchmark baseline on the actual build
+an explicit distinction: callee resolution timing, function and macro
+redefinition, parameter handling (including when `&optional` defaults run and
+which bindings they see), source mutation, and assignment through exposed
+environments. Record the liveness contract, prepared-mode snapshot, and
+inspection differences from this RFC. Refresh the benchmark baseline on the actual build
 used for the experiment.
 
 Acceptance: a named semantic corpus and a documented mode/behavior matrix. No
@@ -512,12 +613,14 @@ runtime default changes and no performance claims from historical timings.
 Add the compiler's record definitions, scope walker, binding resolution,
 parameter description, source associations, graph validation, and a readable
 inspection helper. Start with constants, references, `IF`, `DO`, `LET`, function
-literals, assignment, and named calls. Preserve residual source explicitly.
+literals, assignment, and named calls, expanding macros as the walker
+reaches them. Mark unsupported forms with explicit source escapes.
 Keep `compile!` and the source executor unchanged.
 
 Acceptance: shadowing, simultaneous `LET`, nested/transitive captures, optional
-and rest parameters, function/value namespaces, residual macros, and cyclic
-source rejection/handling are tested. Analyze a small function, inspect it, GC
+and rest parameters, function/value namespaces, expansion at preparation
+time, operators undefined at preparation time, and cyclic source
+rejection/handling are tested. Analyze a small function, inspect it, GC
 it, and save/restore its graph while preserving binding and descriptor identity.
 
 ### 2. Execute semantic records in the existing machine
@@ -525,7 +628,8 @@ it, and save/restore its graph while preserving binding and descriptor identity.
 Add the explicit prepared-frame variant, dispatch transitions, code/closure
 attachment, return path, source escape, and continuation copy policy. Begin
 with current lexical environments and conservative lookup. Support mixed calls
-in both directions and route jets through existing semantics.
+in both directions and route jets through existing semantics. The new frame
+variant enters tape validation and the tape version in this stage, not later.
 
 Acceptance: the multi-shot argument example passes in source and record modes,
 including GC between steps and tape restoration. Nested prompts, dynamic
@@ -537,12 +641,14 @@ activation and verify its environment identity and frozen argument progress.
 
 Implement the opt-in preparation/install operations, source/executable
 inspection, version retention for suspended activations, `SET-CODE!`
-invalidation, and guarded fallback for changed callee kinds. Specify and test
+invalidation, and the condition signaled when a callee has become a macro or
+special operator. Specify and test
 the prepared `KTX-*` projections. Bootstrap compiler descriptors without
 requiring a compiler to load itself.
 
-Acceptance: source edits, recompilation, redefinition during arguments, macro
-effects, and interpreted/prepared reentry have documented, tested outcomes.
+Acceptance: every row of the liveness table, source edits, recompilation,
+redefinition during arguments, macro effects, and interpreted/prepared reentry
+have documented, tested outcomes.
 The existing source-only suite retains its behavior. Every prepared corpus
 case reports whether it executed prepared nodes or used a source escape.
 
@@ -562,7 +668,7 @@ fallback to the source evaluator.
 ### 5. Optimize from measurements
 
 Measure dispatch, allocation, validation, lookup, capture/copying, GC, compile
-time, and image size. Candidate changes include guarded lexical addresses,
+time, and image size. Candidate changes include direct lexical addresses,
 argument-window reuse, safe operation fusion, guarded fixnum arithmetic, and
 proven storage simplification. Keep an unoptimized execution mode.
 
@@ -598,11 +704,13 @@ The corpus should include:
 
 - Lexical shadowing, assignment, optional/rest arguments, shared closures,
   function/value separation, and changing dynamic declarations.
-- Redefinition before and during argument evaluation, including changing a
-  function into a macro or control jet; primitive error and overflow paths.
+- Function redefinition before and during argument evaluation; a function
+  cell that becomes a macro or special operator, signaling at callee
+  resolution; macro redefinition and preparing again; primitive error and
+  overflow paths.
 - Captures before/between/after arguments; repeated, nested, shallow, deep,
   and tail resumption; dynamic mutation versus shared lexical mutation.
-- Actual `ENV`/`KTX-ENV` identity, mutations through exposed environments,
+- Actual `ENV`/`KTX-ENV` identity, assignment through exposed environments,
   public `EVAL`, and call-site macro expansion.
 - Mixed source/prepared/VM recursion, conditions and source escapes, GC at each
   transition, pending timers, cancellation/error resumption, and tape forks.
@@ -639,6 +747,10 @@ the proposed executor has been implemented or tested.
 
 ## Implementation references
 
+The
+[Common Lisp HyperSpec](https://www.lispworks.com/documentation/HyperSpec/Front/index.htm)
+is the reference for the liveness contract, in particular its semantic
+constraints on compilation and its constraints on the `COMMON-LISP` package.
 [Dybvig's Three Implementation Models for Scheme](https://legacy.cs.indiana.edu/~dyb/papers/3imp.pdf)
 is the starting reference for compilation with heap environments and control.
 [The Implementation of Lua 5.0](https://www.lua.org/doc/sblp2005.pdf) supplies
