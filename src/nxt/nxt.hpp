@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "nxt/function-ref.hpp"
+
 #include "nxtui/ansi.hpp"
 #include "nxtui/compositor.hpp"
 #include "nxtui/glyph-table.hpp"

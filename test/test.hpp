@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nxt/stacktrace.hpp>
+#include <nxt/function-ref.hpp>
 
 #include <chrono>
 #include <csignal>
@@ -61,6 +62,9 @@ inline constexpr double slow_test_failure_ms = 1000.0;
 inline constexpr std::chrono::seconds test_timeout{1};
 inline constexpr std::string_view test_root_name = "nxt";
 
+// Suite registration happens during static initialization; execution happens
+// after main configures selectors. Own suite closures because registration
+// temporaries have already been destroyed when the runner invokes them.
 struct test_definition
 {
     std::string_view name;
@@ -303,7 +307,7 @@ void run_body(F & body)
         body();
     else
         test_body_runner<result_type>::run(
-            std::function<result_type()>{std::ref(body)});
+            nxt::function_ref<result_type()>{body});
 }
 
 /// A borrowed test or group body. Erasing it keeps the runner below to one
@@ -311,26 +315,20 @@ void run_body(F & body)
 /// small thunk that calls its own body.
 struct body_ref
 {
-    void * body = nullptr;
-    void (*call)(void *) = nullptr;
+    nxt::function_ref<void()> call;
     bool returns_void = true;
 
     void operator()() const
     {
-        call(body);
+        call();
     }
 };
 
 template<typename F>
 body_ref make_body_ref(F & body)
 {
-    using body_type = std::remove_reference_t<F>;
     return {
-        .body = const_cast<void *>(
-            static_cast<const void *>(std::addressof(body))),
-        .call = [](void * body) {
-            run_body(*static_cast<body_type *>(body));
-        },
+        .call = {nxt::nontype<run_body<F>>, body},
         .returns_void = std::is_void_v<std::invoke_result_t<F &>>,
     };
 }

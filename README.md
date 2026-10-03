@@ -528,7 +528,8 @@ Useful source entry points:
 - `src/nxtai` — the LLM/OpenAI client and `nxtllm`.
 - `src/wisp` — the guest Lisp machine, moving heap, tapes, and executable host.
 - `src/nxt` — shared protocol and utility code (crypto, TLS, JSON, PNG,
-  stacktraces) not tied to one root namespace.
+  stacktraces and borrowed `function_ref` callbacks) not tied to one root
+  namespace.
 - `demo` — small runtime, terminal, HTTP, SSE, and shell demos.
 - `test` — the nested `_group`/`_test` suites (`build/nxt-tests --slow`
   adds the slow integration tier).

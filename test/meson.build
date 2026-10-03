@@ -79,6 +79,9 @@ if get_option('tests')
     nxt_test_sources += files('kqueue-wand-test.cpp')
   endif
 
+  # Append the new suites so existing dotted selectors keep their numbers.
+  nxt_test_sources += files('function-ref-test.cpp')
+
   nxt_tests = executable('nxt-tests',
     nxt_test_sources,
     include_directories : [nxt_inc, include_directories('.')],
