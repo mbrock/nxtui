@@ -62,6 +62,16 @@ nxtrt::task<std::unique_ptr<int>> owned_value_after_yield(
     co_return std::move(value);
 }
 
+template<typename T>
+nxtrt::task<T> succeed_after_stop(T value, bool & drained)
+{
+    while (!nxtrt::stop_requested())
+        co_await nxtrt::yield();
+    co_await nxtrt::yield();
+    drained = true;
+    co_return std::move(value);
+}
+
 struct extraction_value
 {
     bool * fail_moves;
@@ -317,6 +327,120 @@ void declare_runtime_group_tests()
 
             expect(grouped);
         };
+
+        "wait_any keeps the completion winner while a loser succeeds during drain"_test =
+            []() -> nxtrt::task<void> {
+            auto drained = false;
+            auto starts = 0;
+            auto result = co_await nxtrt::wait_any(
+                succeed_after_stop(std::make_unique<int>(11), drained),
+                owned_value_after_yield(std::make_unique<int>(22), starts));
+            expect(drained);
+            expect(*result == 22);
+
+            drained = false;
+            auto tasks = std::vector<nxtrt::task<std::unique_ptr<int>>>{};
+            tasks.push_back(
+                succeed_after_stop(std::make_unique<int>(33), drained));
+            tasks.push_back(
+                owned_value_after_yield(std::make_unique<int>(44), starts));
+            auto ranged = co_await nxtrt::wait_any_range(std::move(tasks));
+            expect(drained);
+            expect(*ranged == 44);
+        };
+
+        "wait_any propagates winner extraction failure instead of choosing a loser"_test =
+            []() -> nxtrt::task<void> {
+            for (auto ranged : {false, true}) {
+                auto fail_winner = false;
+                auto keep_loser = false;
+                auto caught = false;
+                auto loser = succeed_after_stop(
+                    extraction_value{keep_loser}, fail_winner);
+                auto winner = value_before_extraction(fail_winner);
+                try {
+                    if (ranged) {
+                        auto tasks =
+                            std::vector<nxtrt::task<extraction_value>>{};
+                        tasks.push_back(std::move(loser));
+                        tasks.push_back(std::move(winner));
+                        (void) co_await nxtrt::wait_any_range(
+                            std::move(tasks));
+                    } else {
+                        (void) co_await nxtrt::wait_any(
+                            std::move(loser), std::move(winner));
+                    }
+                } catch (const std::domain_error & error) {
+                    caught = std::string_view{error.what()}
+                             == "result extraction failed";
+                }
+                expect(fail_winner);
+                expect(caught);
+            }
+        };
+
+        "wait_any observes completed inputs in input order"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto first = value_after_yield(11);
+            auto second = value_after_yield(22);
+            deck.start(second);
+            deck.run_until_idle();
+            deck.start(first);
+            deck.run_until_idle();
+            expect(deck.sync_wait([&] {
+                return nxtrt::wait_any(std::move(first), std::move(second));
+            }) == 11);
+        };
+
+        "wait_any_range reports empty input and all failures"_test =
+            []() -> nxtrt::task<void> {
+            auto empty_failed = false;
+            try {
+                (void) co_await nxtrt::wait_any_range(
+                    std::vector<nxtrt::task<int>>{});
+            } catch (const nxtrt::runtime_error & error) {
+                empty_failed = std::string_view{error.what()}
+                               == "wait_any_range used with no tasks";
+            }
+            expect(empty_failed);
+            auto tasks = std::vector<nxtrt::task<int>>{};
+            tasks.push_back(throw_int_after_yield());
+            tasks.push_back(throw_int_after_yield());
+            auto grouped = false;
+            try {
+                (void) co_await nxtrt::wait_any_range(std::move(tasks));
+            } catch (const nxtrt::exception_group & error) {
+                grouped = true;
+                expect(error.exceptions().size() == 2u);
+            }
+            expect(grouped);
+        };
+
+        "outside cancellation overrides wait_any successes during drain"_test =
+            [] {
+                auto deck = nxtrt::deck{};
+                auto first_drained = false;
+                auto second_drained = false;
+                auto root = nxtrt::root_task{
+                    deck, [&] {
+                        return nxtrt::wait_any(
+                            succeed_after_stop(11, first_drained),
+                            succeed_after_stop(22, second_drained));
+                    }};
+                root.start();
+                for (auto turn = 0; turn != 10; ++turn)
+                    deck.run_ready();
+                root.inner().request_stop();
+                deck.run_until_idle();
+                auto cancelled = false;
+                try {
+                    (void) std::move(root.inner()).result();
+                } catch (const nxtrt::operation_cancelled &) {
+                    cancelled = true;
+                }
+                expect(cancelled);
+                expect(first_drained && second_drained);
+            };
 
         "wait_any skips failures and drains losers"_test = []() -> nxtrt::task<void> {
             auto events = std::vector<int>{};

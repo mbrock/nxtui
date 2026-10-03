@@ -273,18 +273,20 @@ take_all_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
     };
 }
 
-/// `fail_fast_group` that remembers which job failed first, in completion
-/// order. The policy stops being consulted once it returns true, so the
-/// recorded job is the one whose failure stopped the others.
-struct first_failure_group
+/// Remember the completion that triggers stop. The group stops consulting
+/// the policy once it returns true, so draining cannot replace this index.
+template<group_policy Policy>
+struct record_first
 {
     std::optional<std::size_t> & first;
+    Policy policy{};
 
     bool operator()(std::size_t index, bool failed) const noexcept
     {
-        if (failed)
-            first = index;
-        return failed;
+        if (!std::invoke(policy, index, failed))
+            return false;
+        first = index;
+        return true;
     }
 };
 
@@ -295,58 +297,6 @@ void rethrow_first_failure(
     Tuple & outcomes, std::size_t first, std::index_sequence<Is...>)
 {
     ((Is == first ? rethrow(std::get<Is>(outcomes).error()) : void()), ...);
-}
-
-template<typename T, typename Tuple, std::size_t... Is>
-[[nodiscard]] T
-take_first_success_or_throw(Tuple & outcomes, std::index_sequence<Is...>)
-{
-    auto exceptions = std::vector<std::exception_ptr>{};
-    auto result = std::optional<T>{};
-
-    auto inspect = [&](auto index) {
-        if (result)
-            return;
-
-        auto value = std::move(std::get<index>(outcomes));
-        if (value) {
-            result.emplace(std::move(*value));
-        } else {
-            exceptions.push_back(value.error());
-        }
-    };
-
-    (inspect(std::integral_constant<std::size_t, Is>{}), ...);
-
-    if (result)
-        return std::move(*result);
-    throw_exceptions("wait_any tasks failed", std::move(exceptions));
-}
-
-template<typename Tuple, std::size_t... Is>
-void take_first_void_success_or_throw(
-    Tuple & outcomes, std::index_sequence<Is...>)
-{
-    auto exceptions = std::vector<std::exception_ptr>{};
-    auto succeeded = false;
-
-    auto inspect = [&](auto index) {
-        if (succeeded)
-            return;
-
-        auto value = std::move(std::get<index>(outcomes));
-        if (value) {
-            succeeded = true;
-        } else {
-            exceptions.push_back(value.error());
-        }
-    };
-
-    (inspect(std::integral_constant<std::size_t, Is>{}), ...);
-
-    if (succeeded)
-        return;
-    throw_exceptions("wait_any tasks failed", std::move(exceptions));
 }
 
 } // namespace detail
@@ -444,7 +394,7 @@ template<typename... Ts>
 {
     auto first = std::optional<std::size_t>{};
     auto outcomes = co_await settle(
-        std::move(tasks), detail::first_failure_group{first});
+        std::move(tasks), detail::record_first<fail_fast_group>{first});
     if (first)
         detail::rethrow_first_failure(
             outcomes, *first, std::index_sequence_for<Ts...>{});
@@ -463,9 +413,11 @@ template<typename... Ts>
 ///
 /// Built on `settle` with `first_success_group`: the first job to succeed
 /// stops the others, and all started jobs drain before this returns. The
-/// value returned is the first success in tuple order, not necessarily the
-/// first to complete: a lower-index job that also succeeded (for example
-/// one that ignored the stop) wins. Failures are skipped. If every job
+/// value returned belongs to the job whose success triggered the stop, even
+/// if another job ignores cancellation and later succeeds. Tasks already
+/// completed at entry are observed in tuple order. If extracting the
+/// winner's result fails, that error is thrown; another success does not
+/// replace it. Failures are skipped until a job succeeds. If every job
 /// fails, their exceptions are thrown together through `throw_exceptions`
 /// (an `exception_group`, or the single exception if there was one job).
 /// Stopping the awaiting task throws `operation_cancelled`. Also callable
@@ -474,14 +426,24 @@ template<typename T, typename... Ts>
     requires(std::same_as<T, Ts> && ...)
 [[nodiscard]] task<T> wait_any(std::tuple<task<T>, task<Ts>...> tasks)
 {
-    auto outcomes = co_await settle(std::move(tasks), first_success_group{});
-    if constexpr (std::is_void_v<T>) {
-        detail::take_first_void_success_or_throw(
-            outcomes, std::make_index_sequence<1 + sizeof...(Ts)>{});
-    } else {
-        co_return detail::take_first_success_or_throw<T>(
-            outcomes, std::make_index_sequence<1 + sizeof...(Ts)>{});
+    auto first = std::optional<std::size_t>{};
+    auto outcomes = co_await settle(
+        std::move(tasks), detail::record_first<first_success_group>{first});
+    auto positions = std::apply(
+        [](auto &... value) { return std::array{&value...}; }, outcomes);
+    if (first) {
+        if constexpr (std::is_void_v<T>) {
+            (void) detail::take_outcome(std::move(*positions[*first]));
+            co_return;
+        } else {
+            co_return detail::take_outcome(std::move(*positions[*first]));
+        }
     }
+    auto exceptions = std::vector<std::exception_ptr>{};
+    for (auto * value : positions)
+        exceptions.push_back(value->error());
+    throw_exceptions("wait_any tasks failed", std::move(exceptions));
+    throw logic_error{"wait_any returned without result"};
 }
 
 template<typename T, typename... Ts>
@@ -506,7 +468,7 @@ when_all_range(Range tasks)
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
     auto first = std::optional<std::size_t>{};
     auto outcomes = co_await settle_range(
-        std::move(tasks), detail::first_failure_group{first});
+        std::move(tasks), detail::record_first<fail_fast_group>{first});
     if (first)
         rethrow(outcomes[*first].error());
     auto out = std::vector<result_type>{};
@@ -533,9 +495,10 @@ template<std::ranges::input_range Range>
     }
 }
 
-/// Range form of `wait_any`: returns the first success in range order once
-/// all started jobs have drained. If all fail, their exceptions are thrown
-/// through `throw_exceptions`. Throws `runtime_error` for an empty range.
+/// Range form of `wait_any`: returns the first success in completion order
+/// once all started jobs have drained. If all fail, their exceptions are
+/// thrown through `throw_exceptions`. Throws `runtime_error` for an empty
+/// range.
 template<std::ranges::input_range Range>
     requires is_task_v<std::ranges::range_value_t<Range>>
         && (!std::is_void_v<
@@ -543,17 +506,18 @@ template<std::ranges::input_range Range>
 [[nodiscard]] task<task_result_t<std::ranges::range_value_t<Range>>>
 wait_any_range(Range tasks)
 {
+    auto first = std::optional<std::size_t>{};
     auto outcomes = co_await settle_range(
-        std::move(tasks), first_success_group{});
+        std::move(tasks), detail::record_first<first_success_group>{first});
     if (outcomes.empty())
         throw runtime_error{"wait_any_range used with no tasks"};
 
+    if (first)
+        co_return detail::take_outcome(std::move(outcomes[*first]));
+
     auto exceptions = std::vector<std::exception_ptr>{};
-    for (auto & outcome : outcomes) {
-        if (outcome)
-            co_return std::move(*outcome);
+    for (auto & outcome : outcomes)
         exceptions.push_back(outcome.error());
-    }
 
     throw_exceptions("wait_any tasks failed", std::move(exceptions));
     throw logic_error{"wait_any_range returned without result"};

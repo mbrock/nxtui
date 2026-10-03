@@ -735,12 +735,6 @@ private:
     const server_options & options_;
 };
 
-task<void> consume_connections(pool<connection_recipe> & connections)
-{
-    while (co_await connections.take())
-        ;
-}
-
 } // namespace
 
 task<void>
@@ -758,33 +752,9 @@ serve(int listener, request_handler handler, server_options options)
         || options.handler_timeout <= std::chrono::nanoseconds::zero()
         || options.write_timeout <= std::chrono::nanoseconds::zero())
         throw std::invalid_argument{"invalid HTTP server options"};
-    auto slots = std::make_unique<pool_slot<connection_recipe>[]>(
-        options.max_connections);
-    auto hot_size =
-        nxtrt::farm<pool_slot<connection_recipe>>::hot_capacity_for(
-            options.max_connections);
-    auto cold_size = mask<>::words_for(options.max_connections);
-    auto farm_indices = std::make_unique<std::size_t[]>(hot_size);
-    auto cold_indices = std::make_unique<std::uint64_t[]>(cold_size);
-    auto output =
-        std::make_unique<std::monostate[]>(options.max_connections);
-    auto farm = nxtrt::farm<pool_slot<connection_recipe>>{
-        std::span{slots.get(), options.max_connections},
-        farm_index_storage_ref{
-            std::span{farm_indices.get(), hot_size},
-            std::span{cold_indices.get(), cold_size}}};
     auto accepted = accepted_connections{listener, handler, options};
-    auto connections = pool<connection_recipe>{
-        accepted,
-        farm,
-        value_storage_ref<std::monostate>{
-            output.get(), options.max_connections}};
-    // Borrowed state and every piece of pool land remain alive through
-    // drain.
     try {
-        co_await finally(consume_connections(connections), [&connections] {
-            return connections.close();
-        });
+        co_await drain(accepted, options.max_connections);
     } catch (const operation_cancelled &) {
         // As with the former server scope, stopping the serving task is a
         // normal shutdown, but only after acceptance and connections drain.

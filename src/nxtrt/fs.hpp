@@ -2,6 +2,7 @@
 
 #include "nxtrt/blocking.hpp"
 #include "nxtrt/buffers.hpp"
+#include "nxtrt/pool.hpp"
 #include "nxtrt/task.hpp"
 #include <nxt/unique-fd.hpp>
 
@@ -152,6 +153,19 @@ inline task<file_status> stat_path(int dirfd, std::string path)
     co_return status_from_statx(stat);
 }
 
+struct directory_stat
+{
+    int dirfd;
+    std::string name;
+    std::vector<directory_entry> & entries;
+
+    task<void> operator()() &
+    {
+        auto status = co_await stat_path(dirfd, name);
+        entries.push_back({std::move(name), status});
+    }
+};
+
 inline task<std::vector<std::string>> read_directory_names(int fd)
 {
     auto storage = std::array<std::byte, 16 * 1024>{};
@@ -181,8 +195,9 @@ inline task<std::vector<std::string>> read_directory_names(int fd)
 /// Lists PATH (relative to the working directory, not confined) with every
 /// entry's status, sorted by name and including "." and "..".
 ///
-/// On Linux the open, getdents64 and per-entry statx calls are wishes, run
-/// concurrently. On macOS the whole listing is synchronous on the deck
+/// On Linux open and getdents64 are wishes, followed by at most 32
+/// concurrent per-entry statx jobs. Names and results are retained for the
+/// whole listing. On macOS the whole listing is synchronous on the deck
 /// thread, using getattrlistbulk. Symlinks are reported, not followed.
 inline task<std::vector<directory_entry>> list_directory(std::string path)
 {
@@ -193,16 +208,14 @@ inline task<std::vector<directory_entry>> list_directory(std::string path)
     auto dir = nxt::unique_fd{fd};
     auto names = co_await detail::read_directory_names(dir.get());
 
-    auto entries = co_await when_all_range(
-        names
-        | std::views::transform(
-            [dirfd = dir.get()](
-                std::string const & name) -> task<directory_entry> {
-                co_return directory_entry{
-                    .name = name,
-                    .status = co_await detail::stat_path(dirfd, name),
-                };
-            }));
+    auto entries = std::vector<directory_entry>{};
+    entries.reserve(names.size());
+    auto input = value_range_source{
+        names | std::views::transform([&](std::string & name) {
+            return detail::directory_stat{
+                dir.get(), std::move(name), entries};
+        })};
+    co_await drain(input, 32);
 
     std::ranges::sort(entries, {}, &directory_entry::name);
     co_return entries;

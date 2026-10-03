@@ -21,7 +21,7 @@ NXT_RACKET_VERSION_DIR = $(NXT_RACKET_CACHE_DIR)/$(shell racket -e '(display (ve
 # Empty suffixes retain the installed collection and bytecode search paths.
 NXT_RACKET_ENV = PLTCOMPILEDROOTS="$(NXT_RACKET_VERSION_DIR)/compiled:" PLTCOLLECTS="$(CURDIR):"
 NXT_RACKET = $(NXT_RACKET_ENV) racket
-NXT_SPEC_SOURCES := rdf-forge/tests/bfo-sketch-test.rkt nxtrt/model.rkt
+NXT_SPEC_SOURCES := rdf-forge/tests/bfo-sketch-test.rkt nxtrt/model.rkt nxtrt/ontology.rkt
 
 all: build
 
@@ -205,6 +205,7 @@ spec:
 	@echo
 	@echo "== rdf-forge ontology syntax =="
 	$(NXT_RACKET) rdf-forge/tests/bfo-sketch-test.rkt
+	$(NXT_RACKET) nxtrt/ontology.rkt > /dev/null
 	@echo
 	@echo "== baseline runtime spec =="
 	$(NXT_RACKET) nxtrt/model.rkt --check

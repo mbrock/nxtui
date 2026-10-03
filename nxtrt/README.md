@@ -43,7 +43,7 @@ Print a witness as readable text:
 racket nxtrt/model.rkt --text --run rich-runtime-shape-witness
 ```
 
-Print all model witnesses as readable text:
+Check every model witness and property, plus the ontology export:
 
 ```sh
 make spec
@@ -51,6 +51,8 @@ make spec
 
 `make spec` also runs the BFO-inspired `rdf-forge` ontology syntax smoke test
 in `rdf-forge/tests/bfo-sketch-test.rkt`.
+
+Use `make spec-witnesses` to print the example traces as readable text.
 
 Run the structured checks:
 

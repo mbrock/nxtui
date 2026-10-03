@@ -5,18 +5,23 @@ proposal, kept as written; where names differ, the code is authoritative.
 
 ## As implemented
 
-- `settle(std::tuple{work...}, rule = settle_all{})` runs a fixed set of tasks
-  or task factories in a pool with one slot per job, settles all of them, and
+- `settle(std::tuple{work...}, policy = all_group{})` owns a fixed set of tasks,
+  observes them through synchronous completion links, drains them, and
   returns `std::tuple<outcome<T>...>`, where
   `outcome<T> = std::expected<T, std::exception_ptr>`.
-  `settle_range(range, rule)` returns `std::vector<outcome<T>>` in range order.
-- Stop rules: `settle_all`, `stop_on_failure`, `stop_on_success`,
-  `stop_on_completion`, `stop_after_first` (stop the companions when job 0,
+  `settle_range(range, policy)` materializes tasks and returns
+  `std::vector<outcome<T>>` in range order. Groups have no pool backing,
+  per-child wrapper coroutines, or intermediate result storage.
+- Stop predicates: `all_group`, `fail_fast_group`, `first_success_group`,
+  `first_completion_group`, `primary_group` (stop the companions when job 0,
   the primary, settles), or any `noexcept` callable
-  `bool(std::size_t index, bool failed)`. `stop_after_first` covers the
+  `bool(std::size_t index, bool failed)`. `primary_group` covers the
   proposed `supervise`, which did not land.
 - `when_all`, `wait_any`, `when_all_range`, `wait_any_range`, `with_timeout`,
   and `poll_until_after` are written over `settle`.
+  `when_all` rethrows the failure that triggered stop; `wait_any` returns
+  the success that triggered stop. Both select in observed completion order
+  and drain before returning. Already-completed inputs are observed in input order.
 - `drain(feed<Idea>&, capacity)` runs a feed of ideas at most `capacity` at a
   time, discarding results; the first failure stops and is rethrown.
   `pool_land<Idea>{capacity}` owns a pool's slots and output cells for callers
@@ -32,7 +37,7 @@ proposal, kept as written; where names differ, the code is authoritative.
   and a group stops its own jobs. `current_firm()`, firm subclasses as
   policies, and the firm snapshots in runtime dumps went with it.
 - `nxtrt/runtime.rkt` no longer has firms, deeds, `spawned`, `issued`, or
-  `observes`; pools hold all concurrent work.
+  `observes`; fixed groups own their tasks, while pools bound streams of ideas.
 
 ## Problem
 

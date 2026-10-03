@@ -27,7 +27,7 @@ class pool;
 /// default-constructed (in an array, or through @ref pool_land), hand them
 /// to a `farm`, and keep them and the farm alive until the pool has drained.
 template<idea Idea>
-class pool_slot : private detail::completion_observer
+class pool_slot
 {
     friend class pool<Idea>;
 
@@ -37,12 +37,17 @@ public:
     pool_slot & operator=(const pool_slot &) = delete;
 
 private:
-    void task_completed() noexcept override;
+    struct notify_completion
+    {
+        pool_slot * slot;
+        void operator()() const noexcept;
+    };
 
     pool<Idea> * owner_ = nullptr;
     pool_slot * next_ = nullptr;
     std::optional<Idea> idea_;
     task<idea_result_t<Idea>> task_;
+    completion_link<notify_completion> completion_{notify_completion{this}};
     std::optional<pool_result_t<Idea>> ready_;
     bool started_ = false;
 };
@@ -98,7 +103,6 @@ private:
 template<idea Idea>
 class pool final
     : public feed<pool_result_t<Idea>>
-    , private detail::completion_observer
 {
 public:
     using result_type = pool_result_t<Idea>;
@@ -271,10 +275,15 @@ private:
 
     // Input-read completion uses the same waiter as job completion. An input
     // that is temporarily empty must not block delivery of completed jobs.
-    void task_completed() noexcept override
+    struct notify_input_completion
     {
-        signal();
-    }
+        pool * owner;
+
+        void operator()() const noexcept
+        {
+            owner->signal();
+        }
+    };
 
     void completed(slot_type & slot) noexcept
     {
@@ -381,7 +390,7 @@ private:
                 if (!schedule)
                     return;
                 auto & slot = *prepared_;
-                slot.task_.handle().promise().observe_completion_of(slot);
+                slot.completion_.connect(slot.task_);
                 deck_->start(slot.task_);
                 slot.started_ = true;
                 ++running_;
@@ -391,7 +400,7 @@ private:
                 if (!input_started_) {
                     if (!schedule)
                         return;
-                    input_task_.handle().promise().observe_completion_of(*this);
+                    input_completion_.connect(input_task_);
                     deck_->start(input_task_);
                     input_started_ = true;
                 }
@@ -500,6 +509,8 @@ private:
     farm<slot_type> & slots_;
     deck * deck_ = nullptr;
     task<std::optional<Idea>> input_task_;
+    completion_link<notify_input_completion> input_completion_{
+        notify_input_completion{this}};
     slot_type * input_slot_ = nullptr;
     slot_type * prepared_ = nullptr;
     queue completed_;
@@ -516,9 +527,9 @@ private:
 };
 
 template<idea Idea>
-void pool_slot<Idea>::task_completed() noexcept
+void pool_slot<Idea>::notify_completion::operator()() const noexcept
 {
-    owner_->completed(*this);
+    slot->owner_->completed(*slot);
 }
 
 /// Owned land for a pool of `capacity` slots: the slots, the farm's index

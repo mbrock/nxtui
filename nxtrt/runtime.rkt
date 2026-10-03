@@ -53,6 +53,7 @@ ontology nxt "https://swa.sh/nxt#"
   property stopping
   property returned
   property stop-trigger
+  property selected
 
 model runtime-model
   signature deck
@@ -68,8 +69,12 @@ model runtime-model
   // link observes final suspension, consults the policy, and counts down;
   // return waits for all started children, including on outside stop or startup
   // failure. Zero queues the combiner, never resumes it inside final suspension.
-  // Link storage and callback execution are abstracted out. Group results stay
-  // in child promises; values and positional collection are not modeled.
+  // Groups and pools both own detachable completion links. Link storage and
+  // callback execution are abstracted out. Group results stay in child promises;
+  // selected records the first completion accepted by a stop predicate, as used
+  // by when_all and wait_any. Later completion during drain cannot replace it.
+  // Values, extraction failures, and input order among completed-at-entry tasks
+  // are not modeled. Multiple completions in one abstract step are unordered.
   // slots is fixed capacity; consuming/discarding are events on this step.
   // admitted records job provenance, not current occupancy; slot.job is the
   // live/result identity. Result values, cancellation delivery,
@@ -101,6 +106,7 @@ model runtime-model
     // C++ callable policies share this lifecycle; an empty set represents
     // all_group, which waits for all children without requesting stop.
     stop-trigger set task
+    selected var lone task
   signature group-stop
   signature group-return
 
@@ -113,6 +119,7 @@ model runtime-model
       in (g finished) (union (g started) (g completed-at-entry))
       in (g stop-requested) (g started)
       in (g stop-trigger) (g children)
+      in (g selected) (intersect (g finished) (g stop-trigger))
     all ([g fixed-group] [t (g children)])
       one (matching children t)
       no (matching admitted t)
@@ -124,12 +131,29 @@ model runtime-model
       no (g stop-requested)
       no (g stopping)
       no (g returned)
+      no (g selected)
 
   predicate group-transitions
     all ([g fixed-group])
       in (g started) (g (prime started))
       in (g finished) (g (prime finished))
       in (g stop-requested) (g (prime stop-requested))
+      // Selection is latched at the first observed triggering completion.
+      (=> (some (g selected))
+          (== (g selected) (g (prime selected))))
+      (=> (block
+            (no (g selected))
+            (either
+              (some (g stopping))
+              (no (intersect (g finished) (g stop-trigger)))))
+          (no (g (prime selected))))
+      (=> (block
+            (no (g selected))
+            (no (g stopping))
+            (some (intersect (g finished) (g stop-trigger))))
+          (block
+            (one (g (prime selected)))
+            (in (g (prime selected)) (intersect (g finished) (g stop-trigger)))))
       // Outside stop is nondeterministic; completion-driven stop uses the
       // same drain path. Delivery and child execution are abstract events.
       (=> (some (intersect (g finished) (g stop-trigger)))
@@ -156,6 +180,41 @@ model runtime-model
   predicate group-return-drained
     all ([g fixed-group])
       (=> (some (g returned)) (in (g started) (g finished)))
+
+  predicate group-selection-stays-first
+    all ([g fixed-group])
+      (=> (some (g selected))
+          (== (g selected) (g (prime selected))))
+
+  check fixed-group-selection-stays-first :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 6
+    assume groups-start
+    assume always group-shape
+    assume always group-transitions
+    show always group-selection-stays-first
+
+  // Both jobs can succeed, but b ignores stop and completes during drain.
+  // The result still belongs to a, whose completion triggered the stop.
+  run fixed-group-later-success-keeps-winner :for ([1 fixed-group group-stop group-return] [2 task] [0 pool]) :trace-length 6
+    groups-start
+    always group-shape
+    always group-transitions
+    some ([g fixed-group] [a (g children)] [b (g children)])
+      no (intersect a b)
+      no (g completed-at-entry)
+      == (g stop-trigger) (g children)
+      next-state
+        == (g started) (g children)
+        == (g finished) a
+        no (g stopping)
+        next-state
+          == (g selected) a
+          some (g stopping)
+          == (g finished) a
+          no (g returned)
+          next-state
+            == (g finished) (g children)
+            == (g selected) a
+            some (g returned)
 
   predicate group-stop-freezes-starts
     all ([g fixed-group])

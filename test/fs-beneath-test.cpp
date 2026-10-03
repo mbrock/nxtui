@@ -190,6 +190,47 @@ void files_tests()
         expect(immediate || from_deck.load())
             << "immediate" << immediate << "from_deck" << from_deck.load();
     };
+#if defined(__linux__) && NXT_RT_HAS_URING
+    if constexpr (std::same_as<Wand, nxtrt::uring_wand>) {
+        "directory metadata stays bounded with more entries than task slots"_test =
+            [] {
+                auto t = tree{};
+                for (auto i = 0; i != 256; ++i)
+                    std::ofstream{
+                        t.base / "root" / ("entry-" + std::to_string(i))}
+                        << i;
+                auto wand = Wand{};
+                auto task_land = nxtrt::static_deck_task_storage<128>{};
+                auto deck = nxtrt::deck{task_land, &wand};
+                auto root =
+                    nxtrt::root_task{deck, [&] {
+                                         return fs::list_directory(
+                                             (t.base / "root").string());
+                                     }};
+                root.start();
+                wand.run_until_done(deck, root.inner());
+                auto entries = std::move(root.inner()).result();
+                expect(
+                    entries.size()
+                    == 262u); // 256 files, four fixtures, . and ..
+                expect(
+                    std::ranges::is_sorted(
+                        entries, {}, &fs::directory_entry::name));
+                expect(entries[0].name == ".");
+                expect(entries[1].name == "..");
+                auto link = std::ranges::find(
+                    entries, "up", &fs::directory_entry::name);
+                expect(link != entries.end());
+                if (link != entries.end())
+                    expect(link->status.kind == fs::file_kind::symlink);
+                auto file = std::ranges::find(
+                    entries, "entry-123", &fs::directory_entry::name);
+                expect(file != entries.end());
+                if (file != entries.end())
+                    expect(file->status.size == 3u);
+            };
+    }
+#endif
 }
 
 #if defined(__linux__)

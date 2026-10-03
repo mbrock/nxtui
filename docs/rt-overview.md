@@ -251,7 +251,7 @@ The everyday combinators are written over `settle`:
   `operation_cancelled` of a task it stopped; use `settle` to see every
   failure;
 - @ref nxtrt::wait_any "wait_any(tasks...)" and `wait_any_range` return the
-  first success *in input order*, and throw all failures together if nothing
+  first success *in completion order*, and throw all failures together if nothing
   succeeds;
 - @ref nxtrt::with_timeout "with_timeout(duration, task)" races a task
   against a timer and throws `timeout_error` if the timer wins;

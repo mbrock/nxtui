@@ -52,10 +52,10 @@ inline task<std::vector<resolved_address>> resolve_tcp(
 /// Resolve HOST and SERVICE and connect to one of the addresses.
 ///
 /// Connection attempts to every resolved address start at once. The first
-/// to succeed stops the others, and if several succeed before they stop,
-/// the earliest address in resolver order wins and the rest are closed.
-/// If all fail, the failures are thrown together; no addresses throws
-/// `runtime_error`.
+/// to succeed wins and stops the others. All attempts drain before
+/// returning; any other sockets that connect despite cancellation are
+/// closed. If all fail, the failures are thrown together; no addresses
+/// throws `runtime_error`.
 ///
 /// @code
 /// auto fd = co_await nxtrt::net::connect_tcp("example.com", "443");

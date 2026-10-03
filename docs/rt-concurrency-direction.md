@@ -161,9 +161,9 @@ that feedback composition, not ordinary temporary emptiness of a feed.
 
 Both can have known non-frame storage and downward borrowing. This does not
 make compiler-generated coroutine frame sizes known, nor promise allocation-free
-execution. The existing frame allocator uses nonmoving chunks or explicit
-borrowed land; a ring with prefix retirement was rejected because long-lived
-frames pin the prefix.
+execution. Coroutine frames use ordinary C++ allocation. The old firm frame
+arenas were removed; explicit pool land bounds admission and output storage,
+not the bytes allocated by coroutine frames.
 
 The task-only tuple and range helpers own their fixed membership directly,
 without pool backing or a public deed. Completion links let stop predicates see
@@ -221,9 +221,10 @@ addresses → connection ideas → explicit coping → pool → first success
 ```
 
 That is a sketch for a stream pipeline, not current callable syntax. The fixed
-tuple `wait_any` already preserves the established behavior: it stops on a
-success, drains the batch, then selects the first successful outcome in input
-order (not completion order); when all fail it groups the failures. Filtering
+tuple and range `wait_any` helpers record the first observed successful
+completion, stop the others, and return that winner after draining the batch.
+A loser that succeeds during drain cannot replace it. Already-completed inputs
+are observed in input order; when all fail, the helpers group the failures. Filtering
 and selection need not be special pool policies. A future stream terminal
 consumer can select useful outcomes and finish the computation's extent, which
 stops and drains losers before borrowed storage is released.
@@ -301,8 +302,8 @@ remaining targets are identified below:
 | Use | Why it fits / what must be preserved |
 | --- | --- |
 | [AI tool batches][tool-batches] | Migrated to bounded pool admission without fork/join or result-handle vectors. Ordered collection and collect-before-rethrow are preserved; cancellation stops admission and drains. Direct tool ideas expose completion-order feeds. See [NXTAI status](ai-overview.md). |
-| [Directory metadata][directory-metadata] | Bounded stat ideas; results are sorted afterward, so completion-order production is natural. |
-| [Connection racing][connection-racing] | Coped attempts and first-success consumption. Existing range selection chooses an input-order success after drain; distinguish that from first published success. |
+| [Directory metadata][directory-metadata] | Linux listings now drain stat ideas with at most 32 admitted jobs, then sort the collected entries. |
+| [Connection racing][connection-racing] | `wait_any_range` returns the first observed successful connection after draining all attempts. Bounded stream selection remains a separate direction. |
 | [HTTP serving][http-serving] | Migrated to one accept feed and a bounded connection pool, preserving connection-local error containment. |
 | [Process capture][process-capture] and [shell supervision][shell-supervision] | Process capture now uses `primary_group` for primary capture plus its monitor: only primary completion stops the companions. Other heterogeneous resource lifetimes may need a team or companions. |
 | [Wisp host][wisp-host] | Migrated to explicit native-task awaiting; old guest-job identities are no longer a prerequisite for I/O. |

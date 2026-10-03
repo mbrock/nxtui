@@ -3,34 +3,9 @@
 (require "../rdf-forge/ontology.rkt"
          "runtime.rkt")
 
-(provide nxt
-         deck
-         firm
-         task
-         wish
-         exec
-         exec-state
-         prepared-state
-         parked-state
-         settled-state
-         retired-state
-         parked-phase
-         queued-phase
-         submitted-phase
-         cancelling-phase
-         settled-phase
-         ready-to-retire-phase
-         draining-phase
-         deed
-         has-ready
-         has-lifecycle
-         has-parked-phase
-         has-settled-phase
-         spawned
-         issued
-         observes
-         has-continuation
-         realizes)
+;; Keep the compatibility entrypoint in sync with the single source of the
+;; runtime vocabulary, rather than maintaining a second list of its names.
+(provide (all-from-out "runtime.rkt"))
 
 (module+ main
   (display (ontology->turtle nxt)))

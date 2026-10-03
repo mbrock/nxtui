@@ -173,14 +173,16 @@ started tasks have drained, then move into positional `outcome<T>` values
 Initial extraction errors become exception outcomes without changing the group's
 stopping decision. Subsequent moves of the result tuple/vector can throw after drain.
 Outside cancellation stops and drains before propagation.
-`settle_range`, `when_all`, `wait_any`, and `with_timeout` retain their public
-task-only composition contracts.
+`when_all` retains the first failing completion, and `wait_any` retains the
+first successful completion; draining cannot replace the selected job.
 
 Groups and pools share lifetime discipline, not one execution container. This
 is neither a strict transitive static team nor an allocation-free guarantee:
 work a job starts in its own nested group is outside the batch's finite bound.
 The homogeneous stream pool remains a bounded idea-factory evaluator with
 slots, completion-order output, and borrowed feed/land contracts described above.
+Its jobs and pending input reads use the same detachable completion links as
+groups. HTTP serving and tool batches use `drain` to own pool storage and cleanup.
 
 The slot lifecycle is modeled in `nxtrt/runtime.rkt`, including consumption,
 close/discard, and reuse. The model abstracts frame bytes and cancellation

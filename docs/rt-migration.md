@@ -74,8 +74,15 @@ Fixed groups now directly own tuple/vector tasks and observe completion through
 synchronous completion links, rather than lowering through pool recipes or
 wrapper tasks.
 There is no `group_recipe`, separate intermediate results tuple, or public deed.
-The task-only `settle`, `when_all`, and `wait_any` APIs remain unchanged; pools
-remain streaming bounded idea-factory evaluators.
+Pools remain streaming bounded idea-factory evaluators and now use the same
+completion links for their jobs and pending input reads.
+
+`wait_any` and `wait_any_range` now return the first observed successful
+completion, rather than the first successful input position after drain. A
+loser that ignores stop cannot replace the winner; an error extracting the
+winner propagates instead of selecting another success. Already-completed
+inputs are observed in input order. All-failed aggregation and outside
+cancellation still drain before throwing.
 
 Stop rules see promise success/failure at final suspension. Results stay in
 promises until all started tasks have drained, then move into returned outcomes.

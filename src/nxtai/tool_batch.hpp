@@ -506,23 +506,7 @@ run_function_tool_batch(
     auto input_land = nxtrt::static_value_storage<batch_call, 1>{};
     auto input = nxtrt::value_range_source{recipes, input_land.ref()};
     auto capacity = std::min(max_in_flight, calls.size());
-    auto slots = std::make_unique<nxtrt::pool_slot<batch_call>[]>(capacity);
-    auto hot_size =
-        nxtrt::farm<nxtrt::pool_slot<batch_call>>::hot_capacity_for(
-            capacity);
-    auto hot = std::vector<std::size_t>(hot_size);
-    auto cold =
-        std::vector<std::uint64_t>(nxtrt::mask<>::words_for(capacity));
-    auto available = nxtrt::farm<nxtrt::pool_slot<batch_call>>{
-        std::span{slots.get(), capacity}, {hot, cold}};
-    auto output = nxtrt::rack<std::monostate>{capacity};
-    auto pending = nxtrt::pool<batch_call>{input, available, output.ref()};
-    auto discard = nxtrt::discarding_sink<std::monostate>{};
-    // The pool, recipes, outcomes, and borrowed land outlive the consuming
-    // task and its shielded cleanup, including cancellation and failure.
-    co_await nxtrt::finally(
-        nxtrt::stream_all(pending, discard),
-        [&pending] { return pending.close(); });
+    co_await nxtrt::drain(input, capacity);
 
     auto out = std::vector<function_call_result>{};
     out.reserve(outcomes.size());
