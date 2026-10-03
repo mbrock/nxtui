@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nxtrt/env.hpp"
+#include "nxtrt/format.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -52,7 +53,7 @@ inline void trace(std::format_string<Args...> fmt, Args &&... args)
         if (!trace_enabled)
             return;
         std::cerr << "[nxtrt] "
-                  << std::format(fmt, std::forward<Args>(args)...)
+                  << nxtrt::format(fmt, std::forward<Args>(args)...)
                   << '\n';
     }
 }

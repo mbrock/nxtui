@@ -8,7 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <format>
+#include "nxtrt/format.hpp"
 #include <optional>
 #include <string>
 #include <sys/types.h>
@@ -53,7 +53,7 @@ template<typename Tag>
     auto now = std::chrono::steady_clock::now().time_since_epoch();
     auto nanos =
         std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-    return std::format(
+    return nxtrt::format(
         "nxt-{}-{}-{:x}",
         tag,
         ::getpid(),
@@ -70,7 +70,7 @@ template<typename Tag>
         "--scope",
         "--quiet",
         "--collect",
-        std::format("--unit={}", std::move(unit_name)),
+        nxtrt::format("--unit={}", unit_name),
     };
     wrapped.reserve(wrapped.size() + argv.size());
     for (auto & arg : argv)

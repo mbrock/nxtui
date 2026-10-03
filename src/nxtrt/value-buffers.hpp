@@ -11,7 +11,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstring>
-#include <format>
+#include "nxtrt/format.hpp"
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -874,7 +874,7 @@ task<void> print(
     std::format_string<Args...> fmt,
     Args &&... args)
 {
-    co_await write(sink, std::format(fmt, std::forward<Args>(args)...));
+    co_await write(sink, nxtrt::format(fmt, std::forward<Args>(args)...));
 }
 
 template<typename... Args>
@@ -893,7 +893,7 @@ task<void> print(
     std::format_string<Args...> fmt,
     Args &&... args)
 {
-    auto text = std::format(fmt, std::forward<Args>(args)...);
+    auto text = nxtrt::format(fmt, std::forward<Args>(args)...);
     co_await sink.write(std::span<const char>{text});
 }
 

@@ -40,6 +40,16 @@
 
 namespace boost::ut {
 
+/// std::vformat, compiled once in test-main.cpp: libc++'s std::format is
+/// header-only and would otherwise be compiled into every test file.
+std::string test_vformat(std::string_view fmt, std::format_args args);
+
+template<typename... Args>
+std::string test_format(std::format_string<Args...> fmt, Args &&... args)
+{
+    return test_vformat(fmt.get(), std::make_format_args(args...));
+}
+
 inline int failures = 0;
 inline int tests_run = 0;
 inline int tests_failed = 0;
@@ -82,7 +92,7 @@ inline bool alarm_handler_installed = false;
 
 inline std::string format_ms(double elapsed_ms)
 {
-    return std::format("{:.0f}ms", elapsed_ms);
+    return test_format("{:.0f}ms", elapsed_ms);
 }
 
 inline std::string visible_duration(double elapsed_ms)
@@ -103,7 +113,7 @@ inline std::string format_path(const std::vector<int> & path)
     for (auto i = std::size_t{0}; i < path.size(); ++i) {
         if (i != 0)
             out += '.';
-        out += std::format("{}", path[i]);
+        out += test_format("{}", path[i]);
     }
     return out;
 }
@@ -245,19 +255,19 @@ inline void print_open_groups()
 
 inline std::string plural(int count, std::string_view singular)
 {
-    return std::format("{} {}{}", count, singular, count == 1 ? "" : "s");
+    return test_format("{} {}{}", count, singular, count == 1 ? "" : "s");
 }
 
 inline void print_summary(double elapsed_ms)
 {
     auto const slow_note = slow_skipped == 0
                                ? std::string{}
-                               : std::format(
+                               : test_format(
                                      " \x1b[2m({} skipped; run with "
                                      "--slow)\x1b[0m",
                                      plural(slow_skipped, "slow test"));
     auto const timing =
-        std::format(" \x1b[2min {:.1f}s\x1b[0m", elapsed_ms / 1000.0);
+        test_format(" \x1b[2min {:.1f}s\x1b[0m", elapsed_ms / 1000.0);
 
     if ((!filters.empty() || only_slow) && tests_run == 0) {
         std::cout << "\n\x1b[31m✗\x1b[0m no tests matched" << slow_note
@@ -358,7 +368,7 @@ inline void run_test(
 {
     auto failures_before = failures;
     arm_test_timeout(
-        std::format("after {}s: {} {}", timeout.count(), format_path(path), name),
+        test_format("after {}s: {} {}", timeout.count(), format_path(path), name),
         timeout);
     inside_test = true;
     auto start = std::chrono::steady_clock::now();

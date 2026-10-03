@@ -1,5 +1,10 @@
 #include "test.hpp"
 
+std::string boost::ut::test_vformat(std::string_view fmt, std::format_args args)
+{
+    return std::vformat(fmt, args);
+}
+
 int nxt_tests_main(int argc, char ** argv)
 {
     using namespace boost::ut;
