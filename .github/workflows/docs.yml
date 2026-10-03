@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   pages: read
+  actions: read
 
 concurrency:
   group: github-pages
@@ -23,6 +24,10 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache Nix builds
+        uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025 # v3.1.0
+        with:
+          version: v3.1.0
       - name: Configure GitHub Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - name: Build documentation

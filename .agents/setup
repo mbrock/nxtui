@@ -67,7 +67,7 @@ fi
 EOF
 fi
 
-step 'Cache documentation generator' uvx poxy --version
+step 'Check documentation generator' poxy --version
 
 if [[ -f build/meson-private/coredata.dat ]]; then
   step 'Refresh Meson configuration' meson setup --reconfigure build

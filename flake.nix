@@ -18,6 +18,7 @@
         nxt = pkgs.callPackage ./nix/package.nix { };
         spec-racket = pkgs.callPackage ./nix/spec-racket.nix { };
         spec-sources = pkgs.callPackage ./nix/spec-sources.nix { };
+        poxy = pkgs.callPackage ./nix/poxy.nix { };
         default = nxt;
       });
 
@@ -46,9 +47,9 @@
                   gnumake
                   self.packages.${stdenv.hostPlatform.system}.spec-racket
 
-                  # `make docs`
+                  # Trace-analysis scripts use uv; docs use the Nix package.
                   uv
-                  doxygen
+                  self.packages.${stdenv.hostPlatform.system}.poxy
                 ]
                 ++ lib.optionals stdenv.hostPlatform.isLinux [
                   mold
@@ -69,7 +70,10 @@
           clang = mkDevShell clangStdenv;
           # Publishing docs does not need the C++ or Racket toolchains.
           docs = pkgs.mkShellNoCC {
-            packages = with pkgs; [ gnumake uv doxygen python3 ];
+            packages = [
+              pkgs.gnumake
+              self.packages.${stdenv.hostPlatform.system}.poxy
+            ];
           };
           # Keep GCC's libstdc++ separate from Clang's toolchain.
           gcc = mkDevShell gccStdenv;

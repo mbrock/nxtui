@@ -725,8 +725,8 @@ Keep a configured Meson `build` directory, as with the normal build workflow.
 ### In Amp orbs
 
 `.agents/setup` installs Nix, realizes the development shell from `flake.lock`,
-caches Poxy, and configures Meson. Racket, Java, and the compiled model
-dependencies are included in the development shell. Setup does not compile
+and configures Meson. The packaged Poxy generator, Racket, Java, and the
+compiled model dependencies are included in the development shell. Setup does not compile
 the editable model sources. Amp snapshots the base dependencies for
 reuse by fresh orbs. Repeated setup runs reuse installed packages;
 `.agents/resume` does not install anything.
@@ -831,8 +831,11 @@ changed, and run `nix develop -c make spec` plus the sandboxed spec check.
 
 API docs are published automatically to [mbrock.github.io/nxtui](https://mbrock.github.io/nxtui/)
 on every push to `main` by `.github/workflows/docs.yml`. The workflow builds
-with the docs-only Nix shell, the Poxy version pinned in the Makefile, and
+with the docs-only Nix shell and Poxy pinned in `nix/poxy.nix`, including
 Doxygen from `flake.lock`, then deploys the generated HTML through GitHub Pages.
+Poxy and its Python dependencies are built by Nix; generating docs does not
+install packages from PyPI. Hestia caches the docs toolchain between Actions
+runs, with daily cleanup in `.github/workflows/cache-gc.yml`.
 
 Regenerate local API docs with:
 
