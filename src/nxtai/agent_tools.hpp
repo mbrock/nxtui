@@ -72,7 +72,7 @@ struct bash_tool
     };
 
     static constexpr std::string_view parameters_schema_json =
-        R"json({"type":"object","properties":{"command":{"type":"string","description":"Full shell command line. Will be passed to /bin/bash -c."}},"additionalProperties":false,"required":["command"]})json";
+        R"json({"type":"object","properties":{"command":{"type":"string","description":"Full shell command line. Will be passed to bash -c."}},"additionalProperties":false,"required":["command"]})json";
 
     static std::optional<parameters> parse_parameters(std::string_view json)
     {
@@ -92,18 +92,10 @@ struct bash_tool
             };
 
         auto argv = std::vector<std::string>{};
-        argv.emplace_back("/bin/bash");
+        argv.emplace_back("bash");
         argv.emplace_back("-c");
         argv.push_back(std::move(args.command));
-        auto captured = co_await tool_process::capture(
-            std::move(argv),
-            tool_process::capture_options{
-                .scope = nxtrt::scoped_process::options{
-                    .systemd_user_scope = true,
-                    .unit_name = nxtrt::scoped_process::make_unit_name(
-                        "bash"),
-                },
-            });
+        auto captured = co_await tool_process::capture(std::move(argv));
         co_return process_result_to_tool_result(std::move(captured));
     }
 };

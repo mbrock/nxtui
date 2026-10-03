@@ -20,7 +20,7 @@ groups and pools, and explicit UI/runtime capabilities.
   pidfd-based on Linux, pid-based with `EVFILT_PROC` on kqueue.
 - OpenAI Responses request JSON and small SSE streaming clients.
 - Core terminal input types and parsing in `src/nxtui/input.hpp`.
-- The default `nxtllm` executable as a minimal one-shot streaming client.
+- The default `nxtllm` executable with streaming and a pool-backed tool loop.
 
 The old application stack is no longer in the tree. The former `src/nxt/ai`
 LLM stack has also been removed; the surviving LLM code lives in
@@ -42,7 +42,7 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxt::scope` | a group stop predicate + UI capabilities | Cancellation is per task; a group stops and drains its own jobs. The richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
-| old LLM entry point | `src/nxtai/nxtllm.cpp` | Simplified. The executable is now a small one-shot SSE client without the old HUD/tool UI runtime path. |
+| old LLM entry point | `src/nxtai/nxtllm.cpp` | Ported. Streaming and tool continuations use the ordinary runtime; terminal output is an observer without the old HUD/tool UI runtime path. |
 
 ## Firm API migration
 
@@ -108,9 +108,10 @@ its task runs.
    `nxtllm` path: it connects over `nxtrt` TCP/TLS, reads HTTP/SSE, and
    writes text deltas to stdout.
 
-5. Port tool execution after streaming works. The neutral tool-call pieces live
-   in `src/nxtai/tool_batch.hpp`, `agent_tools.hpp`, and `tool_process.hpp`.
-   The old runtime UI wrapper has been removed.
+5. Port tool execution after streaming works. Done in `src/nxtai/agent.hpp`:
+   the CLI connects completed Responses items to `tool_batch.hpp` and resumes
+   the model with tool outputs. `responses_stream.hpp` handles stream events
+   independently of terminal rendering. The old runtime UI wrapper is gone.
 
 6. Re-enable `nxtllm` on the runtime. Done in
    `src/nxtai/nxtllm.cpp`: the executable builds by default, parses CLI

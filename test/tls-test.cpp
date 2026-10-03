@@ -213,6 +213,8 @@ public:
     }
 
     int writes = 0;
+    std::vector<nxt::tls::bytes> application_records;
+    nxt::tls::tls13_application_keys application_keys;
 
 private:
     nxtrt::hope<std::size_t>
@@ -223,8 +225,11 @@ private:
         auto sent = bytes{};
         for (auto chunk : chunks)
             put_bytes(sent, chunk);
-        if (++writes != 1)
+        if (++writes != 1) {
+            if (writes > 2)
+                application_records.push_back(sent);
             return nxtrt::hope<std::size_t>::ready(sent.size());
+        }
 
         auto client_hello = std::span{sent}.subspan(5);
         auto body = byte_cursor{client_hello.subspan(4)};
@@ -337,6 +342,7 @@ private:
             put_bytes(transcript, message);
             put_bytes(flight, message);
         }
+        application_keys = derive_tls13_application_keys(keys.secret, transcript);
         // Split headers and bodies, not just between messages.
         auto remaining = std::span{flight};
         while (!remaining.empty()) {
@@ -363,6 +369,36 @@ using namespace std::literals;
 
 suite tls_tests = [] {
     "TLS authentication"_group = [] {
+        "large application writes use bounded records with consecutive nonces"_test = [] {
+            auto fixture = certificate_fixture{};
+            auto chunks = std::array<nxt::tls::bytes, 1>{};
+            auto reader = nxtrt::byte_span_feed{chunks, std::size_t{65536}};
+            auto peer = handshake_peer{chunks[0], fixture, {8, 11, 15, 20}};
+            auto client = nxtrt::tls::tls13_client_session{reader, peer};
+            auto deck = nxtrt::deck{};
+            deck.sync_wait([&] {
+                return client.handshake("service.example", fixture.path.data());
+            });
+            auto payload = std::string(40000, 'x');
+            deck.sync_wait([&] { return client.write_all(payload); });
+            expect(peer.application_records.size() == 3_ul);
+            auto decoded = nxt::tls::bytes{};
+            for (auto const & record : peer.application_records) {
+                expect(record.size() <= 16384_ul + 1_ul + 16_ul + 5_ul);
+                auto cursor = nxt::tls::byte_cursor{record};
+                auto type = cursor.take_u8();
+                auto version = cursor.take_u16();
+                auto content = cursor.take(cursor.take_u16());
+                expect(cursor.empty());
+                auto plain = nxt::tls::open_tls13_record(
+                    peer.application_keys.client,
+                    {.type = type, .version = version,
+                     .payload = {content.begin(), content.end()}});
+                expect(plain.inner_type == 23);
+                nxt::tls::put_bytes(decoded, plain.content);
+            }
+            expect(nxtrt::as_string_view(decoded) == payload);
+        };
         "validates chains and SAN identities, not common names"_test = [] {
             auto fixture = certificate_fixture{};
             auto chain = fixture.chain();

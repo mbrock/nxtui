@@ -174,9 +174,16 @@ task<> tls13_client_session::handshake(
 task<> tls13_client_session::write_all(std::span<const std::byte> bytes)
 {
     require_handshake();
-    co_await nxtrt::write_all(
-        writer_,
-        nxt::tls::seal_tls13_record(application_keys_.client, 23, bytes));
+    // RFC 8446 section 5.1 limits each plaintext fragment to 2^14 bytes.
+    // Tool continuations routinely exceed that, even with short answers.
+    while (!bytes.empty()) {
+        auto count = std::min(bytes.size(), std::size_t{16384});
+        co_await nxtrt::write_all(
+            writer_,
+            nxt::tls::seal_tls13_record(
+                application_keys_.client, 23, bytes.first(count)));
+        bytes = bytes.subspan(count);
+    }
 }
 
 task<> tls13_client_session::write_all(std::string_view text)

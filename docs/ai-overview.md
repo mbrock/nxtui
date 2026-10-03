@@ -1,38 +1,51 @@
 # NXTAI: current pieces and next steps {#ai_overview}
 
-NXTAI is a collection of useful LLM building blocks, not yet an integrated
-tool-using agent. The executable `nxtllm` sends one OpenAI Responses request
-and prints a text stream. Tool execution is a separate library path, currently
-exercised by tests rather than that executable.
-
-## What is connected today
-
-`src/nxtai/nxtllm.cpp` owns the connection, TLS session, decoded HTTP body,
-SSE feed, and text consumer. They run on the ordinary NXT deck and wand;
-there are no LLM workers or separate scheduler. TLS authenticates the peer
-against the requested host and trust store. The CLI can also serialize a
-request without contacting OpenAI:
+`nxtllm` is a tool-using OpenAI Responses client running on the ordinary NXT
+deck and wand. It defaults to `gpt-6-luna` and advertises `read_file`,
+`rg_search`, and `bash`, using the current directory as its working directory.
 
 ```sh
+nix develop .#filc -c build/filc/nxt-dev nxtllm "Does this repo support Fil-C?"
+build/nxtllm --no-tools "Explain epoll briefly"
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
-The current text consumer expects response creation, progress, sequential
-output items with zero or more text content parts, and completion. This
-includes empty reasoning items before a model's text answer. It does not
-yet dispatch arbitrary/interleaved output items,
-reasoning events, function calls, or all terminal/error states. It is a useful
-transport experiment, not a general Responses stream implementation.
+Set `OPENAI_API_KEY` first. Development shells configure the TLS trust bundle.
+Tools run with the caller's filesystem and process permissions; `--no-tools`
+disables them. `bash` and `rg` must be on PATH (the C++ development shells
+provide both). `--max-turns N` bounds model requests, defaulting to 32.
 
-`responses_request.hpp` already serializes tool definitions, raw input items,
-and `previous_response_id`. `tool_batch.hpp` parses completed function-call
-items and builds corresponding `function_call_output` items. Those pieces are
-not yet connected into subsequent model requests. The older HTTP request
-helper also returns `nxt::http::request`, while the CLI separately constructs
-an `nxtrt::http::request`; that duplication is a future consolidation target.
+## Ownership and response handling
 
-`tool_tui.hpp` and `trace_tui.hpp` provide tool-turn and span-waterfall layouts,
-exercised by raster tests. They are not connected to `nxtllm`'s text consumer.
+`nxtllm.cpp` owns each connection, verified TLS session, HTTP decoding reader,
+and SSE feed. `responses_stream.hpp` decodes events independently of terminal
+rendering. Text and refusal deltas stream immediately; argument and reasoning
+updates do not trigger tool execution. A successful `response.completed`
+snapshot supplies the canonical ordered output items, so interleaved events
+cannot reorder conversation history. Failed/incomplete responses and premature
+EOF fail the turn without executing its partial calls.
+
+`agent.hpp` owns the request and local transcript. After each completed
+response, it extracts function calls, invokes the existing tool pool, appends
+`function_call_output` items, and requests the next response. No calls means
+the turn is finished. The CLI uses pool capacity one to preserve tool order;
+library callers can explicitly choose more concurrency. Cancellation propagates
+through the pool's existing stop/drain behavior. The final allowed model turn
+cannot start tools whose results would require another request.
+
+The default `store=false` mode replays complete output items, preserving opaque
+reasoning content and unknown fields. Requests include
+`reasoning.encrypted_content`. With `--store`, continuation uses
+`previous_response_id` plus the tool results. Tool definitions are sent on
+every request. Transcript ownership is independent of call parsing.
+
+The console observer prints model text on stdout and tool names/status on
+stderr. `tool_tui.hpp` and `trace_tui.hpp` remain available for richer observers;
+the old UI runtime is not part of the agent loop.
+
+Offline fixtures in `test/ai-agent-test.cpp` exercise the model/tool/model
+loop, both history modes, reasoning preservation, multiple calls, unknown-tool
+results, cancellation, turn limits, malformed events, and premature EOF.
 
 ## Tools as pool work
 
@@ -90,8 +103,7 @@ ideas directly as a completion-order pool feed.
 ## What the existing tools provide
 
 `agent_tools.hpp` defines `read_file`, `rg_search`, and `bash`, and constructs
-a registry through `for_agent()`. No production caller currently installs
-that registry into an LLM request.
+a registry through `for_agent()`. The CLI installs that registry by default.
 
 Process capture already has useful ownership: combined stdout/stderr,
 bounded captured output (8 MiB by default), child wait/termination cleanup,
@@ -106,25 +118,14 @@ Important limitations remain:
 - `read_file` uses synchronous filesystem operations and may stall the single
   event loop. Its size cap silently truncates; some read failures yield empty
   text. `rg_search` treats a nonzero exit, including no matches, as failure.
-- Individual output caps do not bound all retained batch output, and there is
-  no tool-batch deadline or dependency/side-effect ordering policy.
-- Process-capture tests exist, but there is no end-to-end model/tool/model
-  fixture. The request stream consumer itself lacks offline event-sequence
-  coverage.
+- Individual output caps do not bound the aggregate retained transcript, and
+  there is no per-tool deadline. Sequential execution preserves call order but
+  does not make shell commands read-only.
 
-## Recommended next work
+## Next work
 
-1. Extract a reusable Responses event decoder with offline fixtures covering
-   multiple/interleaved items, reasoning, function arguments, failure,
-   incomplete responses, and premature EOF. Keep terminal formatting separate.
-2. Connect one response → completed tool calls → bounded tool pool → output
-   items → next response. Test the entire loop with a scripted local server
-   before relying on live provider calls. Make conversation ownership explicit.
-3. Consume completion-order tool results for progress reporting, collecting an
-   ordered turn only where needed. Then reconnect the UI to real lifecycle
-   events rather than another collection of worker/handle bookkeeping.
-4. Establish tool permissions, filesystem scope, deadlines, and aggregate
-   output budgets before exposing shell execution as a general agent feature.
-
-This keeps one scheduler and existing task/feed/pool composition, rather than
-adding an agent-specific concurrency framework.
+Add aggregate context/output budgets and configurable tool deadlines. Richer
+progress rendering can consume tool results in completion order through the
+existing pool feed, while keeping history in model output order. Filesystem
+scope and tool permissions need explicit policy before this becomes a sandboxed
+agent. The current CLI is a local tool runner with the user's permissions.

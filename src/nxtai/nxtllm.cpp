@@ -4,13 +4,15 @@
 #include <nxtrt/net_dns.hpp>
 #include <nxtrt/tls.hpp>
 #include <nxt/stacktrace.hpp>
-#include <nxtai/responses_request.hpp>
+#include <nxtai/agent.hpp>
+#include <nxtai/agent_tools.hpp>
 #include <nxtai/tool_json.hpp>
 
 #include <array>
 #include <charconv>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -29,6 +31,8 @@ struct cli_options
     std::string model = "gpt-6-luna";
     std::size_t max_output_tokens = 20000;
     bool store = false;
+    bool tools = true;
+    std::size_t max_turns = 32;
     bool dump_request = false;
     std::optional<std::string> prompt;
 };
@@ -68,28 +72,16 @@ struct openai_unexpected_content_type : nxtrt::runtime_error
     std::optional<std::string> actual;
 };
 
-struct openai_unexpected_event : nxtrt::runtime_error
-{
-    openai_unexpected_event(std::string expected, std::string actual)
-        : nxtrt::runtime_error{
-              "OpenAI Responses expected " + expected + ", got " + actual}
-        , expected(std::move(expected))
-        , actual(std::move(actual))
-    {
-    }
-
-    std::string expected;
-    std::string actual;
-};
-
 [[noreturn]] void print_help_and_exit()
 {
     std::cout
         << "usage: nxtllm [options] [prompt...]\n"
-           "  streams one OpenAI Responses request over nxtrt\n"
+           "  streams OpenAI Responses and runs local tools over nxtrt\n"
            "\n"
            "  -m, --model MODEL                 (default: gpt-6-luna)\n"
            "  --max-output-tokens N\n"
+           "  --max-turns N                     (default: 32)\n"
+           "  --no-tools                        disable local file/search/shell tools\n"
            "  --store                           ask OpenAI to store the response\n"
            "  --dump-request                    print serialized Responses JSON\n";
     std::exit(EXIT_SUCCESS);
@@ -122,6 +114,14 @@ cli_options parse_args(int argc, char ** argv)
                     "--max-output-tokens needs a value"};
             options.max_output_tokens =
                 parse_size(argv[i], "--max-output-tokens");
+        } else if (arg == "--no-tools") {
+            options.tools = false;
+        } else if (arg == "--max-turns") {
+            if (++i >= argc)
+                throw nxtrt::runtime_error{"--max-turns needs a value"};
+            options.max_turns = parse_size(argv[i], "--max-turns");
+            if (options.max_turns == 0)
+                throw nxtrt::runtime_error{"--max-turns must be nonzero"};
         } else if (arg == "--store") {
             options.store = true;
         } else if (arg == "--dump-request") {
@@ -240,296 +240,44 @@ nxtrt::task<nxtrt::http::response_head> open_response_stream(
     co_return head;
 }
 
-namespace openai_response_scope {
-
-inline constexpr auto response = std::string_view{"response"};
-inline constexpr auto output_item =
-    std::string_view{"response.output_item"};
-inline constexpr auto content_part =
-    std::string_view{"response.content_part"};
-inline constexpr auto output_text =
-    std::string_view{"response.output_text"};
-
-} // namespace openai_response_scope
-
-namespace openai_response_event {
-
-inline constexpr auto response_created =
-    std::string_view{"response.created"};
-inline constexpr auto response_in_progress =
-    std::string_view{"response.in_progress"};
-inline constexpr auto response_completed =
-    std::string_view{"response.completed"};
-inline constexpr auto output_item_added =
-    std::string_view{"response.output_item.added"};
-inline constexpr auto output_item_done =
-    std::string_view{"response.output_item.done"};
-inline constexpr auto content_part_added =
-    std::string_view{"response.content_part.added"};
-inline constexpr auto content_part_done =
-    std::string_view{"response.content_part.done"};
-inline constexpr auto output_text_delta =
-    std::string_view{"response.output_text.delta"};
-inline constexpr auto output_text_done =
-    std::string_view{"response.output_text.done"};
-
-} // namespace openai_response_event
-
-using breadcrumb = std::vector<std::string_view>;
-
-struct breadcrumb_key
-{
-    using value_type = breadcrumb;
-};
-
-breadcrumb current_breadcrumb()
-{
-    if (auto value = nxtrt::env_get<breadcrumb_key>())
-        return *value;
-    return {};
-}
-
-std::size_t current_breadcrumb_depth()
-{
-    if (auto value = nxtrt::env_get<breadcrumb_key>())
-        return value->size();
-    return 0;
-}
-
-nxtrt::task<void>
-write_indent(nxtrt::bytesink & output, std::size_t depth)
-{
-    co_await nxtrt::write_splat(output, "  ", depth);
-}
-
-nxtrt::task<void> write_indented_line(
-    nxtrt::bytesink & output, std::size_t depth, std::string_view text)
-{
-    co_await write_indent(output, depth);
-    co_await nxtrt::write(output, text);
-    co_await nxtrt::write(output, std::string_view{"\n"});
-}
-
-nxtrt::task<void> write_indented_block(
-    nxtrt::bytesink & output, std::size_t depth, std::string_view text)
-{
-    auto offset = std::size_t{0};
-    while (offset < text.size()) {
-        auto newline = text.find('\n', offset);
-        auto line_end =
-            newline == std::string_view::npos ? text.size() : newline;
-
-        co_await write_indented_line(
-            output, depth, text.substr(offset, line_end - offset));
-
-        if (newline == std::string_view::npos)
-            co_return;
-        offset = newline + 1;
-    }
-
-    if (text.empty())
-        co_await write_indented_line(output, depth, {});
-}
-
-nxtrt::task<void> write_sse_event_debug(
-    nxtrt::bytesink & output,
-    nxtrt::http::server_sent_event event,
-    std::size_t depth)
-{
-    co_await write_indent(output, depth);
-    co_await nxtrt::print_all(output, "* {}\n", event.type);
-    co_await write_indented_block(output, depth, event.data);
-    co_await nxtrt::write_all(output, "\n");
-}
-
-struct breadcrumb_output
+struct console_observer
 {
     nxtrt::bytesink & output;
-    breadcrumb rendered = {};
 
-    nxtrt::task<void> render_current()
+    nxtrt::task<void> text(std::string delta)
     {
-        co_await render(current_breadcrumb());
+        co_await nxtrt::write_all(output, delta);
     }
 
-    nxtrt::task<void> close_all()
+    nxtrt::task<void> tool_started(const nxtai::tools::function_call & call)
     {
-        co_await render({});
+        std::cerr << "\n[tool " << call.name << " " << call.call_id << "]\n";
+        co_return;
     }
 
-    nxtrt::task<void> write_event(nxtrt::http::server_sent_event event)
+    nxtrt::task<void> tool_finished(const nxtai::tools::function_call_result & result)
     {
-        co_await render_current();
-        if (false)
-            co_await write_sse_event_debug(
-                output, std::move(event), current_breadcrumb_depth());
-    }
-
-    nxtrt::task<void> write_text_delta(std::string text)
-    {
-        co_await render_current();
-        co_await write_indent(output, current_breadcrumb_depth());
-        co_await nxtrt::print_all(output, "<<{}>>\n", text);
-    }
-
-private:
-    nxtrt::task<void> render(breadcrumb next)
-    {
-        auto keep = std::size_t{0};
-        while (keep < rendered.size() && keep < next.size()
-               && rendered[keep] == next[keep])
-            ++keep;
-
-        for (auto i = rendered.size(); i > keep; --i)
-            co_await write_marker(i - 1, rendered[i - 1], true);
-
-        for (auto i = keep; i < next.size(); ++i)
-            co_await write_marker(i, next[i], false);
-
-        rendered = std::move(next);
-    }
-
-    nxtrt::task<void>
-    write_marker(std::size_t depth, std::string_view name, bool closing)
-    {
-        co_await write_indent(output, depth);
-        if (closing)
-            co_await nxtrt::print(output, "[/{}]\n", name);
-        else
-            co_await nxtrt::print(output, "[{}]\n", name);
-    }
-};
-
-template<typename Fn>
-nxtrt::task<void> with_breadcrumb_scope(std::string_view name, Fn && body)
-{
-    using body_type = std::decay_t<Fn>;
-
-    auto next = current_breadcrumb();
-    next.push_back(name);
-    co_await nxtrt::with_env<breadcrumb_key>(
-        std::move(next), body_type{std::forward<Fn>(body)});
-}
-
-struct openai_response_stream_client
-{
-    using event_type = nxtrt::http::server_sent_event;
-
-    nxtrt::feed<event_type> & events;
-    breadcrumb_output & output;
-
-    nxtrt::task<void> stream_response()
-    {
-        co_await with_breadcrumb_scope(
-            openai_response_scope::response,
-            [this] { return stream_response_body(); });
-    }
-
-private:
-    nxtrt::task<void> stream_response_body()
-    {
-        co_await write_expected_event(
-            openai_response_event::response_created);
-        co_await write_expected_event(
-            openai_response_event::response_in_progress);
-        while ((co_await events.peek_one())->type
-               == openai_response_event::output_item_added)
-            co_await stream_output_item();
-        co_await write_expected_event(
-            openai_response_event::response_completed);
-    }
-
-    nxtrt::task<event_type> expect_event(std::string_view type)
-    {
-        auto * event = co_await events.peek_one();
-        if (event->type != type)
-            throw openai_unexpected_event{
-                std::string{type},
-                event->type,
-            };
-        co_return co_await events.take_one();
-    }
-
-    nxtrt::task<void> write_expected_event(std::string_view type)
-    {
-        co_await output.write_event(co_await expect_event(type));
-    }
-
-    nxtrt::task<void> stream_output_item()
-    {
-        co_await with_breadcrumb_scope(
-            openai_response_scope::output_item,
-            [this] { return stream_output_item_body(); });
-    }
-
-    nxtrt::task<void> stream_output_item_body()
-    {
-        co_await write_expected_event(
-            openai_response_event::output_item_added);
-        // Reasoning items can finish without any text content parts.
-        while ((co_await events.peek_one())->type
-               == openai_response_event::content_part_added)
-            co_await stream_content_part();
-        co_await write_expected_event(
-            openai_response_event::output_item_done);
-    }
-
-    nxtrt::task<void> stream_content_part()
-    {
-        co_await with_breadcrumb_scope(
-            openai_response_scope::content_part,
-            [this] { return stream_content_part_body(); });
-    }
-
-    nxtrt::task<void> stream_content_part_body()
-    {
-        co_await write_expected_event(
-            openai_response_event::content_part_added);
-
-        co_await stream_output_text();
-
-        co_await write_expected_event(
-            openai_response_event::content_part_done);
-    }
-
-    nxtrt::task<void> stream_output_text()
-    {
-        co_await with_breadcrumb_scope(
-            openai_response_scope::output_text,
-            [this] { return stream_output_text_body(); });
-    }
-
-    nxtrt::task<void> stream_output_text_body()
-    {
-        while ((co_await events.peek_one())->type
-               == openai_response_event::output_text_delta) {
-            auto event = co_await events.take_one();
-            auto text =
-                nxtai::tools::json_string_member(event.data, "delta")
-                    .value_or(std::string{});
-            co_await output.write_text_delta(std::move(text));
-        }
-
-        co_await write_expected_event(
-            openai_response_event::output_text_done);
+        std::cerr << "[tool " << result.call.name
+                  << (result.result.failed ? " failed" : " done") << "]\n";
+        co_return;
     }
 };
 
 struct stream_request
 {
     nxtai::responses::openai_responses_request request;
-    nxtrt::bytesink & output;
+    console_observer & observer;
     std::array<std::byte, 16 * 1024> socktxbuf{};
     std::array<std::byte, 64 * 1024> sockrxbuf{};
     std::array<std::byte, 64 * 1024> tlsbuf{};
 
-    nxtrt::task<void> operator()()
+    nxtrt::task<nxtai::responses::response_result> operator()()
     {
         return stream_openai_response();
     }
 
 private:
-    nxtrt::task<void> stream_openai_response()
+    nxtrt::task<nxtai::responses::response_result> stream_openai_response()
     {
         auto request_text = nxtrt::http::serialize(openai_request(request));
 
@@ -552,11 +300,25 @@ private:
             openai_sse_body_buffer_size};
         auto events = nxtrt::http::sse_event_parser(body);
 
-        auto transcript = breadcrumb_output{output};
-        auto client = openai_response_stream_client{events, transcript};
+        auto decoder = nxtai::responses::stream_decoder{};
+        while (auto event = co_await events.take()) {
+            if (auto delta = co_await decoder.accept(event->type, event->data))
+                co_await observer.text(std::move(*delta));
+            if (decoder.completed)
+                co_return decoder.finish();
+        }
+        co_return decoder.finish();
+    }
+};
 
-        co_await client.stream_response();
-        co_await nxtrt::write_all(output, "\n");
+struct openai_transport
+{
+    nxtrt::task<nxtai::responses::response_result> operator()(
+        const nxtai::responses::openai_responses_request & request,
+        console_observer & observer)
+    {
+        auto stream = stream_request{.request = request, .observer = observer};
+        co_return co_await stream();
     }
 };
 
@@ -571,6 +333,25 @@ nxtrt::task<int> run_nxtllm(cli_options options)
     auto request =
         make_request(options, co_await read_env_string("OPENAI_API_KEY"));
 
+    auto tools = options.tools ? nxtai::agent_tools::for_agent()
+                               : nxtai::tools::tool_registry{};
+    request.tools = nxtai::tools::function_tool_definitions(tools);
+    if (options.tools) {
+        if (!request.store)
+            request.include = {"reasoning.encrypted_content"};
+        auto context = nxt::json::writer{};
+        context.raw("{\"role\":\"developer\",\"content\":");
+        context.string("You are a local coding assistant. Use the available tools "
+                       "to inspect files before answering questions about this repository. "
+                       "Working directory: " + std::filesystem::current_path().string());
+        context.character('}');
+        request.input_items = {{std::move(context.out)}};
+        auto user_request = nxtai::responses::openai_responses_request{};
+        user_request.input = request.input;
+        for (auto & item : nxtai::responses::input_items_from_request(user_request))
+            request.input_items.push_back(std::move(item));
+    }
+
     if (options.dump_request) {
         co_await nxtrt::print_all(output,
             "{}\n", nxtai::responses::openai_responses_body(request));
@@ -581,12 +362,11 @@ nxtrt::task<int> run_nxtllm(cli_options options)
         throw nxtrt::runtime_error{"OPENAI_API_KEY is not set"};
     }
 
-    // The stream's coroutine borrows the request and its buffers.
-    auto stream = stream_request{
-        .request = std::move(request),
-        .output = output,
-    };
-    co_await stream();
+    auto observer = console_observer{output};
+    auto transport = openai_transport{};
+    co_await nxtai::run_agent(std::move(request), tools, transport, observer,
+        {.max_turns = options.max_turns});
+    co_await nxtrt::write_all(output, "\n");
 
     co_return EXIT_SUCCESS;
 }

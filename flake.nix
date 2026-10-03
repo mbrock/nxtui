@@ -68,6 +68,8 @@
                   llvm.clang-tools
                   nixd
                   gnumake
+                  bash
+                  ripgrep
                   self.packages.${stdenv.hostPlatform.system}.spec-racket
 
                   # Trace-analysis scripts use uv; docs use the Nix package.
@@ -111,7 +113,11 @@
             filcPkgs.mkShell {
               shellHook = certificateShellHook;
               inputsFrom = [ self.packages.${stdenv.hostPlatform.system}.nxt-filc ];
-              nativeBuildInputs = [ pkgs.gnumake ];
+              nativeBuildInputs = [
+                pkgs.gnumake
+                pkgs.bash
+                pkgs.ripgrep
+              ];
               # Fil-C supplies its own linker; do not pick up host mold.
               NXT_MESON_LINK_ARGS = "";
             };
