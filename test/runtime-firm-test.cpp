@@ -270,9 +270,9 @@ void declare_runtime_firm_tests()
 
         "firm fork unwinds child record after deck registry overflow"_test =
             [] {
-                // Two scope scaffolds occupy six task IDs; this probe
-                // occupies the seventh. Only the fork must overflow.
-                auto storage = nxtrt::static_deck_task_storage<7>{};
+                // The scope scaffold occupies three task IDs; this probe
+                // occupies the fourth. Only the fork must overflow.
+                auto storage = nxtrt::static_deck_task_storage<4>{};
                 auto deck = nxtrt::deck{storage};
                 auto events = std::vector<int>{};
                 auto overflowed = false;

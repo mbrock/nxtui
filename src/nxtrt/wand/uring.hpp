@@ -880,7 +880,10 @@ template<task_factory Fn>
     [[maybe_unused]] auto previous_root_firm =
         root_env.replace<firm_key>(&root_firm);
     auto root_guard = detail::env_guard{root_env, &d, nullptr};
-    auto root = with_firm(std::forward<Fn>(fn));
+    // The factory outlives its task: a capturing coroutine lambda's frame
+    // refers to the closure object.
+    auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};
+    auto root = std::invoke(factory);
 
     d.start(root);
     wand.run_until_done(d, root);

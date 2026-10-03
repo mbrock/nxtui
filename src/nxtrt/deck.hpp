@@ -275,13 +275,13 @@ public:
             "make_task(args); }) so the root task is created inside its firm");
     }
 
-    /// Create and drive a task from a nullary task factory.
-    ///
-    /// This is a tiny sender-like convenience: the callable is a lazy recipe
-    /// that produces a fresh task when `sync_wait` starts it.
-    template<task_factory Fn>
-    [[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
-    sync_wait(Fn && fn);
+    /// Create a task by calling `fn(args...)` inside the root firm, then
+    /// drive it to completion. The factory stays alive until it finishes.
+    template<typename Fn, typename... Args>
+        requires task_factory<std::decay_t<Fn> &, Args...>
+    [[nodiscard]] task_result_t<
+        std::invoke_result_t<std::decay_t<Fn> &, Args...>>
+    sync_wait(Fn && fn, Args &&... args);
 
 private:
     /// Drive one root task, created inside its root firm, until completion.

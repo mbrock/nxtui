@@ -16,20 +16,6 @@
 
 namespace nxtrt {
 
-namespace detail {
-
-template<typename Fn>
-[[nodiscard]] task<stored_task_result_t<Fn>> run_in_root_firm(Fn fn)
-{
-    if constexpr (std::is_void_v<stored_task_result_t<Fn>>) {
-        co_await with_firm(std::move(fn));
-    } else {
-        co_return co_await with_firm(std::move(fn));
-    }
-}
-
-} // namespace detail
-
 /// Small application-facing owner for the runtime.
 ///
 /// This is intentionally not the terminal UI runtime yet. It is the common
@@ -144,9 +130,10 @@ public:
             root_env.replace<firm_key>(&root_firm);
         auto root_guard = detail::env_guard{root_env, &deck_, nullptr};
 
-        return drive(
-            detail::run_in_root_firm(
-                std::decay_t<Fn>{std::forward<Fn>(fn)}));
+        // The factory outlives its task: a capturing coroutine lambda's
+        // frame refers to the closure object.
+        auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};
+        return drive(std::invoke(factory));
     }
 
     void request_stop()

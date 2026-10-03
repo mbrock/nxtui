@@ -63,19 +63,21 @@ template<typename Fn>
 root_task(deck &, Fn &&)
     -> root_task<stored_task_result_t<std::decay_t<Fn>>>;
 
-template<task_factory Fn>
-[[nodiscard]] task_result_t<std::invoke_result_t<Fn>>
-deck::sync_wait(Fn && fn)
+template<typename Fn, typename... Args>
+    requires task_factory<std::decay_t<Fn> &, Args...>
+[[nodiscard]] task_result_t<std::invoke_result_t<std::decay_t<Fn> &, Args...>>
+deck::sync_wait(Fn && fn, Args &&... args)
 {
-    using factory_type = std::decay_t<Fn>;
-
+    // The factory outlives its task: a capturing coroutine lambda's frame
+    // refers to the closure object.
+    auto factory = std::decay_t<Fn>{std::forward<Fn>(fn)};
     auto root_firm = firm{};
     auto root_env = runtime_env{};
     [[maybe_unused]] auto previous_root_firm =
         root_env.replace<firm_key>(&root_firm);
     auto root_guard = detail::env_guard{root_env, this, nullptr};
 
-    return drive(with_firm(factory_type{std::forward<Fn>(fn)}));
+    return drive(std::invoke(factory, std::forward<Args>(args)...));
 }
 
 } // namespace nxtrt
