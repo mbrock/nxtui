@@ -238,18 +238,22 @@ private:
         if ((op.flags & SOCK_CLOEXEC) != 0)
             set_close_on_exec(accepted);
 #endif
+        // BSD accept() copies O_NONBLOCK from the listener, which
+        // nonblocking_call may have set only for this call. Give the
+        // accepted socket exactly the mode the operation asked for.
+        auto nonblocking = false;
 #ifdef SOCK_NONBLOCK
-        if ((op.flags & SOCK_NONBLOCK) != 0) {
-            auto flags = ::fcntl(accepted, F_GETFL, 0);
-            if (flags < 0
-                || ::fcntl(accepted, F_SETFL, flags | O_NONBLOCK) < 0) {
-                auto error = errno;
-                ::close(accepted);
-                errno = error;
-                return -1;
-            }
-        }
+        nonblocking = (op.flags & SOCK_NONBLOCK) != 0;
 #endif
+        auto flags = ::fcntl(accepted, F_GETFL, 0);
+        auto wanted = nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
+        if (flags < 0
+            || (wanted != flags && ::fcntl(accepted, F_SETFL, wanted) < 0)) {
+            auto error = errno;
+            ::close(accepted);
+            errno = error;
+            return -1;
+        }
         return accepted;
     }
 

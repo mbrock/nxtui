@@ -416,12 +416,13 @@ suite tls_tests = [] {
                 auto fixture = certificate_fixture{};
                 auto chunks = std::array<nxt::tls::bytes, 1>{};
                 auto offset = std::size_t{0};
+                auto reader_storage = std::vector<std::byte>(65536);
                 auto reader = nxtrt::task_bytefeed{
                     [&](nxtrt::junk<std::byte> into) {
                         return read_growing_tls_reply(
                             chunks[0], offset, into);
                     },
-                    std::size_t{65536}};
+                    std::span{reader_storage}};
                 auto peer =
                     handshake_peer{chunks[0], fixture, {8, 11, 15, 20}};
                 auto client =
@@ -463,12 +464,13 @@ suite tls_tests = [] {
                 // traffic secret.
                 auto updated_chunks = std::array<nxt::tls::bytes, 1>{};
                 auto updated_offset = std::size_t{0};
+                auto updated_reader_storage = std::vector<std::byte>(65536);
                 auto updated_reader = nxtrt::task_bytefeed{
                     [&](nxtrt::junk<std::byte> into) {
                         return read_growing_tls_reply(
                             updated_chunks[0], updated_offset, into);
                     },
-                    std::size_t{65536}};
+                    std::span{updated_reader_storage}};
                 auto updated_peer = handshake_peer{
                     updated_chunks[0], fixture, {8, 11, 15, 20}};
                 auto updated_client = nxtrt::tls::tls13_client_session{
