@@ -58,9 +58,31 @@ Awaiting a task connects child to parent. The awaited task is enqueued on the
 active deck, and the awaiting task becomes its continuation. When the child
 reaches final suspend, the parent is requeued for a future pump step.
 
+`on_completed` registers a synchronous, non-suspending callback without
+starting the task or consuming its result:
+
+```cpp
+auto link = child.on_completed([&]() noexcept {
+    // Inspect child.result(), update local state, or queue a continuation.
+});
+```
+
+The returned `completion_link` owns the callable but borrows the task. Keep it
+alive until notification; destruction or `disconnect()` detaches it. Moving
+either the link or the task preserves the registration. Destroying the task
+disconnects the link without notifying it. Only one completion observer may be
+connected at a time; the ordinary awaiting continuation is independent.
+
+Callbacks must return `void` and be `noexcept`. They run at final suspension,
+in the completing task's context, before its awaiting continuation is queued.
+Registering on an already-completed task instead calls back immediately in the
+registering context. A callback must not destroy the completing task or resume
+another coroutine inline: queue continuations so final suspension can finish.
+
 Concrete API:
 
 - @ref nxtrt::task "nxtrt::task<T>"
+- @ref nxtrt::completion_link "nxtrt::completion_link<Fn>"
 - @ref nxtrt::task_id "nxtrt::task_id"
 
 ## Groups {#rt_group}
@@ -101,14 +123,13 @@ settle(std::move(tasks), [index](std::size_t settled, bool) noexcept {
 });
 ```
 
-Each child has a wrapper coroutine that awaits it, consults the policy, and
-counts down. The combiner awaits that countdown before returning; there are
-no group objects or per-child completion observers. Stop propagates through
-the wrappers' normal task-await relationships. Policy notification runs when
-the wrapper resumes, one deck turn after a running child finishes, rather
-than inside the child's final suspension. Cancellation is cooperative, so
-companions may make progress or finish before that notification requests stop.
-Each child also costs a wrapper frame and an additional deck task slot.
+Each child has a synchronous completion link that consults the policy and
+counts down. The combiner awaits that countdown before returning; reaching
+zero queues it for a later deck turn, never resumes it inside final suspension.
+There are no group objects, wrapper coroutines, or extra per-child deck slots.
+Policy notification runs in the completing child's context, during final
+suspension, and requests stop directly on unfinished siblings. Cancellation
+is still cooperative: a stopped child can continue until it observes stop.
 
 Policies see the task promise's success or failure without moving its value.
 Results stay in their promises until all started tasks have drained, then move

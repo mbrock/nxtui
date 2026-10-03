@@ -200,10 +200,10 @@ trick applied to tasks themselves.
 A fixed group is a set of tasks awaited by one task. @ref nxtrt::settle "settle"
 takes a tuple of tasks, owns them directly, runs them concurrently, and does not
 return until every started task has settled. Task factories must be called
-before entering the group. One wrapper coroutine per child awaits completion,
-consults a stop predicate, and counts down; the combiner awaits the countdown.
-The state lives in coroutine frames, without a group class or per-child
-completion observers. Fixed groups do not use a pool.
+before entering the group. One synchronous completion link per child consults
+a stop predicate and counts down; the combiner awaits the countdown. The state
+lives in its coroutine frame, without a group class or wrapper coroutines.
+Fixed groups do not use a pool.
 
 What the caller gets back is not a handle to running work but a settled
 `outcome<T>` per job — `std::expected<T, std::exception_ptr>` — in input

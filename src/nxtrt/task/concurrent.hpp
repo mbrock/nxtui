@@ -7,7 +7,6 @@
 #include "nxtrt/task/compose.hpp"
 
 #include <expected>
-#include <span>
 #include <vector>
 
 namespace nxtrt {
@@ -75,8 +74,7 @@ template<typename T>
 }
 
 /// Single-deck countdown. Reaching zero queues the waiter, never resumes it
-/// inline: the last worker must reach final suspension before it is
-/// destroyed.
+/// inline: the completing child's final suspension must finish first.
 struct countdown
 {
     deck & executor;
@@ -102,43 +100,38 @@ struct countdown
     void await_resume() const noexcept {}
 };
 
-/// Observe completion without moving the result. Original task promises are
-/// the outcome slots; extraction happens only after all workers have
-/// drained.
-template<typename T, typename Complete>
-task<void> settle_one(
-    task<T> & child,
-    std::size_t index,
-    bool & stopping,
-    countdown & done,
-    Complete & complete)
+/// Visit tuple positions with compile-time indices, or range positions with
+/// ordinary indices. The same setup and stop logic works for both shapes.
+template<typename Tasks, typename Visit>
+void visit_tasks(Tasks & tasks, Visit visit)
 {
-    if (!stopping) {
-        auto failed = false;
-        auto setup_failure = std::exception_ptr{};
-        try {
-            (void) co_await child;
-        } catch (...) {
-            failed = true;
-            // An incomplete child means scheduling, not its body, failed.
-            if (!child.done())
-                setup_failure = std::current_exception();
-        }
-        complete(index, failed, setup_failure);
+    if constexpr (std::ranges::range<Tasks>) {
+        auto index = std::size_t{0};
+        for (auto & child : tasks)
+            visit(child, index++);
+    } else {
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            (visit(
+                 std::get<Is>(tasks),
+                 std::integral_constant<std::size_t, Is>{}),
+             ...);
+        }(std::make_index_sequence<std::tuple_size_v<Tasks>>{});
     }
-    done.arrive();
 }
 
-/// Start the wrappers and drain them even on parent stop or setup failure.
-/// bind fills the caller-owned wrappers with settle_one coroutines; all the
-/// state they borrow stays in this frame until the countdown reaches zero.
-template<group_policy Policy, typename Bind>
-task<void>
-run_group(std::span<task<void>> workers, Policy policy, Bind bind)
+/// Prepare links before scheduling anything, then connect and start in
+/// input order. Link callbacks inspect promises without moving their
+/// results.
+template<typename Tasks, group_policy Policy>
+task<void> run_group(Tasks & tasks, Policy policy)
 {
     auto * env = current_env;
     if (!env || !env->current_deck || !env->current_promise)
         throw runtime_error{"nxtrt group used without a running deck"};
+    visit_tasks(tasks, [](auto & child, auto) {
+        if (!child.handle())
+            throw runtime_error{"nxtrt group received an empty task"};
+    });
 
     auto done = countdown{*env->current_deck};
     auto stopping = false;
@@ -146,31 +139,67 @@ run_group(std::span<task<void>> workers, Policy policy, Bind bind)
     auto setup_failure = std::exception_ptr{};
     auto stop = [&]() noexcept {
         stopping = true;
-        for (auto & worker : workers)
-            worker.request_stop();
+        visit_tasks(tasks, [](auto & child, auto) {
+            if (child.id() && !child.done())
+                child.request_stop();
+        });
     };
-    auto complete = [&](std::size_t index,
-                        bool failed,
-                        std::exception_ptr error) noexcept {
-        if (error) {
-            if (!setup_failure)
-                setup_failure = std::move(error);
-            stop();
-        } else if (!stopping && std::invoke(policy, index, failed)) {
-            stop();
+    auto make_link = [&](auto & child, std::size_t index) {
+        return completion_link{[&, index]() noexcept {
+            auto failed = false;
+            try {
+                (void) child.result();
+            } catch (...) {
+                failed = true;
+            }
+            if (!stopping && std::invoke(policy, index, failed))
+                stop();
+            done.arrive();
+        }};
+    };
+    // All callback storage exists before a child starts, so partial setup
+    // failure cannot unwind registrations that still need to count down.
+    auto registrations = [&] {
+        if constexpr (std::ranges::range<Tasks>) {
+            using link_type = decltype(make_link(tasks[0], 0));
+            auto out = std::vector<link_type>{};
+            out.reserve(tasks.size());
+            visit_tasks(tasks, [&](auto & child, auto index) {
+                out.push_back(make_link(child, index));
+            });
+            return out;
+        } else {
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                return std::tuple{make_link(std::get<Is>(tasks), Is)...};
+            }(std::make_index_sequence<std::tuple_size_v<Tasks>>{});
         }
-    };
-    bind(stopping, done, complete);
+    }();
     auto parent_stop = std::stop_callback{
         env->current_promise->stop_token(), [&]() noexcept {
             parent_stopped = true;
             stop();
         }};
     try {
-        for (auto & worker : workers) {
-            env->current_deck->start(worker);
-            ++done.pending;
-        }
+        visit_tasks(tasks, [&](auto & child, auto index) {
+            if (!child.done() && stopping)
+                return;
+            auto & link = [&]() -> auto & {
+                if constexpr (std::ranges::range<Tasks>)
+                    return registrations[index];
+                else
+                    return std::get<decltype(index)::value>(registrations);
+            }();
+            if (child.done()) {
+                ++done.pending;
+                link.connect(
+                    child); // Inline arrival; never schedule again.
+            } else {
+                child.handle().promise().env.copy_entries_from(*env);
+                link.connect(child);
+                env->current_deck->start(child);
+                ++done.pending; // Count only successfully queued children.
+            }
+        });
     } catch (...) {
         setup_failure = std::current_exception();
         stop();
@@ -283,26 +312,7 @@ template<typename... Ts, detail::group_policy Policy = all_group>
 [[nodiscard]] task<std::tuple<outcome<Ts>...>>
 settle(std::tuple<task<Ts>...> tasks, Policy execution = {})
 {
-    // Reject every empty position before scheduling any work.
-    std::apply(
-        [&](auto &... child) {
-            if ((!child.handle() || ...))
-                throw runtime_error{"nxtrt group received an empty task"};
-        },
-        tasks);
-    auto workers = std::array<task<void>, sizeof...(Ts)>{};
-    co_await detail::run_group(
-        std::span{workers},
-        std::move(execution),
-        [&](bool & stopping, detail::countdown & done, auto & complete) {
-            std::apply(
-                [&](auto &... child) {
-                    auto index = std::size_t{0};
-                    workers = {detail::settle_one(
-                        child, index++, stopping, done, complete)...};
-                },
-                tasks);
-        });
+    co_await detail::run_group(tasks, std::move(execution));
     co_return std::apply(
         [](auto &... child) {
             return std::tuple{
@@ -322,20 +332,9 @@ template<
 {
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
     auto tasks = std::vector<task<result_type>>{};
-    for (auto && item : range) {
-        if (!item.handle())
-            throw runtime_error{"nxtrt group received an empty task"};
+    for (auto && item : range)
         tasks.push_back(std::move(item));
-    }
-    auto workers = std::vector<task<void>>(tasks.size());
-    co_await detail::run_group(
-        std::span{workers},
-        std::move(execution),
-        [&](bool & stopping, detail::countdown & done, auto & complete) {
-            for (auto i = std::size_t{0}; i < tasks.size(); ++i)
-                workers[i] = detail::settle_one(
-                    tasks[i], i, stopping, done, complete);
-        });
+    co_await detail::run_group(tasks, std::move(execution));
 
     auto out = std::vector<outcome<result_type>>{};
     out.reserve(tasks.size());

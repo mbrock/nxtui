@@ -71,7 +71,8 @@ shape of its concurrency:
   values a group returns.
 
 Fixed groups now directly own tuple/vector tasks and observe completion through
-stable observers, rather than lowering through pool recipes or wrapper tasks.
+synchronous completion links, rather than lowering through pool recipes or
+wrapper tasks.
 There is no `group_recipe`, separate intermediate results tuple, or public deed.
 The task-only `settle`, `when_all`, and `wait_any` APIs remain unchanged; pools
 remain streaming bounded idea-factory evaluators.

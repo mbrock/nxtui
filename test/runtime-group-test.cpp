@@ -45,6 +45,15 @@ static_assert(settle_policy<decltype([](std::size_t, bool) noexcept {
 static_assert(
     !settle_policy<decltype([](std::size_t, bool) { return false; })>);
 
+template<typename Fn>
+concept completion_callback = requires(nxtrt::task<int> & child, Fn fn) {
+    child.on_completed(std::move(fn));
+};
+
+static_assert(completion_callback<decltype([]() noexcept {})>);
+static_assert(!completion_callback<decltype([] {})>);
+static_assert(!completion_callback<decltype([]() noexcept { return 1; })>);
+
 nxtrt::task<std::unique_ptr<int>> owned_value_after_yield(
     std::unique_ptr<int> value, int & starts)
 {
@@ -653,10 +662,10 @@ void declare_runtime_group_tests()
 
         "child startup failure drains scheduled children before rethrow"_test =
             [] {
-                // settle is the root: it, run_group, eight wrappers, and
-                // one child fit. Scheduling the second child fails after
-                // the first was queued.
-                auto storage = nxtrt::static_deck_task_storage<11>{};
+                // settle is the root: it, run_group, and one child fit.
+                // Scheduling the second child fails after the first is
+                // queued.
+                auto storage = nxtrt::static_deck_task_storage<3>{};
                 auto deck = nxtrt::deck{storage};
                 auto events = std::vector<int>{};
                 auto failed = false;
@@ -675,6 +684,31 @@ void declare_runtime_group_tests()
                 expect(deck.empty());
             };
 
+        "link registration failure drains scheduled children"_test = [] {
+            auto deck = nxtrt::deck{};
+            auto events = std::vector<int>{};
+            auto observed = value_after_yield(23);
+            auto calls = 0;
+            auto link = observed.on_completed([&]() noexcept { ++calls; });
+            auto failed = false;
+            try {
+                (void) deck.sync_wait([&] {
+                    return nxtrt::settle(
+                        std::tuple{
+                            tuple_wait_for_stop(events, 41),
+                            std::move(observed),
+                        });
+                });
+            } catch (const nxtrt::runtime_error & error) {
+                failed = std::string_view{error.what()}
+                         == "nxtrt task already has a completion observer";
+            }
+            expect(failed);
+            expect(events == std::vector<int>{41});
+            expect(calls == 0 && !link.connected());
+            expect(deck.empty());
+        };
+
         "policies work with ranges"_test = []() -> nxtrt::task<void> {
             auto events = std::vector<int>{};
             auto tasks = std::vector<nxtrt::task<int>>{};
@@ -687,9 +721,9 @@ void declare_runtime_group_tests()
             expect(events == std::vector<int>{9});
         };
 
-        "wrapper startup failure drains only scheduled wrappers"_test = [] {
-            // settle is the root: it, run_group, and one wrapper fit.
-            auto storage = nxtrt::static_deck_task_storage<3>{};
+        "startup failure before any child starts does not wait"_test = [] {
+            // Only settle and run_group fit; no child can be scheduled.
+            auto storage = nxtrt::static_deck_task_storage<2>{};
             auto deck = nxtrt::deck{storage};
             auto events = std::vector<int>{};
             auto failed = false;
@@ -729,19 +763,182 @@ void declare_runtime_group_tests()
             expect(events == std::vector<int>{13});
         };
 
-        "policy stop runs on the wrapper continuation turn"_test =
+        "policy stop runs at child final suspension"_test =
             []() -> nxtrt::task<void> {
             auto states = std::vector<bool>{};
             auto finish = []() -> nxtrt::task<void> { co_return; };
             auto outcomes = co_await nxtrt::settle(
                 std::tuple{finish(), observe_stop_turns(states)},
                 nxtrt::first_completion_group{});
-            // The companion starts before the first child's wrapper
-            // resumes, then observes stop on its next turn. A final-suspend
-            // observer would stop it before its body starts: {true, true}.
-            expect(states == std::vector<bool>{false, true});
+            // The first child stops its queued companion before its body
+            // starts. A wrapper would defer stop: {false, true}.
+            expect(states == std::vector<bool>{true, true});
             expect(std::get<0>(outcomes).has_value());
             expect(std::get<1>(outcomes).has_value());
+        };
+
+        "completion links need no wrapper task slots"_test = [] {
+            auto storage = nxtrt::static_deck_task_storage<4>{};
+            auto deck = nxtrt::deck{storage};
+            auto outcomes = deck.sync_wait([] {
+                return nxtrt::settle(
+                    std::tuple{
+                        value_after_yield(17), value_after_yield(43)});
+            });
+            expect(std::get<0>(outcomes).value() == 17);
+            expect(std::get<1>(outcomes).value() == 43);
+            expect(deck.empty());
+        };
+
+        "completion links"_group = [] {
+            "notify inline without starting or consuming the task"_test =
+                [] {
+                    auto deck = nxtrt::deck{};
+                    auto child = value_after_yield(37);
+                    auto calls = 0;
+                    auto result = 0;
+                    auto link = child.on_completed([&]() noexcept {
+                        ++calls;
+                        result = child.result();
+                    });
+                    expect(link.connected());
+                    expect(calls == 0 && !child.id());
+                    deck.start(child);
+                    deck.run_ready();
+                    expect(calls == 0);
+                    deck.run_ready();
+                    expect(calls == 1 && result == 37);
+                    expect(!link.connected() && child.done());
+                    expect(deck.empty());
+                    expect(child.result() == 37);
+                    deck.run_until_idle();
+                    expect(calls == 1);
+                };
+
+            "owns a move-only callback"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto child = value_after_yield(19);
+                auto observed = 0;
+                auto link = child.on_completed(
+                    [value = std::make_unique<int>(53),
+                     &observed]() noexcept { observed = *value; });
+                deck.start(child);
+                deck.run_until_idle();
+                expect(observed == 53 && !link.connected());
+                expect(child.result() == 19);
+            };
+
+            "completed tasks notify before registration returns"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto starts = 0;
+                auto child = owned_value_after_yield(
+                    std::make_unique<int>(29), starts);
+                deck.start(child);
+                deck.run_until_idle();
+                auto calls = 0;
+                auto link = child.on_completed([&]() noexcept {
+                    ++calls;
+                    expect(*child.result() == 29);
+                });
+                expect(calls == 1 && starts == 1);
+                expect(!link.connected());
+                expect(*std::move(child).result() == 29);
+            };
+
+            "destruction and explicit disconnection detach"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto child = value_after_yield(19);
+                auto calls = 0;
+                {
+                    auto link =
+                        child.on_completed([&]() noexcept { ++calls; });
+                    expect(link.connected());
+                }
+                expect(child.handle().promise().completion == nullptr);
+                auto link = child.on_completed([&]() noexcept { ++calls; });
+                link.disconnect();
+                link.disconnect();
+                expect(!link.connected());
+                deck.start(child);
+                deck.run_until_idle();
+                expect(calls == 0 && child.result() == 19);
+            };
+
+            "moving links and tasks preserves the registration"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto first = value_after_yield(17);
+                auto second = value_after_yield(23);
+                auto calls = 0;
+                auto notify = [&]() noexcept { ++calls; };
+                auto link = first.on_completed(notify);
+                auto links = std::vector<decltype(link)>{};
+                links.reserve(1);
+                links.push_back(std::move(link));
+                links.push_back(
+                    second.on_completed(notify)); // Reallocates.
+                expect(!link.connected());
+                auto moved = std::move(first);
+                deck.start(moved);
+                deck.start(second);
+                deck.run_until_idle();
+                expect(calls == 2);
+                expect(!links[0].connected() && !links[1].connected());
+                expect(moved.result() == 17 && second.result() == 23);
+            };
+
+            "destroying the task disconnects a surviving link"_test = [] {
+                auto child = value_after_yield(31);
+                auto calls = 0;
+                auto link = child.on_completed([&]() noexcept { ++calls; });
+                child = {};
+                expect(!link.connected() && calls == 0);
+                link.disconnect();
+            };
+
+            "reject empty tasks and duplicate observers"_test = [] {
+                auto deck = nxtrt::deck{};
+                auto empty = nxtrt::task<int>{};
+                auto rejected = false;
+                try {
+                    auto link = empty.on_completed([]() noexcept {});
+                } catch (const nxtrt::runtime_error &) {
+                    rejected = true;
+                }
+                expect(rejected);
+                auto child = value_after_yield(7);
+                auto first_calls = 0;
+                auto second_calls = 0;
+                auto first =
+                    child.on_completed([&]() noexcept { ++first_calls; });
+                rejected = false;
+                try {
+                    auto second = child.on_completed(
+                        [&]() noexcept { ++second_calls; });
+                } catch (const nxtrt::runtime_error &) {
+                    rejected = true;
+                }
+                expect(rejected && first.connected());
+                deck.start(child);
+                deck.run_until_idle();
+                expect(first_calls == 1 && second_calls == 0);
+            };
+
+            "notification precedes the queued awaiting continuation"_test =
+                []() -> nxtrt::task<void> {
+                auto child = value_after_yield(41);
+                auto parent = nxtrt::current_deck()->current_task_id();
+                auto callback_task = nxtrt::task_id{};
+                auto link = child.on_completed([&]() noexcept {
+                    callback_task =
+                        nxtrt::current_deck()->current_task_id();
+                    expect(callback_task == child.id());
+                });
+                auto result = co_await child;
+                expect(result == 41);
+                expect(callback_task && callback_task != parent);
+                expect(nxtrt::current_deck()->current_task_id() == parent);
+                expect(!link.connected());
+            };
         };
     };
 }

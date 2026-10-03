@@ -165,10 +165,11 @@ storage. Reading after close is not supported.
 
 Fixed groups accept tasks only; the stream pool still accepts idea factories.
 Groups directly own tuple/vector tasks, without pool backing or `group_recipe`.
-Wrapper coroutines await children, consult a callable stop predicate, and count
-down; the combiner awaits the countdown. Results remain in child promises,
-without a separate intermediate results tuple, until all started tasks have
-drained, then move into positional `outcome<T>` values (`expected<T, exception_ptr>`).
+Synchronous completion links consult a callable stop predicate at child final
+suspension and count down; the combiner awaits the countdown. Results remain
+in child promises, without a separate intermediate results tuple, until all
+started tasks have drained, then move into positional `outcome<T>` values
+(`expected<T, exception_ptr>`).
 Initial extraction errors become exception outcomes without changing the group's
 stopping decision. Subsequent moves of the result tuple/vector can throw after drain.
 Outside cancellation stops and drains before propagation.

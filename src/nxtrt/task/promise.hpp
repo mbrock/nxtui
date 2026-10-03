@@ -50,6 +50,8 @@ struct promise_base;
 struct completion_observer
 {
     virtual void task_completed() noexcept = 0;
+
+    virtual void task_destroyed() noexcept {}
 protected:
     ~completion_observer() = default;
 };
@@ -113,6 +115,12 @@ struct promise_base
     {
         if (auto * current = detail::current_env)
             env.copy_entries_from(*current);
+    }
+
+    ~promise_base()
+    {
+        if (completion != nullptr)
+            completion->task_destroyed();
     }
 
     /// Called by the compiler before running the coroutine body.
@@ -199,8 +207,11 @@ struct promise_base
             completion->task_completed();
     }
 
-    void observe_completion_of(completion_observer & observer) noexcept
+    void observe_completion_of(completion_observer & observer)
     {
+        if (completion != nullptr)
+            throw runtime_error{
+                "nxtrt task already has a completion observer"};
         completion = &observer;
     }
 

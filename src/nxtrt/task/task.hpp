@@ -7,6 +7,88 @@
 
 namespace nxtrt {
 
+/// A synchronous, one-shot completion registration. Owns the callable, not
+/// the task. It may move while connected; destruction disconnects it.
+/// Callbacks run in the completing task's context and must not destroy that
+/// task or resume another coroutine inline. Queue any continuation instead.
+template<typename Fn>
+    requires std::is_nothrow_invocable_v<Fn &>
+             && std::same_as<std::invoke_result_t<Fn &>, void>
+             && std::is_nothrow_move_constructible_v<Fn>
+class [[nodiscard]] completion_link : private detail::completion_observer
+{
+public:
+    /// Construct unbound so storage can be prepared before starting tasks.
+    explicit completion_link(Fn fn) noexcept
+        : fn_(std::move(fn))
+    {
+    }
+
+    completion_link(const completion_link &) = delete;
+    completion_link & operator=(const completion_link &) = delete;
+    completion_link & operator=(completion_link &&) = delete;
+
+    completion_link(completion_link && other) noexcept
+        : fn_(std::move(other.fn_))
+        , promise_(std::exchange(other.promise_, nullptr))
+    {
+        if (promise_ != nullptr)
+            promise_->completion = this;
+    }
+
+    ~completion_link()
+    {
+        disconnect();
+    }
+
+    /// Notify inline if already complete, otherwise at final suspension.
+    /// Each connection notifies once; only one observer may be connected.
+    template<typename T>
+    void connect(task<T> & source)
+    {
+        if (promise_ != nullptr)
+            throw runtime_error{
+                "nxtrt completion link is already connected"};
+        auto handle = source.handle();
+        if (!handle)
+            throw runtime_error{"nxtrt completion link on an empty task"};
+        if (handle.done()) {
+            std::invoke(fn_);
+            return;
+        }
+        handle.promise().observe_completion_of(*this);
+        promise_ = &handle.promise();
+    }
+
+    void disconnect() noexcept
+    {
+        if (promise_ != nullptr) {
+            promise_->completion = nullptr;
+            promise_ = nullptr;
+        }
+    }
+
+    [[nodiscard]] bool connected() const noexcept
+    {
+        return promise_ != nullptr;
+    }
+
+private:
+    void task_completed() noexcept override
+    {
+        disconnect();
+        std::invoke(fn_);
+    }
+
+    void task_destroyed() noexcept override
+    {
+        promise_ = nullptr;
+    }
+
+    Fn fn_;
+    detail::promise_base * promise_ = nullptr;
+};
+
 template<typename T>
 class [[nodiscard]] task
 {
@@ -110,6 +192,18 @@ public:
     [[nodiscard]] coroutine_handle handle() const noexcept
     {
         return coroutine_;
+    }
+
+    /// Register a non-suspending callback without starting this task. Keep
+    /// the returned link alive until notification, or destroy it to detach.
+    /// An already-completed task calls fn before this function returns.
+    template<typename Fn>
+        requires requires { typename completion_link<Fn>; }
+    [[nodiscard]] auto on_completed(Fn fn) &
+    {
+        auto link = completion_link<Fn>{std::move(fn)};
+        link.connect(*this);
+        return link;
     }
 
     bool request_stop() noexcept
