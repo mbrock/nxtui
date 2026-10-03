@@ -50,30 +50,14 @@ if not cpp.compiles('''
   error('Wisp requires #embed support (GCC 15+ or Clang 19+)')
 endif
 
+# Related sources compile through unity translation units, sharing header
+# parsing and template instantiation. The HTTP server is the largest source
+# and stays on its own so it builds in parallel with the rest.
 nxt_core_sources = files(
-  'nxtrt/alloc_trace.cpp',
-  'nxtrt/buffers.cpp',
-  'nxtrt/compression.cpp',
-  'nxtrt/crypto.cpp',
+  'nxt-core-rt.cpp',
+  'nxt-core-ui.cpp',
+  'nxt-core-wisp.cpp',
   'nxtrt/http-server.cpp',
-  'nxtrt/tls.cpp',
-  'nxtui/ansi.cpp',
-  'nxtui/compositor.cpp',
-  'nxt/crypto.cpp',
-  'nxt/crypto/aes128gcm.cpp',
-  'nxt/crypto/sha1.cpp',
-  'nxt/crypto/sha256.cpp',
-  'nxt/crypto/x25519.cpp',
-  'nxt/tls/cert.cpp',
-  'nxtui/glyph-table.cpp',
-  'nxtui/input.cpp',
-  'nxtui/raster.cpp',
-  'wisp/heap.cpp',
-  'wisp/eval.cpp',
-  'wisp/reader.cpp',
-  'wisp/printer.cpp',
-  'wisp/load.cpp',
-  'wisp/tape.cpp',
 )
 
 nxt_stacktrace_deps = []

@@ -1,0 +1,9 @@
+// Unity translation unit: compiled as one file to share header parsing and template work.
+#include "wisp-test.cpp"
+#include "wisp-eval-test.cpp"
+#include "wisp-reader-test.cpp"
+#include "wisp-printer-test.cpp"
+#include "wisp-primitives-test.cpp"
+#include "wisp-load-test.cpp"
+#include "wisp-runtime-test.cpp"
+#include "wisp-tape-test.cpp"

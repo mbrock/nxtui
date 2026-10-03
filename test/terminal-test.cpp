@@ -1235,7 +1235,7 @@ static suite scroll_region_tests{
 // Diff rendering tests
 // ============================================================================
 
-static suite diff_tests{
+static suite terminal_diff_tests{
     "Terminal diffs", [] {
         "re-render only changed cells"_test = [] {
             GlyphTable glyphs;

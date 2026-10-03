@@ -1,28 +1,20 @@
 if get_option('tests')
+  # Test files are compiled through a few unity translation units, which
+  # share header parsing and template instantiation between related tests.
+  # The runtime suite is split instead, since it would dominate the build as
+  # one unit. Keep the order: suites register (and are numbered) in it.
   nxt_test_sources = files(
-    'input-test.cpp',
-    'json-test.cpp',
-    'crypto-test.cpp',
-    'tls-test.cpp',
-    'include-test.cpp',
-    'http-server-test.cpp',
-    'fs-beneath-test.cpp',
-    'process-test.cpp',
-    'idea-test.cpp',
-    'blocking-test.cpp',
+    'unity-io-tests.cpp',
+    'unity-server-tests.cpp',
+    'unity-process-tests.cpp',
     'pool-test.cpp',
     'runtime-test.cpp',
-    'raster-test.cpp',
-    'terminal-test.cpp',
-    'mtproto-test.cpp',
-    'wisp-test.cpp',
-    'wisp-eval-test.cpp',
-    'wisp-reader-test.cpp',
-    'wisp-printer-test.cpp',
-    'wisp-primitives-test.cpp',
-    'wisp-load-test.cpp',
-    'wisp-runtime-test.cpp',
-    'wisp-tape-test.cpp',
+    'runtime-firm-test.cpp',
+    'runtime-firm-stop-test.cpp',
+    'runtime-buffer-test.cpp',
+    'runtime-io-test.cpp',
+    'unity-ui-tests.cpp',
+    'unity-wisp-tests.cpp',
     'test-main.cpp',
   )
   nxt_test_deps = [

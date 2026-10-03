@@ -21,7 +21,7 @@ void demand(bool good, const char * message)
         throw tape::error(message);
 }
 
-struct writer
+struct tape_writer
 {
     std::vector<std::byte> bytes;
 
@@ -50,7 +50,7 @@ struct writer
     }
 };
 
-struct reader
+struct tape_reader
 {
     std::span<const std::byte> bytes;
 
@@ -426,7 +426,7 @@ struct tape_codec
     {
         validate(vm, entry);
         const auto & h = vm.heap_;
-        writer out;
+        tape_writer out;
         out.raw(std::as_bytes(std::span{magic.data(), magic.size()}));
         out.u32(version);
         out.u32(h.era_);
@@ -491,7 +491,7 @@ struct tape_codec
                 nxt::crypto::sha256(body),
                 data.last(nxt::crypto::sha256_len)),
             "tape checksum mismatch");
-        reader in{body};
+        tape_reader in{body};
         demand(
             std::ranges::equal(
                 in.take(magic.size()),
@@ -646,7 +646,7 @@ encode(const evaluator & vm, word entry, compression format)
     auto data = tape_codec::encode(vm, entry);
     if (format == compression::none)
         return data;
-    writer out;
+    tape_writer out;
     out.raw(
         std::as_bytes(
             std::span{compressed_magic.data(), compressed_magic.size()}));
@@ -677,7 +677,7 @@ decode(std::span<const std::byte> data, std::size_t limit)
                 std::span{
                     compressed_magic.data(), compressed_magic.size()}))) {
         demand(data.size() <= limit, "tape exceeds input limit");
-        reader in{data.subspan(compressed_magic.size())};
+        tape_reader in{data.subspan(compressed_magic.size())};
         const auto decoded_size = in.u32();
         demand(decoded_size <= limit, "tape exceeds decoded limit");
         std::vector<std::byte> decoded(decoded_size);

@@ -1,0 +1,12 @@
+// Unity translation unit for nxt-core: related sources compiled as one file.
+#include "nxtrt/alloc_trace.cpp"
+#include "nxtrt/buffers.cpp"
+#include "nxtrt/compression.cpp"
+#include "nxtrt/crypto.cpp"
+#include "nxtrt/tls.cpp"
+#include "nxt/crypto.cpp"
+#include "nxt/crypto/aes128gcm.cpp"
+#include "nxt/crypto/sha1.cpp"
+#include "nxt/crypto/sha256.cpp"
+#include "nxt/crypto/x25519.cpp"
+#include "nxt/tls/cert.cpp"

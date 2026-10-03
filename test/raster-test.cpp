@@ -433,7 +433,7 @@ static suite write_text_tests{
 // Diff algorithm tests
 // ============================================================================
 
-static suite diff_tests{
+static suite raster_diff_tests{
     "Raster diffs", [] {
         "emit no diff for identical rasters"_test = [] {
             //  "    " -> "    " = no changes
