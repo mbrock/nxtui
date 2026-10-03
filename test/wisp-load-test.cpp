@@ -293,7 +293,9 @@ static suite source_tests{
 
 static suite record_tests{
     "WISP RECORDS AND STRUCTS", [] {
-        "records are typed word vectors with their own printer"_test = [] {
+        // Every case can boot base.wisp when selected in a fresh process.
+        "records are typed word vectors with their own printer"_test.slow()
+            .with_timeout(10s) = [] {
             source_machine m{base_image()};
             m.check(
                 R"(
@@ -314,7 +316,11 @@ static suite record_tests{
                 "(try (record-get (record 'box) 0) (catch (e k) (type-of e)))",
                 "BUILTIN-FAILURE");
         };
-        "DEFSTRUCT defines constructors, accessors, setters and predicates"_test =
+        // Macro expansion under collection every 257 steps exceeds one
+        // second in debug builds; a standalone run also boots base.wisp.
+        "DEFSTRUCT defines constructors, accessors, setters and predicates"_test
+            .slow()
+            .with_timeout(20s) =
             [] {
                 source_machine m{base_image()};
                 m.check(
@@ -345,7 +351,8 @@ static suite record_tests{
                     "(T NIL #S(POINT :X 1 :Y 2 :Z 3))");
                 m.check("(defstruct empty) (make-empty)", "#S(EMPTY)");
             };
-        "conditions are records named by their type"_test = [] {
+        "conditions are records named by their type"_test.slow()
+            .with_timeout(10s) = [] {
             source_machine m{base_image()};
             m.check(
                 R"(
@@ -363,7 +370,9 @@ static suite record_tests{
                 "UNBOUND-VARIABLE #S(CUSTOM 1 2) #S(ERROR \"message\" 3) "
                 "#S(OOPS :REASON \"why\") #S(ERROR))");
         };
-        "struct instances survive tapes with their descriptor identity"_test =
+        "struct instances survive tapes with their descriptor identity"_test
+            .slow()
+            .with_timeout(10s) =
             [] {
                 source_machine m{base_image()};
                 m.load(R"(
