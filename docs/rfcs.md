@@ -45,3 +45,6 @@ parallel Wisp/HTTP work. For the concrete pool API, see
 - [RFC 0019: Firms Without Bodies](../rfc/new/rfc-0019-firms-without-bodies.md)
   — implemented: fixed groups (`settle` with `group` subclasses) and streaming
   pools (`drain`) replace firms.
+- @ref rfc_wisp_semantic_code "RFC 0020: Wisp Semantic Code and Bytecode"
+  — proposed: a Wisp compiler over semantic records, heap-resident prepared
+  execution, and incremental lowering to a portable bytecode VM.
