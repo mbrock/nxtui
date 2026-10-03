@@ -173,3 +173,11 @@ timeout.
 Wisp tests that need the base library start from `wisp::test::base_image()`
 in `test/wisp-base.hpp`: the base library is interpreted once per process
 and every caller decodes a private copy of that machine.
+
+Prefer writing Wisp behavior tests in Wisp. `test/wisp/*-test.wisp` files
+use the harness in `test/wisp/harness.wisp` (`deftest`, `expect`,
+`expect-equal`, and `:slow` after a test's name). `nxt-tests` reads them from
+the source tree at run time under its WISP TEST FILES suite, one group per
+file and one numbered test per `deftest`, each in a fresh machine with the
+base library and compiler loaded, so editing them needs no rebuild. Keep C++
+tests for native APIs such as tapes, the heap, and the host.

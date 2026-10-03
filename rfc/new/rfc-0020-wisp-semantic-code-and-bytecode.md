@@ -616,11 +616,11 @@ used for the experiment.
 Acceptance: a named semantic corpus and a documented mode/behavior matrix. No
 runtime default changes and no performance claims from historical timings.
 
-Status: done. The corpus is the table in
-[`test/wisp-compiler-test.cpp`](https://github.com/mbrock/nxtui/blob/main/test/wisp-compiler-test.cpp).
-Each case runs in a fresh base image and records its source-mode result; the
+Status: done. The corpus is the Wisp test file
+[`test/wisp/corpus-test.wisp`](https://github.com/mbrock/nxtui/blob/main/test/wisp/corpus-test.wisp).
+Each case runs in a fresh machine and records its source-mode result; the
 cases where prepared mode deliberately differs record that outcome and the
-reason, which makes the table the mode/behavior matrix.
+reason, which makes the file the mode/behavior matrix.
 
 ### 1. Analyze into records in Wisp
 
