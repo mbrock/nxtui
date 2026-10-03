@@ -21,6 +21,9 @@ paths = [
     'ai-overview.md',
     'rt-holding.md',
     'rt-occurrents.md',
+    'quest.md',
+    'wisp.md',
+    'building.md',
     '../rfc/cur',
     '../rfc/new',
 ]

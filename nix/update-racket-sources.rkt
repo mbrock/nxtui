@@ -1,7 +1,7 @@
 #lang racket/base
 
 ;; Explicit, networked lock update. Normal Nix builds never consult a catalog.
-;; Run with the flake's Racket; see README.md for the atomic lock update command.
+;; Run with the flake's Racket; see docs/building.md for the atomic lock update command.
 (require json
          net/url
          pkg/lib

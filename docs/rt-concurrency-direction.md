@@ -7,7 +7,7 @@ bounded idea pools, and the questions to resolve with real migrations.
 The implemented baseline is the pool introduced in commit `8946acc`.
 The Wisp async/HTTP simplification now uses that pool for native connections
 and an explicit operation-awaiting bridge, without permanent guest workers.
-See [the Wisp guide](../README.md#wisp--portable-lisp-machines-and-http-on-nxt)
+See [the Wisp guide](wisp.md)
 and [RFC 0018](../rfc/new/rfc-0018-portable-wisp-lisp-machines.md) for its
 implemented contract; guest structured concurrency remains a design question.
 

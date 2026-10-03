@@ -195,7 +195,10 @@ spec-witnesses:
 docs:
 	rm -rf docs/html
 	mkdir -p docs/html
-	poxy --output-dir docs docs/poxy.toml
+	# Doxygen compares the main page path after resolving symlinks such as
+	# macOS's /tmp -> /private/tmp, so hand Poxy a resolved temp directory.
+	TMPDIR="$$(cd "$${TMPDIR:-/tmp}" && pwd -P)" \
+		poxy --output-dir docs docs/poxy.toml
 	chmod -R a+rX docs/html
 
 docs-publish:
