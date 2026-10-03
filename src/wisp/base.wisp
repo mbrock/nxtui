@@ -118,13 +118,19 @@
 (defun atom? (x)
   (not (eq? 'cons (type-of x))))
 
+;; As in Common Lisp, a clause's body is an implicit DO, and a
+;; clause with only a test returns the test's value.
 (defun %cond (clauses)
   (if (nil? clauses) nil
       (let ((x (head clauses)))
-        (list 'if
-              (head x)
-              (head (tail x))
-              (%cond (tail clauses))))))
+        (if (nil? (tail x))
+            (let ((value (fresh-symbol!)))
+              (list 'let (list (list value (head x)))
+                    (list 'if value value (%cond (tail clauses)))))
+            (list 'if
+                  (head x)
+                  (prognify (tail x))
+                  (%cond (tail clauses)))))))
 
 (defmacro cond (&rest clauses)
   (%cond clauses))
