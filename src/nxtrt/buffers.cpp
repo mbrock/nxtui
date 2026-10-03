@@ -6,6 +6,39 @@
 
 namespace nxtrt {
 
+task<void> feed_core::fill_slow(std::size_t n)
+{
+    while (buffered_count() < n) {
+        auto before = buffered_count();
+        auto read = co_await refill();
+        if (is_eof(read) && value_count(read) == 0 && buffered_count() == before)
+            throw value_end_of_stream{"unexpected end of value input"};
+    }
+}
+
+task<bool> feed_core::fill_some_slow()
+{
+    while (true) {
+        auto before = buffered_count();
+        auto read = co_await refill();
+        if (buffered_count() != 0)
+            co_return true;
+        if (is_eof(read) && value_count(read) == 0 && buffered_count() == before)
+            co_return false;
+    }
+}
+
+task<bool> feed_core::fill_some_slow(hope<fare_t> first_read)
+{
+    auto before = buffered_count();
+    auto read = co_await std::move(first_read);
+    if (buffered_count() != 0)
+        co_return true;
+    if (is_eof(read) && value_count(read) == 0 && buffered_count() == before)
+        co_return false;
+    co_return co_await fill_some_slow();
+}
+
 template class sink<std::byte>;
 template class feed<std::byte>;
 template class fixed_sink<std::byte>;

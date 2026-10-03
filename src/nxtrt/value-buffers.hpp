@@ -907,13 +907,38 @@ task<void> print_all(
     co_await sink.flush();
 }
 
+/// The part of every feed that does not depend on its value type: the
+/// refill loops. They only count buffered values and call `refill()`, so they
+/// are compiled once (in buffers.cpp) instead of once per value type.
+class feed_core
+{
+public:
+    virtual ~feed_core() = default;
+
+protected:
+    /// Append whatever the source produces next to the buffer. Throws if
+    /// the buffer is already full.
+    virtual hope<fare_t> refill() = 0;
+    [[nodiscard]] virtual std::size_t buffered_count() const noexcept = 0;
+
+    /// Refill until at least `n` values are buffered; EOF first throws
+    /// `value_end_of_stream`.
+    task<void> fill_slow(std::size_t n);
+
+    /// Refill until at least one value is buffered. Returns false at EOF.
+    task<bool> fill_some_slow();
+
+    /// As above, starting from a refill that is already in flight.
+    task<bool> fill_some_slow(hope<fare_t> first_read);
+};
+
 /// Buffered asynchronous feed for typed values.
 ///
 /// Lookahead lives in reusable ring storage. The hot path borrows or consumes
 /// buffered values directly; `stream_more()` is the cold path that produces more
 /// values from the concrete source.
 template<typename T>
-class feed
+class feed : public feed_core
 {
 public:
     using value_type = std::remove_cv_t<T>;
@@ -936,7 +961,7 @@ public:
     feed(feed &&) = delete;
     feed & operator=(feed &&) = delete;
 
-    virtual ~feed()
+    ~feed() override
     {
         destroy_buffered();
     }
@@ -1507,37 +1532,28 @@ private:
         co_return finish_read(sink, result);
     }
 
-    task<void> fill_slow(std::size_t n)
+    hope<fare_t> refill() final
     {
-        while (buffered_size() < n) {
-            auto before = buffered_size();
-            auto read = co_await fill_more_into_capacity();
-            if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
-                throw value_end_of_stream{"unexpected end of value input"};
-        }
+        return fill_more();
+    }
+
+    [[nodiscard]] std::size_t buffered_count() const noexcept final
+    {
+        return buffered_size();
     }
 
     task<const value_type *> peek_slow()
     {
-        while (true) {
-            auto before = buffered_size();
-            auto read = co_await fill_more();
-            if (buffered_size() != 0)
-                co_return ring_.front_data();
-            if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
-                co_return nullptr;
-        }
+        if (co_await fill_some_slow())
+            co_return ring_.front_data();
+        co_return nullptr;
     }
 
     task<const value_type *> peek_slow(hope<fare_t> first_read)
     {
-        auto before = buffered_size();
-        auto read = co_await std::move(first_read);
-        if (buffered_size() != 0)
+        if (co_await fill_some_slow(std::move(first_read)))
             co_return ring_.front_data();
-        if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
-            co_return nullptr;
-        co_return co_await peek_slow();
+        co_return nullptr;
     }
 
     task<const_value_chunk_view> peek_slow(std::size_t n)
@@ -1556,25 +1572,16 @@ private:
 
     task<std::optional<value_type>> take_slow()
     {
-        while (true) {
-            auto before = buffered_size();
-            auto read = co_await fill_more();
-            if (buffered_size() != 0)
-                co_return take_buffered();
-            if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
-                co_return std::nullopt;
-        }
+        if (co_await fill_some_slow())
+            co_return take_buffered();
+        co_return std::nullopt;
     }
 
     task<std::optional<value_type>> take_slow(hope<fare_t> first_read)
     {
-        auto before = buffered_size();
-        auto read = co_await std::move(first_read);
-        if (buffered_size() != 0)
+        if (co_await fill_some_slow(std::move(first_read)))
             co_return take_buffered();
-        if (is_eof(read) && value_count(read) == 0 && buffered_size() == before)
-            co_return std::nullopt;
-        co_return co_await take_slow();
+        co_return std::nullopt;
     }
 
     task<const value_type *> peek_one_slow(
