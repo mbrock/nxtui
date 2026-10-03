@@ -1,4 +1,0 @@
-for i in ./forge-core/*/*.rkt; do 
-  echo "******************** testing $i"; 
-  racket $i; 
-done

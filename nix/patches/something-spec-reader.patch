@@ -1,0 +1,33 @@
+--- a/something/reader.rkt
++++ b/something/reader.rkt
+@@ -29,6 +29,12 @@
+                       "^" "|" "~" "@"
+                       "`" ","
+                       "\\")]
++  [c:symbol-punctuation (:or "!" "$" "%" "&"
++                             "*" "+" "-"
++                             "<" "=" ">" "?"
++                             "^" "|" "~" "@"
++                             "`" ","
++                             "\\")]
+   [c:string-escape (:or "\\\\"
+                         "\\\""
+                         "\\\'"
+@@ -40,7 +46,7 @@
+                         (:: "\\u" c:hex-digit c:hex-digit c:hex-digit c:hex-digit)
+                         (:: "\\x" c:hex-digit c:hex-digit))]
+   [c:symbol-start (:or alphabetic "_" "*" "+" "-")] ;; this is getting silly
+-  [c:symbol-inner (:or c:symbol-start numeric c:punctuation)]
++  [c:symbol-inner (:or c:symbol-start numeric c:symbol-punctuation)]
+   [c:symbol-end (:or c:symbol-start numeric "!" "?")]
+   [c:symbol-normal (:: c:symbol-start (:? (:: (:* c:symbol-inner) c:symbol-end)))]
+   [c:symbol-quoted (:: "\'" (:* (:or c:string-escape (:~ "\\" "\'"))) "\'")]
+--- a/info.rkt
++++ b/info.rkt
+@@ -1,4 +1,4 @@
+ #lang setup/infotab
+ (define collection 'multi)
+-(define deps '("base" "tabular"))
+-(define build-deps '("rackunit-lib"))
++;; tabular is only used by the unsupported experimental shells.
++(define deps '("base" "parser-tools-lib"))

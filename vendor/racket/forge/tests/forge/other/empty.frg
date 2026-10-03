@@ -1,3 +1,0 @@
-#lang forge 
-
-// Contains nothing

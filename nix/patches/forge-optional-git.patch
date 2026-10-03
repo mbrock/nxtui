@@ -1,0 +1,31 @@
+--- a/shared.rkt
++++ b/shared.rkt
+@@ -64,6 +64,7 @@
+ (define (set-verbosity x) (set! verbosityoption x))
+ 
+ (define-runtime-path info-path "info.rkt")
++(define-runtime-path forge-source-dir ".")
+ (: forge-version String)
+ (define forge-version "x.x.x")
+ 
+@@ -85,9 +86,10 @@
+     (define windows? (eq? (system-type) 'windows))
+     (: git-exe (U False Path))
+     (define git-exe (find-executable-path (if windows? "git.exe" "git")))
+-    (define forge-dir (pkg-directory "forge"))
+-    (if (or (not forge-dir) (not git-exe))
+-        (raise "Could not find Forge package installed on the system.")
++    (define forge-dir forge-source-dir)
++    (if (not git-exe)
++        ; Git metadata is optional, e.g. in an offline Nix runtime closure.
++        (void)
+         (parameterize ([current-directory forge-dir])
+           (map
+             string-trim
+@@ -321,4 +323,4 @@
+   (when (log-to-file-enabled?)
+     ;(printf "Log sending: ~a~n" datum)
+     ; logger level topic message data prefix-message
+-    (log-message forge-logger-logger level topic message datum #t)))
+\ No newline at end of file
++    (log-message forge-logger-logger level topic message datum #t)))

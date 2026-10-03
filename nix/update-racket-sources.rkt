@@ -7,19 +7,36 @@
          pkg/lib
          racket/list
          racket/port
-         racket/runtime-path
          racket/string
          racket/system
          setup/getinfo)
 
-(define-runtime-path forge "../vendor/racket/forge")
-(define-runtime-path something "../vendor/racket/something-src")
+(define source-root
+  (let ([args (current-command-line-arguments)])
+    (unless (= (vector-length args) 1)
+      (error 'update-racket-sources "pass the output of nix build .#spec-sources"))
+    (vector-ref args 0)))
+(define forge (build-path source-root "forge"))
+(define something (build-path source-root "something"))
 ;; The minimal distribution supplies just these packages. Keep the lock
 ;; independent of the updater's installed packages (including Darwin's full
 ;; distribution), so it remains complete for the Linux headless build.
 (define bundled '("base" "racket-lib"))
 (define sources (make-hash))
 (define seen (make-hash))
+(define fetched (make-hash))
+
+(define (prefetch url)
+  (hash-ref!
+   fetched url
+   (lambda ()
+     (eprintf "Pinning ~a\n" url)
+     (string->jsexpr
+      (with-output-to-string
+        (lambda ()
+          (unless (system* (find-executable-path "nix") "store" "prefetch-file"
+                           "--unpack" "--json" url)
+            (error 'prefetch "failed: ~a" url))))))))
 
 (define (archive-url source rev)
   (define u (string->url source))
@@ -50,25 +67,21 @@
     (define subdir (cond [(assq 'path (url-query (string->url source))) => cdr]
                         [else "."]))
     (hash-set! packages (string->symbol name) subdir)
-    (for-each visit (hash-ref details 'dependencies))))
+    ;; Catalog dependency lists include build/documentation dependencies.
+    ;; Read runtime deps from the actual pinned source instead, recursively.
+    (define dir (build-path (hash-ref (prefetch url) 'storePath) subdir))
+    (for-each visit (extract-pkg-dependencies (get-info/full dir) #:build-deps? #f))))
 
 (parameterize ([current-pkg-catalogs
                 (list (string->url (format "https://download.racket-lang.org/releases/~a/catalog/" (version)))
                       (string->url "https://pkgs.racket-lang.org"))])
   (visit "compiler-lib") ; supplies `raco make` in the minimal environment
   (for ([dir (list forge something)])
-    (for-each visit (extract-pkg-dependencies (get-info/full dir) #:build-deps? #t))))
+    (for-each visit (extract-pkg-dependencies (get-info/full dir) #:build-deps? #f))))
 
 (define locked
   (for/list ([url (sort (hash-keys sources) string<?)])
-    (eprintf "Pinning ~a\n" url)
-    (define result
-      (string->jsexpr
-       (with-output-to-string
-         (lambda ()
-           (unless (system* (find-executable-path "nix") "store" "prefetch-file"
-                            "--unpack" "--json" url)
-             (error 'prefetch "failed: ~a" url))))))
+    (define result (prefetch url))
     (hash 'url url 'hash (hash-ref result 'hash) 'packages (hash-ref sources url))))
 (write-json locked #:indent 2)
 (newline)

@@ -779,12 +779,25 @@ distribution's GTK and desktop wrappers. Darwin retains full Racket because
 the pinned Nixpkgs marks its minimal package broken there.
 `nix/racket-sources.json` pins the external package closure to source revisions
 and Nix content hashes; `nix/spec-racket.nix` installs and compiles those inputs
-offline, including the patched Forge and Something sources in `vendor/racket/`.
+offline. `nix/spec-sources.nix` fetches Forge v5.2 and Something at pinned
+upstream commits and applies the small patches in `nix/patches/`; their full
+source trees are not checked into this repo.
 The resulting `spec-racket` package is an ordinary cacheable Nix derivation:
 
 ```sh
 nix build .#spec-racket
 ```
+
+This is a spec backend environment: it compiles Forge's functional API,
+temporal checks, XML serializer, and Something's reader, with their imports.
+The patches preserve XML export and reader tokenization, make Git metadata
+optional, disable online Forge version checks, omit two embedded Typed RackUnit
+test submodules that pull in GUI dependencies, and narrow package dependencies
+to the supported backend modules. GUI/editor tooling, documentation packages,
+Forge's domain examples, and Something's experimental shells are outside this
+environment. The dependency lock contains no GUI or drawing packages. Linux
+uses minimal Racket; Darwin still uses full Racket because Nixpkgs marks its
+minimal package broken there.
 
 The dependency inputs are reproducibly locked and the output can be shared
 through a normal Nix binary cache. Byte-for-byte rebuild reproducibility is
@@ -801,18 +814,25 @@ also runs the specs in a clean Nix build sandbox.
 To deliberately refresh the dependency lock from the Racket catalog (this is
 the networked update step, not part of normal builds), the updater prefers the
 catalog for the installed Racket version, then the community catalog. It locks
-every dependency not supplied by minimal Racket, including libraries that
+every runtime dependency not supplied by minimal Racket, including libraries that
 would otherwise be bundled with the full distribution:
 
 ```sh
-nix develop -c racket nix/update-racket-sources.rkt > nix/racket-sources.json.new &&
+spec_sources=$(nix build .#spec-sources --no-link --print-out-paths)
+nix develop -c racket nix/update-racket-sources.rkt "$spec_sources" > nix/racket-sources.json.new &&
   mv nix/racket-sources.json.new nix/racket-sources.json
 nix build .#checks.x86_64-linux.spec # use your system's check attribute
 ```
 
 Review and commit the lock changes. The updater derives the closure from the
-vendored packages' dependency declarations, excluding libraries already
-provided by the Racket distribution pinned in `flake.lock`.
+patched packages' dependency declarations and the runtime declarations in
+each fetched dependency. Catalog build/documentation dependencies are excluded.
+Only `base` and `racket-lib`, supplied by minimal Racket, are omitted from the
+lock; this keeps it complete even when updated using Darwin's full distribution.
+
+To change an upstream revision or a backend patch, edit `nix/spec-sources.nix`
+or `nix/patches/`, regenerate the lock with the command above if dependencies
+changed, and run `nix develop -c make spec` plus the sandboxed spec check.
 
 Regenerate local API docs (poxy + Doxygen) with:
 

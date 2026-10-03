@@ -1,4 +1,0 @@
-#lang forge
-
-sig A {}
-

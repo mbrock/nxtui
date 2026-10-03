@@ -8,6 +8,7 @@
   racket-minimal,
   jdk21_headless,
   makeWrapper,
+  callPackage,
 }:
 
 let
@@ -28,13 +29,7 @@ let
       lib.mapAttrs (_: subdir: "${src}/${subdir}") source.packages
     ) sources
   );
-  vendored = lib.fileset.toSource {
-    root = ../vendor/racket;
-    fileset = lib.fileset.unions [
-      ../vendor/racket/forge
-      ../vendor/racket/something-src
-    ];
-  };
+  specSources = callPackage ./spec-sources.nix { };
 in
 stdenvNoCC.mkDerivation {
   pname = "nxt-spec-racket";
@@ -71,20 +66,25 @@ stdenvNoCC.mkDerivation {
         copyPackage ${name} ${src}
       '') packages
     )}
-    cp -R ${vendored}/forge "$out/sources/forge"
-    cp -R ${vendored}/something-src "$out/sources/something"
+    cp -R ${specSources}/forge "$out/sources/forge"
+    cp -R ${specSources}/something "$out/sources/something"
     chmod -R u+w "$out/sources"
+    # raco validates build-deps even with --no-setup. Remove only that metadata
+    # from dependency copies so --deps fail still checks every runtime dep.
+    racket ${./runtime-package-info.rkt} ${lib.concatMapStringsSep " " (name: ''"$out/sources/${name}"'') (builtins.attrNames packages)}
 
     # All dependencies are explicit local inputs. Missing dependencies fail
     # rather than silently fetching from a mutable Racket package catalog.
     # Darwin's full Racket already supplies some of the locked libraries.
     raco pkg install --batch --no-setup --deps fail "$out"/sources/*
-    # Compile Forge and the libraries it uses, not every dependency's GUI
-    # examples, test tools, and documentation helpers.
-    raco setup --no-docs --avoid-main -j "$NIX_BUILD_CORES" --pkgs compiler-lib forge
+    # Compile the backend entry points and their imports, not Forge's editor,
+    # domain examples, browser UI, or every module in its dependencies.
+    raco setup --no-docs --avoid-main -j "$NIX_BUILD_CORES" --pkgs compiler-lib
+    raco make "$out/sources/forge/sigs-functional.rkt" \
+      "$out/sources/forge/temporal/lang/temporal-lang-specific-checks.rkt" \
+      "$out/sources/forge/server/modelToXML.rkt"
     # Something's experimental shells/examples do not compile in this
-    # snapshot. Compile the supported DSL modules and their dependencies,
-    # not those unused experiments (previously linked with --no-setup).
+    # snapshot. Its patched package declares only the reader's dependencies.
     raco make "$out/sources/something/something/base.rkt" \
       "$out/sources/something/something/infix.rkt" \
       "$out/sources/something/something/reader.rkt"

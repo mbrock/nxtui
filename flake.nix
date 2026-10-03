@@ -17,6 +17,7 @@
       packages = forAllSystems (pkgs: rec {
         nxt = pkgs.callPackage ./nix/package.nix { };
         spec-racket = pkgs.callPackage ./nix/spec-racket.nix { };
+        spec-sources = pkgs.callPackage ./nix/spec-sources.nix { };
         default = nxt;
       });
 

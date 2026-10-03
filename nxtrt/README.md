@@ -15,9 +15,11 @@ On a fresh machine, enter the reproducible development environment:
 nix develop
 ```
 
-The `forge` and `something` packages used by this model are vendored under
-`vendor/racket/` because this repo depends on small local patches to both.
-Nix builds them and their hash-pinned dependencies into a cached package,
+The `forge` and `something` packages used by this model come from pinned
+upstream sources in `nix/spec-sources.nix`, with small patches in `nix/patches/`.
+Their dependencies are narrowed to the spec backend and reader; the environment
+does not install GUI/editor or documentation packages. Nix builds these
+sources and their hash-pinned runtime dependencies into a cached package,
 including compiled bytecode. No `raco pkg install` is needed in the checkout,
 and no sibling checkouts or user-level Racket packages are used. The shell
 exposes the editable `rdf-forge` collection from this repo; its bytecode cache
