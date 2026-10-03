@@ -221,3 +221,110 @@
   (expect-equal
    (capture-names '(let ((x 1) (y 2)) (fn (z) (%macro-fn () x))))
    '(y x)))
+
+;;; Checking
+
+(defun problem-kinds (node &optional scope)
+  (map #'head (ir-check node scope)))
+
+(defvar *sample*
+  '(let ((x 1) (y 2))
+     (defun counter (start &optional step &rest notes)
+       (let ((n start))
+         (fn () (set! n (+ n (if step step 1))) (list n x notes))))
+     (if x (foo x) (%macro-fn () y))))
+
+(deftest "analyzed graphs are well formed"
+  (expect-equal (ir-check (analyze *sample*)) nil)
+  (let ((x (make-ir-binding 'x nil)))
+    (expect-equal (ir-check (analyze '(list x y) (list x)) (list x))
+                  nil)))
+
+(deftest "cyclic literal data is not a cycle in the graph"
+  (let ((data (list 1 2)))
+    (set-tail! (tail data) data)
+    (expect (ir-valid? (make-ir-constant data)))))
+
+(deftest "references must name a binding in scope"
+  (let* ((x (make-ir-binding 'x nil))
+         (node (analyze '(list x) (list x))))
+    (expect-equal (problem-kinds node) '(:out-of-scope))
+    (expect-equal (problem-kinds (make-ir-reference 'x))
+                  '(:not-a-binding))
+    (expect-equal (problem-kinds (make-ir-source '(f) (list x)))
+                  '(:out-of-scope))))
+
+(deftest "a reference cannot escape its LET"
+  (let* ((node (analyze '(list (let ((x 1)) x) 2)))
+         (inner (argument node 0))
+         (escaped (ir-let-body inner)))
+    (vector-set! (ir-call-arguments node) 1 escaped)
+    (expect-equal (problem-kinds node) '(:out-of-scope))))
+
+(deftest "child edges must hold nodes"
+  (expect-equal (problem-kinds (make-ir-branch 1 (make-ir-constant 2)
+                                               (make-ir-constant 3)))
+                '(:not-a-node))
+  (expect-equal (problem-kinds (make-ir-call (make-ir-function-reference 'f)
+                                             '(1 2)))
+                '(:not-a-vector))
+  (expect-equal (problem-kinds (make-ir-sequence
+                                (vector (make-ir-constant 1))))
+                '(:short-sequence))
+  (expect-equal (problem-kinds (make-ir-lookup 42)) '(:bad-name))
+  (expect-equal (problem-kinds (make-ir-assignment (make-ir-constant 1)
+                                                   (make-ir-constant 2)))
+                '(:bad-target)))
+
+(deftest "a node that contains itself is a cycle"
+  (let ((node (analyze '(if a b c))))
+    (set-ir-branch-consequent! node node)
+    (expect-equal (problem-kinds node) '(:cycle))))
+
+(deftest "binders own their bindings and introduce each once"
+  (let* ((node (analyze '(let ((x 1)) x)))
+         (x (vector-get (ir-let-bindings node) 0)))
+    (set-ir-binding-owner! x nil)
+    (expect-equal (problem-kinds node) '(:wrong-owner)))
+  (let* ((node (analyze '(list (let ((x 1)) x) 2))))
+    (vector-set! (ir-call-arguments node) 1 (argument node 0))
+    (expect-equal (problem-kinds node) '(:introduced-twice))))
+
+(deftest "LET bindings and initializers correspond"
+  (let ((node (analyze '(let ((x 1) (y 2)) x))))
+    (set-ir-let-initializers! node (vector (make-ir-constant 1)))
+    (expect-equal (problem-kinds node) '(:let-shape))))
+
+(deftest "function bindings match the parameter list"
+  (let* ((closure (analyze '(fn (a &optional b) (list a b))))
+         (function (ir-closure-function closure))
+         (parameters (ir-function-parameters function)))
+    (expect (ir-valid? closure))
+    (set-ir-parameters-source! parameters '(a b))
+    (expect-equal (problem-kinds closure) '(:parameter-mismatch))
+    (set-ir-parameters-source! parameters '(a &optional b))
+    (set-ir-function-bindings!
+     function
+     (vector (vector-get (ir-function-bindings function) 1)
+             (vector-get (ir-function-bindings function) 0)))
+    (expect-equal (problem-kinds closure) '(:parameter-mismatch))))
+
+;;; Persistence
+
+(deftest "graphs keep their identities across collection"
+  (let* ((node (analyze *sample*))
+         (shown (ir-show node))
+         (counter (ir-closure-function
+                   (argument (vector-get (ir-sequence-forms
+                                          (ir-let-body node))
+                                         0)
+                             1)))
+         (inner (ir-let-body (ir-function-body counter))))
+    (gc)
+    (expect-equal (ir-show node) shown)
+    (expect (ir-valid? node))
+    (expect (eq? counter (ir-binding-owner
+                          (vector-get (ir-function-bindings counter) 0))))
+    (expect (eq? (record-type node) <ir-let>))
+    (expect-equal (map #'ir-binding-name (ir-captures inner))
+                  '(n step x notes))))

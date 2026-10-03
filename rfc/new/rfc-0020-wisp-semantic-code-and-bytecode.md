@@ -860,6 +860,14 @@ Each step is a small, separately tested commit.
 3. **Persistence and checking.** A graph survives collection and a tape round
    trip with its identities intact, and a graph checker written in Wisp
    rejects malformed nodes.
+   Done: `ir-check` returns a list of problems. It follows only executable
+   child edges, never binding owners or constants, so cyclic literal data is
+   fine and a node that contains itself is a `:cycle`. It checks node kinds,
+   vector fields, that references and source escapes name bindings in scope,
+   that binders own and introduce each binding once, and that a function's
+   bindings match its parameter list. Every corpus form checks clean, graphs
+   keep their identities across collection, and a graph with functions,
+   scopes, captures, and a source escape survives a tape round trip.
 4. **Minimal executor.** Add the record case to `once()` and execute
    constants, lookups, references, branches, and sequences.
 5. **Calls and closures.** Execute calls with a progress vector holding the

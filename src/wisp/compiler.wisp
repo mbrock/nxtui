@@ -371,6 +371,200 @@
 
 
 
+;;; * Checking
+
+;; (ir-check node &optional scope) checks that a graph is well
+;; formed and returns a list of problems, or NIL. Each problem is
+;; a list of a keyword, the offending node, and details. SCOPE
+;; lists the bindings already visible, as for ANALYZE.
+;;
+;; The checker follows only executable child edges: it never
+;; follows a binding's owner or looks inside a constant, so
+;; cyclic literal data is fine, but a node that contains itself
+;; is a :CYCLE. It checks node kinds, that every reference and
+;; source escape names a binding in scope, that binders own the
+;; bindings they introduce and introduce each only once, and that
+;; a function's bindings match its parameter list.
+(defun ir-check (node &optional scope)
+  (let ((state (vector nil nil)))
+    (%ir-check node scope nil state)
+    (reverse (vector-get state 0))))
+
+(defun ir-valid? (node &optional scope)
+  (nil? (ir-check node scope)))
+
+;; STATE is a vector of the problems found so far, newest first,
+;; and the bindings introduced so far.
+(defun %ir-problem (state &rest problem)
+  (vector-set! state 0 (cons problem (vector-get state 0)))
+  nil)
+
+(defun %ir-node? (x)
+  (some? (fn (predicate) (call predicate x))
+         (list #'ir-constant? #'ir-lookup? #'ir-reference?
+               #'ir-function-reference? #'ir-assignment? #'ir-call?
+               #'ir-branch? #'ir-sequence? #'ir-let? #'ir-closure?
+               #'ir-function? #'ir-source?)))
+
+;; Check a node in SCOPE, given its ANCESTORS on the path from
+;; the root.
+(defun %ir-check (node scope ancestors state)
+  (cond
+    ((not (%ir-node? node))
+     (%ir-problem state :not-a-node node))
+    ((%ir-memq node ancestors)
+     (%ir-problem state :cycle node))
+    (t (%ir-check-node node scope (cons node ancestors) state))))
+
+(defun %ir-check-each (nodes scope ancestors state)
+  (for-each nodes
+            (fn (node) (%ir-check node scope ancestors state))))
+
+;; The elements of a vector of nodes, or NIL after noting a
+;; problem when it is not a vector.
+(defun %ir-check-vector (owner nodes state)
+  (if (vector? nodes)
+      (list-from-vector nodes)
+    (%ir-problem state :not-a-vector owner nodes)))
+
+(defun %ir-check-binding-use (owner binding scope state)
+  (cond ((not (ir-binding? binding))
+         (%ir-problem state :not-a-binding owner binding))
+        ((not (%ir-memq binding scope))
+         (%ir-problem state :out-of-scope owner binding))
+        (t nil)))
+
+;; Note that OWNER introduces BINDINGS, and return them.
+(defun %ir-check-binders (owner bindings state)
+  (for-each bindings
+    (fn (binding)
+      (cond ((not (ir-binding? binding))
+             (%ir-problem state :not-a-binding owner binding))
+            ((not (eq? owner (ir-binding-owner binding)))
+             (%ir-problem state :wrong-owner owner binding))
+            ((not (%ir-name? (ir-binding-name binding)))
+             (%ir-problem state :bad-name owner
+                          (ir-binding-name binding)))
+            ((%ir-memq binding (vector-get state 1))
+             (%ir-problem state :introduced-twice owner binding))
+            (t (vector-set! state 1
+                            (cons binding (vector-get state 1)))))))
+  bindings)
+
+(defun %ir-check-node (node scope ancestors state)
+  (cond
+    ((ir-constant? node) nil)
+    ((ir-lookup? node)
+     (unless (%ir-name? (ir-lookup-symbol node))
+       (%ir-problem state :bad-name node (ir-lookup-symbol node))))
+    ((ir-function-reference? node)
+     (unless (%ir-name? (ir-function-reference-symbol node))
+       (%ir-problem state :bad-name node
+                    (ir-function-reference-symbol node))))
+    ((ir-reference? node)
+     (%ir-check-binding-use node (ir-reference-binding node)
+                            scope state))
+    ((ir-assignment? node)
+     (let ((target (ir-assignment-target node)))
+       (if (or (ir-reference? target) (ir-lookup? target))
+           (%ir-check target scope ancestors state)
+         (%ir-problem state :bad-target node target))
+       (%ir-check (ir-assignment-value node) scope ancestors state)))
+    ((ir-call? node)
+     (do (%ir-check (ir-call-callee node) scope ancestors state)
+         (%ir-check-each (%ir-check-vector node (ir-call-arguments node)
+                                           state)
+                         scope ancestors state)))
+    ((ir-branch? node)
+     (%ir-check-each (list (ir-branch-test node)
+                           (ir-branch-consequent node)
+                           (ir-branch-alternative node))
+                     scope ancestors state))
+    ((ir-sequence? node)
+     (let ((forms (%ir-check-vector node (ir-sequence-forms node)
+                                    state)))
+       (when (and (vector? (ir-sequence-forms node))
+                  (< (length forms) 2))
+         (%ir-problem state :short-sequence node))
+       (%ir-check-each forms scope ancestors state)))
+    ((ir-let? node) (%ir-check-let node scope ancestors state))
+    ((ir-closure? node)
+     (let ((function (ir-closure-function node)))
+       (if (ir-function? function)
+           (%ir-check function scope ancestors state)
+         (%ir-problem state :not-a-function node function))))
+    ((ir-function? node)
+     (%ir-check-function node scope ancestors state))
+    ((ir-source? node)
+     (let ((visible (ir-source-scope node)))
+       (if (%ir-list-length visible)
+           (for-each visible
+             (fn (binding)
+               (%ir-check-binding-use node binding scope state)))
+         (%ir-problem state :bad-scope node visible))))))
+
+(defun %ir-check-let (node scope ancestors state)
+  (let ((bindings (%ir-check-vector node (ir-let-bindings node) state))
+        (initializers (%ir-check-vector node (ir-let-initializers node)
+                                        state)))
+    (if (or (nil? bindings)
+            (not (eq? (length bindings) (length initializers))))
+        (%ir-problem state :let-shape node)
+      (do
+        (%ir-check-binders node bindings state)
+        (%ir-check-each initializers scope ancestors state)
+        (%ir-check (ir-let-body node)
+                   (reverse-append bindings scope)
+                   ancestors state)))))
+
+(defun %ir-check-function (node scope ancestors state)
+  (let ((name (ir-function-name node))
+        (parameters (ir-function-parameters node))
+        (bindings (%ir-check-vector node (ir-function-bindings node)
+                                    state)))
+    (unless (or (nil? name) (%ir-name? name))
+      (%ir-problem state :bad-name node name))
+    (if (not (and (ir-parameters? parameters)
+                  (%ir-parameters-match? parameters bindings)))
+        (%ir-problem state :parameter-mismatch node parameters)
+      (do
+        (%ir-check-binders node bindings state)
+        (%ir-check (ir-function-body node)
+                   (append bindings scope)
+                   ancestors state)))))
+
+;; The parameter record and the binding vector describe the same
+;; bindings, in the order the source parameter list names them.
+(defun %ir-parameters-match? (parameters bindings)
+  (let ((required (ir-parameters-required parameters))
+        (optional (ir-parameters-optional parameters))
+        (rest (ir-parameters-rest parameters))
+        (parsed (%ir-parse-parameters (ir-parameters-source parameters))))
+    (and parsed
+         (vector? required)
+         (vector? optional)
+         (let ((declared (append (list-from-vector required)
+                                 (list-from-vector optional)
+                                 (if rest (list rest) nil))))
+           (and (%ir-same-list? declared bindings)
+                (equal? (map #'%ir-binding-name-or-nil declared)
+                        (append (head parsed) (second parsed)
+                                (if (third parsed)
+                                    (list (third parsed))
+                                  nil)))
+                (eq? (vector-length required) (length (head parsed))))))))
+
+(defun %ir-binding-name-or-nil (x)
+  (if (ir-binding? x) (ir-binding-name x) nil))
+
+(defun %ir-same-list? (xs ys)
+  (cond ((nil? xs) (nil? ys))
+        ((nil? ys) nil)
+        ((eq? (head xs) (head ys)) (%ir-same-list? (tail xs) (tail ys)))
+        (t nil)))
+
+
+
 ;;; * Inspection
 
 ;; (ir-show node) describes a graph as nested lists headed by

@@ -245,10 +245,11 @@
                           (%tree-includes? (tail tree) x)))
         (t nil)))
 
-(deftest "every corpus form analyzes into known records"
+(deftest "every corpus form analyzes into a well-formed graph"
   (for-each *corpus*
     (fn (case)
       (for-each (second case)
         (fn (form)
-          (expect (not (%tree-includes? (ir-show (analyze form))
-                                        :unknown))))))))
+          (let ((node (analyze form)))
+            (expect (not (%tree-includes? (ir-show node) :unknown)))
+            (expect-equal (ir-check node) nil)))))))

@@ -25,6 +25,31 @@ static suite compiler_tests{
                 "((:IF (:REFERENCE X 1) (:CALL FOO (:REFERENCE X 1)) "
                 "(:CONSTANT 17)) T T)");
         };
+
+        "functions, scopes, and captures survive a tape"_test = [] {
+            source_machine m{compiler_image()};
+            m.load(R"((defvar node
+                        (analyze '(let ((n 0) (y 1))
+                                    (fn (step &rest notes)
+                                      (set! n (+ n step))
+                                      (list n notes (%macro-fn () y))))))
+                      (defvar shown (ir-show node)))");
+            source_machine copy{tape::decode(tape::encode(m.vm))};
+            copy.check(
+                R"((let* ((closure (ir-let-body node))
+                          (function (ir-closure-function closure))
+                          (n (vector-get (ir-let-bindings node) 0)))
+                     (list (equal? (ir-show node) shown)
+                           (ir-check node)
+                           (eq? node (ir-binding-owner n))
+                           (eq? function
+                                (ir-binding-owner
+                                 (ir-parameters-rest
+                                  (ir-function-parameters function))))
+                           (map #'ir-binding-name (ir-captures closure))
+                           (eq? n (head (ir-captures closure))))))",
+                "(T NIL T T (N Y) T)");
+        };
     }};
 
 } // namespace
