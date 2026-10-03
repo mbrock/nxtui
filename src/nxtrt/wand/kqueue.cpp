@@ -239,8 +239,8 @@ private:
             set_close_on_exec(accepted);
 #endif
         // BSD accept() copies O_NONBLOCK from the listener, which
-        // nonblocking_call may have set only for this call. Give the
-        // accepted socket exactly the mode the operation asked for.
+        // nonblocking_call may have set only for this call. As with epoll,
+        // the accepted socket honors the wish's flags instead.
         auto nonblocking = false;
 #ifdef SOCK_NONBLOCK
         nonblocking = (op.flags & SOCK_NONBLOCK) != 0;
@@ -537,11 +537,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::recv_some & op)
         {
-            auto result = ::recv(
-                op.fd,
-                op.buffer.data(),
-                op.buffer.size(),
-                op.flags | MSG_DONTWAIT);
+            // macOS can ignore MSG_DONTWAIT on a blocking TCP socket.
+            auto result = nonblocking_call(op.fd, [&] {
+                return ::recv(
+                    op.fd,
+                    op.buffer.data(),
+                    op.buffer.size(),
+                    op.flags | MSG_DONTWAIT);
+            });
             return finish_or_wait(
                 token,
                 changes,
@@ -557,11 +560,14 @@ private:
             std::vector<kqueue_event> & changes,
             op::send_some & op)
         {
-            auto result = ::send(
-                op.fd,
-                op.buffer.data(),
-                op.buffer.size(),
-                op.flags | MSG_DONTWAIT);
+            // macOS can ignore MSG_DONTWAIT on a blocking TCP socket.
+            auto result = nonblocking_call(op.fd, [&] {
+                return ::send(
+                    op.fd,
+                    op.buffer.data(),
+                    op.buffer.size(),
+                    op.flags | MSG_DONTWAIT);
+            });
             return finish_or_wait(
                 token,
                 changes,
@@ -850,11 +856,14 @@ private:
             kqueue_event const &,
             op::recv_some & op)
         {
-            auto result = ::recv(
-                op.fd,
-                op.buffer.data(),
-                op.buffer.size(),
-                op.flags | MSG_DONTWAIT);
+            // macOS can ignore MSG_DONTWAIT on a blocking TCP socket.
+            auto result = nonblocking_call(op.fd, [&] {
+                return ::recv(
+                    op.fd,
+                    op.buffer.data(),
+                    op.buffer.size(),
+                    op.flags | MSG_DONTWAIT);
+            });
             return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_READ);
         }
 
@@ -865,11 +874,14 @@ private:
             kqueue_event const &,
             op::send_some & op)
         {
-            auto result = ::send(
-                op.fd,
-                op.buffer.data(),
-                op.buffer.size(),
-                op.flags | MSG_DONTWAIT);
+            // macOS can ignore MSG_DONTWAIT on a blocking TCP socket.
+            auto result = nonblocking_call(op.fd, [&] {
+                return ::send(
+                    op.fd,
+                    op.buffer.data(),
+                    op.buffer.size(),
+                    op.flags | MSG_DONTWAIT);
+            });
             return finish_or_rearm(wand, d, token, result, op.fd, EVFILT_WRITE);
         }
 
