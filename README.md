@@ -737,11 +737,6 @@ entering `nix develop`. Run model checks with `make spec` in the same
 environment. No API credentials are needed for these local
 workflows.
 
-The separate Bun graph-documentation workflow requires the sibling checkout
-at `../src/forge-graph/packages/forge-graph` specified in `package.json`.
-Setup installs its locked dependencies when that checkout exists and reports
-the omission otherwise; this does not affect the C++ build, spec, or Poxy docs.
-
 The orb's host kernel also matters. Subprocess waits use `io_uring` to poll
 pidfds, then reap ready children with ordinary `waitid(P_PIDFD)`. This works
 on Linux 6.1 without `IORING_OP_WAITID` (which requires Linux 6.7); the pidfd

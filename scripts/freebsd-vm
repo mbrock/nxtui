@@ -323,7 +323,6 @@ sync_repo()
         --exclude /docs/generated/ \
         --exclude /docs/html/ \
         --exclude /docs/xml/ \
-        --exclude /docs2/out/ \
         --exclude /node_modules/ \
         --exclude /tmp/ \
         --exclude /traces/ \

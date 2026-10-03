@@ -69,12 +69,6 @@ fi
 
 step 'Cache documentation generator' uvx poxy --version
 
-if [[ -f ../src/forge-graph/packages/forge-graph/package.json ]]; then
-  step 'Install optional graph documentation dependencies' bun install --frozen-lockfile
-else
-  printf '\nOptional graph documentation dependencies skipped: package.json requires ../src/forge-graph/packages/forge-graph.\n'
-fi
-
 if [[ -f build/meson-private/coredata.dat ]]; then
   step 'Refresh Meson configuration' meson setup --reconfigure build
 else
