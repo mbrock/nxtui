@@ -166,11 +166,11 @@ storage. Reading after close is not supported.
 Fixed groups accept tasks only; the stream pool still accepts idea factories.
 Groups directly own tuple/vector tasks, without pool backing, `group_recipe`,
 wrapper tasks, or a separate intermediate results tuple. Stable observers
-report completion at final suspension, where stop rules see promise success or
+report completion at final suspension, where group subclasses see promise success or
 failure. Results remain in promises until all started tasks have drained, then
 move into positional `outcome<T>` values (`expected<T, exception_ptr>`).
-Initial extraction errors become exception outcomes without changing the stop
-rule. Subsequent moves of the result tuple/vector can throw after drain.
+Initial extraction errors become exception outcomes without changing the group's
+stopping decision. Subsequent moves of the result tuple/vector can throw after drain.
 Outside cancellation stops and drains before propagation.
 `settle_range`, `when_all`, `wait_any`, and `with_timeout` retain their public
 task-only composition contracts.

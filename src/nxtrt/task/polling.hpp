@@ -65,7 +65,7 @@ take_poll_until_result(poll_until_outcomes & outcomes)
             detail::poll_ready(op::poll{fd, events}),
             detail::poll_deadline(timeout),
         },
-        stop_on_completion{});
+        first_completion_group{});
     co_return detail::take_poll_until_result(outcomes);
 }
 

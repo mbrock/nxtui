@@ -43,4 +43,5 @@ parallel Wisp/HTTP work. For the concrete pool API, see
 - [State of the Frontier](../rfc/new/rfc-0017-state-of-the-frontier.md)
 - [RFC 0018: Portable Wisp Lisp Machines](../rfc/new/rfc-0018-portable-wisp-lisp-machines.md)
 - [RFC 0019: Firms Without Bodies](../rfc/new/rfc-0019-firms-without-bodies.md)
-  — implemented: groups (`settle`, stop rules, `drain`) replace firms.
+  — implemented: fixed groups (`settle` with `group` subclasses) and streaming
+  pools (`drain`) replace firms.

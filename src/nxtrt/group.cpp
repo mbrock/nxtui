@@ -1,123 +1,139 @@
 #include "nxtrt/task.hpp"
 
-namespace nxtrt::detail {
+#include <cassert>
 
-struct group_coordinator
+namespace nxtrt {
+
+group::group([[maybe_unused]] group && other) noexcept
 {
-    std::span<group_child> children;
-    group_control & control;
-    deck & executor;
-    std::size_t pending = 0;
-    need waiter{};
-    bool parent_stopped = false;
+    // Coroutine parameters move before execution, never with live observers.
+    assert(other.executor_ == nullptr);
+}
 
-    ~group_coordinator()
-    {
-        for (auto & child : children) {
-            if (child.promise && child.promise->completion == &child)
-                child.promise->completion = nullptr;
-            child.owner = nullptr;
-        }
+group::~group() = default;
+
+void group::detach() noexcept
+{
+    for (auto & child : children_) {
+        if (child.promise && child.promise->completion == &child)
+            child.promise->completion = nullptr;
+        child.owner = nullptr;
     }
+    children_ = {};
+    executor_ = nullptr;
+}
 
-    void stop() noexcept
+void group::stop() noexcept
+{
+    for (auto & child : children_)
+        if (child.started && !child.completed)
+            child.promise->request_stop();
+}
+
+void group::signal() noexcept
+{
+    if (pending_ == 0 && waiter_.handle)
+        std::exchange(waiter_, {}).resume(*executor_);
+}
+
+void group::completed(detail::group_child & child) noexcept
+{
+    child.completed = true;
+    if (child.started)
+        --pending_;
+    if (!stopped_ && should_stop(child.index, child.failed(child.promise)))
+        stopped_ = true;
+    if (stopped_)
+        stop();
+    signal();
+}
+
+struct group::stop_callback
+{
+    group & owner;
+    void operator()() const noexcept
     {
-        for (auto & child : children)
-            if (child.started && !child.completed)
-                child.promise->request_stop();
+        owner.parent_stopped_ = true;
+        owner.stop();
     }
-
-    void signal() noexcept
-    {
-        if (pending == 0 && waiter.handle)
-            std::exchange(waiter, {}).resume(executor);
-    }
-
-    void completed(group_child & child) noexcept
-    {
-        child.completed = true;
-        if (child.started)
-            --pending;
-        control.settled(child.index, child.failed(child.promise));
-        if (control.stopped)
-            stop();
-        signal();
-    }
-
-    struct stop_callback
-    {
-        group_coordinator & owner;
-        void operator()() const noexcept
-        {
-            owner.parent_stopped = true;
-            owner.stop();
-        }
-    };
-
-    struct drain_awaiter
-    {
-        group_coordinator & owner;
-        bool await_ready() noexcept
-        {
-            return owner.pending == 0;
-        }
-        void await_suspend(std::coroutine_handle<> handle) noexcept
-        {
-            owner.waiter = need{handle, current_env->current_promise};
-        }
-        void await_resume() noexcept {}
-    };
 };
 
-void group_child::task_completed() noexcept
+struct group::drain_awaiter
+{
+    group & owner;
+    bool await_ready() noexcept
+    {
+        return owner.pending_ == 0;
+    }
+    void await_suspend(std::coroutine_handle<> handle) noexcept
+    {
+        owner.waiter_ = need{handle, detail::current_env->current_promise};
+    }
+    void await_resume() noexcept {}
+};
+
+void detail::group_child::task_completed() noexcept
 {
     owner->completed(*this);
 }
 
-task<void>
-run_group(std::span<group_child> children, group_control & control)
+task<void> group::run(std::span<detail::group_child> children)
 {
-    auto * env = current_env;
+    auto * env = detail::current_env;
     if (!env || !env->current_deck || !env->current_promise)
         throw runtime_error{"nxtrt group used without a running deck"};
-    auto coordinator = group_coordinator{children, control, *env->current_deck};
+    if (executor_)
+        throw runtime_error{"nxtrt group is already running"};
+
+    children_ = children;
+    executor_ = env->current_deck;
+    pending_ = 0;
+    waiter_ = {};
+    stopped_ = false;
+    parent_stopped_ = false;
+    // Disconnect observers before the caller destroys its child records,
+    // including when this coroutine exits with an exception.
+    struct binding
+    {
+        group & owner;
+        ~binding() { owner.detach(); }
+    } bound{*this};
     auto parent_stop = std::stop_callback{
-        env->current_promise->stop_token(),
-        group_coordinator::stop_callback{coordinator}};
+        env->current_promise->stop_token(), stop_callback{*this}};
     auto setup_failure = std::exception_ptr{};
     try {
-        // Validate even positions a stop rule might otherwise skip.
+        // Validate even positions a stopping group might otherwise skip.
         for (auto & child : children)
             if (!child.handle)
                 throw runtime_error{"nxtrt group received an empty task"};
 
         for (auto i = std::size_t{0}; i < children.size(); ++i) {
             auto & child = children[i];
-            child.owner = &coordinator;
+            child.owner = this;
             child.index = i;
             if (child.handle.done()) {
                 // Final suspension has already notified any old observer.
-                coordinator.completed(child);
+                completed(child);
                 continue;
             }
-            if (control.stopped || coordinator.parent_stopped)
+            if (stopped_ || parent_stopped_)
                 continue;
             child.promise->env.copy_entries_from(*env);
             child.promise->observe_completion_of(child);
             // enqueue may allocate. Count only successfully scheduled work.
             child.promise->enqueue_self(child.handle);
             child.started = true;
-            ++coordinator.pending;
+            ++pending_;
         }
     } catch (...) {
         setup_failure = std::current_exception();
-        coordinator.stop();
+        stop();
     }
-    co_await group_coordinator::drain_awaiter{coordinator};
+    co_await drain_awaiter{*this};
     if (setup_failure)
         rethrow(setup_failure);
-    if (coordinator.parent_stopped)
+    if (parent_stopped_)
         throw operation_cancelled{};
 }
 
-} // namespace nxtrt::detail
+} // namespace nxtrt

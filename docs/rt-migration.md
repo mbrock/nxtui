@@ -39,7 +39,7 @@ LLM stack has also been removed; the surviving LLM code lives in
 | `nxtio/input.hpp` | `nxtui/input.hpp` | Done. The compatibility include has been removed. |
 | `nxt::latch` | `settle` / `when_all` over the jobs, or a small latch | Prefer awaiting a group; add a latch only for true countdown cases. |
 | `spawn_detached` | a job in a group, or an idea fed to `drain` / `pool<Idea>` | There is no fork or ambient spawning; work is owned by the group or pool it is handed to. |
-| `nxt::scope` | a group with a stop rule + UI capabilities | Cancellation is per task; a group stops and drains its own jobs. The richer yard-style UI facade is still being rebuilt on top. |
+| `nxt::scope` | a group subclass + UI capabilities | Cancellation is per task; a group stops and drains its own jobs. The richer yard-style UI facade is still being rebuilt on top. |
 | `nxtio/net` | `src` HTTP/TLS/DNS | Done. The OpenAI streaming path uses the new HTTP client directly. |
 | old shell/pty subprocess helpers | `nxtrt::op::spawn_pty` + `nxtrt::pty::session` | PTY processes are now pidfd-owned wishes and can render through vterm without a separate output mailbox. |
 | old LLM entry point | `src/nxtai/nxtllm.cpp` | Simplified. The executable is now a small one-shot SSE client without the old HUD/tool UI runtime path. |
@@ -53,14 +53,16 @@ shape of its concurrency:
 - A scope-only firm (cancellation or lifetime, no children) becomes a plain
   awaited task. Read stop through `current_stop_token()`, `stop_requested()`,
   or `throw_if_stop_requested()`, which see the running task's stop.
-- A fixed fork/fork/join becomes `settle(std::tuple{a, b}, rule)`, which
+- A fixed fork/fork/join becomes `settle(std::tuple{a, b}, execution)`, which
   returns `std::tuple<outcome<T>...>`, or `when_all` / `wait_any` when the
   usual aggregation fits. Elements are tasks, created before entering the
   group; call task factories to obtain those tasks first.
-- A firm policy that stopped siblings becomes a stop rule: `stop_on_failure`,
-  `stop_on_success`, `stop_on_completion`, `stop_after_first` (a primary job
-  plus companions), or a `noexcept` callable `bool(std::size_t, bool failed)`.
-- A loop of forks over a range becomes `settle_range(range, rule)`, returning
+- A firm policy that stopped siblings becomes a group subclass:
+  `fail_fast_group`, `first_success_group`, `first_completion_group`,
+  `primary_group` (a primary job plus companions), or a custom subclass of
+  `group` overriding `bool should_stop(std::size_t, bool failed) const noexcept`.
+  `all_group` is the default and does not stop siblings.
+- A loop of forks over a range becomes `settle_range(range, execution)`, returning
   outcomes in range order.
 - An open-ended stream of forked work becomes a feed of ideas run by
   `drain(ideas, capacity)`, or a `pool<Idea>` over a `pool_land<Idea>` when the

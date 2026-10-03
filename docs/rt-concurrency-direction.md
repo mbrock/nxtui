@@ -17,7 +17,7 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Groups: `settle`, `settle_range`, stop rules | Task-only public APIs; direct tuple/vector task ownership with stable completion observers, drain before result extraction, and typed `outcome<T>` results |
+| Groups: `settle`, `settle_range`, `group` subclasses | Task-only public APIs; direct tuple/vector task ownership with stable completion observers, drain before result extraction, and typed `outcome<T>` results |
 | `when_all`, `wait_any`, `with_timeout`, `poll_until_after` | Implemented over `settle` |
 | `drain(feed, capacity)`, `pool_land<Idea>` | Implemented: bounded evaluation of a feed of ideas, and owned land for a pool |
 | Cancellation | Per task: stop propagates to the awaited task, and a group stops its own jobs |
@@ -165,10 +165,10 @@ borrowed land; a ring with prefix retirement was rejected because long-lived
 frames pin the prefix.
 
 The task-only tuple and range helpers own their fixed membership directly,
-without pool backing or a public deed. Stable observers let stop rules see
+without pool backing or a public deed. Stable observers let group subclasses see
 promise success/failure at final suspension. All started tasks drain before
 results move from promises into the returned outcomes. Initial extraction errors
-become exception outcomes without changing the rule's observation; subsequent
+become exception outcomes without changing the group's stopping decision; subsequent
 moves of the result tuple/vector can throw after drain.
 Outside cancellation stops and drains the group before propagating.
 
@@ -205,8 +205,8 @@ boundary. The pool does not collect every failure during close, and successful
 unconsumed outputs from the same pump may be discarded.
 
 Groups differ: `settle` and `settle_range` record every job's outcome and
-consult the stop rule as each one settles, so a failure stops the others only
-when the rule says so. This unifies ownership and drain machinery for fixed
+consult the group subclass as each one settles, so a failure stops the others only
+when the subclass says so. This unifies ownership and drain machinery for fixed
 batches, but does not change the general pool's consumer-driven error handling
 described above. `drain` uses the consumer-driven path: the first failure
 stops admission, drains the running jobs, and is rethrown.
@@ -303,7 +303,7 @@ remaining targets are identified below:
 | [Directory metadata][directory-metadata] | Bounded stat ideas; results are sorted afterward, so completion-order production is natural. |
 | [Connection racing][connection-racing] | Coped attempts and first-success consumption. Existing range selection chooses an input-order success after drain; distinguish that from first published success. |
 | [HTTP serving][http-serving] | Migrated to one accept feed and a bounded connection pool, preserving connection-local error containment. |
-| [Process capture][process-capture] and [shell supervision][shell-supervision] | Process capture now uses a group for primary capture plus its monitor, with `stop_after_first`: only primary completion stops the companions. Other heterogeneous resource lifetimes may need a team or companions. |
+| [Process capture][process-capture] and [shell supervision][shell-supervision] | Process capture now uses `primary_group` for primary capture plus its monitor: only primary completion stops the companions. Other heterogeneous resource lifetimes may need a team or companions. |
 | [Wisp host][wisp-host] | Migrated to explicit native-task awaiting; old guest-job identities are no longer a prerequisite for I/O. |
 
 These source links pin the inventory to the implemented baseline, so the
@@ -330,7 +330,7 @@ Use actual pipelines to settle:
 3. Generic mapping and bounded in-memory admission/feedback, without a second
    scheduler or a mandatory channel around every source.
 4. Static team representation and companion-resource lifetimes.
-5. Companion lifetimes beyond a primary job and `stop_after_first`.
+5. Companion lifetimes beyond a primary job and `primary_group`.
 6. The native task/guest continuation cancellation and root-release boundary.
 
 Preserve evidence alongside the design: many more jobs than slots; a paused

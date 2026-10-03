@@ -71,6 +71,35 @@ nxtrt::task<void> fail_later_moves(bool & fail_moves)
     fail_moves = true;
 }
 
+struct indexed_group : nxtrt::group
+{
+    std::size_t index;
+
+    explicit indexed_group(std::size_t index) : index(index) {}
+
+    bool should_stop(std::size_t settled, bool) const noexcept override
+    {
+        return settled == index;
+    }
+};
+
+struct observed_failure_group : nxtrt::group
+{
+    int & failures;
+    int & completions;
+
+    observed_failure_group(int & failures, int & completions)
+        : failures(failures), completions(completions)
+    {}
+
+    bool should_stop(std::size_t, bool failed) const noexcept override
+    {
+        ++completions;
+        failures += failed;
+        return failed;
+    }
+};
+
 struct later_move_value
 {
     int moves_left = 2;
@@ -168,7 +197,7 @@ void declare_runtime_group_tests()
                 throw_after_yield(events, 1),
                 record_stop_state_after_two_yields(events, 2),
             },
-            nxtrt::stop_on_failure{});
+            nxtrt::fail_fast_group{});
             expect(!std::get<0>(outcomes));
             expect(std::get<1>(outcomes).has_value());
             expect(events == std::vector<int>{11, 2});
@@ -181,7 +210,7 @@ void declare_runtime_group_tests()
                 value_after_yield(123),
                 record_stop_state_after_two_yields(events, 3),
             },
-            nxtrt::stop_on_success{});
+            nxtrt::first_success_group{});
             expect(std::get<0>(outcomes).value() == 123);
             expect(events == std::vector<int>{3});
         };
@@ -196,7 +225,7 @@ void declare_runtime_group_tests()
                             value_after_yield(5),
                             tuple_wait_for_stop(events, 6),
                         },
-                        nxtrt::stop_after_first{});
+                        nxtrt::primary_group{});
                 });
                 expect(std::get<0>(outcomes).value() == 5);
                 expect(!std::get<1>(outcomes));
@@ -212,23 +241,21 @@ void declare_runtime_group_tests()
                             value_after_two_yields_or_stop(events, 7),
                             throw_int_after_yield(),
                         },
-                        nxtrt::stop_after_first{});
+                        nxtrt::primary_group{});
                 });
                 expect(std::get<0>(primary_ran).value() == -7);
                 expect(!std::get<1>(primary_ran));
                 expect(events.empty());
             };
 
-        "a stop rule can be any noexcept callable"_test = []() -> nxtrt::task<void> {
+        "a group subclass can choose a configured child"_test = []() -> nxtrt::task<void> {
             auto events = std::vector<int>{};
             auto outcomes = co_await nxtrt::settle(
-            std::tuple{
-                tuple_wait_for_stop(events, 1),
-                value_after_yield(2),
-            },
-            [](std::size_t index, bool) noexcept {
-                return index == 1;
-            });
+                std::tuple{
+                    tuple_wait_for_stop(events, 1),
+                    value_after_yield(2),
+                },
+                indexed_group{1});
             expect(!std::get<0>(outcomes));
             expect(std::get<1>(outcomes).value() == 2);
             expect(events == std::vector<int>{1});
@@ -308,7 +335,7 @@ void declare_runtime_group_tests()
                         throw_int_after_yield(),
                         tuple_wait_for_stop(events, 23),
                     },
-                    nxtrt::stop_on_completion{});
+                    nxtrt::first_completion_group{});
             });
             auto first = std::move(std::get<0>(outcomes));
             auto second = std::move(std::get<1>(outcomes));
@@ -505,7 +532,7 @@ void declare_runtime_group_tests()
                 work.push_back(tuple_wait_for_stop(events, 5));
                 work.push_back(throw_int_after_yield());
                 return nxtrt::settle_range(
-                    std::move(work), nxtrt::stop_on_failure{});
+                    std::move(work), nxtrt::fail_fast_group{});
             });
             expect(nxtrt::is_operation_cancelled(stopped[0].error()));
             expect(!nxtrt::is_operation_cancelled(stopped[1].error()));
@@ -534,7 +561,7 @@ void declare_runtime_group_tests()
             auto outcomes = deck.sync_wait([&] {
                 return nxtrt::settle(
                     std::tuple{std::move(first), std::move(second)},
-                    nxtrt::stop_on_completion{});
+                    nxtrt::first_completion_group{});
             });
             expect(std::get<0>(outcomes).value() == 17);
             expect(std::get<1>(outcomes).value() == 23);
@@ -555,7 +582,7 @@ void declare_runtime_group_tests()
                         owned_value_after_yield(
                             std::make_unique<int>(29), starts),
                     },
-                    nxtrt::stop_on_failure{});
+                    nxtrt::fail_fast_group{});
             });
             expect(!std::get<0>(outcomes));
             expect(!std::get<1>(outcomes));
@@ -574,11 +601,7 @@ void declare_runtime_group_tests()
                         value_before_extraction(fail_moves),
                         fail_later_moves(fail_moves),
                     },
-                    [&](std::size_t, bool failed) noexcept {
-                        ++completions;
-                        failures += failed;
-                        return failed;
-                    });
+                    observed_failure_group{failures, completions});
                 expect(completions == 2);
                 expect(failures == 0);
                 expect(!std::get<0>(outcomes));
@@ -628,6 +651,57 @@ void declare_runtime_group_tests()
             expect(!events.empty());
             expect(deck.empty());
         };
+
+        "group subclasses work with ranges"_test = []() -> nxtrt::task<void> {
+            auto events = std::vector<int>{};
+            auto tasks = std::vector<nxtrt::task<int>>{};
+            tasks.push_back(tuple_wait_for_stop(events, 9));
+            tasks.push_back(value_after_yield(11));
+            auto outcomes = co_await nxtrt::settle_range(
+                std::move(tasks), indexed_group{1});
+            expect(nxtrt::is_operation_cancelled(outcomes[0].error()));
+            expect(outcomes[1].value() == 11);
+            expect(events == std::vector<int>{9});
+        };
+
+        "group execution detaches observers before returning"_test =
+            []() -> nxtrt::task<void> {
+                auto execution = nxtrt::all_group{};
+                auto child = value_after_yield(17);
+                auto children = std::array<nxtrt::detail::group_child, 1>{};
+                children[0].bind(child);
+                co_await execution.run(children);
+                expect(child.done());
+                expect(children[0].owner == nullptr);
+                expect(child.handle().promise().completion == nullptr);
+
+                // Reusing an idle group with fresh records must also be safe.
+                auto next = value_after_yield(23);
+                auto next_children = std::array<nxtrt::detail::group_child, 1>{};
+                next_children[0].bind(next);
+                co_await execution.run(next_children);
+                expect(next.done());
+                expect(next_children[0].owner == nullptr);
+                expect(next.handle().promise().completion == nullptr);
+            };
+
+        "group execution detaches records after setup failure"_test =
+            []() -> nxtrt::task<void> {
+                auto execution = nxtrt::all_group{};
+                auto child = value_after_yield(17);
+                auto children = std::array<nxtrt::detail::group_child, 2>{};
+                children[0].bind(child);
+                auto failed = false;
+                try {
+                    co_await execution.run(children);
+                } catch (const nxtrt::runtime_error &) {
+                    failed = true;
+                }
+                expect(failed);
+                expect(!child.done());
+                expect(children[0].owner == nullptr);
+                expect(child.handle().promise().completion == nullptr);
+            };
     };
 }
 

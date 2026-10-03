@@ -43,8 +43,8 @@ lifetime or completion-signal bug, not the timer. Verify that the worker task
 can actually set the `done` flag it is supposed to set.
 
 When a sibling task needs to stop the main work, make the main work a job in
-the same group, with a stop rule that says when (for example
-`nxtrt::settle(std::tuple{main, watcher}, nxtrt::stop_after_first{})`). A
+the same group, with a subclass that decides when to stop the others (for example
+`nxtrt::settle(std::tuple{main, watcher}, nxtrt::primary_group{})`). A
 group can only stop its own jobs; the task awaiting the group is not one of
 them.
 

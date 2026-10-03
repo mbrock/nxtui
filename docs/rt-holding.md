@@ -197,26 +197,26 @@ buffered bytes never reach the socket. Don't forget to flush.
 Before the smallest holder, one structural layer, because it is the same
 trick applied to tasks themselves.
 
-A group is a set of ideas awaited by one task. @ref nxtrt::settle "settle"
-takes a tuple of tasks or task factories, runs them concurrently, and does not
-return until every one of them has settled; the awaiting task is parked the
-whole time. The group *holds* its jobs in a @ref nxtrt::pool "pool", one slot
-per job, keeping enough shared state to stop them, drain them, and surface each
-result or exception in a controlled order.
+A fixed group is a set of tasks awaited by one task. @ref nxtrt::settle "settle"
+takes a tuple of tasks, owns them directly, runs them concurrently, and does not
+return until every started task has settled. Task factories must be called
+before entering the group. The shared @ref nxtrt::group "group" base keeps the
+state needed to stop children and drain them; its subclasses decide when a
+completion should stop the others. Fixed groups do not use a pool.
 
 What the caller gets back is not a handle to running work but a settled
 `outcome<T>` per job — `std::expected<T, std::exception_ptr>` — in input
-order. Nothing remains to redeem later: by the time the outcomes exist, the
-executions are over and their frames are gone. A stop rule decides when a
-settled job should stop the others (`stop_on_failure`, `stop_on_success`,
-`stop_after_first`, or any `noexcept` predicate over the job's index and
-whether it failed). This lets a helper see every outcome before deciding what
-to throw, without dropped failures.
+order. Nothing remains to redeem later: by the time the caller receives the
+outcomes, the executions are over and their frames are gone. The built-in
+subclasses are `all_group`, `fail_fast_group`, `first_success_group`,
+`first_completion_group`, and `primary_group`. Custom subclasses override
+`should_stop(index, failed)`. This lets a helper see every outcome before
+deciding what to throw, without dropped failures.
 
 `when_all`, `wait_any`, `with_timeout` are not new schedulers. They are
-small functions over `settle`, which is written over a pool, which is written
-over tasks and the deck. `drain` holds an open-ended feed of ideas the same
-way, at most `capacity` at once. The holder nests: a pool is a deck-shaped
+small functions over `settle`, which is written over tasks and the deck.
+`drain` uses a pool to hold an open-ended feed of ideas, at most `capacity`
+at once. The holder nests: a pool is a deck-shaped
 idea (hold jobs, release on settlement) scoped to a set of jobs instead of the
 whole program. As above, so below, again.
 

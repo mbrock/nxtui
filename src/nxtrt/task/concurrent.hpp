@@ -1,8 +1,8 @@
 #pragma once
 
-// Groups: run a fixed set or a range of tasks concurrently, with a
-// stop rule deciding when the rest are cancelled. A group settles every job
-// before it returns. Include nxtrt/task.hpp for the complete runtime API.
+// Groups: run a fixed set or a range of tasks concurrently. Subclasses decide
+// when the rest are cancelled; every started job settles before return.
+// Include nxtrt/task.hpp for the complete runtime API.
 
 #include "nxtrt/task/compose.hpp"
 
@@ -16,52 +16,87 @@ namespace nxtrt {
 template<typename T>
 using outcome = std::expected<T, std::exception_ptr>;
 
-/// Stop rules decide, as each job of a group settles, whether to stop the
-/// others. `index` is the job's position in the group.
-template<typename Rule>
-concept stop_rule =
-    std::is_nothrow_invocable_r_v<bool, const Rule &, std::size_t, bool>;
+namespace detail {
+struct group_child;
+}
+
+/// Shared execution state for a group. Subclasses decide when to stop the
+/// remaining jobs; every started job is drained before run() returns.
+/// A group may be moved before execution, but not while bound to children.
+class group
+{
+public:
+    group() = default;
+    group(const group &) = delete;
+    group & operator=(const group &) = delete;
+    group(group && other) noexcept;
+    virtual ~group();
+
+    /// Execution entry used by settle; records must be fresh and remain alive
+    /// until this task finishes. Observers are detached before it returns.
+    task<void> run(std::span<detail::group_child> children);
+
+protected:
+    virtual bool should_stop(std::size_t index, bool failed) const noexcept = 0;
+
+private:
+    friend struct detail::group_child;
+    std::span<detail::group_child> children_;
+    deck * executor_ = nullptr;
+    std::size_t pending_ = 0;
+    need waiter_{};
+    bool stopped_ = false;
+    bool parent_stopped_ = false;
+
+    void stop() noexcept;
+    void signal() noexcept;
+    void completed(detail::group_child & child) noexcept;
+    void detach() noexcept;
+
+    struct stop_callback;
+    struct drain_awaiter;
+};
 
 /// Let every job run to completion.
-struct settle_all
+struct all_group : group
 {
-    bool operator()(std::size_t, bool) const noexcept
+    bool should_stop(std::size_t, bool) const noexcept override
     {
         return false;
     }
 };
 
 /// Stop the others when a job fails.
-struct stop_on_failure
+struct fail_fast_group : group
 {
-    bool operator()(std::size_t, bool failed) const noexcept
+    bool should_stop(std::size_t, bool failed) const noexcept override
     {
         return failed;
     }
 };
 
 /// Stop the others when a job succeeds.
-struct stop_on_success
+struct first_success_group : group
 {
-    bool operator()(std::size_t, bool failed) const noexcept
+    bool should_stop(std::size_t, bool failed) const noexcept override
     {
         return !failed;
     }
 };
 
 /// Stop the others when any job settles.
-struct stop_on_completion
+struct first_completion_group : group
 {
-    bool operator()(std::size_t, bool) const noexcept
+    bool should_stop(std::size_t, bool) const noexcept override
     {
         return true;
     }
 };
 
 /// Stop the companions when the first job (the primary) settles.
-struct stop_after_first
+struct primary_group : group
 {
-    bool operator()(std::size_t index, bool) const noexcept
+    bool should_stop(std::size_t index, bool) const noexcept override
     {
         return index == 0;
     }
@@ -76,35 +111,6 @@ template<typename T>
         std::unexpected{std::make_exception_ptr(operation_cancelled{})}};
 }
 
-/// Applies a group's stop rule as its jobs settle. The rule is reached
-/// through a function pointer so the group machinery below is shared by
-/// every group rather than instantiated per rule and per call site.
-struct group_control
-{
-    const void * rule = nullptr;
-    bool (*should_stop)(const void *, std::size_t, bool) noexcept = nullptr;
-    bool stopped = false;
-
-    template<typename Rule>
-    explicit group_control(const Rule & rule) noexcept
-        : rule(&rule)
-        , should_stop([](const void * rule,
-                         std::size_t index,
-                         bool failed) noexcept {
-            return (*static_cast<const Rule *>(rule))(index, failed);
-        })
-    {}
-
-    void settled(std::size_t index, bool failed) noexcept
-    {
-        if (stopped || !should_stop(rule, index, failed))
-            return;
-        stopped = true;
-    }
-};
-
-struct group_coordinator;
-
 /// Stable observers borrow tasks owned by the settle frame. Values stay in
 /// their promises until every started task has reached final suspension.
 struct group_child final : completion_observer
@@ -112,7 +118,7 @@ struct group_child final : completion_observer
     std::coroutine_handle<> handle;
     promise_base * promise = nullptr;
     bool (*failed)(promise_base *) noexcept = nullptr;
-    group_coordinator * owner = nullptr;
+    group * owner = nullptr;
     std::size_t index = 0;
     bool started = false;
     bool completed = false;
@@ -135,8 +141,6 @@ struct group_child final : completion_observer
 
     void task_completed() noexcept override;
 };
-
-task<void> run_group(std::span<group_child> children, group_control & control);
 
 template<typename T>
 outcome<T> extract_outcome(task<T> & child)
@@ -230,21 +234,20 @@ void take_first_void_success_or_throw(
 
 } // namespace detail
 
-/// Run a fixed set of tasks concurrently and settle all of it. `rule`
+/// Run a fixed set of tasks concurrently and settle all of it. `execution`
 /// decides when the remaining jobs are stopped. Returns each job's outcome
 /// in tuple order; a job stopped before it started settles as cancelled.
-template<typename... Tasks, stop_rule Rule = settle_all>
-    requires(is_task_v<Tasks> && ...)
+template<typename... Tasks, typename Group = all_group>
+    requires (is_task_v<Tasks> && ...) && std::derived_from<Group, group>
 [[nodiscard]] task<std::tuple<outcome<task_result_t<Tasks>>...>>
-settle(std::tuple<Tasks...> tasks, Rule rule = {})
+settle(std::tuple<Tasks...> tasks, Group execution = {})
 {
-    auto control = detail::group_control{rule};
     auto children = std::array<detail::group_child, sizeof...(Tasks)>{};
     auto index = std::size_t{0};
     std::apply([&](auto &... child) {
         (children[index++].bind(child), ...);
     }, tasks);
-    co_await detail::run_group(std::span{children}, control);
+    co_await execution.run(std::span{children});
     co_return std::apply(
         [](auto &... child) {
             return std::tuple{
@@ -255,21 +258,21 @@ settle(std::tuple<Tasks...> tasks, Rule rule = {})
 
 /// Run a range of tasks concurrently and settle all of it.
 /// Returns the outcomes in range order.
-template<std::ranges::input_range Range, stop_rule Rule = settle_all>
+template<std::ranges::input_range Range, typename Group = all_group>
     requires is_task_v<std::ranges::range_value_t<Range>>
-[[nodiscard]] auto settle_range(Range range, Rule rule = {})
+        && std::derived_from<Group, group>
+[[nodiscard]] auto settle_range(Range range, Group execution = {})
     -> task<std::vector<outcome<
         task_result_t<std::ranges::range_value_t<Range>>>>>
 {
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
-    auto control = detail::group_control{rule};
     auto tasks = std::vector<task<result_type>>{};
     for (auto && item : range)
         tasks.push_back(std::move(item));
     auto children = std::vector<detail::group_child>(tasks.size());
     for (auto i = std::size_t{0}; i < tasks.size(); ++i)
         children[i].bind(tasks[i]);
-    co_await detail::run_group(std::span{children}, control);
+    co_await execution.run(std::span{children});
 
     auto out = std::vector<outcome<result_type>>{};
     out.reserve(tasks.size());
@@ -288,7 +291,7 @@ template<typename... Tasks>
         std::monostate,
         task_result_t<Tasks>>...>>
 {
-    auto outcomes = co_await settle(std::move(tasks), stop_on_failure{});
+    auto outcomes = co_await settle(std::move(tasks), fail_fast_group{});
     co_return detail::take_all_or_throw(
         outcomes, std::index_sequence_for<Tasks...>{});
 }
@@ -313,7 +316,7 @@ template<typename First, typename... Rest>
 wait_any(std::tuple<First, Rest...> tasks)
 {
     using result_type = task_result_t<First>;
-    auto outcomes = co_await settle(std::move(tasks), stop_on_success{});
+    auto outcomes = co_await settle(std::move(tasks), first_success_group{});
     if constexpr (std::is_void_v<result_type>) {
         detail::take_first_void_success_or_throw(
             outcomes, std::index_sequence_for<First, Rest...>{});
@@ -341,7 +344,7 @@ template<std::ranges::input_range Range>
 when_all_range(Range tasks)
 {
     using result_type = task_result_t<std::ranges::range_value_t<Range>>;
-    auto outcomes = co_await settle_range(std::move(tasks), stop_on_failure{});
+    auto outcomes = co_await settle_range(std::move(tasks), fail_fast_group{});
     auto out = std::vector<result_type>{};
     out.reserve(outcomes.size());
     for (auto & outcome : outcomes)
@@ -371,7 +374,8 @@ template<std::ranges::input_range Range>
 [[nodiscard]] task<task_result_t<std::ranges::range_value_t<Range>>>
 wait_any_range(Range tasks)
 {
-    auto outcomes = co_await settle_range(std::move(tasks), stop_on_success{});
+    auto outcomes = co_await settle_range(
+        std::move(tasks), first_success_group{});
     if (outcomes.empty())
         throw runtime_error{"wait_any_range used with no tasks"};
 
@@ -402,7 +406,7 @@ template<typename T>
         std::tuple{
             std::move(body),
             timeout_after(duration)},
-        stop_on_completion{});
+        first_completion_group{});
     auto body_result = std::move(std::get<0>(outcomes));
     if (body_result) {
         if constexpr (std::is_void_v<T>) {

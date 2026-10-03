@@ -137,7 +137,7 @@ capture(
                 options.scope.sample_interval,
                 options.scope.max_samples),
         },
-        nxtrt::stop_after_first{});
+        nxtrt::primary_group{});
 
     auto capture_done = std::move(std::get<0>(outcomes));
     if (!capture_done)

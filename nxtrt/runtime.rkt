@@ -93,8 +93,9 @@ model runtime-model
     stop-requested var set task
     stopping var lone group-stop
     returned var lone group-return
-    // Abstract completion events accepted by a completion-driven stop rule.
-    // An empty set represents a rule that waits for all children.
+    // Abstract completion events accepted by group::should_stop. Concrete
+    // C++ group subclasses share this lifecycle; an empty set represents
+    // all_group, which waits for all children without requesting stop.
     stop-trigger set task
   signature group-stop
   signature group-return

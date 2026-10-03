@@ -195,11 +195,19 @@ nxtrt::task<void> run_clients(
         clients.push_back(
             echo_client(address, options.messages, payload, stats));
     auto outcomes = co_await nxtrt::settle_range(
-        std::move(clients), nxtrt::stop_on_failure{});
+        std::move(clients), nxtrt::fail_fast_group{});
     for (auto & outcome : outcomes)
         if (!outcome)
             nxtrt::rethrow(outcome.error());
 }
+
+struct echo_load_group : nxtrt::primary_group
+{
+    bool should_stop(std::size_t index, bool failed) const noexcept override
+    {
+        return primary_group::should_stop(index, failed) || failed;
+    }
+};
 
 nxtrt::task<void> run_echo_load(
     bench_options options,
@@ -219,9 +227,7 @@ nxtrt::task<void> run_echo_load(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     options.timeout)),
         },
-        [](std::size_t index, bool failed) noexcept {
-            return index == 0 || failed;
-        });
+        echo_load_group{});
 
     if (!deadline && !nxtrt::is_operation_cancelled(deadline.error()))
         nxtrt::rethrow(deadline.error());

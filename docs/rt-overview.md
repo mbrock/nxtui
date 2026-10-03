@@ -73,32 +73,38 @@ task before the awaiting task resumes. It has no pool backing, recipe wrappers,
 or separate intermediate results tuple. There is no fork, join, or public deed:
 a group owns exactly the tasks it was given, and they cannot outlive it.
 
-`settle(std::tuple{tasks...}, rule)` runs a fixed heterogeneous set of tasks,
+`settle(std::tuple{tasks...}, execution)` runs a fixed heterogeneous set of tasks,
 owned directly in the tuple. Tasks are created before entering the group; their
 coroutine bodies begin when they start. Factories are not accepted. The
 result is `std::tuple<outcome<T>...>` in tuple order, where `outcome<T>` is
 `std::expected<T, std::exception_ptr>` (including `outcome<void>`); a job
-stopped before it started settles as cancelled. `settle_range(range, rule)` does
+stopped before it started settles as cancelled. `settle_range(range, execution)` does
 the same for a homogeneous range and returns `std::vector<outcome<T>>` in range
 order.
 
-The stop rule decides, as each job settles, whether to stop the rest:
+The group subclass decides, as each job settles, whether to stop the rest:
 
-- `settle_all` (the default) lets every job finish;
-- `stop_on_failure` and `stop_on_success` stop the others on the first failure
+- `all_group` (the default) lets every job finish;
+- `fail_fast_group` and `first_success_group` stop the others on the first failure
   or success;
-- `stop_on_completion` stops the others when any job settles;
-- `stop_after_first` stops the companions when job 0, the primary, settles;
-- any `noexcept` callable `bool(std::size_t index, bool failed)`.
+- `first_completion_group` stops the others when any job settles;
+- `primary_group` stops the companions when job 0, the primary, settles.
 
-Stop rules see the task promise's success or failure at final suspension.
+Custom groups derive from `nxtrt::group` and override
+`bool should_stop(std::size_t index, bool failed) const noexcept`. Pass a
+concrete group by value, for example
+`settle(std::tuple{std::move(work), std::move(watcher)}, primary_group{})`.
+The group is move-only; its coordination state lives in the
+settle coroutine frame and must not be moved while running.
+
+Group subclasses see the task promise's success or failure at final suspension.
 Results stay in their promises until all started tasks have drained, then move
 into the returned outcomes. Initial extraction errors become exception outcomes
-without changing the stop rule's decision. Subsequent moves while constructing
+without changing the group's stopping decision. Subsequent moves while constructing
 or delivering the result tuple/vector can still throw; children are already
 drained at that point.
 
-A stop chosen by the rule is a normal finish. Outside cancellation stops the
+A stop chosen by the group subclass is a normal finish. Outside cancellation stops the
 group's tasks and drains them before propagating cancellation.
 
 The usual helpers are written over `settle`. `when_all(tuple)` /
