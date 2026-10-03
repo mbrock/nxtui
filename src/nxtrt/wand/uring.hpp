@@ -302,16 +302,7 @@ protected:
     coin_t prep(
         deck &,
         detail::promise_base &,
-        detail::prepared_wish packet) override
-    {
-        return std::visit(
-            [this, &packet](auto & wish) -> coin_t {
-                return prepare_uring_wish(
-                    std::move(wish),
-                    std::move(packet.state));
-            },
-            packet.wish);
-    }
+        detail::prepared_wish packet) override;
 
 private:
     friend class uring_submission;
@@ -854,6 +845,22 @@ private:
     std::vector<exec *> pending_submissions_;
     std::vector<exec *> pending_cancellations_;
 };
+
+// Instantiate the visitor after the class is complete. Fil-C's Clang 20 can
+// otherwise leave calls to the later-defined member template unresolved.
+inline coin_t uring_wand::prep(
+    deck &,
+    detail::promise_base &,
+    detail::prepared_wish packet)
+{
+    return std::visit(
+        [this, &packet](auto & wish) -> coin_t {
+            return prepare_uring_wish(
+                std::move(wish),
+                std::move(packet.state));
+        },
+        packet.wish);
+}
 
 template<typename T>
 [[nodiscard]] inline T run(task<T> root)

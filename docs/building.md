@@ -158,11 +158,13 @@ The shell uses Fil-C's linker and contains the C++ build tools; use the
 default shell for docs and runtime model work. `nix build .#nxt-filc` attempts
 the installable package with tests.
 
-At pinned Filnix revision `0e32960446f8`, `make filc` compiles the x86_64
-Linux sources, including the OpenSSL-backed certificate and signature tests,
-but linking `nxt-dev` fails on undefined
-`nxtrt::uring_wand::prepare_uring_wish<...>` instantiations. Full runtime tests
-remain blocked by that linker failure.
+At pinned Filnix revision `0e32960446f8`, `make filc` builds and links
+`nxt-dev` on x86_64 Linux. The crypto and TLS authentication suites pass with
+`build/filc/nxt-dev test 3 4` (29 tests). The uring suite (`test 38`) stops at
+`filc user error: unsupported syscall: 425`: Fil-C's syscall dispatcher does
+not support `io_uring_setup`. The epoll suite (`test 37`) also stops, with
+`filc safety error: cannot read pointer with null object` in
+`epoll_wand::suspend`. The full test suite is therefore not yet passing.
 
 For editors launched outside the development shell, use `scripts/clangd` as
 the language-server executable. It enters the pinned Nix shell so clangd sees
