@@ -52,11 +52,23 @@ stdenvNoCC.mkDerivation {
     export PLTADDONDIR="$out/share/racket"
     mkdir -p "$HOME" "$out/sources"
 
+    # --skip-installed only skips packages in the target scope. Full Racket
+    # on Darwin provides many locked packages in the installation scope;
+    # omit those explicitly instead of trying to reinstall them as user packages.
+    racket -e '(require pkg/lib)
+      (for ([name (in-hash-keys (installed-pkg-table #:scope (quote installation)))])
+        (displayln name))' > "$TMPDIR/installed-packages"
+    copyPackage() {
+      if ! grep -Fxq "$1" "$TMPDIR/installed-packages"; then
+        cp -R "$2" "$out/sources/$1"
+      fi
+    }
+
     # Copy to stable output paths before installing/compiling: package links
     # and bytecode must not refer to the disposable build directory.
     ${lib.concatStringsSep "\n" (
       lib.mapAttrsToList (name: src: ''
-        cp -R ${src} "$out/sources/${name}"
+        copyPackage ${name} ${src}
       '') packages
     )}
     cp -R ${vendored}/forge "$out/sources/forge"
@@ -66,7 +78,7 @@ stdenvNoCC.mkDerivation {
     # All dependencies are explicit local inputs. Missing dependencies fail
     # rather than silently fetching from a mutable Racket package catalog.
     # Darwin's full Racket already supplies some of the locked libraries.
-    raco pkg install --batch --no-setup --deps fail --skip-installed "$out"/sources/*
+    raco pkg install --batch --no-setup --deps fail "$out"/sources/*
     # Compile Forge and the libraries it uses, not every dependency's GUI
     # examples, test tools, and documentation helpers.
     raco setup --no-docs --avoid-main -j "$NIX_BUILD_CORES" --pkgs compiler-lib forge
