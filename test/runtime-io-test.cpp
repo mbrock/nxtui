@@ -664,6 +664,27 @@ void declare_runtime_io_tests()
             expect(values == std::vector<int>{1, 2});
         };
 
+        "ring wakes every waiter parked on the bell"_test = [] {
+            auto rt = nxtrt::runtime{};
+            auto ready = nxtrt::bell{};
+            auto values = std::vector<int>{};
+
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_after_bell(ready, values, 1); },
+                    [&] { return record_after_bell(ready, values, 2); },
+                    [&]() -> nxtrt::task<void> {
+                        co_await settle_parked_waiters();
+                        expect(values.empty());
+                        ready.ring();
+                    },
+                });
+            });
+
+            std::ranges::sort(values);
+            expect(values == std::vector<int>{1, 2});
+        };
+
         "reset makes future awaits suspend again"_test = [] {
             auto rt = nxtrt::runtime{};
             auto ready = nxtrt::bell{};
@@ -689,6 +710,54 @@ void declare_runtime_io_tests()
             });
 
             expect(values == std::vector<int>{1, 2});
+        };
+    };
+
+    "shared fd readiness"_group = [] {
+        "two polls parked on one pipe both wake"_test = [] {
+            auto rt = nxtrt::runtime{};
+            auto pipe = make_pipe();
+            auto fd = pipe[0].get();
+            auto values = std::vector<int>{};
+
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_after_poll(fd, values, 1); },
+                    [&] { return record_after_poll(fd, values, 2); },
+                    [&]() -> nxtrt::task<void> {
+                        co_await settle_parked_waiters();
+                        expect(values.empty());
+                        auto byte = std::uint8_t{1};
+                        expect(::write(pipe[1].get(), &byte, 1) == 1);
+                    },
+                });
+            });
+
+            std::ranges::sort(values);
+            expect(values == std::vector<int>{1, 2});
+        };
+
+        "a cancelled poll leaves its sibling waiting on the fd"_test = [] {
+            auto rt = nxtrt::runtime{};
+            auto pipe = make_pipe();
+            auto fd = pipe[0].get();
+            auto values = std::vector<int>{};
+
+            rt.run([&]() -> nxtrt::task<void> {
+                (void)co_await nxtrt::when_all(std::tuple{
+                    [&] { return record_after_poll(fd, values, 1); },
+                    [&]() -> nxtrt::task<void> {
+                        co_await settle_parked_waiters();
+                        co_await record_poll_until_timeout(fd, values, 2);
+                        co_await settle_parked_waiters();
+                        expect(values == std::vector<int>{2});
+                        auto byte = std::uint8_t{1};
+                        expect(::write(pipe[1].get(), &byte, 1) == 1);
+                    },
+                });
+            });
+
+            expect(values == std::vector<int>{2, 1});
         };
     };
 

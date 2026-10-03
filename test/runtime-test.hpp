@@ -22,6 +22,10 @@
 #include "test.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <nxt/unique-fd.hpp>
+#include <poll.h>
+#include <unistd.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1032,6 +1036,42 @@ record_after_bell(
 {
     co_await ready;
     out.push_back(value);
+}
+
+inline std::array<nxt::unique_fd, 2> make_pipe()
+{
+    auto fds = std::array<int, 2>{-1, -1};
+    if (::pipe(fds.data()) != 0)
+        throw std::runtime_error{"pipe failed"};
+    return {nxt::unique_fd{fds[0]}, nxt::unique_fd{fds[1]}};
+}
+
+inline nxtrt::task<void>
+record_after_poll(int fd, std::vector<int> & out, int value)
+{
+    auto events = co_await nxtrt::op::poll{fd, POLLIN};
+    if ((events & POLLIN) != 0)
+        out.push_back(value);
+}
+
+inline nxtrt::task<void> record_poll_until_timeout(
+    int fd,
+    std::vector<int> & out,
+    int value)
+{
+    auto result = co_await nxtrt::poll_until_after(
+        fd,
+        POLLIN,
+        std::chrono::milliseconds{1});
+    if (result.timed_out)
+        out.push_back(value);
+}
+
+/// Let parked wishes reach the wand before the caller continues.
+inline nxtrt::task<void> settle_parked_waiters()
+{
+    co_await nxtrt::yield();
+    co_await nxtrt::op::timeout::after(std::chrono::milliseconds{2});
 }
 
 inline nxtrt::task<void> record_current_task_id_after_yield(

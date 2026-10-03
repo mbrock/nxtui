@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <functional>
+#include <map>
 #include <memory>
 #include <poll.h>
 #include <ranges>
@@ -54,9 +55,15 @@ using kqueue_event = struct kevent;
 
 /// kqueue-backed wand for BSD runtime wishes.
 ///
-/// Each awaited wish becomes one hub-stored execution record. Kevent `udata`
-/// points at that record while variant phases make prepared, parked, settled,
-/// delayed-delete, and retired states explicit.
+/// Each awaited wish becomes one hub-stored execution record. Timer and
+/// process kevents carry that record in `udata`, while variant phases make
+/// prepared, parked, settled, delayed-delete, and retired states explicit.
+///
+/// kqueue keys fd registrations by (fd, filter), so a second EV_ADD for the
+/// same pair replaces the first. Fd readiness therefore goes through one
+/// wand-owned registration per pair with a list of waiting execs: an event
+/// fans out to every waiter, and the kevent is deleted only when the last
+/// waiter leaves. Fd kevents never carry an exec pointer.
 class kqueue_wand final : public wand
 {
 private:
@@ -163,7 +170,7 @@ public:
         compact_execs();
         stage_submissions(d);
         stage_cancellations(d);
-        apply_changes();
+        apply_changes(d);
     }
 
     void poll(deck & d)
@@ -454,10 +461,10 @@ private:
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::read_some & op)
         {
             set_nonblocking(op.fd);
@@ -465,18 +472,18 @@ private:
                 ? ::read(op.fd, op.buffer.data(), op.buffer.size())
                 : ::pread(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
             return finish_or_wait(
+                wand,
                 token,
-                changes,
                 result,
                 op.fd,
                 EVFILT_READ);
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::write_some & op)
         {
             set_nonblocking(op.fd);
@@ -484,54 +491,54 @@ private:
                 ? ::write(op.fd, op.buffer.data(), op.buffer.size())
                 : ::pwrite(op.fd, op.buffer.data(), op.buffer.size(), op.offset);
             return finish_or_wait(
+                wand,
                 token,
-                changes,
                 result,
                 op.fd,
                 EVFILT_WRITE);
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::recv_some & op)
         {
             set_nonblocking(op.fd);
             auto result =
                 ::recv(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
             return finish_or_wait(
+                wand,
                 token,
-                changes,
                 result,
                 op.fd,
                 EVFILT_READ);
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::send_some & op)
         {
             set_nonblocking(op.fd);
             auto result =
                 ::send(op.fd, op.buffer.data(), op.buffer.size(), op.flags);
             return finish_or_wait(
+                wand,
                 token,
-                changes,
                 result,
                 op.fd,
                 EVFILT_WRITE);
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::connect & op)
         {
             set_nonblocking(op.fd);
@@ -545,61 +552,35 @@ private:
                 return false;
             }
 
-            set_event(
-                changes,
-                op.fd,
-                EVFILT_WRITE,
-                EV_ADD | EV_ONESHOT,
-                0,
-                0,
-                token);
+            wand.watch_fd(token, op.fd, EVFILT_WRITE);
             return true;
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::accept & op)
         {
             set_nonblocking(op.fd);
             auto result = accept_once(op);
             return finish_or_wait(
+                wand,
                 token,
-                changes,
                 result,
                 op.fd,
                 EVFILT_READ);
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
-            std::vector<kqueue_event> & changes,
+            std::vector<kqueue_event> &,
             op::poll & op)
         {
-            if ((op.events & POLLIN) != 0) {
-                set_event(
-                    changes,
-                    op.fd,
-                    EVFILT_READ,
-                    EV_ADD | EV_ONESHOT,
-                    0,
-                    0,
-                    token);
-            }
-            if ((op.events & POLLOUT) != 0) {
-                set_event(
-                    changes,
-                    op.fd,
-                    EVFILT_WRITE,
-                    EV_ADD | EV_ONESHOT,
-                    0,
-                    0,
-                    token);
-            }
+            wand.watch_poll_fd(token, op.fd, op.events);
             return true;
         }
 
@@ -622,32 +603,13 @@ private:
         }
 
         bool submit_op(
-            kqueue_wand &,
+            kqueue_wand & wand,
             deck &,
             wait_token token,
             std::vector<kqueue_event> & changes,
             op::poll_until & op)
         {
-            if ((op.events & POLLIN) != 0) {
-                set_event(
-                    changes,
-                    op.fd,
-                    EVFILT_READ,
-                    EV_ADD | EV_ONESHOT,
-                    0,
-                    0,
-                    token);
-            }
-            if ((op.events & POLLOUT) != 0) {
-                set_event(
-                    changes,
-                    op.fd,
-                    EVFILT_WRITE,
-                    EV_ADD | EV_ONESHOT,
-                    0,
-                    0,
-                    token);
-            }
+            wand.watch_poll_fd(token, op.fd, op.events);
             set_event(
                 changes,
                 token,
@@ -826,15 +788,13 @@ private:
         }
 
         bool event_op(
-            kqueue_wand & wand,
+            kqueue_wand &,
             deck &,
-            wait_token token,
+            wait_token,
             kqueue_event const & event,
-            op::poll & op)
+            op::poll &)
         {
             finish_result(poll_events_from_filter(event.filter));
-            if (wand.delete_poll_siblings(token, op, event.filter))
-                this->mark_delete_pending();
             return true;
         }
 
@@ -854,7 +814,7 @@ private:
             deck &,
             wait_token token,
             kqueue_event const & event,
-            op::poll_until & op)
+            op::poll_until &)
         {
             if (event.filter == EVFILT_TIMER) {
                 finish_poll_until(poll_until_result{
@@ -867,8 +827,10 @@ private:
                     .timed_out = false,
                 });
             }
-            if (wand.delete_poll_until_siblings(token, op, event.filter))
+            if (event.filter != EVFILT_TIMER) {
+                wand.delete_timer(token);
                 this->mark_delete_pending();
+            }
             return true;
         }
 
@@ -974,65 +936,6 @@ private:
         void delete_op_events(
             wait_token token,
             std::vector<kqueue_event> & changes,
-            op::read_some & op)
-        {
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
-            op::write_some & op)
-        {
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
-            op::recv_some & op)
-        {
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
-            op::send_some & op)
-        {
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
-            op::connect & op)
-        {
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
-            op::accept & op)
-        {
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
-            op::poll & op)
-        {
-            if ((op.events & POLLIN) != 0)
-                set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-            if ((op.events & POLLOUT) != 0)
-                set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
-        }
-
-        void delete_op_events(
-            wait_token token,
-            std::vector<kqueue_event> & changes,
             op::timeout &)
         {
             set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
@@ -1041,12 +944,8 @@ private:
         void delete_op_events(
             wait_token token,
             std::vector<kqueue_event> & changes,
-            op::poll_until & op)
+            op::poll_until &)
         {
-            if ((op.events & POLLIN) != 0)
-                set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-            if ((op.events & POLLOUT) != 0)
-                set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
             set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
         }
 
@@ -1076,8 +975,8 @@ private:
         {}
 
         bool finish_or_wait(
+            kqueue_wand & wand,
             wait_token token,
-            std::vector<kqueue_event> & changes,
             ssize_t result,
             int fd,
             short filter)
@@ -1090,7 +989,7 @@ private:
                 finish_result(-errno);
                 return false;
             }
-            set_event(changes, fd, filter, EV_ADD | EV_ONESHOT, 0, 0, token);
+            wand.watch_fd(token, fd, filter);
             return true;
         }
 
@@ -1110,7 +1009,7 @@ private:
                 finish_result(-errno);
                 return true;
             }
-            wand.arm(token, fd, filter);
+            wand.watch_fd(token, fd, filter);
             return false;
         }
 
@@ -1295,8 +1194,14 @@ private:
         }
     }
 
-    void apply_changes()
+    /// Flush staged changes. Every change asks for a receipt so one failed
+    /// change cannot abort the rest of the list and no pending events are
+    /// drained. A delete that finds nothing is fine: a oneshot that already
+    /// fired, or an fd that was closed, has no registration left. A failed
+    /// add finishes its waiters with the error.
+    void apply_changes(deck & d)
     {
+        reconcile_fd_watches();
         if (pending_changes_.empty()) {
             mark_deletes_applied();
             return;
@@ -1304,24 +1209,184 @@ private:
 
         auto changes = std::vector<kqueue_event>{};
         changes.swap(pending_changes_);
+        for (auto & change : changes)
+            change.flags |= EV_RECEIPT;
+        auto receipts = std::vector<kqueue_event>(changes.size());
+        auto const zero = timespec{.tv_sec = 0, .tv_nsec = 0};
+        auto rc = 0;
         while (true) {
-            auto rc = ::kevent(
+            rc = ::kevent(
                 kq_.get(),
                 changes.data(),
                 static_cast<int>(changes.size()),
-                nullptr,
-                0,
-                nullptr);
-            if (rc == 0) {
-                mark_deletes_applied();
-                return;
-            }
-            if (rc < 0 && errno == EINTR)
-                continue;
-            if (rc < 0)
+                receipts.data(),
+                static_cast<int>(receipts.size()),
+                &zero);
+            if (rc >= 0)
+                break;
+            if (errno != EINTR)
                 throw runtime_error{
                     "kevent changelist failed: " + std::to_string(errno)};
         }
+        mark_deletes_applied();
+
+        for (auto i = std::size_t{0}; i != static_cast<std::size_t>(rc); ++i) {
+            auto const & receipt = receipts[i];
+            if ((receipt.flags & EV_ERROR) == 0 || receipt.data == 0)
+                continue;
+            auto const & change = changes[i];
+            if ((change.flags & EV_DELETE) != 0) {
+                if (receipt.data == ENOENT || receipt.data == EBADF)
+                    continue;
+                throw runtime_error{
+                    "kevent delete failed: " + std::to_string(receipt.data)};
+            }
+            auto failed = change;
+            failed.flags = EV_ERROR;
+            failed.data = receipt.data;
+            handle_event(d, failed);
+        }
+    }
+
+    using fd_key = std::pair<uintptr_t, short>;
+
+    /// One kqueue registration for an (fd, filter) pair and its waiters.
+    struct fd_watch
+    {
+        std::vector<wait_token> waiters;
+        /// The kernel holds an unfired oneshot for this pair.
+        bool armed = false;
+        /// A waiter joined since the last flush; re-add so a reused fd
+        /// number cannot hide behind a registration the kernel dropped.
+        bool add = false;
+    };
+
+    static bool is_fd_filter(short filter) noexcept
+    {
+        return filter == EVFILT_READ || filter == EVFILT_WRITE;
+    }
+
+    void watch_fd(wait_token token, int fd, short filter)
+    {
+        auto key = fd_key{static_cast<uintptr_t>(fd), filter};
+        auto & watch = fd_watches_[key];
+        if (std::ranges::find(watch.waiters, token) == watch.waiters.end())
+            watch.waiters.push_back(token);
+        watch.add = true;
+        dirty_fds_.push_back(key);
+    }
+
+    void watch_poll_fd(wait_token token, int fd, short events)
+    {
+        if ((events & POLLIN) != 0)
+            watch_fd(token, fd, EVFILT_READ);
+        if ((events & POLLOUT) != 0)
+            watch_fd(token, fd, EVFILT_WRITE);
+    }
+
+    void unwatch_fd(wait_token token, int fd, short filter)
+    {
+        auto key = fd_key{static_cast<uintptr_t>(fd), filter};
+        auto it = fd_watches_.find(key);
+        if (it == fd_watches_.end())
+            return;
+        if (std::erase(it->second.waiters, token) != 0)
+            dirty_fds_.push_back(key);
+    }
+
+    /// Drop every fd interest an exec may hold, so no waiter list names it
+    /// after it settles.
+    void forget_fds(exec & execution)
+    {
+        auto token = token_for(execution);
+        std::visit(
+            [&](auto const & op) {
+                using Op = std::decay_t<decltype(op)>;
+                if constexpr (
+                    std::is_same_v<Op, op::read_some>
+                    || std::is_same_v<Op, op::recv_some>
+                    || std::is_same_v<Op, op::accept>) {
+                    unwatch_fd(token, op.fd, EVFILT_READ);
+                } else if constexpr (
+                    std::is_same_v<Op, op::write_some>
+                    || std::is_same_v<Op, op::send_some>
+                    || std::is_same_v<Op, op::connect>) {
+                    unwatch_fd(token, op.fd, EVFILT_WRITE);
+                } else if constexpr (
+                    std::is_same_v<Op, op::poll>
+                    || std::is_same_v<Op, op::poll_until>) {
+                    if ((op.events & POLLIN) != 0)
+                        unwatch_fd(token, op.fd, EVFILT_READ);
+                    if ((op.events & POLLOUT) != 0)
+                        unwatch_fd(token, op.fd, EVFILT_WRITE);
+                }
+            },
+            execution.specification.request);
+    }
+
+    /// Turn waiter-list changes into kevent adds and deletes.
+    void reconcile_fd_watches()
+    {
+        auto keys = std::vector<fd_key>{};
+        keys.swap(dirty_fds_);
+        for (auto const & key : keys) {
+            auto it = fd_watches_.find(key);
+            if (it == fd_watches_.end())
+                continue;
+            auto & watch = it->second;
+            if (!watch.waiters.empty()) {
+                if (watch.add || !watch.armed)
+                    set_event(
+                        pending_changes_,
+                        key.first,
+                        key.second,
+                        EV_ADD | EV_ONESHOT,
+                        0,
+                        0,
+                        0);
+                watch.armed = true;
+                watch.add = false;
+                continue;
+            }
+            if (watch.armed)
+                set_event(
+                    pending_changes_,
+                    key.first,
+                    key.second,
+                    EV_DELETE,
+                    0,
+                    0,
+                    0);
+            fd_watches_.erase(it);
+        }
+    }
+
+    /// Mark a fired oneshot as consumed before any waiter reacts to it.
+    void disarm_fd(kqueue_event const & event)
+    {
+        auto it = fd_watches_.find(fd_key{event.ident, event.filter});
+        if (it != fd_watches_.end())
+            it->second.armed = false;
+    }
+
+    /// Deliver fd readiness to every exec waiting on the pair. Waiters that
+    /// still would block join the list again.
+    void handle_fd_event(deck & d, kqueue_event const & event)
+    {
+        auto key = fd_key{event.ident, event.filter};
+        auto it = fd_watches_.find(key);
+        if (it == fd_watches_.end())
+            return;
+        it->second.armed = false;
+        auto waiters = std::exchange(it->second.waiters, {});
+        dirty_fds_.push_back(key);
+        for (auto token : waiters)
+            handle_exec_event(d, token, event);
+    }
+
+    void delete_timer(wait_token token)
+    {
+        set_event(pending_changes_, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
     }
 
     // Registers one oneshot event immediately; returns 0 or the errno.
@@ -1351,54 +1416,9 @@ private:
         }
     }
 
-    void arm(wait_token token, int fd, short filter)
-    {
-        if (auto error = try_arm(token, static_cast<uintptr_t>(fd), filter))
-            throw runtime_error{
-                "kevent rearm failed: " + std::to_string(error)};
-    }
-
-    [[nodiscard]] bool delete_poll_siblings(
-        wait_token token,
-        op::poll const & op,
-        short completed_filter)
-    {
-        auto changes = std::vector<kqueue_event>{};
-        if (completed_filter != EVFILT_READ && (op.events & POLLIN) != 0)
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-        if (completed_filter != EVFILT_WRITE && (op.events & POLLOUT) != 0)
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
-        auto const any = !changes.empty();
-        pending_changes_.insert(
-            pending_changes_.end(),
-            changes.begin(),
-            changes.end());
-        return any;
-    }
-
-    [[nodiscard]] bool delete_poll_until_siblings(
-        wait_token token,
-        op::poll_until const & op,
-        short completed_filter)
-    {
-        auto changes = std::vector<kqueue_event>{};
-        if (completed_filter != EVFILT_TIMER)
-            set_event(changes, token, EVFILT_TIMER, EV_DELETE, 0, 0, token);
-        if (completed_filter != EVFILT_READ && (op.events & POLLIN) != 0)
-            set_event(changes, op.fd, EVFILT_READ, EV_DELETE, 0, 0, token);
-        if (completed_filter != EVFILT_WRITE && (op.events & POLLOUT) != 0)
-            set_event(changes, op.fd, EVFILT_WRITE, EV_DELETE, 0, 0, token);
-        auto const any = !changes.empty();
-        pending_changes_.insert(
-            pending_changes_.end(),
-            changes.begin(),
-            changes.end());
-        return any;
-    }
-
     void poll_with_timeout(deck & d, timespec const * timeout)
     {
-        apply_changes();
+        apply_changes(d);
 
         auto events = std::array<kqueue_event, 64>{};
         while (true) {
@@ -1420,6 +1440,11 @@ private:
                 throw runtime_error{
                     "kevent wait failed: " + std::to_string(errno)};
 
+            for (auto i = 0; i != rc; ++i) {
+                auto const & event = events[static_cast<std::size_t>(i)];
+                if (is_fd_filter(event.filter))
+                    disarm_fd(event);
+            }
             for (auto i = 0; i != rc; ++i)
                 handle_event(d, events[static_cast<std::size_t>(i)]);
             drain_applied_deletes();
@@ -1430,7 +1455,18 @@ private:
 
     void handle_event(deck & d, kqueue_event const & event)
     {
-        auto token = event_token(event);
+        if (is_fd_filter(event.filter)) {
+            handle_fd_event(d, event);
+            return;
+        }
+        handle_exec_event(d, event_token(event), event);
+    }
+
+    void handle_exec_event(
+        deck & d,
+        wait_token token,
+        kqueue_event const & event)
+    {
         auto * execution = exec_from_token(token);
         if (execution == nullptr)
             return;
@@ -1471,7 +1507,8 @@ private:
     {
         return !pending_submissions_.empty()
             || !pending_cancellations_.empty()
-            || !pending_changes_.empty();
+            || !pending_changes_.empty()
+            || !dirty_fds_.empty();
     }
 
     void fulfill(deck & d, exec & execution, need continuation)
@@ -1494,6 +1531,7 @@ private:
             return;
 
         auto continuation = state->continuation;
+        forget_fds(execution);
         execution.state = settled{.phase = std::move(phase)};
         fulfill(d, execution, continuation);
     }
@@ -1551,6 +1589,8 @@ private:
     std::vector<exec *> pending_submissions_;
     std::vector<exec *> pending_cancellations_;
     std::vector<kqueue_event> pending_changes_;
+    std::map<fd_key, fd_watch> fd_watches_;
+    std::vector<fd_key> dirty_fds_;
 };
 
 template<typename Wish>

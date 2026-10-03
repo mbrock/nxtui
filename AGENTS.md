@@ -129,8 +129,9 @@ keep the header install excludes in `src/meson.build` in sync.
 For wand bugs, first map the concrete operation to the model vocabulary:
 `has-lifecycle`, `prepared-state`, `parked-state`, `settled-state`,
 `retired-state`, `has-parked-phase`, `has-settled-phase`, `has-ready`,
-`has-continuation`, `realizes`, and, for concurrent work, the pool's
-`admitted`, `slots`, `free-slots`, `running-slots`, and `ready-slots`. Each exec
+`has-continuation`, `realizes`, for concurrent work the pool's `admitted`,
+`slots`, `free-slots`, `running-slots`, and `ready-slots`, and for readiness
+registrations shared through an `fd-watch`, `awaits` and `waiters`. Each exec
 owns its lifecycle and backend phase details. If the bug is a missing invariant
 or impossible transition, encode that in the model before or alongside the
 runtime fix.

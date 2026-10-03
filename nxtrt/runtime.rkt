@@ -23,6 +23,7 @@ ontology nxt "https://swa.sh/nxt#"
   class settled-phase :abstract
   class ready-to-retire-phase :subclass-of settled-phase
   class draining-phase :subclass-of settled-phase
+  class fd-watch
 
   property has-ready
   property has-lifecycle
@@ -42,6 +43,8 @@ ontology nxt "https://swa.sh/nxt#"
   property blocking-lifecycle
   property worker-access
   property blocking-stopped
+  property awaits
+  property waiters
 
 model runtime-model
   signature deck
@@ -95,6 +98,15 @@ model runtime-model
     has-lifecycle var one exec-state
     has-parked-phase var lone parked-phase
     has-settled-phase var lone settled-phase
+    // Readiness interests the exec waits on (kqueue: one per fd filter).
+    awaits set fd-watch
+  // One wand-owned backend registration per readiness key, e.g. a kqueue
+  // (fd, filter) pair. The kernel keeps one registration per key, so every
+  // exec waiting on the key is listed here and a firing fans out to all of
+  // them. uring polls are per request and epoll registers a private dup per
+  // exec, so there each key has a single waiter by construction.
+  signature fd-watch
+    waiters var set exec
   signature exec-state
   signature prepared-state
   signature parked-state
@@ -480,6 +492,62 @@ model runtime-model
     assume always structural-invariants
     assume always lifecycle-transitions
     show always settled-never-reparks
+
+  // kqueue_wand::forget_fds runs in settle: listed waiters are parked
+  // execs that await the watch.
+  predicate watch-shape
+    all ([w fd-watch] [a (w waiters)])
+      in w (a awaits)
+      in (a has-lifecycle) parked-state
+
+  // watch_fd on submit or re-arm lists the exec; a firing hands it the
+  // event and it either settles or re-arms. Nothing else removes a waiter,
+  // in particular not a second exec registering the same key.
+  predicate watch-transitions
+    all ([a exec] [w (a awaits)])
+      (=> (block
+            (no (intersect (a has-parked-phase) submitted-phase))
+            (next-state (some (intersect (a has-parked-phase) submitted-phase))))
+          (next-state (in a (w waiters))))
+    all ([w fd-watch] [a (w waiters)])
+      next-state
+        (either
+          (in a (w waiters))
+          (in (a has-lifecycle) settled-state))
+
+  predicate submitted-waiters-stay-listed
+    all ([a exec] [w (a awaits)])
+      (=> (some (intersect (a has-parked-phase) submitted-phase))
+          (in a (w waiters)))
+
+  predicate shared-watch-fans-out
+    some ([w fd-watch] [a exec] [b exec])
+      no (intersect a b)
+      eventually
+        in a (w waiters)
+        in b (w waiters)
+        next-state
+          in (a has-lifecycle) settled-state
+          in (b has-lifecycle) settled-state
+
+  // Deleting the "nothing else removes a waiter" rule from
+  // watch-transitions makes this fail: the second registration on a key
+  // may strand the first exec, parked with no event that can wake it.
+  check submitted-exec-keeps-its-watch :for ([1 deck pool wish fd-watch prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task]) :trace-length 6
+    assume execs-start-prepared
+    assume always structural-invariants
+    assume always lifecycle-transitions
+    assume always watch-shape
+    assume always watch-transitions
+    show always submitted-waiters-stay-listed
+
+  run shared-watch-fans-out-witness :for ([1 deck pool wish fd-watch prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 exec task]) :trace-length 6
+    execs-start-prepared
+    always structural-invariants
+    always lifecycle-transitions
+    always watch-shape
+    always watch-transitions
+    shared-watch-fans-out
 
   run rich-runtime-shape-witness :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task])
     structural-invariants
