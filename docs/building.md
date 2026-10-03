@@ -148,18 +148,21 @@ The experimental Fil-C commands use `nix develop .#filc` and `build/filc`;
 override the directory with `FILC_BUILD_DIR=...`. Inside that shell, use
 `make build-filc` and `make test-filc`. The pinned `github:mbrock/filnix`
 input supplies both the compiler and its matching library package set, since
-Fil-C libraries must use the Fil-C ABI. AWS-LC uses its portable C mode because
-its assembly flags are not supported by Fil-C's assembler. The shell uses
-Fil-C's linker and contains the C++ build tools; use the default shell for docs
-and runtime model work. `nix build .#nxt-filc` attempts the installable package with tests.
+Fil-C libraries must use the Fil-C ABI. This target uses Filnix's OpenSSL
+package for `libcrypto`; the default Clang/GCC environments still use AWS-LC.
+Certificate verification and the certificate/signature fixtures use APIs
+shared by both providers. The AWS-LC-specific ML-KEM-768 test wrapper is
+omitted when its API probe fails with OpenSSL.
 
-At the pinned Filnix revision `0e32960446f8`, the x86_64 Linux attempt is
-blocked before Meson setup: AWS-LC 1.69.0 compiles in portable mode, but its
-`ASN1Test.ASN1Dup` test triggers `filc safety error: attempting to use
-unrecognized madvise advice -1`. AWS-LC's fork-detection code deliberately
-passes invalid advice to probe for an older QEMU bug; Fil-C traps on that
-argument. Dependency checks remain enabled. Nxt compilation and runtime
-compatibility have not yet been established with this toolchain.
+The shell uses Fil-C's linker and contains the C++ build tools; use the
+default shell for docs and runtime model work. `nix build .#nxt-filc` attempts
+the installable package with tests.
+
+At pinned Filnix revision `0e32960446f8`, `make filc` compiles the x86_64
+Linux sources, including the OpenSSL-backed certificate and signature tests,
+but linking `nxt-dev` fails on undefined
+`nxtrt::uring_wand::prepare_uring_wish<...>` instantiations. Full runtime tests
+remain blocked by that linker failure.
 
 For editors launched outside the development shell, use `scripts/clangd` as
 the language-server executable. It enters the pinned Nix shell so clangd sees

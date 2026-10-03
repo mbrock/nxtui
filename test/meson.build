@@ -26,10 +26,9 @@ if get_option('tests')
   nxt_crypto_dep = dependency('libcrypto', required : false)
   nxt_test_libcrypto_probe = '''
     #include <openssl/ec.h>
-    #include <openssl/ec_key.h>
     #include <openssl/ecdsa.h>
     #include <openssl/evp.h>
-    #include <openssl/nid.h>
+    #include <openssl/objects.h>
     #include <openssl/rsa.h>
     int main() {
       return EVP_PKEY_RSA != 0 && NID_X9_62_prime256v1 != 0;
@@ -46,7 +45,7 @@ if get_option('tests')
 
   nxt_mlkem_probe = '''
     #include <openssl/evp.h>
-    #include <openssl/nid.h>
+    #include <openssl/objects.h>
     int main() {
       EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_KEM, nullptr);
       return ctx != nullptr && NID_MLKEM768 != 0

@@ -18,6 +18,7 @@
   bash,
   coreutils,
   procps,
+  cryptoLibrary ? aws-lc,
   doCheck ? true,
 }:
 
@@ -53,11 +54,11 @@ stdenv.mkDerivation {
     brotli
     zstd
     c-ares
-    aws-lc
+    cryptoLibrary
   ];
 
-  # AWS-LC's libcrypto validates TLS certificates and also supplies the
-  # crypto test fixtures and ML-KEM-768 cross-checks.
+  # libcrypto validates TLS certificates and supplies crypto test fixtures.
+  # The default AWS-LC provider also enables the ML-KEM-768 test wrapper.
   nativeCheckInputs = [ python3 ] ++ lib.optionals stdenv.hostPlatform.isLinux [ procps ];
 
   postPatch = ''

@@ -9,11 +9,11 @@
 
 #ifdef NXT_HAVE_TEST_LIBCRYPTO
 #    include <openssl/ec.h>
-#    include <openssl/ec_key.h>
 #    include <openssl/ecdsa.h>
 #    include <openssl/evp.h>
-#    include <openssl/nid.h>
+#    include <openssl/objects.h>
 #    include <openssl/rsa.h>
+#    include <openssl/x509.h>
 #endif
 
 #include <algorithm>

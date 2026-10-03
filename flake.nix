@@ -35,10 +35,7 @@
               filcPkgs = filnix.legacyPackages.${pkgs.stdenv.hostPlatform.system}.pkgsFilc;
             in
             filcPkgs.callPackage ./nix/package.nix {
-              # AWS-LC's assembly flags are not supported by Fil-C's assembler.
-              aws-lc = filcPkgs.aws-lc.overrideAttrs (old: {
-                cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DOPENSSL_NO_ASM=ON" ];
-              });
+              cryptoLibrary = filcPkgs.openssl;
             };
         }
       );
