@@ -50,9 +50,8 @@ output view; ordinary feed view-invalidation rules still apply.
 
 This bounds admitted jobs, not every byte in the pipeline. Upstream recipe
 buffers, response-body storage, the deck registry, and coroutine frames have
-their own budgets. Frames currently use the ambient firm's frame provider,
-which must outlive the pool's drain. Recipes may themselves allocate or create
-further work; they do not spawn ambiently into the frame-provider firm. Any
+their own budgets. Recipes may themselves allocate or create further work;
+they do not spawn ambiently into the surrounding firm. Any
 child ownership must use an explicitly passed firm scope, and is outside the
 pool's transitive bound.
 

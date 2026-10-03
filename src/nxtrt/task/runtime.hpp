@@ -15,44 +15,6 @@ inline void child_record_base::task_completed() noexcept
         firm_record.owner->report_child_finished(*this);
 }
 
-inline void * allocate_task_frame(std::size_t size)
-{
-    if (auto * firm = current_firm()) {
-        auto * ptr = firm->allocate_frame(size);
-        alloc_trace::event(
-            "task-frame",
-            "new",
-            ptr,
-            size,
-            alignof(task_frame_header),
-            firm->frame_used(),
-            firm->frame_capacity());
-        return ptr;
-    }
-
-    throw runtime_error{
-        "nxtrt task created without current firm (root tasks must be "
-        "created inside runtime::run or deck::sync_wait: pass a task "
-        "factory)"};
-}
-
-inline void deallocate_task_frame(void * ptr, std::size_t size) noexcept
-{
-    if (ptr == nullptr)
-        return;
-
-    auto & arena = firm_frame_arena::owner_of(ptr);
-    arena.deallocate(ptr);
-    alloc_trace::event(
-        "task-frame",
-        "del",
-        ptr,
-        size,
-        alignof(task_frame_header),
-        arena.used(),
-        arena.capacity());
-}
-
 } // namespace detail
 
 inline task_id deck::current_task_id() const noexcept

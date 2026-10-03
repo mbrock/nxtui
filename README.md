@@ -591,10 +591,8 @@ Nix, and OpenSSL is also supported for X.509 verification. The crypto
 cross-check tests (RSA/ECDSA fixtures and ML-KEM-768) expect AWS-LC's headers;
 with OpenSSL those optional cross-checks are skipped at configure time.
 
-Default firms acquire frame land lazily in non-relocating chunks rather than
-reserving 4 MiB per scope. Chunks are reused until the firm is destroyed;
-explicit static or borrowed frame land remains bounded. Callers can still
-preallocate an `owned_frame_storage` rack and lend its view to a firm.
+Coroutine frames use the ordinary C++ allocator (see
+[RFC 0002](rfc/cur/rfc-0002-firm-frame-arenas.md) for the removed firm arenas).
 
 Meson keeps allocator poisoning enabled for everyday tests and the repeated
 HTTP stress tier. To run the stress cases with poisoning explicitly:

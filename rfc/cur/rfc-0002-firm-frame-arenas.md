@@ -1,7 +1,19 @@
 # RFC 0002: Firm Frame Arenas {#rfc_firm_frame_arenas}
 
-Status: implemented frame allocation; original ring/bookkeeping plans retained
-as history
+Status: removed. Coroutine frames use the ordinary C++ allocator again; the
+rest of this document is history.
+
+## Removal
+
+Firm arenas made the current firm a precondition for creating any task, which
+forced every entry point to take a callable body so the task could be born
+inside its firm (see [RFC 0019](../new/rfc-0019-firms-without-bodies.md)).
+They did not reclaim memory any faster on cancellation: every frame still had
+to be destroyed individually so its locals could run their destructors. What
+remained was bounded borrowed land, which only tests used, diagnostics, and a
+private size-class allocator that duplicated what the system allocator does.
+If frame allocation ever shows up in a profile, replacing the global allocator
+is the general fix.
 
 ## Current implementation note
 

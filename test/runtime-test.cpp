@@ -109,41 +109,33 @@ static suite runtime_tests{
                 }) == 7_i);
             };
 
-            "sync_wait factories create tasks inside a root firm"_test = [] {
+            "sync_wait factories run inside a root firm"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto before = std::size_t{};
-                auto after = std::size_t{};
+                auto had_firm = false;
 
                 deck.sync_wait([&] {
-                    auto * firm = nxtrt::current_firm();
-                    expect(firm != nullptr);
-                    before = firm->frame_high_water();
-                    auto root = []() -> nxtrt::task<void> {
-                        co_return;
-                    }();
-                    after = firm->frame_high_water();
-                    return root;
+                    had_firm = nxtrt::current_firm() != nullptr;
+                    return []() -> nxtrt::task<void> { co_return; }();
                 });
 
-                expect(after > before);
+                expect(had_firm);
             };
 
             "root_task keeps a root firm for manually pumped tasks"_test = [] {
                 auto deck = nxtrt::deck{};
-                auto before = std::size_t{};
-                auto after = std::size_t{};
+                auto had_firm = false;
 
                 auto root = nxtrt::root_task{
                     deck,
                     [&] {
-                        return root_task_probe(before, after);
+                        return root_task_probe(had_firm);
                     },
                 };
 
                 root.start();
                 deck.run_until_idle();
 
-                expect(after > before);
+                expect(had_firm);
                 expect(std::move(root.inner()).result() == 9_i);
             };
 

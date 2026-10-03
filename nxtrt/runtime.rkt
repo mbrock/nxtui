@@ -36,7 +36,6 @@ ontology nxt "https://swa.sh/nxt#"
   property has-continuation
   property realizes
   property admitted
-  property frame-source
   property slots
   property free-slots
   property running-slots
@@ -60,9 +59,10 @@ model runtime-model
   // HTTP connection tasks use the bounded pool below; Wisp callbacks await
   // native tasks directly. Guest continuations stay in the Wisp heap, not
   // in this deck. Neither layer needs permanent evaluator/connection workers.
-  // Firms provide frame memory and cancellation context; core no longer
-  // offers ambient free fork/join. A firm may be an empty frame/cancel scope,
-  // or a callback may explicitly use its firm reference to own children.
+  // Firms provide cancellation context; core no longer offers ambient free
+  // fork/join. A firm may be an empty cancellation scope, or a callback may
+  // explicitly use its firm reference to own children. Coroutine frames use
+  // the ordinary allocator and are not modeled.
   // The concurrent tuple combinator admits its finite input of N indexed
   // void recipes into an N-slot ordinary pool: main work stays pool-owned,
   // with no firm child/deed records. Any additional fork needs an explicit
@@ -72,20 +72,15 @@ model runtime-model
     // Optional explicit child ownership, not what makes the firm exist.
     spawned set task
     issued set deed
-  // Admission ownership is separate from frame allocation: pool jobs use
-  // the ambient firm's frame storage, but have no firm child/deed record.
-  // Frame-allocation provenance (a preconstructed task's allocation scope
-  // must outlive its target, while a factory runs in the target scope) is
-  // enforced by C++ and is outside this exec/ownership model.
+  // Pool jobs have no firm child/deed record.
   // slots is fixed capacity; consuming/discarding are events on this step.
   // admitted records job provenance, not current occupancy; slot.job is the
-  // live/result identity. Frame bytes, result values, cancellation delivery,
+  // live/result identity. Result values, cancellation delivery,
   // and eventual completion/close progress are intentionally abstracted out.
   // Upstream input reservation is folded into admission here; C++ reserves
   // capacity before reading an idea, and tests cover that additional wait.
   signature pool
     admitted set task
-    frame-source one firm
     slots set pool-slot
     free-slots var set pool-slot
     running-slots var set pool-slot

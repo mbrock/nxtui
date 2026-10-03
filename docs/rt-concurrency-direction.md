@@ -17,9 +17,9 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Firm | Lifetime scope providing frame memory and cancellation, with optional explicit child ownership through a passed scope reference |
+| Firm | Lifetime scope providing cancellation, with optional explicit child ownership through a passed scope reference |
 | Tuple concurrency helpers | Fixed heterogeneous work lowers to finite indexed `task<void>` recipes in the ordinary pool; main work has zero child/deed records |
-| Frame provision | Supplied by the ambient firm context, including for pool jobs; ambient context does not admit children |
+| Frame provision | Ordinary C++ allocation; firm arenas were removed (see RFC 0002) |
 | Idea-level `cope`, generic feed mapping, lifetime-aware terminal consumers | Design direction; no APIs are specified here as already available |
 | Strict transitive static teams | Design direction; tuple lowering bounds only its own fixed batch, not separately owned child work |
 | Wisp without permanent evaluation workers | Implemented explicit-await bridge and pool-based HTTP; guest structured-concurrency semantics remain open |
@@ -39,8 +39,8 @@ Several relationships previously hid behind “this task belongs to a firm”:
 
 These often have the same surrounding scope, but they are not the same
 relationship. A pool now owns pending task handles without registering them as
-firm children; their allocations still come from ambient firm frame land. The
-deck identifies and schedules those tasks without owning their frames. Fixed
+firm children. The deck identifies and schedules those tasks without owning
+their frames. Fixed
 tuple composition uses this existing pool: each finite indexed recipe starts
 one task and writes its typed `expected<T, exception_ptr>` into the matching
 tuple position. It allocates no main-work child records or deeds. The policy's
@@ -307,10 +307,10 @@ comparison remains intelligible after those applications change.
 [shell-supervision]: https://github.com/mbrock/nxtui/blob/8946acc004295d4699a69fb3c6f79f5f15d5c69b/demo/shell_scope_demo.cpp#L344-L380
 [wisp-host]: https://github.com/mbrock/nxtui/blob/8946acc004295d4699a69fb3c6f79f5f15d5c69b/src/wisp/main.cpp#L1029-L1128
 
-Some existing firms are only frame/resource scopes, with no explicitly owned
-children. Root task construction also requires an ambient firm context.
-Replacing those scopes with empty pools would obscure rather than simplify the
-system. Keep frame provision distinct from optional child ownership.
+Some existing firms are only resource or cancellation scopes, with no
+explicitly owned children. See
+[RFC 0019](../rfc/new/rfc-0019-firms-without-bodies.md) for removing firm
+bodies in favour of groups of ideas.
 
 ## Next decisions and verification
 

@@ -989,60 +989,10 @@ inline nxtrt::task<void> record_after_yield(std::vector<int> & events, int value
     events.push_back(value * 10 + 2);
 }
 
-inline nxtrt::task<int> frame_reuse_step(int value)
+inline nxtrt::task<int> root_task_probe(bool & had_firm)
 {
-    co_return value + 1;
-}
-
-inline nxtrt::task<void> frame_reuse_worker(int iterations, int & total)
-{
-    for (auto i = 0; i < iterations; ++i) {
-        total = co_await frame_reuse_step(total);
-        co_await nxtrt::yield();
-    }
-}
-
-/// Long-lived forked workers that keep awaiting short tasks: the shape that
-/// exhausted bump-only frame land (the echo bench's client loops).
-struct frame_reuse_firm : nxtrt::firm
-{
-    frame_reuse_firm(
-        nxtrt::firm land,
-        int iterations,
-        std::array<int, 4> & totals,
-        std::size_t & high_water)
-        : nxtrt::firm(std::move(land))
-        , iterations(iterations)
-        , totals(&totals)
-        , high_water(&high_water)
-    {}
-
-    frame_reuse_firm(frame_reuse_firm &&) noexcept = default;
-    frame_reuse_firm & operator=(frame_reuse_firm &&) = delete;
-
-    nxtrt::task<void> operator()()
-    {
-        for (auto & total : *totals)
-            fork(frame_reuse_worker(iterations, total));
-        co_await join();
-        *high_water = frame_high_water();
-    }
-
-    int iterations = 0;
-    std::array<int, 4> * totals = nullptr;
-    std::size_t * high_water = nullptr;
-};
-
-inline nxtrt::task<int> root_task_probe(std::size_t & before, std::size_t & after)
-{
-    auto * firm = nxtrt::current_firm();
-    expect(firm != nullptr);
-    before = firm->frame_high_water();
-    auto child = []() -> nxtrt::task<int> {
-        co_return 9;
-    }();
-    after = firm->frame_high_water();
-    co_return co_await child;
+    had_firm = nxtrt::current_firm() != nullptr;
+    co_return 9;
 }
 
 inline nxtrt::task<void>

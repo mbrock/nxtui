@@ -52,8 +52,6 @@ class deed_result_storage;
 
 namespace detail {
 
-void * allocate_task_frame(std::size_t size);
-void deallocate_task_frame(void * ptr, std::size_t size) noexcept;
 struct promise_base;
 struct child_record_base;
 struct deed_result_state_base;
@@ -126,16 +124,6 @@ struct promise_base
     {
         if (auto * current = detail::current_env)
             env.copy_entries_from(*current);
-    }
-
-    [[nodiscard]] static void * operator new(std::size_t size)
-    {
-        return allocate_task_frame(size);
-    }
-
-    static void operator delete(void * ptr, std::size_t size) noexcept
-    {
-        deallocate_task_frame(ptr, size);
     }
 
     /// Called by the compiler before running the coroutine body.

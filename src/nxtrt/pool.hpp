@@ -45,7 +45,7 @@ private:
 /// slot. Free + awaiting input + running + completed/unconsumed = capacity.
 /// Input recipes are invoked once, only after admission. Ready hopes require
 /// no task or scheduler turn. Pending jobs are owned directly, not forked into
-/// a firm; their frames still use the ambient runtime's frame provider.
+/// a firm.
 ///
 /// One consumer, on one deck. Values are consumed according to feed rules:
 /// transfer out of this source returns credit, not eventual delivery through

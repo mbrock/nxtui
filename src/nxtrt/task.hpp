@@ -9,7 +9,6 @@
 #include "nxtrt/task/task.hpp"
 #include "nxtrt/task/context.hpp"
 #include "nxtrt/task/deed.hpp"
-#include "nxtrt/task/frame_arena.hpp"
 #include "nxtrt/task/firm.hpp"
 #include "nxtrt/task/compose.hpp"
 #include "nxtrt/task/scope.hpp"

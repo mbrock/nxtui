@@ -169,13 +169,8 @@ history happens.
 
 The useful structured-concurrency rule is about owned child executions: they
 must settle before the firm exits. Cancellation requests do not satisfy that
-rule by themselves. Physical frame residence is a separate relationship:
-a frame can use the ambient firm's land without becoming a firm child.
-The [pool](rt-pool.md), for example, owns pending jobs directly, without firm
-child records, while their frames use the ambient frame provider. That land
-must remain live until those frames are released. The spatial metaphor helps
-describe storage lifetime, but allocation alone does not establish structured
-parenthood.
+rule by themselves. The [pool](rt-pool.md), for example, owns pending jobs
+directly, without firm child records.
 
 ## What this suggests for the model {#rt_occurrents_model}
 

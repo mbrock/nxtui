@@ -262,7 +262,7 @@ public:
 
     /// Rejects an already-created task at compile time.
     ///
-    /// A task's frame is allocated in the current firm when the task is
+    /// A task captures the runtime environment (deck, firm) when it is
     /// created, and the root firm only exists inside `sync_wait`, so the root
     /// must be created there: pass the factory instead.
     template<typename T>

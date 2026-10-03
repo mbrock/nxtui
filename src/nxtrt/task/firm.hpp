@@ -1,10 +1,8 @@
 #pragma once
 
-// Lifetime scope: frame provision, cancellation, and explicit child
-// ownership. Include nxtrt/task.hpp for the complete runtime API.
+// Lifetime scope: cancellation and explicit child ownership. Include nxtrt/task.hpp for the complete runtime API.
 
 #include "nxtrt/task/deed.hpp"
-#include "nxtrt/task/frame_arena.hpp"
 
 namespace nxtrt {
 
@@ -18,12 +16,6 @@ class firm
 {
 public:
     firm()
-    {
-        register_debug();
-    }
-
-    explicit firm(frame_storage_ref frames)
-        : frames_(frames)
     {
         register_debug();
     }
@@ -52,8 +44,7 @@ public:
     firm & operator=(const firm &) = delete;
 
     firm(firm && other) noexcept
-        : frames_(std::move(other.frames_))
-        , children_(std::move(other.children_))
+        : children_(std::move(other.children_))
         , stop_(std::move(other.stop_))
         , debug_id_(std::exchange(other.debug_id_, 0))
         , parent_(std::exchange(other.parent_, nullptr))
@@ -65,33 +56,6 @@ public:
         debug_update();
     }
     firm & operator=(firm &&) = delete;
-
-    [[nodiscard]] void * allocate_frame(std::size_t size)
-    {
-        if (auto * frame = frames_.allocate(size))
-            return frame;
-        throw_frame_arena_full(size);
-    }
-
-    [[nodiscard]] std::size_t frame_capacity() const noexcept
-    {
-        return frames_.capacity();
-    }
-
-    [[nodiscard]] std::size_t frame_high_water() const noexcept
-    {
-        return frames_.high_water();
-    }
-
-    [[nodiscard]] std::size_t frame_used() const noexcept
-    {
-        return frames_.used();
-    }
-
-    [[nodiscard]] const firm_frame_arena & frame_arena() const noexcept
-    {
-        return frames_;
-    }
 
     [[nodiscard]] std::size_t child_count() const noexcept
     {
@@ -137,16 +101,6 @@ public:
         auto handle = child.handle();
         if (!handle || handle.done())
             throw runtime_error{"nxtrt firm fork used with empty task"};
-
-        // A frame must outlive its execution owner. Explicit targeting can
-        // cross dynamic scopes, but cannot export an inner scope's frame.
-        auto & arena = firm_frame_arena::owner_of(handle.address());
-        auto * source = this;
-        while (source != nullptr && &source->frames_ != &arena)
-            source = source->parent_;
-        if (source == nullptr)
-            throw runtime_error{
-                "nxtrt firm fork frame belongs to a non-enclosing scope"};
 
         auto result = deed<T>{std::in_place};
         auto record = std::unique_ptr<detail::child_record<T>>{};
@@ -263,9 +217,6 @@ private:
             std::invoke(fn, *child);
     }
 
-    [[noreturn]] void throw_frame_arena_full(std::size_t frame_size) const;
-
-    firm_frame_arena frames_;
     // Records never move: promises and deeds link directly to them.
     // Retain settlement records until nursery destruction, even after
     // their frames have been evacuated and returned to the frame pool.
@@ -291,43 +242,6 @@ inline firm & require_current_firm()
         throw runtime_error{"nxtrt operation used without firm"};
     return *firm;
 }
-inline void firm::throw_frame_arena_full(std::size_t frame_size) const
-{
-    auto message = std::string{"nxtrt firm frame arena is full: firm "};
-    message += std::to_string(debug_id_);
-    message += " needs ";
-    message += std::to_string(firm_frame_arena::block_size(frame_size));
-    message += " bytes for a ";
-    message += std::to_string(frame_size);
-    message += "-byte frame (alignment ";
-    message += std::to_string(firm_frame_arena::block_alignment);
-    message += "); ";
-    message += std::to_string(frames_.used());
-    message += " of ";
-    message += std::to_string(frames_.capacity());
-    message += " bytes held by ";
-    message += std::to_string(frames_.live_frames());
-    message += " live frames, top ";
-    message += std::to_string(frames_.top());
-    message += ", high water ";
-    message += std::to_string(frames_.high_water());
-    message += ", ";
-    message += std::to_string(frames_.free_listed_bytes());
-    message += " bytes free-listed, ";
-    message += std::to_string(frames_.stranded_bytes());
-    message += " stranded";
-    if (auto * env = current_env();
-        env != nullptr && env->current_promise != nullptr) {
-        if (auto id = env->current_promise->id) {
-            message += "; created by task ";
-            message += std::to_string(id.index());
-            message += ".";
-            message += std::to_string(id.era());
-        }
-    }
-    throw runtime_error{std::move(message)};
-}
-
 inline deck * current_deck() noexcept
 {
     auto * env = current_env();

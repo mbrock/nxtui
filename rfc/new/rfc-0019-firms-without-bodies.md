@@ -44,10 +44,10 @@ supplies the stop rule.
 
 Split the three jobs of a firm and drop the body.
 
-1. **Frames.** A firm is frame land plus a stop source. The deck's root entry
-   owns the root firm and binds it while it invokes the root factory, once.
-   Groups allocate their jobs' frames from the ambient firm, as pools do now.
-   No API creates a nested firm by running a body.
+1. **Frames.** Coroutine frames use the ordinary allocator; firm arenas are
+   removed (see RFC 0002). Creating a task no longer requires a current firm,
+   so root entry can take a task or a factory, and no API needs a body to
+   delay task creation.
 
 2. **Work ownership.** Concurrent work is always a group of ideas: a tuple, a
    range or a feed, admitted into a bounded pool. A group has a stop rule and
@@ -172,10 +172,6 @@ favour of pool slots, which it already models.
 
 ## Open questions
 
-- **Nested frame land.** Nothing outside tests borrows bounded frame land or
-  needs a nested arena. If one is needed, an RAII guard that rebinds the
-  current task's firm for frames created in its extent would provide it
-  without a body. Its destructor must find no live frames in that land.
 - **Games.** `with_game` and `sync_wait_game` bind a game scope around a body
   in the same way. They should become root-entry options or a bound value.
 - **Cancellation of a group from outside.** A group's jobs observe the

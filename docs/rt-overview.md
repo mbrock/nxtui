@@ -120,7 +120,7 @@ A [bounded idea pool](rt-pool.md) turns a homogeneous feed of recipes into a
 completion-order result feed. It borrows farm slots and output land; consuming
 results returns admission capacity. Pool jobs are owned directly, not retained
 as firm child records. Ready hopes stay synchronous, while pending tasks use
-the existing deck and frame provider.
+the existing deck.
 
 See [Recipes, pools, and structured async](rt-concurrency-direction.md) for
 the design direction: teams versus pools, explicit coping, lifetime-aware
