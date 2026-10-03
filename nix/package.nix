@@ -59,7 +59,7 @@ stdenv.mkDerivation {
 
   # libcrypto validates TLS certificates and supplies crypto test fixtures.
   # The default AWS-LC provider also enables the ML-KEM-768 test wrapper.
-  nativeCheckInputs = [ python3 ] ++ lib.optionals stdenv.hostPlatform.isLinux [ procps ];
+  nativeCheckInputs = [ python3 procps ];
 
   postPatch = ''
     # These tests exercise explicit executable paths, rather than PATH lookup.

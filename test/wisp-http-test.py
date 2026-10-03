@@ -161,9 +161,13 @@ with tempfile.TemporaryDirectory(prefix="wisp-http-") as directory:
             assert blocked.result(timeout=5)[0] == 504
             assert queued.result(timeout=5)[0] == 504
             assert command.result(timeout=5)[0] == 504
-        leftover = subprocess.run(["pgrep", "-f", "sleep 45.123"],
-                                  capture_output=True)
-        assert leftover.stdout == b"", leftover.stdout
+        # pgrep is not available on darwin, but procps-ng and Apple's ps
+        # both list every process's full command line this way.
+        processes = subprocess.run(["ps", "-axww", "-o", "command="],
+                                   capture_output=True, check=True).stdout
+        leftover = [line for line in processes.splitlines()
+                    if b"sleep 45.123" in line]
+        assert leftover == [], leftover
         time.sleep(.8)
         server.stdin.write(b"available\n")
         server.stdin.flush()
