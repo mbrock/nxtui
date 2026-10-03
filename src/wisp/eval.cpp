@@ -156,6 +156,74 @@ struct condition
     word value;
 };
 
+// Prepared execution (RFC 0020) runs the compiler's semantic records
+// directly. They are DEFSTRUCT instances from compiler.wisp. Each IR type is
+// named here with the slots the executor reads; their positions come from
+// the descriptor's own slot list, so only the DEFSTRUCT defines slot order.
+enum class ir : std::uint8_t {
+    constant,
+    lookup,
+    reference,
+    function_reference,
+    assignment,
+    call,
+    branch,
+    sequence,
+    let,
+    closure,
+    function,
+    parameters,
+    binding,
+    source,
+};
+
+struct ir_shape
+{
+    ir kind;
+    std::size_t name;
+    std::size_t count;
+    std::array<std::size_t, 5> slots;
+};
+
+consteval ir_shape shape(
+    ir kind,
+    std::string_view name,
+    std::initializer_list<std::string_view> slots)
+{
+    ir_shape result{kind, known_name::find(name), slots.size(), {}};
+    std::size_t i = 0;
+    for (auto slot : slots)
+        result.slots[i++] = known_name::find(slot);
+    return result;
+}
+
+constexpr std::array ir_shapes{
+    shape(ir::constant, "IR-CONSTANT", {"VALUE"}),
+    shape(ir::lookup, "IR-LOOKUP", {"SYMBOL"}),
+    shape(ir::reference, "IR-REFERENCE", {"BINDING"}),
+    shape(ir::function_reference, "IR-FUNCTION-REFERENCE", {"SYMBOL"}),
+    shape(ir::assignment, "IR-ASSIGNMENT", {"TARGET", "VALUE"}),
+    shape(ir::call, "IR-CALL", {"CALLEE", "ARGUMENTS"}),
+    shape(ir::branch, "IR-BRANCH", {"TEST", "CONSEQUENT", "ALTERNATIVE"}),
+    shape(ir::sequence, "IR-SEQUENCE", {"FORMS"}),
+    shape(ir::let, "IR-LET", {"BINDINGS", "INITIALIZERS", "BODY"}),
+    shape(ir::closure, "IR-CLOSURE", {"FUNCTION"}),
+    shape(ir::function, "IR-FUNCTION", {"NAME", "PARAMETERS", "BODY",
+                                        "SOURCE"}),
+    shape(ir::parameters, "IR-PARAMETERS", {"SOURCE"}),
+    shape(ir::binding, "IR-BINDING", {"NAME"}),
+    shape(ir::source, "IR-SOURCE", {"FORM"}),
+};
+
+static_assert(
+    [] {
+        for (std::size_t i = 0; i < ir_shapes.size(); ++i)
+            if (std::size_t(ir_shapes[i].kind) != i)
+                return false;
+        return true;
+    }(),
+    "ir_shapes is indexed by ir");
+
 } // namespace
 
 evaluator::evaluator(heap & storage, std::nullptr_t)
@@ -397,6 +465,364 @@ struct eval_step
         enter(x);
     }
 
+    // * Prepared execution
+
+    struct ir_node
+    {
+        ir kind;
+        evaluator::ir_layout layout;
+    };
+
+    // The IR type of a record, or nothing for any other value. Layouts are
+    // cached per descriptor until the next collection moves descriptors.
+    std::optional<ir_node> ir_of(word x)
+    {
+        if (tag_of(x) != tag::rec || h.words<tag::rec>(x).empty())
+            return std::nullopt;
+        const auto descriptor = h.words<tag::rec>(x)[0];
+        if (vm.ir_layout_epoch_ != h.epoch()) {
+            vm.ir_layout_count_ = 0;
+            vm.ir_layout_epoch_ = h.epoch();
+        }
+        for (std::size_t i = 0; i < vm.ir_layout_count_; ++i)
+            if (vm.ir_layouts_[i].descriptor == descriptor)
+                return ir_node{
+                    ir(vm.ir_layouts_[i].kind), vm.ir_layouts_[i]};
+        const auto layout = ir_layout_of(descriptor);
+        if (!layout)
+            return std::nullopt;
+        if (vm.ir_layout_count_ == vm.ir_layouts_.size())
+            vm.ir_layout_count_ = 0;
+        vm.ir_layouts_[vm.ir_layout_count_++] = *layout;
+        return ir_node{ir(layout->kind), *layout};
+    }
+
+    // A descriptor made by DEFSTRUCT is #S(STRUCT-TYPE name slots).
+    std::optional<evaluator::ir_layout> ir_layout_of(word descriptor)
+    {
+        if (tag_of(descriptor) != tag::rec)
+            return std::nullopt;
+        const auto d = h.words<tag::rec>(descriptor);
+        if (d.size() != 3 || d[0] != vm.known("STRUCT-TYPE"))
+            return std::nullopt;
+        const auto name = d[1];
+        const auto slots = d[2];
+        for (const auto & shape : ir_shapes) {
+            if (vm.known_[shape.name].get() != name)
+                continue;
+            evaluator::ir_layout layout{descriptor, std::uint8_t(shape.kind)};
+            for (std::size_t i = 0; i < shape.count; ++i) {
+                const auto wanted = vm.known_[shape.slots[i]].get();
+                std::size_t at = 0;
+                auto cur = slots;
+                while (tag_of(cur) == tag::duo
+                       && h.get<tag::duo, field::car>(cur) != wanted
+                       && at < 255) {
+                    cur = h.get<tag::duo, field::cdr>(cur);
+                    ++at;
+                }
+                if (tag_of(cur) != tag::duo || at == 255)
+                    return std::nullopt;
+                layout.at[i] = std::uint8_t(at);
+            }
+            return layout;
+        }
+        return std::nullopt;
+    }
+
+    word ir_field(word x, const ir_node & node, std::size_t i)
+    {
+        const auto words = h.words<tag::rec>(x);
+        const auto at = std::size_t{1} + node.layout.at[i];
+        if (at >= words.size())
+            fail("INVALID-EXPRESSION", {x});
+        return words[at];
+    }
+
+    // A child that must be an IR record of a particular type.
+    ir_node ir_child(word owner, word x, ir kind)
+    {
+        const auto node = ir_of(x);
+        if (!node || node->kind != kind)
+            fail("INVALID-EXPRESSION", {owner});
+        return *node;
+    }
+
+    word binding_name(word owner, word binding)
+    {
+        const auto name =
+            ir_field(binding, ir_child(owner, binding, ir::binding), 0);
+        require(name, tag::sym);
+        return name;
+    }
+
+    std::size_t ir_vector_size(word owner, word x)
+    {
+        if (tag_of(x) != tag::v32)
+            fail("INVALID-EXPRESSION", {owner});
+        return h.v32slice(x).size();
+    }
+
+    // A frame's position, which must name an element of a vector.
+    std::size_t frame_index(word arg, std::size_t limit)
+    {
+        if (tag_of(arg) != tag::integer || integer(arg) < 0
+            || std::size_t(integer(arg)) >= limit)
+            fail("INVALID-CONTINUATION", {way});
+        return std::size_t(integer(arg));
+    }
+
+    bool control_jet(word fun) const noexcept
+    {
+        return tag_of(fun) == tag::jet && payload_of(fun) < builtins().size()
+               && builtins()[payload_of(fun)].control;
+    }
+
+    // A prepared closure keeps its IR-FUNCTION in the code slot; calls run
+    // the function's body.
+    word executable_body(word code)
+    {
+        const auto node = ir_of(code);
+        if (node && node->kind == ir::function)
+            return ir_field(code, *node, 2);
+        return code;
+    }
+
+    // CODE shows a prepared closure's source snapshot, not its IR.
+    word source_body(word code)
+    {
+        const auto node = ir_of(code);
+        if (node && node->kind == ir::function)
+            return ir_field(code, *node, 3);
+        return code;
+    }
+
+    void prepared(word x, const ir_node & node)
+    {
+        switch (node.kind) {
+        case ir::constant:
+            give(ir_field(x, node, 0));
+            return;
+        case ir::lookup:
+            give(lookup(ir_field(x, node, 0)));
+            return;
+        case ir::reference:
+            // Prepared scopes build the same environments as source
+            // evaluation, so a binding resolves by name, correct by
+            // construction until lexical addresses replace the search.
+            give(lookup(binding_name(x, ir_field(x, node, 0))));
+            return;
+        case ir::function_reference:
+            function(ir_field(x, node, 0));
+            return;
+        case ir::assignment:
+            push(x, nil, nil);
+            enter(ir_field(x, node, 1));
+            return;
+        case ir::branch:
+            push(x, nil, nil);
+            enter(ir_field(x, node, 0));
+            return;
+        case ir::sequence: {
+            const auto forms = ir_field(x, node, 0);
+            const auto size = ir_vector_size(x, forms);
+            if (size == 0)
+                fail("INVALID-EXPRESSION", {x});
+            if (size > 1)
+                push(x, nil, fixnum(1));
+            enter(h.v32slice(forms)[0]);
+            return;
+        }
+        case ir::let: {
+            const auto names = ir_field(x, node, 0);
+            const auto inits = ir_field(x, node, 1);
+            const auto size = ir_vector_size(x, inits);
+            if (ir_vector_size(x, names) != size)
+                fail("INVALID-EXPRESSION", {x});
+            if (size == 0) {
+                enter(ir_field(x, node, 2));
+                return;
+            }
+            push(x, h.filledv32(size, nil), fixnum(0));
+            enter(h.v32slice(inits)[0]);
+            return;
+        }
+        case ir::call:
+            start_call(x, node);
+            return;
+        case ir::closure: {
+            const auto function = ir_field(x, node, 0);
+            const auto fn = ir_child(x, function, ir::function);
+            const auto name = ir_field(function, fn, 0);
+            if (name != nil)
+                require(name, tag::sym);
+            const auto parameters = ir_field(function, fn, 1);
+            const auto source = ir_field(
+                parameters,
+                ir_child(function, parameters, ir::parameters),
+                0);
+            give(h.make<tag::fun>({env, source, function, name, 0}));
+            return;
+        }
+        case ir::function:
+            enter(ir_field(x, node, 2));
+            return;
+        case ir::source:
+            // The same run and call-site environment, not public EVAL.
+            enter(ir_field(x, node, 0));
+            return;
+        default:
+            fail("INVALID-EXPRESSION", {x});
+        }
+    }
+
+    // As in source application, the callee is resolved before any
+    // argument runs and kept for the rest of the call. Prepared code fixes
+    // the special operators and expands macros when it is prepared, so a
+    // macro or special operator here is an error rather than a reason to
+    // expand (RFC 0020's liveness contract).
+    void start_call(word x, const ir_node & node)
+    {
+        const auto callee = ir_field(x, node, 0);
+        const auto name = ir_field(
+            callee, ir_child(x, callee, ir::function_reference), 0);
+        require(name, tag::sym);
+        const auto fun = h.get<tag::sym, field::fun>(name);
+        if (fun == nil)
+            fail("UNDEFINED-FUNCTION", {name});
+        if (tag_of(fun) != tag::fun
+            && (tag_of(fun) != tag::jet || control_jet(fun)))
+            fail("INVALID-FUNCTION", {fun});
+        const auto args = ir_field(x, node, 1);
+        const auto size = ir_vector_size(x, args);
+        if (size == 0) {
+            call(fun, {});
+            return;
+        }
+        // One argument needs no progress vector: the frame keeps the
+        // callee itself. Otherwise the vector is [callee, arguments...].
+        if (size == 1) {
+            push(x, fun, fixnum(0));
+        } else {
+            const auto progress = h.filledv32(size + 1, nil);
+            h.v32set(progress, 0, fun);
+            push(x, progress, fixnum(0));
+        }
+        enter(h.v32slice(args)[0]);
+    }
+
+    void proceed_prepared(word x, word acc, word arg, word hop)
+    {
+        const auto node = ir_of(x);
+        if (!node)
+            fail("INVALID-CONTINUATION", {way});
+        switch (node->kind) {
+        case ir::branch:
+            way = hop;
+            enter(ir_field(x, *node, val == nil ? 2 : 1));
+            return;
+        case ir::assignment: {
+            const auto target = ir_field(x, *node, 0);
+            const auto kind = ir_of(target);
+            word name = nil;
+            if (kind && kind->kind == ir::reference)
+                name = binding_name(target, ir_field(target, *kind, 0));
+            else if (kind && kind->kind == ir::lookup)
+                name = ir_field(target, *kind, 0);
+            else
+                fail("INVALID-EXPRESSION", {x});
+            way = hop;
+            give(lookup(name, true, val));
+            return;
+        }
+        case ir::sequence: {
+            const auto forms = ir_field(x, *node, 0);
+            const auto size = ir_vector_size(x, forms);
+            const auto i = frame_index(arg, size);
+            if (i + 1 == size) {
+                way = hop;
+            } else {
+                writable_frame();
+                h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+            }
+            enter(h.v32slice(forms)[i]);
+            return;
+        }
+        case ir::let:
+            proceed_let(x, *node, arg, hop);
+            return;
+        case ir::call:
+            proceed_call(x, *node, acc, arg, hop);
+            return;
+        default:
+            fail("INVALID-CONTINUATION", {way});
+        }
+    }
+
+    void proceed_let(word x, const ir_node & node, word arg, word hop)
+    {
+        const auto names = ir_field(x, node, 0);
+        const auto inits = ir_field(x, node, 1);
+        const auto size = ir_vector_size(x, inits);
+        if (ir_vector_size(x, names) != size)
+            fail("INVALID-EXPRESSION", {x});
+        const auto i = frame_index(arg, size);
+        writable_frame();
+        const auto values = h.get<tag::ktx, field::acc>(way);
+        if (tag_of(values) != tag::v32 || h.v32slice(values).size() != size)
+            fail("INVALID-CONTINUATION", {way});
+        h.v32set(values, i, val);
+        if (i + 1 < size) {
+            h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+            enter(h.v32slice(inits)[i + 1]);
+            return;
+        }
+        // Like source LET, the last clause comes first, so a duplicated
+        // name resolves to its last binding.
+        with_words(2 * size, [&](std::span<word> scope) {
+            for (std::size_t k = 0; k < size; ++k) {
+                const auto j = size - 1 - k;
+                scope[2 * k] = binding_name(x, h.v32slice(names)[j]);
+                scope[2 * k + 1] = h.v32slice(values)[j];
+            }
+            env = h.cons(h.newv32(scope), env);
+        });
+        way = hop;
+        enter(ir_field(x, node, 2));
+    }
+
+    void proceed_call(
+        word x, const ir_node & node, word acc, word arg, word hop)
+    {
+        const auto args = ir_field(x, node, 1);
+        const auto size = ir_vector_size(x, args);
+        const auto i = frame_index(arg, size);
+        if (size == 1) {
+            const std::array one{val};
+            way = hop;
+            call(acc, one);
+            return;
+        }
+        writable_frame();
+        const auto progress = h.get<tag::ktx, field::acc>(way);
+        if (tag_of(progress) != tag::v32
+            || h.v32slice(progress).size() != size + 1)
+            fail("INVALID-CONTINUATION", {way});
+        h.v32set(progress, i + 1, val);
+        if (i + 1 < size) {
+            h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+            enter(h.v32slice(args)[i + 1]);
+            return;
+        }
+        with_words(size, [&](std::span<word> xs) {
+            const auto saved = h.v32slice(progress);
+            const auto fun = saved[0];
+            std::ranges::copy(saved.subspan(1), xs.begin());
+            way = hop;
+            call(fun, xs);
+        });
+    }
+
     void push(word fun, word acc, word arg)
     {
         way = h.make<tag::ktx>({way, env, fun, acc, arg});
@@ -538,7 +964,7 @@ struct eval_step
             h.set<tag::fun, field::cnt>(fun, count + 1);
         else
             h.set<tag::mac, field::cnt>(fun, count + 1);
-        enter(body);
+        enter(executable_body(body));
     }
 
     void call(word fun, std::span<const word> args)
@@ -696,6 +1122,8 @@ struct eval_step
                 h.set<tag::ktx, field::arg>(way, rest);
                 enter(first);
             }
+        } else if (tag_of(fun) == tag::rec) {
+            proceed_prepared(fun, acc, arg, hop);
         } else {
             fail("INVALID-CONTINUATION", {way});
         }
@@ -1012,6 +1440,8 @@ struct eval_step
             result = nil;
         else
             fail("PROGRAM-ERROR");
+        if constexpr (F == field::exp)
+            result = source_body(result);
         if constexpr (F == field::cnt)
             give_count(result);
         else
@@ -1686,6 +2116,12 @@ struct eval_step
         case tag::duo:
             application(exp);
             break;
+        case tag::rec:
+            if (const auto node = ir_of(exp)) {
+                prepared(exp, *node);
+                break;
+            }
+            fail("INVALID-EXPRESSION", {exp});
         default:
             fail("INVALID-EXPRESSION", {exp});
         }

@@ -831,9 +831,16 @@ finds slot positions by name in the descriptor's slot list, as the host does
 for its structs, so no slot order is duplicated in C++. A `WISP-COMPILER`
 package can follow once the API settles.
 
-During stage 2, `CODE` on a prepared closure returns its root node, which links
-back to the source. Stage 3 chooses between keeping that arrangement and
-adding an executable column to `fun`, which would change the tape version.
+A prepared closure is an ordinary `fun` row whose code slot holds its
+`ir-function` node; calls enter the node's body. The node also keeps the body
+form it was analyzed from, and `CODE` returns that snapshot, so editing it
+does not change the prepared code, and `SET-CODE!` returns the closure to
+source execution. No `fun` column or tape version changed. Stage 3 can still
+choose a separate executable column if reflection needs one.
+
+The executor caches each IR descriptor's slot positions and invalidates the
+cache with a heap collection counter, because collection moves descriptors and
+the pointer era bit alone repeats.
 
 ### Steps
 
@@ -870,6 +877,7 @@ Each step is a small, separately tested commit.
    scopes, captures, and a source escape survives a tape round trip.
 4. **Minimal executor.** Add the record case to `once()` and execute
    constants, lookups, references, branches, and sequences.
+   Done, together with steps 5 and 6.
 5. **Calls and closures.** Execute calls with a progress vector holding the
    resolved callee, position, and values; `ir-closure` building `fun` rows
    with node bodies; `LET`; assignment; and source escapes. Extend the
@@ -878,6 +886,14 @@ Each step is a small, separately tested commit.
    collection between every step and a tape restore before the first
    resumption. Mixed recursion works, a deep tail loop keeps a flat frame
    depth, and the whole corpus runs in prepared mode.
+   Done: every corpus case runs in both modes, the three deliberate
+   differences included, and `test/wisp/prepared-test.wisp` checks that the
+   frames of a suspended prepared call are `IR-CALL` records with their
+   argument progress, that tail calls stay flat in prepared code and across
+   prepared/source calls in both directions, and that malformed IR signals
+   conditions. A C++ test runs the suspended-argument example prepared with a
+   collection after every transition, saves a tape before resuming, and
+   resumes twice in each of two restored machines.
 
 Stages 3 through 6 then proceed as described above, with a working executor
 to measure. Delay instruction packing until we can inspect, save, restore, and

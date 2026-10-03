@@ -72,7 +72,10 @@
 ;; The code of a function literal. PARAMETERS is an
 ;; IR-PARAMETERS; BINDINGS is a vector of every parameter binding
 ;; in source order. The function owns its parameter bindings.
-(defstruct ir-function name parameters bindings body)
+;; SOURCE is the body form it was analyzed from: a prepared
+;; closure's CODE shows that snapshot, and editing it does not
+;; change the analyzed BODY.
+(defstruct ir-function name parameters bindings body source)
 
 ;; REQUIRED and OPTIONAL are vectors of bindings, and REST is a
 ;; binding or NIL. Missing optional arguments are NIL; Wisp has
@@ -282,7 +285,7 @@
     (if (or (nil? parsed)
             (not (or (nil? name) (%ir-name? name))))
         (make-ir-source form scope)
-      (let* ((function (make-ir-function name nil nil nil))
+      (let* ((function (make-ir-function name nil nil nil body))
              (bind (fn (parameter) (make-ir-binding parameter function)))
              (required (map bind (head parsed)))
              (optional (map bind (second parsed)))
@@ -299,6 +302,20 @@
         (set-ir-function-body! function
                                (analyze body (append bindings scope)))
         (make-ir-closure function)))))
+
+
+
+;;; * Running prepared code
+
+;; Evaluating an IR node runs it on the same control machine as
+;; source evaluation: its frames are ordinary continuation frames,
+;; so prepared and source code call each other, capture and
+;; resume continuations, and survive collection and tapes.
+;; (prepared-eval form) analyzes FORM and evaluates the result
+;; under public EVAL's scope rule. A function literal evaluates to
+;; a closure whose calls run prepared code.
+(defun prepared-eval (form)
+  (eval (analyze form)))
 
 
 

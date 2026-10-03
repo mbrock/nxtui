@@ -50,6 +50,41 @@ static suite compiler_tests{
                            (eq? n (head (ir-captures closure))))))",
                 "(T NIL T T (N Y) T)");
         };
+
+        "a prepared call suspended between arguments resumes from tapes"_test =
+            [] {
+                source_machine m{compiler_image()};
+                m.load(R"((defvar saved nil)
+                          (defvar program
+                            (analyze
+                             '(call-with-prompt 'pause
+                                (fn ()
+                                  (let ((x 0))
+                                    (list (do (set! x (+ x 1)) x)
+                                          (send! 'pause)
+                                          (do (set! x (+ x 1)) x))))
+                                (fn (v k) (set! saved k) 'paused)))))");
+                // Run the prepared program with a collection between every
+                // transition, then save the machine before any resumption.
+                m.check(R"((eval program))", "PAUSED");
+                expect(m.load("(eval program)", 1) != nil);
+                const auto saved = tape::encode(m.vm);
+                // Each restored copy is its own machine: resuming twice
+                // inside one shares its lexical store, and copies never
+                // share theirs.
+                for (int copy = 0; copy < 2; ++copy) {
+                    source_machine restored{tape::decode(saved)};
+                    expect(
+                        print(
+                            restored.h,
+                            restored.load(
+                                "(list (call saved 10) (call saved 20))", 1))
+                        == "((1 10 2) (1 20 3))");
+                }
+                m.check(
+                    "(list (call saved 10) (call saved 20))",
+                    "((1 10 2) (1 20 3))");
+            };
     }};
 
 } // namespace

@@ -18,6 +18,9 @@
 ;; Cases in declaration order: (name program source prepared reason).
 (defvar *corpus* nil)
 
+;; Each case is a test in source mode and another in prepared
+;; mode, where every top-level form is analyzed and the result
+;; evaluated.
 (defmacro defcase (name program source &optional prepared reason)
   (when (not (eq? (nil? prepared) (nil? reason)))
     (error 'corpus-case-needs-reason name))
@@ -25,7 +28,16 @@
              (append *corpus* (list (list ,name ',program ',source
                                           ',prepared ,reason))))
        (deftest ,name
-         (expect-equal (run-forms ',program) ',source))))
+         (expect-equal (run-forms ',program) ',source))
+       (deftest ,(string-append name " [prepared]")
+         (expect-equal (run-prepared-forms ',program)
+                       ',(if reason prepared source)))))
+
+(defun run-prepared-forms (forms)
+  (if (nil? (tail forms))
+      (prepared-eval (head forms))
+    (do (prepared-eval (head forms))
+        (run-prepared-forms (tail forms)))))
 
 ;;; Values and evaluation order
 

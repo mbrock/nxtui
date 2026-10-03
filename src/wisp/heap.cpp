@@ -100,8 +100,11 @@ word heap::copy_continuation_frame(word x)
     auto fun = tag_of(frame[column_index<tag::ktx, field::fun>()]);
     auto & acc = frame[column_index<tag::ktx, field::acc>()];
     // Lexical environments are shared store. Partially filled argument
-    // vectors are mutable control state and must be copied per invocation.
-    if ((fun == tag::fun || fun == tag::jet) && tag_of(acc) == tag::v32)
+    // vectors are mutable control state and must be copied per invocation,
+    // including the progress vectors of prepared frames, whose callee
+    // field holds an IR node record.
+    if ((fun == tag::fun || fun == tag::jet || fun == tag::rec)
+        && tag_of(acc) == tag::v32)
         acc = clonev32(acc);
     return make<tag::ktx>(frame);
 }
@@ -300,6 +303,7 @@ struct tidy
         old.bytes_ = std::move(bytes);
         old.words_ = std::move(words);
         old.era_ = !old.era_;
+        ++old.epoch_;
         old.freeze_continuations();
     }
 };
