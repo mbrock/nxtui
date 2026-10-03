@@ -19,6 +19,7 @@
 #include <nxtrt/wire.hpp>
 #include <nxtai/tool_batch.hpp>
 
+#include "task-test.hpp"
 #include "test.hpp"
 
 #include <algorithm>

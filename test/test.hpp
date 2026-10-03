@@ -8,6 +8,7 @@
 #include <exception>
 #include <format>
 #include <functional>
+#include <type_traits>
 #include <iostream>
 #include <optional>
 #include <ranges>
@@ -32,6 +33,9 @@
 // integration and stress cases that CI runs but everyday runs skip:
 // `--slow` adds them, `--only-slow` runs just them, and a selector naming a
 // slow test or something inside it runs it too.
+//
+// A test body may also be a coroutine, `[]() -> nxtrt::task<void> { ... }`,
+// when the file includes task-test.hpp: the runner awaits it on a fresh deck.
 
 namespace boost::ut {
 
@@ -281,7 +285,13 @@ void run_group(
     open_groups.push_back(
         {.name = name, .path = std::move(path), .slow = slow});
     try {
-        std::forward<F>(body)();
+        if constexpr (std::is_void_v<std::invoke_result_t<F &>>) {
+            body();
+        } else {
+            ++failures;
+            std::cerr << name << ": a group body only declares tests and "
+                                 "cannot be a coroutine\n";
+        }
     } catch (const std::exception & e) {
         ++failures;
         std::cerr << name << ": group failed while declaring tests: "
@@ -292,6 +302,23 @@ void run_group(
         std::cerr << name << ": group failed while declaring tests\n";
     }
     open_groups.pop_back();
+}
+
+/// Runs a test body that returns something to run rather than finishing
+/// when called, such as a coroutine task. A header that defines such a type
+/// specializes this; see task-test.hpp for `nxtrt::task<void>`.
+template<typename Result>
+struct test_body_runner;
+
+template<typename F>
+void run_body(F & body)
+{
+    using result_type = std::invoke_result_t<F &>;
+    if constexpr (std::is_void_v<result_type>)
+        body();
+    else
+        test_body_runner<result_type>::run(
+            std::function<result_type()>{std::ref(body)});
 }
 
 template<typename F>
@@ -308,7 +335,7 @@ void run_test(
     inside_test = true;
     auto start = std::chrono::steady_clock::now();
     try {
-        std::forward<F>(body)();
+        run_body(body);
     } catch (const std::exception & e) {
         ++failures;
         std::cerr << name << ": unexpected exception: " << e.what() << '\n';

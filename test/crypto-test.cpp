@@ -4,6 +4,7 @@
 #include <nxtrt/deck.hpp>
 #include <nxtrt/tls.hpp>
 
+#include "task-test.hpp"
 #include "test.hpp"
 
 #ifdef NXT_HAVE_TEST_LIBCRYPTO
@@ -193,13 +194,10 @@ static suite crypto_tests{
                 hex("1f8ac10f23c5b5bc1167bda84b833e5c057a77d2")));
         };
 
-        "hashes bytes through a SHA-256 sink"_test = [] {
-            auto deck = nxtrt::deck{};
+        "hashes bytes through a SHA-256 sink"_test = []() -> nxtrt::task<void> {
             auto sink = nxtrt::sha256_sink{std::size_t{2}};
 
-            deck.sync_wait([&] {
-                return write_sha256_sink_chunks(sink);
-            });
+            co_await write_sha256_sink_chunks(sink);
 
             expect(equal_bytes(
                 sink.finalize(),
@@ -207,13 +205,10 @@ static suite crypto_tests{
                     "b00361a396177a9cb410ff61f20015ad")));
         };
 
-        "hashes bytes through a SHA-1 sink"_test = [] {
-            auto deck = nxtrt::deck{};
+        "hashes bytes through a SHA-1 sink"_test = []() -> nxtrt::task<void> {
             auto sink = nxtrt::sha1_sink{std::size_t{2}};
 
-            deck.sync_wait([&] {
-                return write_sha1_sink_chunks(sink);
-            });
+            co_await write_sha1_sink_chunks(sink);
 
             expect(equal_bytes(
                 sink.finalize(),
@@ -229,7 +224,7 @@ static suite crypto_tests{
                     "881dc200c9833da726e9376c2e32cff7")));
         };
 
-        "authenticates bytes through HMAC-SHA256 state and sink"_test = [] {
+        "authenticates bytes through HMAC-SHA256 state and sink"_test = []() -> nxtrt::task<void> {
             auto key = nxt::crypto::bytes(20, std::byte{0x0b});
             auto state = nxt::crypto::hmac_sha256_state{key};
             state.update(bytes_from("Hi "));
@@ -239,11 +234,8 @@ static suite crypto_tests{
                 hex("b0344c61d8db38535ca8afceaf0bf12b"
                     "881dc200c9833da726e9376c2e32cff7")));
 
-            auto deck = nxtrt::deck{};
             auto sink = nxtrt::hmac_sha256_sink{key, std::size_t{3}};
-            deck.sync_wait([&] {
-                return write_hmac_sha256_sink_chunks(sink);
-            });
+            co_await write_hmac_sha256_sink_chunks(sink);
             expect(equal_bytes(
                 sink.finalize(),
                 hex("b0344c61d8db38535ca8afceaf0bf12b"

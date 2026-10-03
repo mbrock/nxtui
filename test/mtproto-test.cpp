@@ -9,6 +9,7 @@
 #include <nxtrt/deck.hpp>
 #include <nxtrt/mtproto.hpp>
 
+#include "task-test.hpp"
 #include "test.hpp"
 
 #include <array>
@@ -279,17 +280,14 @@ static suite mtproto_tests{
             expect(frames.extent() == std::size_t{13});
         };
 
-        "peeks abridged runtime frames as borrowed reel views"_test = [] {
-            auto deck = nxtrt::deck{};
+        "peeks abridged runtime frames as borrowed reel views"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{
                 "\x01" "abcd" "\x01" "efgh" "\x01" "ijkl"sv,
             };
             auto storage = std::array<std::byte, 10>{};
             auto source = mtproto_text_source(chunks, std::span{storage});
 
-            deck.sync_wait([&] {
-                return check_abridged_reel_ring_feed(source);
-            });
+            co_await check_abridged_reel_ring_feed(source);
         };
 
         "projects plain messages inside abridged reel frames"_test = [] {
@@ -398,48 +396,39 @@ static suite mtproto_tests{
             expect(reader.empty());
         };
 
-        "reads abridged runtime frames from a bytefeed"_test = [] {
-            auto deck = nxtrt::deck{};
+        "reads abridged runtime frames from a bytefeed"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"\x81\0\0\0\x01"sv, "abcd"sv};
             auto storage = std::array<std::byte, 16>{};
             auto source = mtproto_text_source(chunks, std::span{storage});
 
-            auto payload = deck.sync_wait([&] {
-                return read_frame_text(source);
-            });
+            auto payload = co_await read_frame_text(source);
 
             expect(payload == "abcd");
         };
 
-        "writes abridged runtime frames to a container sink"_test = [] {
-            auto deck = nxtrt::deck{};
+        "writes abridged runtime frames to a container sink"_test = []() -> nxtrt::task<void> {
             auto out = std::vector<std::byte>{};
             auto sink = nxtrt::container_sink{out};
 
-            deck.sync_wait([&] {
-                return write_frame(sink, bytes("abcd"));
-            });
+            co_await write_frame(sink, bytes("abcd"));
 
             expect(out.size() == std::size_t{5});
             expect(std::to_integer<unsigned>(out[0]) == 1);
             expect(text(std::span<const std::byte>{out}.subspan(1)) == "abcd");
         };
 
-        "writes and reads runtime plain messages through abridged frames"_test = [] {
-            auto deck = nxtrt::deck{};
+        "writes and reads runtime plain messages through abridged frames"_test = []() -> nxtrt::task<void> {
             auto out = std::vector<std::byte>{};
             auto sink = nxtrt::container_sink{out};
             auto last_message_id = std::optional<std::uint64_t>{};
             auto message_storage = std::array<std::byte, 32>{};
 
-            deck.sync_wait([&] {
-                return nxtrt::mtproto::write_plain_abridged_frame(
-                    sink,
-                    bytes("ping"),
-                    last_message_id,
-                    message_storage,
-                    1'693'436'740'000'000'000ULL);
-            });
+            co_await nxtrt::mtproto::write_plain_abridged_frame(
+            sink,
+            bytes("ping"),
+            last_message_id,
+            message_storage,
+            1'693'436'740'000'000'000ULL);
 
             expect(last_message_id.has_value());
             expect(out.size() == std::size_t{25});
@@ -453,9 +442,7 @@ static suite mtproto_tests{
                 std::span{source_storage},
             };
 
-            auto message = deck.sync_wait([&] {
-                return nxtrt::mtproto::read_plain_abridged_frame(source);
-            });
+            auto message = co_await nxtrt::mtproto::read_plain_abridged_frame(source);
 
             expect(message.message_id == *last_message_id);
             expect(text(message.body) == "ping");

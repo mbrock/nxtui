@@ -178,7 +178,7 @@ void declare_runtime_buffer_tests()
                         batch_probe_tool{.state = &state})});
                 auto cancelled = false;
                 try {
-                    deck.sync_wait([&] {
+                    (void)deck.sync_wait([&] {
                         return nxtai::tools::run_function_tool_batch(
                             tools, tool_batch_probe_calls(7), 1);
                     });
@@ -210,7 +210,7 @@ void declare_runtime_buffer_tests()
                         }}});
                 auto message = std::string{};
                 try {
-                    deck.sync_wait([&] {
+                    (void)deck.sync_wait([&] {
                         return nxtai::tools::run_function_tool_batch(
                             tools, tool_batch_probe_calls(5), 2);
                     });
@@ -275,7 +275,7 @@ void declare_runtime_buffer_tests()
                 expect(results.empty());
                 auto rejected = false;
                 try {
-                    deck.sync_wait([&] {
+                    (void)deck.sync_wait([&] {
                         return nxtai::tools::run_function_tool_batch(
                             tools, {}, 0);
                     });
@@ -649,25 +649,21 @@ void declare_runtime_buffer_tests()
             expect(result == plain);
         };
 
-        "protocol leftovers remain buffered"_test = [] {
-            auto deck = nxtrt::deck{};
+        "protocol leftovers remain buffered"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"abc--def--ghi"sv};
             auto storage = std::array<std::byte, 16>{};
             auto reader = text_source(chunks, std::span{storage});
 
-            auto parts = deck.sync_wait(
-                [&]() -> nxtrt::task<std::vector<std::string>> {
-                    auto out = std::vector<std::string>{};
-                    out.emplace_back(
-                        nxtrt::as_string_view(
-                            co_await reader.take_until("--")));
-                    out.emplace_back(
-                        nxtrt::as_string_view(
-                            co_await reader.take_until("--")));
-                    out.emplace_back(
-                        nxtrt::as_string_view(reader.buffered_span()));
-                    co_return out;
-                });
+            auto out = std::vector<std::string>{};
+            out.emplace_back(
+                nxtrt::as_string_view(
+                    co_await reader.take_until("--")));
+            out.emplace_back(
+                nxtrt::as_string_view(
+                    co_await reader.take_until("--")));
+            out.emplace_back(
+                nxtrt::as_string_view(reader.buffered_span()));
+            std::vector<std::string> parts = out;
 
             expect(
                 parts == std::vector<std::string>{"abc", "def", "ghi"});
@@ -702,15 +698,12 @@ void declare_runtime_buffer_tests()
             expect(std::move(root.inner()).result() == "abc");
         };
 
-        "bytefeed peeks through shared chunk views"_test = [] {
-            auto deck = nxtrt::deck{};
+        "bytefeed peeks through shared chunk views"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"abcd"sv};
             auto storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{storage});
 
-            deck.sync_wait([&] {
-                return check_bytefeed_chunk_peek(reader);
-            });
+            co_await check_bytefeed_chunk_peek(reader);
         };
 
         "chop lazily scans visible byte chunks"_test = [] {
@@ -748,8 +741,7 @@ void declare_runtime_buffer_tests()
                 == std::size_t{5});
         };
 
-        "reel peeks chops from a bytefeed without storing frames"_test = [] {
-            auto deck = nxtrt::deck{};
+        "reel peeks chops from a bytefeed without storing frames"_test = []() -> nxtrt::task<void> {
             auto bytes = std::array{
                 byte_value(2),
                 byte_value('a'),
@@ -773,36 +765,27 @@ void declare_runtime_buffer_tests()
                 std::span{storage},
             };
 
-            deck.sync_wait([&] {
-                return check_reel_chops_ring_feed(reader);
-            });
+            co_await check_reel_chops_ring_feed(reader);
         };
 
-        "reel is generic over source stock values"_test = [] {
-            auto deck = nxtrt::deck{};
+        "reel is generic over source stock values"_test = []() -> nxtrt::task<void> {
             auto source = int_feed{
                 std::vector<int>{2, 10, 20, 1, 30, 2, 40, 50},
                 5,
             };
 
-            deck.sync_wait([&] {
-                return check_stock_reel_chops_ring_feed(source);
-            });
+            co_await check_stock_reel_chops_ring_feed(source);
         };
 
-        "empty reads are distinguished from EOF"_test = [] {
-            auto deck = nxtrt::deck{};
+        "empty reads are distinguished from EOF"_test = []() -> nxtrt::task<void> {
             auto storage = std::array<std::byte, 8>{};
             auto reader = empty_then_string_source{storage.size()};
 
-            auto parts = deck.sync_wait(
-                [&]() -> nxtrt::task<std::vector<std::string>> {
-                    auto out = std::vector<std::string>{};
-                    while (auto chunk = co_await reader.take_some())
-                        out.emplace_back(
-                            nxtrt::as_string_view(*chunk));
-                    co_return out;
-                });
+            auto out = std::vector<std::string>{};
+            while (auto chunk = co_await reader.take_some())
+                out.emplace_back(
+                    nxtrt::as_string_view(*chunk));
+            std::vector<std::string> parts = out;
 
             expect(parts == std::vector<std::string>{"", "abc"});
         };
@@ -841,26 +824,22 @@ void declare_runtime_buffer_tests()
             expect(writer.text == "abcdef");
         };
 
-        "bytefeed reads directly into caller storage"_test = [] {
-            auto deck = nxtrt::deck{};
+        "bytefeed reads directly into caller storage"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"ab"sv, "cde"sv, "fg"sv};
             auto source_storage = std::array<std::byte, 2>{};
             auto reader = text_source(chunks, std::span{source_storage});
             auto out = std::array<std::byte, 5>{};
             auto dsts = std::array{std::span<std::byte>{out}};
 
-            auto read = deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
-                co_return nxtrt::value_count(
-                    co_await reader.read_vec(std::span{dsts}));
-            });
+            std::size_t read = nxtrt::value_count(
+                co_await reader.read_vec(std::span{dsts}));
 
             expect(read == std::size_t{5});
             expect(nxtrt::as_string_view(out) == "abcde");
             expect(reader.buffered_size() == std::size_t{0});
         };
 
-        "bytefeed read_vec scatters buffered bytes"_test = [] {
-            auto deck = nxtrt::deck{};
+        "bytefeed read_vec scatters buffered bytes"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"abcd"sv};
             auto source_storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{source_storage});
@@ -871,11 +850,9 @@ void declare_runtime_buffer_tests()
                 std::span<std::byte>{second},
             };
 
-            auto read = deck.sync_wait([&]() -> nxtrt::task<std::size_t> {
-                co_await reader.fill(4);
-                co_return nxtrt::value_count(
-                    co_await reader.read_vec(std::span{dsts}));
-            });
+            co_await reader.fill(4);
+            std::size_t read = nxtrt::value_count(
+                co_await reader.read_vec(std::span{dsts}));
 
             expect(read == std::size_t{3});
             expect(nxtrt::as_string_view(first) == "ab");
@@ -908,15 +885,12 @@ void declare_runtime_buffer_tests()
             expect(is_eof(eof));
         };
 
-        "write_all drains borrowed bytes into sinks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "write_all drains borrowed bytes into sinks"_test = []() -> nxtrt::task<void> {
             auto sink = chunking_string_sink{2};
 
-            deck.sync_wait([&]() -> nxtrt::task<void> {
-                co_await nxtrt::write_all(
-                    sink,
-                    std::string{"abcdef"});
-            });
+            co_await nxtrt::write_all(
+                sink,
+                std::string{"abcdef"});
 
             expect(sink.text == "abcdef");
         };
@@ -974,7 +948,7 @@ void declare_runtime_buffer_tests()
                 expect(!nxtrt::is_eof(result));
             };
 
-            "buffers into its feed storage when the stream sink has no room"_test = [] {
+            "buffers into its feed storage when the stream sink has no room"_test = []() -> nxtrt::task<void> {
                 struct read_once
                 {
                     nxtrt::task<nxtrt::fare_t>
@@ -992,7 +966,6 @@ void declare_runtime_buffer_tests()
                     }
                 };
 
-                auto deck = nxtrt::deck{};
                 auto storage = std::array<std::byte, 4>{};
                 auto source = nxtrt::task_bytefeed{
                     read_once{},
@@ -1000,113 +973,94 @@ void declare_runtime_buffer_tests()
                 };
                 auto writer = chunking_string_sink{64, std::size_t{0}};
 
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    auto first = co_await source.stream(writer, 3);
-                    expect(nxtrt::value_count(first) == std::size_t{0});
-                    expect(!nxtrt::is_eof(first));
-                    expect(writer.text.empty());
-                    expect(nxtrt::as_string_view(source.buffered_span()) == "abc");
+                auto first = co_await source.stream(writer, 3);
+                expect(nxtrt::value_count(first) == std::size_t{0});
+                expect(!nxtrt::is_eof(first));
+                expect(writer.text.empty());
+                expect(nxtrt::as_string_view(source.buffered_span()) == "abc");
 
-                    auto second = co_await source.stream(writer, 3);
-                    expect(nxtrt::value_count(second) == std::size_t{3});
-                });
+                auto second = co_await source.stream(writer, 3);
+                expect(nxtrt::value_count(second) == std::size_t{3});
 
                 expect(writer.text == "abc");
                 expect(source.buffered_size() == std::size_t{0});
             };
         };
 
-        "bytefeed peeks and takes copied structs"_test = [] {
+        "bytefeed peeks and takes copied structs"_test = []() -> nxtrt::task<void> {
             struct pair
             {
                 unsigned char a = 0;
                 unsigned char b = 0;
             };
 
-            auto deck = nxtrt::deck{};
             auto chunks = std::array{"abcd"sv};
             auto storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{storage});
 
-            deck.sync_wait([&]() -> nxtrt::task<void> {
-                auto first = co_await reader.peek_struct<pair>();
-                expect(first.a == static_cast<unsigned char>('a'));
-                expect(first.b == static_cast<unsigned char>('b'));
-                expect(reader.buffered_size() == std::size_t{4});
+            auto first = co_await reader.peek_struct<pair>();
+            expect(first.a == static_cast<unsigned char>('a'));
+            expect(first.b == static_cast<unsigned char>('b'));
+            expect(reader.buffered_size() == std::size_t{4});
 
-                auto second = co_await reader.take_struct<pair>();
-                expect(second.has_value());
-                expect(second->a == static_cast<unsigned char>('a'));
-                expect(second->b == static_cast<unsigned char>('b'));
-                expect(reader.buffered_size() == std::size_t{2});
-            });
+            auto second = co_await reader.take_struct<pair>();
+            expect(second.has_value());
+            expect(second->a == static_cast<unsigned char>('a'));
+            expect(second->b == static_cast<unsigned char>('b'));
+            expect(reader.buffered_size() == std::size_t{2});
         };
 
-        "bytefeed returns nullopt when taking structs at eof"_test = [] {
+        "bytefeed returns nullopt when taking structs at eof"_test = []() -> nxtrt::task<void> {
             struct pair
             {
                 unsigned char a = 0;
                 unsigned char b = 0;
             };
 
-            auto deck = nxtrt::deck{};
             auto chunks = std::array{""sv};
             auto storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{storage});
 
-            auto result = deck.sync_wait(
-                [&]() -> nxtrt::task<std::optional<pair>> {
-                co_return co_await reader.take_struct<pair>();
-            });
+            std::optional<pair> result = co_await reader.take_struct<pair>();
 
             expect(!result);
         };
 
-        "bytefeed does not treat empty reads as struct eof"_test = [] {
+        "bytefeed does not treat empty reads as struct eof"_test = []() -> nxtrt::task<void> {
             struct pair
             {
                 unsigned char a = 0;
                 unsigned char b = 0;
             };
 
-            auto deck = nxtrt::deck{};
             auto storage = std::array<std::byte, 8>{};
             auto reader = empty_then_string_source{storage.size()};
 
-            auto result = deck.sync_wait(
-                [&]() -> nxtrt::task<std::optional<pair>> {
-                co_return co_await reader.take_struct<pair>();
-            });
+            std::optional<pair> result = co_await reader.take_struct<pair>();
 
             expect(result.has_value());
             expect(result->a == static_cast<unsigned char>('a'));
             expect(result->b == static_cast<unsigned char>('b'));
         };
 
-        "bytefeed takes borrowed string views"_test = [] {
-            auto deck = nxtrt::deck{};
+        "bytefeed takes borrowed string views"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"abcd"sv};
             auto storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{storage});
 
-            auto result = deck.sync_wait([&]() -> nxtrt::task<std::string> {
-                auto view = co_await reader.take_string_view(3);
-                co_return std::string{view};
-            });
+            auto view = co_await reader.take_string_view(3);
+            std::string result = std::string{view};
 
             expect(result == "abc");
             expect(reader.buffered_size() == std::size_t{1});
         };
 
-        "zero-storage bytefeeds stream direct bytes"_test = [] {
-            auto deck = nxtrt::deck{};
+        "zero-storage bytefeeds stream direct bytes"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"xy"sv};
             auto reader = text_source(chunks, std::span<std::byte>{});
             auto sink = chunking_string_sink{64};
 
-            auto streamed = deck.sync_wait([&] {
-                return nxtrt::stream_all(reader, sink);
-            });
+            auto streamed = co_await nxtrt::stream_all(reader, sink);
 
             expect(streamed == std::size_t{2});
             expect(sink.text == "xy");
@@ -1114,21 +1068,18 @@ void declare_runtime_buffer_tests()
 
         "BYTESINK"_group = [] {
             "with borrowed storage"_group = [] {
-                "buffers bytes until flush"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "buffers bytes until flush"_test = []() -> nxtrt::task<void> {
                     auto storage = std::array<std::byte, 4>{};
                     auto writer =
                         chunking_string_sink{64, std::span{storage}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, std::string{"ab"});
-                        expect(writer.text.empty());
-                        co_await nxtrt::write(writer, std::string{"cd"});
-                        expect(writer.text.empty());
-                        co_await nxtrt::write(writer, std::string{"e"});
-                        expect(writer.text == "abcd");
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, std::string{"ab"});
+                    expect(writer.text.empty());
+                    co_await nxtrt::write(writer, std::string{"cd"});
+                    expect(writer.text.empty());
+                    co_await nxtrt::write(writer, std::string{"e"});
+                    expect(writer.text == "abcd");
+                    co_await writer.flush();
 
                     expect(writer.text == "abcde");
                 };
@@ -1164,160 +1115,127 @@ void declare_runtime_buffer_tests()
             };
 
             "with owned storage"_group = [] {
-                "buffers bytes until flush"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "buffers bytes until flush"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{4}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, std::string{"ab"});
-                        expect(writer.text.empty());
-                        co_await nxtrt::write(writer, std::string{"cd"});
-                        expect(writer.text.empty());
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, std::string{"ab"});
+                    expect(writer.text.empty());
+                    co_await nxtrt::write(writer, std::string{"cd"});
+                    expect(writer.text.empty());
+                    co_await writer.flush();
 
                     expect(writer.text == "abcd");
                 };
 
-                "writes ranges of text chunks"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes ranges of text chunks"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{4}};
                     auto chunks =
                         std::vector<std::string>{"ab", "cd", "e"};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, chunks);
-                        expect(writer.text == "abcd");
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, chunks);
+                    expect(writer.text == "abcd");
+                    co_await writer.flush();
 
                     expect(writer.text == "abcde");
                 };
 
-                "writes and flushes text chunks"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes and flushes text chunks"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{8}};
                     auto chunks =
                         std::vector<std::string>{"ab", "cd", "e"};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write_all(writer, chunks);
-                    });
+                    co_await nxtrt::write_all(writer, chunks);
 
                     expect(writer.text == "abcde");
                     expect(writer.buffered_size() == std::size_t{0});
                 };
 
-                "writes and flushes string literals"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes and flushes string literals"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{8}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write_all(writer, "hello");
-                    });
+                    co_await nxtrt::write_all(writer, "hello");
 
                     expect(writer.text == "hello");
                     expect(writer.buffered_size() == std::size_t{0});
                 };
 
-                "prints formatted text"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "prints formatted text"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{16}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::print(writer, "{}={:02}", "n", 7);
-                        expect(writer.text.empty());
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::print(writer, "{}={:02}", "n", 7);
+                    expect(writer.text.empty());
+                    co_await writer.flush();
 
                     expect(writer.text == "n=07");
                 };
 
-                "prints and flushes formatted text"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "prints and flushes formatted text"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{16}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::print_all(writer, "{} {}", "hello", 42);
-                    });
+                    co_await nxtrt::print_all(writer, "{} {}", "hello", 42);
 
                     expect(writer.text == "hello 42");
                     expect(writer.buffered_size() == std::size_t{0});
                 };
 
-                "drains buffered prefix before direct bytes"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "drains buffered prefix before direct bytes"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{3, std::size_t{4}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, "ab"sv);
-                        expect(writer.text.empty());
-                        co_await nxtrt::write(writer, "cdef"sv);
-                    });
+                    co_await nxtrt::write(writer, "ab"sv);
+                    expect(writer.text.empty());
+                    co_await nxtrt::write(writer, "cdef"sv);
 
                     expect(writer.text == "abcdef");
                     expect(writer.buffered_size() == std::size_t{0});
                 };
 
-                "writes repeated byte patterns"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes repeated byte patterns"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{8}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write_splat(writer, "ab"sv, 3);
-                        expect(writer.text.empty());
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write_splat(writer, "ab"sv, 3);
+                    expect(writer.text.empty());
+                    co_await writer.flush();
 
                     expect(writer.text == "ababab");
                 };
 
-                "drains splatted patterns after buffered prefix"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "drains splatted patterns after buffered prefix"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{4, std::size_t{2}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, "x"sv);
-                        co_await nxtrt::write_splat(writer, "ab"sv, 3);
-                    });
+                    co_await nxtrt::write(writer, "x"sv);
+                    co_await nxtrt::write_splat(writer, "ab"sv, 3);
 
                     expect(writer.text == "xababab");
                     expect(writer.buffered_size() == std::size_t{0});
                 };
 
-                "rebases while preserving recent buffered bytes"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "rebases while preserving recent buffered bytes"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{2, std::size_t{6}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, "abcdef"sv);
-                        co_await writer.rebase(2, 3);
-                        expect(writer.text == "abcd");
-                        expect(byte_value_chunks_text(writer.buffered()) == "ef");
-                        expect(writer.unused_capacity().size() >= std::size_t{3});
+                    co_await nxtrt::write(writer, "abcdef"sv);
+                    co_await writer.rebase(2, 3);
+                    expect(writer.text == "abcd");
+                    expect(byte_value_chunks_text(writer.buffered()) == "ef");
+                    expect(writer.unused_capacity().size() >= std::size_t{3});
 
-                        co_await nxtrt::write(writer, "XYZ"sv);
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, "XYZ"sv);
+                    co_await writer.flush();
 
                     expect(writer.text == "abcdefXYZ");
                 };
 
-                "reserves writable slices while preserving recent bytes"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "reserves writable slices while preserving recent bytes"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{2, std::size_t{6}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, "abcdef"sv);
-                        auto out =
-                            co_await writer.writable_slice_preserve(2, 3);
-                        std::memcpy(out.data(), "XYZ", out.size());
-                        expect(writer.text == "abcd");
-                        expect(
-                            byte_value_chunks_text(writer.buffered())
-                            == "efXYZ");
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, "abcdef"sv);
+                    auto out =
+                        co_await writer.writable_slice_preserve(2, 3);
+                    std::memcpy(out.data(), "XYZ", out.size());
+                    expect(writer.text == "abcd");
+                    expect(
+                        byte_value_chunks_text(writer.buffered())
+                        == "efXYZ");
+                    co_await writer.flush();
 
                     expect(writer.text == "abcdefXYZ");
                 };
@@ -1338,8 +1256,7 @@ void declare_runtime_buffer_tests()
                     expect(rejected);
                 };
 
-                "writes lazy ranges of text chunks"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes lazy ranges of text chunks"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{8}};
                     auto numbers = std::views::iota(1, 4);
                     auto chunks = numbers
@@ -1347,16 +1264,13 @@ void declare_runtime_buffer_tests()
                             return std::to_string(n);
                         });
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, chunks);
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, chunks);
+                    co_await writer.flush();
 
                     expect(writer.text == "123");
                 };
 
-                "writes ranges of byte spans"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes ranges of byte spans"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{4}};
                     auto chunks = std::array{
                         nxtrt::as_bytes("ab"sv),
@@ -1364,16 +1278,13 @@ void declare_runtime_buffer_tests()
                         nxtrt::as_bytes("ef"sv),
                     };
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, chunks);
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, chunks);
+                    co_await writer.flush();
 
                     expect(writer.text == "abcdef");
                 };
 
-                "writes and flushes byte spans"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "writes and flushes byte spans"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{64, std::size_t{8}};
                     auto chunks = std::array{
                         nxtrt::as_bytes("ab"sv),
@@ -1381,45 +1292,36 @@ void declare_runtime_buffer_tests()
                         nxtrt::as_bytes("ef"sv),
                     };
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write_all(writer, chunks);
-                    });
+                    co_await nxtrt::write_all(writer, chunks);
 
                     expect(writer.text == "abcdef");
                     expect(writer.buffered_size() == std::size_t{0});
                 };
 
-                "free write_all borrows lvalue sinks"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "free write_all borrows lvalue sinks"_test = []() -> nxtrt::task<void> {
                     auto sink = chunking_string_sink{64};
                     auto chunks =
                         std::vector<std::string>{"ab", "cd", "e"};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write_all(sink, chunks);
-                    });
+                    co_await nxtrt::write_all(sink, chunks);
 
                     expect(sink.text == "abcde");
                 };
 
-                "free write_all uses explicitly owned sinks"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "free write_all uses explicitly owned sinks"_test = []() -> nxtrt::task<void> {
                     auto text = std::make_shared<std::string>();
                     auto sink = shared_string_sink{text};
                     auto chunks =
                         std::vector<std::string>{"ab", "cd", "e"};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write_all(sink, chunks);
-                    });
+                    co_await nxtrt::write_all(sink, chunks);
 
                     expect(*text == "abcde");
                 };
             };
 
             "with borrowed sink and owned storage"_group = [] {
-                "buffers bytes until flush"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "buffers bytes until flush"_test = []() -> nxtrt::task<void> {
                     auto text = std::make_shared<std::string>();
                     auto writer = shared_string_sink{
                         text,
@@ -1427,44 +1329,36 @@ void declare_runtime_buffer_tests()
                         std::size_t{4},
                     };
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, std::string{"abc"});
-                        expect(text->empty());
-                        co_await nxtrt::write(writer, std::string{"de"});
-                        expect(*text == "abcd");
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, std::string{"abc"});
+                    expect(text->empty());
+                    co_await nxtrt::write(writer, std::string{"de"});
+                    expect(*text == "abcd");
+                    co_await writer.flush();
 
                     expect(*text == "abcde");
                 };
             };
 
             "with zero storage"_group = [] {
-                "owned zero-size buffers write directly"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "owned zero-size buffers write directly"_test = []() -> nxtrt::task<void> {
                     auto writer = chunking_string_sink{2, std::size_t{0}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, "abcde"sv);
-                        expect(writer.text == "abcde");
-                        expect(writer.buffered_size() == std::size_t{0});
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, "abcde"sv);
+                    expect(writer.text == "abcde");
+                    expect(writer.buffered_size() == std::size_t{0});
+                    co_await writer.flush();
 
                     expect(writer.text == "abcde");
                 };
 
-                "borrowed empty buffers write directly"_test = [] {
-                    auto deck = nxtrt::deck{};
+                "borrowed empty buffers write directly"_test = []() -> nxtrt::task<void> {
                     auto writer =
                         chunking_string_sink{64, std::span<std::byte>{}};
 
-                    deck.sync_wait([&]() -> nxtrt::task<void> {
-                        co_await nxtrt::write(writer, "ab"sv);
-                        expect(writer.text == "ab");
-                        expect(writer.buffered_size() == std::size_t{0});
-                        co_await writer.flush();
-                    });
+                    co_await nxtrt::write(writer, "ab"sv);
+                    expect(writer.text == "ab");
+                    expect(writer.buffered_size() == std::size_t{0});
+                    co_await writer.flush();
 
                     expect(writer.text == "ab");
                 };

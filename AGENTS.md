@@ -156,6 +156,12 @@ leaf. The runner makes one pass: group bodies only declare children, test
 bodies run only when selected, and results print as each test finishes. Keep
 every test self-contained; siblings must not share state through their group.
 
+A test that awaits runtime work can be a coroutine itself:
+`"name"_test = []() -> nxtrt::task<void> { ... co_await ...; }` in a file that
+includes `test/task-test.hpp`. The runner awaits it on a fresh deck through one
+shared entry, so prefer this to a `deck.sync_wait([&] { ... })` per test; keep
+an explicit deck only when the test drives or inspects the deck itself.
+
 Slow integration and stress cases are marked `"name"_test.slow()` (or a whole
 `.slow()` group). Everyday runs skip them; `build/nxt-tests --slow` runs
 everything, `--only-slow` runs just them, and selecting a slow test by number

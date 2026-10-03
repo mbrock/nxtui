@@ -5,40 +5,30 @@ namespace nxt::test {
 void declare_runtime_io_tests()
 {
     "feeds and sinks"_group = [] {
-        "peek fills the source buffer without consuming"_test = [] {
-            auto deck = nxtrt::deck{};
+        "peek fills the source buffer without consuming"_test = []() -> nxtrt::task<void> {
             auto storage = nxtrt::static_value_storage<int, 1>{};
             auto source = int_feed{
                 std::vector<int>{1, 2},
                 storage,
             };
 
-            deck.sync_wait([&] {
-                return check_feed_peek(source);
-            });
+            co_await check_feed_peek(source);
         };
 
-        "peek borrows requested values as chunks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "peek borrows requested values as chunks"_test = []() -> nxtrt::task<void> {
             auto source = int_feed{std::vector<int>{1, 2, 3}, 2};
 
-            deck.sync_wait([&] {
-                return check_feed_chunk_peek(source);
-            });
+            co_await check_feed_chunk_peek(source);
         };
 
-        "feed buffers expose wrapped chunks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "feed buffers expose wrapped chunks"_test = []() -> nxtrt::task<void> {
             auto source =
                 int_feed{std::vector<int>{1, 2, 3, 4, 5}, 3};
 
-            deck.sync_wait([&] {
-                return check_feed_ring_peek(source);
-            });
+            co_await check_feed_ring_peek(source);
         };
 
-        "byte feeds have reader-shaped ring lookahead"_test = [] {
-            auto deck = nxtrt::deck{};
+        "byte feeds have reader-shaped ring lookahead"_test = []() -> nxtrt::task<void> {
             auto text = "abcdef"sv;
             auto storage = nxtrt::static_value_storage<std::byte, 4>{};
             auto source = nxtrt::value_range_source{
@@ -46,29 +36,21 @@ void declare_runtime_io_tests()
                 storage,
             };
 
-            deck.sync_wait([&] {
-                return check_byte_feed_ring_shape(source);
-            });
+            co_await check_byte_feed_ring_shape(source);
         };
 
-        "bytefeeds are feeds"_test = [] {
-            auto deck = nxtrt::deck{};
+        "bytefeeds are feeds"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"abcdef"sv};
             auto storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{storage});
 
-            deck.sync_wait([&] {
-                return check_byte_feed_ring_shape(reader);
-            });
+            co_await check_byte_feed_ring_shape(reader);
         };
 
-        "peek returns null at eof"_test = [] {
-            auto deck = nxtrt::deck{};
+        "peek returns null at eof"_test = []() -> nxtrt::task<void> {
             auto source = int_feed{std::vector<int>{}, 1};
 
-            auto event = deck.sync_wait([&] {
-                return peek_int_value(source);
-            });
+            auto event = co_await peek_int_value(source);
 
             expect(event == nullptr);
         };
@@ -93,100 +75,78 @@ void declare_runtime_io_tests()
             expect(rejected);
         };
 
-        "sink buffers values until flush"_test = [] {
-            auto deck = nxtrt::deck{};
+        "sink buffers values until flush"_test = []() -> nxtrt::task<void> {
             auto storage = nxtrt::static_value_storage<int, 2>{};
             auto sink = collecting_int_sink{64, storage};
 
-            deck.sync_wait([&] {
-                return check_sink_buffers_until_flush(sink);
-            });
+            co_await check_sink_buffers_until_flush(sink);
 
             expect(sink.collected == std::vector<int>{1, 2});
         };
 
-        "sink buffers expose wrapped chunks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "sink buffers expose wrapped chunks"_test = []() -> nxtrt::task<void> {
             auto sink = collecting_int_sink{2, std::size_t{3}};
 
-            deck.sync_wait([&] {
-                return check_sink_ring_buffer(sink);
-            });
+            co_await check_sink_ring_buffer(sink);
 
             expect(sink.collected == std::vector<int>{1, 2, 3, 4, 5});
         };
 
-        "sinks write value spans and splats"_test = [] {
-            auto deck = nxtrt::deck{};
+        "sinks write value spans and splats"_test = []() -> nxtrt::task<void> {
             auto sink = collecting_int_sink{64, std::size_t{8}};
             auto values = std::array{1, 2, 3};
             auto pattern = std::array{8, 9};
 
-            deck.sync_wait([&]() -> nxtrt::task<void> {
-                co_await sink.write(std::span<const int>{values});
-                co_await sink.write_splat(std::span<const int>{pattern}, 2);
-                co_await sink.flush();
-            });
+            co_await sink.write(std::span<const int>{values});
+            co_await sink.write_splat(std::span<const int>{pattern}, 2);
+            co_await sink.flush();
 
             expect(sink.collected == std::vector<int>{1, 2, 3, 8, 9, 8, 9});
         };
 
-        "zero-storage sinks drain splatted value chunks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "zero-storage sinks drain splatted value chunks"_test = []() -> nxtrt::task<void> {
             auto sink = collecting_int_sink{64, std::size_t{0}};
             auto pattern = std::array{4, 5};
 
-            deck.sync_wait([&]() -> nxtrt::task<void> {
-                co_await sink.write_splat(std::span<const int>{pattern}, 3);
-            });
+            co_await sink.write_splat(std::span<const int>{pattern}, 3);
 
             expect(sink.collected == std::vector<int>{4, 5, 4, 5, 4, 5});
         };
 
-        "stream_all moves feed values into sinks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "stream_all moves feed values into sinks"_test = []() -> nxtrt::task<void> {
             auto source = int_feed{std::vector<int>{1, 2, 3}, 1};
             auto sink = collecting_int_sink{64, std::size_t{2}};
 
-            auto streamed = deck.sync_wait([&] {
-                return nxtrt::stream_all(source, sink);
-            });
+            auto streamed = co_await nxtrt::stream_all(source, sink);
 
             expect(streamed == std::size_t{3});
             expect(sink.collected == std::vector<int>{1, 2, 3});
         };
 
-        "zero-storage feeds stream directly into sinks"_test = [] {
-            auto deck = nxtrt::deck{};
+        "zero-storage feeds stream directly into sinks"_test = []() -> nxtrt::task<void> {
             auto source = int_feed{
                 std::vector<int>{5, 6, 7},
                 std::size_t{0},
             };
             auto sink = collecting_int_sink{64, std::size_t{3}};
 
-            auto streamed = deck.sync_wait([&] {
-                return nxtrt::stream_all(source, sink);
-            });
+            auto streamed = co_await nxtrt::stream_all(source, sink);
 
             expect(streamed == std::size_t{3});
             expect(sink.collected == std::vector<int>{5, 6, 7});
         };
 
-        "container sinks append without internal storage"_test = [] {
-            auto deck = nxtrt::deck{};
+        "container sinks append without internal storage"_test = []() -> nxtrt::task<void> {
             auto values = std::vector<int>{};
             auto sink = nxtrt::container_sink{values};
 
-            deck.sync_wait([&] {
-                return write_int_values(sink, 1, 2);
-            });
+            co_await write_int_values(sink, 1, 2);
             expect(sink.buffered_size() == std::size_t{0});
 
             expect(values == std::vector<int>{1, 2});
         };
 
-        "iterator sinks write through output iterators"_test = [] {
-            auto deck = nxtrt::deck{};
+        "iterator sinks write through output iterators"_test = []() -> nxtrt::task<void> {
             auto values = std::vector<int>{};
             auto sink = nxtrt::iterator_sink<
                 int,
@@ -194,15 +154,12 @@ void declare_runtime_io_tests()
                 std::back_inserter(values),
             };
 
-            deck.sync_wait([&] {
-                return write_int_values(sink, 3, 4);
-            });
+            co_await write_int_values(sink, 3, 4);
 
             expect(values == std::vector<int>{3, 4});
         };
 
-        "range feeds stream lazy views"_test = [] {
-            auto deck = nxtrt::deck{};
+        "range feeds stream lazy views"_test = []() -> nxtrt::task<void> {
             auto values = std::vector<int>{};
             auto source = nxtrt::value_range_source{
                 std::views::iota(1, 4)
@@ -213,15 +170,13 @@ void declare_runtime_io_tests()
             };
             auto sink = nxtrt::container_sink{values};
 
-            auto streamed = deck.sync_wait([&] {
-                return nxtrt::stream_all(source, sink);
-            });
+            auto streamed = co_await nxtrt::stream_all(source, sink);
 
             expect(streamed == std::size_t{3});
             expect(values == std::vector<int>{10, 20, 30});
         };
 
-        "taskfeeds fill typed value storage from task callables"_test = [] {
+        "taskfeeds fill typed value storage from task callables"_test = []() -> nxtrt::task<void> {
             struct read_ints
             {
                 nxtrt::task<nxtrt::fare_t>
@@ -240,24 +195,21 @@ void declare_runtime_io_tests()
                 std::size_t offset = 0;
             };
 
-            auto deck = nxtrt::deck{};
             auto storage = std::array<int, 3>{};
             auto source =
                 nxtrt::taskfeed{read_ints{}, std::span{storage}};
             auto out = std::vector<int>{};
             auto sink = nxtrt::container_sink{out};
 
-            deck.sync_wait([&]() -> nxtrt::task<void> {
-                auto peeked = co_await source.peek(2);
-                expect(peeked.size() == std::size_t{2});
-                auto streamed = co_await nxtrt::stream_all(source, sink);
-                expect(streamed == std::size_t{4});
-            });
+            auto peeked = co_await source.peek(2);
+            expect(peeked.size() == std::size_t{2});
+            auto streamed = co_await nxtrt::stream_all(source, sink);
+            expect(streamed == std::size_t{4});
 
             expect(out == std::vector<int>{1, 2, 3, 4});
         };
 
-        "feeds peek and take structs over value atoms"_test = [] {
+        "feeds peek and take structs over value atoms"_test = []() -> nxtrt::task<void> {
             struct triple
             {
                 int a = 0;
@@ -265,31 +217,27 @@ void declare_runtime_io_tests()
                 int c = 0;
             };
 
-            auto deck = nxtrt::deck{};
             auto source =
                 int_feed{std::vector<int>{1, 2, 3, 4}, 3};
 
-            deck.sync_wait([&]() -> nxtrt::task<void> {
-                auto peeked = co_await source.peek_struct<triple>();
-                expect(peeked.a == 1_i);
-                expect(peeked.b == 2_i);
-                expect(peeked.c == 3_i);
-                expect(source.buffered_size() == std::size_t{3});
+            auto peeked = co_await source.peek_struct<triple>();
+            expect(peeked.a == 1_i);
+            expect(peeked.b == 2_i);
+            expect(peeked.c == 3_i);
+            expect(source.buffered_size() == std::size_t{3});
 
-                auto taken = co_await source.take_struct<triple>();
-                expect(taken.has_value());
-                expect(taken->a == 1_i);
-                expect(taken->b == 2_i);
-                expect(taken->c == 3_i);
-                expect(source.buffered_size() == std::size_t{0});
+            auto taken = co_await source.take_struct<triple>();
+            expect(taken.has_value());
+            expect(taken->a == 1_i);
+            expect(taken->b == 2_i);
+            expect(taken->c == 3_i);
+            expect(source.buffered_size() == std::size_t{0});
 
-                auto rest = co_await source.take_one();
-                expect(rest == 4_i);
-            });
+            auto rest = co_await source.take_one();
+            expect(rest == 4_i);
         };
 
-        "parser feeds parse values from arbitrary feeds"_test = [] {
-            auto deck = nxtrt::deck{};
+        "parser feeds parse values from arbitrary feeds"_test = []() -> nxtrt::task<void> {
             auto input = int_feed{std::vector<int>{1, 2, 3, 4}, 2};
             auto source =
                 nxtrt::function_parser_feed<int, int>{
@@ -299,17 +247,14 @@ void declare_runtime_io_tests()
             auto values = std::vector<int>{};
             auto sink = nxtrt::container_sink{values};
 
-            auto streamed = deck.sync_wait([&] {
-                return nxtrt::stream_all(source, sink);
-            });
+            auto streamed = co_await nxtrt::stream_all(source, sink);
 
             expect(streamed == std::size_t{2});
             expect(values == std::vector<int>{3, 7});
             expect(input.buffered_size() == std::size_t{0});
         };
 
-        "byte parsers stream parsed values from bytefeeds"_test = [] {
-            auto deck = nxtrt::deck{};
+        "byte parsers stream parsed values from bytefeeds"_test = []() -> nxtrt::task<void> {
             auto chunks = std::array{"123"sv};
             auto storage = std::array<std::byte, 4>{};
             auto reader = text_source(chunks, std::span{storage});
@@ -318,37 +263,27 @@ void declare_runtime_io_tests()
             auto values = std::vector<int>{};
             auto sink = nxtrt::container_sink{values};
 
-            auto streamed = deck.sync_wait([&] {
-                return nxtrt::stream_all(source, sink);
-            });
+            auto streamed = co_await nxtrt::stream_all(source, sink);
 
             expect(streamed == std::size_t{3});
             expect(values == std::vector<int>{1, 2, 3});
         };
 
-        "range feed lookahead uses source storage"_test = [] {
-            auto deck = nxtrt::deck{};
+        "range feed lookahead uses source storage"_test = []() -> nxtrt::task<void> {
             auto storage = nxtrt::static_value_storage<int, 1>{};
             auto source = nxtrt::value_range_source{
                 std::views::iota(5, 7),
                 storage,
             };
 
-            deck.sync_wait([&] {
-                return check_range_source_lookahead(source);
-            });
+            co_await check_range_source_lookahead(source);
         };
 
-        "discard_all consumes expected values"_test = [] {
-            auto deck = nxtrt::deck{};
+        "discard_all consumes expected values"_test = []() -> nxtrt::task<void> {
             auto source = int_feed{std::vector<int>{1, 2, 3}, 1};
 
-            deck.sync_wait([&] {
-                return discard_expected_prefix(source);
-            });
-            auto rest = deck.sync_wait([&] {
-                return take_int_value(source);
-            });
+            co_await discard_expected_prefix(source);
+            auto rest = co_await take_int_value(source);
             expect(rest && *rest == 3_i);
         };
 
@@ -429,22 +364,15 @@ void declare_runtime_io_tests()
             expect(seen == std::vector<int>{7});
         };
 
-        "close rejects publishers and drains consumers"_test = [] {
-            auto deck = nxtrt::deck{};
+        "close rejects publishers and drains consumers"_test = []() -> nxtrt::task<void> {
             auto storage = nxtrt::rack<int>{64};
             auto events = nxtrt::wire<int>{storage};
 
             expect(events.try_send(1));
             events.close();
 
-            auto first = deck.sync_wait(
-                [&]() -> nxtrt::task<std::optional<int>> {
-                co_return co_await events.next();
-            });
-            auto second = deck.sync_wait(
-                [&]() -> nxtrt::task<std::optional<int>> {
-                co_return co_await events.next();
-            });
+            std::optional<int> first = co_await events.next();
+            std::optional<int> second = co_await events.next();
 
             expect(first && *first == 1_i);
             expect(!second);

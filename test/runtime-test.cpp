@@ -273,8 +273,7 @@ static suite runtime_tests{
                 expect(deck.empty());
             };
 
-            "re-enters yielded tasks through the pump"_test = [] {
-                auto deck = nxtrt::deck{};
+            "re-enters yielded tasks through the pump"_test = []() -> nxtrt::task<void> {
                 auto out = std::vector<int>{};
 
                 auto child_body = [&out](int tag) -> nxtrt::task<void> {
@@ -283,13 +282,11 @@ static suite runtime_tests{
                     out.push_back(tag * 10 + 2);
                 };
 
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    auto first = child_body(1);
-                    auto second = child_body(2);
+                auto first = child_body(1);
+                auto second = child_body(2);
 
-                    co_await first;
-                    co_await second;
-                });
+                co_await first;
+                co_await second;
 
                 expect(out == std::vector<int>{11, 12, 21, 22})
                     << "yield event order changed";
@@ -429,14 +426,11 @@ static suite runtime_tests{
                 expect(std::move(root.inner()).result() == 42_i);
             };
 
-            "missing awaitable delegates to a spliced task"_test = [] {
-                auto deck = nxtrt::deck{};
+            "missing awaitable delegates to a spliced task"_test = []() -> nxtrt::task<void> {
                 auto events = std::vector<int>{};
                 auto suspends = 0;
 
-                auto value = deck.sync_wait([&] {
-                    return run_splice_probe(events, suspends, false);
-                });
+                auto value = co_await run_splice_probe(events, suspends, false);
 
                 expect(suspends == 1_i)
                     << "miss path should enter await_suspend exactly once";
@@ -468,14 +462,11 @@ static suite runtime_tests{
                 expect(std::move(root.inner()).result() == 42_i);
             };
 
-            "hope makes a wish and resumes after it"_test = [] {
-                auto deck = nxtrt::deck{};
+            "hope makes a wish and resumes after it"_test = []() -> nxtrt::task<void> {
                 auto events = std::vector<int>{};
                 auto suspends = 0;
 
-                auto value = deck.sync_wait([&] {
-                    return run_hope(events, suspends, false);
-                });
+                auto value = co_await run_hope(events, suspends, false);
 
                 expect(suspends == 1_i)
                     << "miss path should build exactly one delegate task";
@@ -537,42 +528,31 @@ static suite runtime_tests{
                     << "transform must run in the resume after fulfillment";
             };
 
-            "then transforms task values"_test = [] {
-                auto deck = nxtrt::deck{};
-
-                auto result = deck.sync_wait([] {
-                    return nxtrt::then(value_after_yield(20), [](int value) {
-                        return value + 1;
-                    });
+            "then transforms task values"_test = []() -> nxtrt::task<void> {
+                auto result = co_await nxtrt::then(value_after_yield(20), [](int value) {
+                    return value + 1;
                 });
 
                 expect(result == 21_i);
             };
 
-            "let_value chains task values"_test = [] {
-                auto deck = nxtrt::deck{};
-
-                auto result = deck.sync_wait([] {
-                    return nxtrt::let_value(
-                        value_after_yield(20),
-                        [](int value) {
-                        return value_after_yield(value + 2);
-                    });
+            "let_value chains task values"_test = []() -> nxtrt::task<void> {
+                auto result = co_await nxtrt::let_value(
+                    value_after_yield(20),
+                    [](int value) {
+                    return value_after_yield(value + 2);
                 });
 
                 expect(result == 22_i);
             };
 
-            "finally runs shielded cleanup before returning values"_test = [] {
-                auto deck = nxtrt::deck{};
+            "finally runs shielded cleanup before returning values"_test = []() -> nxtrt::task<void> {
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait([&] {
-                    return nxtrt::finally(
-                        value_after_yield(7),
-                        [&]() {
-                            return record_after_yield(events, 9);
-                        });
+                auto result = co_await nxtrt::finally(
+                value_after_yield(7),
+                [&]() {
+                    return record_after_yield(events, 9);
                 });
 
                 expect(result == 7_i);
@@ -621,74 +601,63 @@ static suite runtime_tests{
                 expect(grouped);
             };
 
-            "task adaptors flow through then and let_value"_test = [] {
-                auto deck = nxtrt::deck{};
+            "task adaptors flow through then and let_value"_test = []() -> nxtrt::task<void> {
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait([&] {
-                    return value_after_yield(10)
-                        | nxtrt::then([](int value) {
-                            return value * 2;
-                        })
-                        | nxtrt::let_value([](int value) {
-                            return value_after_yield(value + 5);
-                        })
-                        | nxtrt::finally([&]() {
-                            return record_after_yield(events, 6);
-                        });
-                });
+                auto result = co_await (
+                    value_after_yield(10)
+                    | nxtrt::then([](int value) {
+                        return value * 2;
+                    })
+                    | nxtrt::let_value([](int value) {
+                        return value_after_yield(value + 5);
+                    })
+                    | nxtrt::finally([&]() {
+                        return record_after_yield(events, 6);
+                    }));
 
                 expect(result == 25_i);
                 expect(events == std::vector<int>{61, 62});
             };
 
-            "for_each_task awaits lazy ranges of tasks"_test = [] {
-                auto deck = nxtrt::deck{};
+            "for_each_task awaits lazy ranges of tasks"_test = []() -> nxtrt::task<void> {
                 auto values = std::array{1, 2, 3};
                 auto events = std::vector<int>{};
 
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::for_each_task(
-                        values | std::views::transform(
-                            [&](int value) {
-                                return record_after_yield(events, value);
-                            }));
-                });
+                co_await nxtrt::for_each_task(
+                    values | std::views::transform(
+                        [&](int value) {
+                            return record_after_yield(events, value);
+                        }));
 
                 expect(events == std::vector<int>{11, 12, 21, 22, 31, 32});
             };
 
-            "when_all_range awaits lazy ranges concurrently"_test = [] {
-                auto deck = nxtrt::deck{};
+            "when_all_range awaits lazy ranges concurrently"_test = []() -> nxtrt::task<void> {
                 auto values = std::array{1, 2, 3};
 
-                auto result = deck.sync_wait([&]() -> nxtrt::task<std::vector<int>> {
-                    co_return co_await nxtrt::when_all_range(
-                        values | std::views::transform(
-                            [](int value) {
-                                return value_after_yield(value * 10);
-                            }));
-                });
+                std::vector<int> result = co_await nxtrt::when_all_range(
+                    values | std::views::transform(
+                        [](int value) {
+                            return value_after_yield(value * 10);
+                        }));
 
                 expect(result == std::vector<int>{10, 20, 30});
             };
 
-            "wait_any_range awaits lazy ranges concurrently"_test = [] {
-                auto deck = nxtrt::deck{};
+            "wait_any_range awaits lazy ranges concurrently"_test = []() -> nxtrt::task<void> {
                 auto values = std::array{5, 6};
                 auto events = std::vector<int>{};
 
-                auto result = deck.sync_wait([&]() -> nxtrt::task<int> {
-                    co_return co_await nxtrt::wait_any_range(
-                        values | std::views::transform(
-                            [&](int value) {
-                                if (value == 5)
-                                    return value_after_yield(value);
-                                return value_after_two_yields_or_stop(
-                                    events,
-                                    value);
-                            }));
-                });
+                int result = co_await nxtrt::wait_any_range(
+                    values | std::views::transform(
+                        [&](int value) {
+                            if (value == 5)
+                                return value_after_yield(value);
+                            return value_after_two_yields_or_stop(
+                                events,
+                                value);
+                        }));
 
                 expect(result == 5_i);
                 expect(events == std::vector<int>{6});
@@ -732,50 +701,40 @@ static suite runtime_tests{
                 expect(get_threw);
             };
 
-            "survives nested task awaits"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto result = deck.sync_wait([]() -> nxtrt::task<int> {
-                    co_return co_await nxtrt::with_env<ambient_int_key>(
-                        41, [] { return read_ambient_int_after_yield(); });
-                });
+            "survives nested task awaits"_test = []() -> nxtrt::task<void> {
+                int result = co_await nxtrt::with_env<ambient_int_key>(
+                    41, [] { return read_ambient_int_after_yield(); });
 
                 expect(result == 41_i);
             };
 
-            "restores outer env values"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto result = deck.sync_wait([]() -> nxtrt::task<int> {
-                    co_return co_await nxtrt::with_env<ambient_int_key>(
-                        10, []() -> nxtrt::task<int> {
-                            auto before = co_await read_ambient_int();
-                            auto inside = co_await nxtrt::with_env<
-                                ambient_int_key>(20, [] {
-                                return read_ambient_int_after_yield();
-                            });
-                            auto after = co_await read_ambient_int();
-                            co_return before * 100 + inside * 10 + after;
+            "restores outer env values"_test = []() -> nxtrt::task<void> {
+                int result = co_await nxtrt::with_env<ambient_int_key>(
+                    10, []() -> nxtrt::task<int> {
+                        auto before = co_await read_ambient_int();
+                        auto inside = co_await nxtrt::with_env<
+                            ambient_int_key>(20, [] {
+                            return read_ambient_int_after_yield();
                         });
-                });
+                        auto after = co_await read_ambient_int();
+                        co_return before * 100 + inside * 10 + after;
+                    });
 
                 expect(result == 1210_i);
             };
 
-            "group jobs see the env bound around the group"_test = [] {
-                auto deck = nxtrt::deck{};
-                auto result = deck.sync_wait([]() -> nxtrt::task<int> {
-                    auto values = co_await nxtrt::with_env<ambient_int_key>(
-                        99, [] {
-                            return nxtrt::when_all(
-                                std::tuple{read_ambient_int_after_yield});
-                        });
-                    co_return std::get<0>(values);
-                });
+            "group jobs see the env bound around the group"_test = []() -> nxtrt::task<void> {
+                auto values = co_await nxtrt::with_env<ambient_int_key>(
+                    99, [] {
+                        return nxtrt::when_all(
+                            std::tuple{read_ambient_int_after_yield});
+                    });
+                int result = std::get<0>(values);
 
                 expect(result == 99_i);
             };
 
-            "trace context is inherited by group jobs"_test = [] {
-                auto deck = nxtrt::deck{};
+            "trace context is inherited by group jobs"_test = []() -> nxtrt::task<void> {
                 auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
 
@@ -789,18 +748,16 @@ static suite runtime_tests{
                     span.finish("ok");
                 };
 
-                deck.sync_wait([&]() -> nxtrt::task<void> {
-                    co_await nxtrt::with_env<nxtrt::trace_context_key>(
-                        trace, [&]() -> nxtrt::task<void> {
-                            co_await nxtrt::with_env<
-                                nxtrt::trace_current_span_key>(
-                                root.span_id(), [&]() -> nxtrt::task<void> {
-                                    (void)co_await nxtrt::when_all(
-                                        traced_child("child-a"),
-                                        traced_child("child-b"));
-                                });
-                        });
-                });
+                co_await nxtrt::with_env<nxtrt::trace_context_key>(
+                    trace, [&]() -> nxtrt::task<void> {
+                        co_await nxtrt::with_env<
+                            nxtrt::trace_current_span_key>(
+                            root.span_id(), [&]() -> nxtrt::task<void> {
+                                (void)co_await nxtrt::when_all(
+                                    traced_child("child-a"),
+                                    traced_child("child-b"));
+                            });
+                    });
 
                 root.finish("ok");
                 auto children = trace->children(root.span_id());
@@ -811,24 +768,21 @@ static suite runtime_tests{
                 expect(children[1].status == "ok"sv);
             };
 
-            "with trace span scopes task bodies"_test = [] {
-                auto deck = nxtrt::deck{};
+            "with trace span scopes task bodies"_test = []() -> nxtrt::task<void> {
                 auto trace = std::make_shared<nxtrt::trace_context>();
                 auto root = trace->start_span("root");
 
-                auto result = deck.sync_wait([&]() -> nxtrt::task<int> {
+                int result = co_await nxtrt::with_env<
+                    nxtrt::trace_context_key>(
+                    trace, [&]() -> nxtrt::task<int> {
                     co_return co_await nxtrt::with_env<
-                        nxtrt::trace_context_key>(
-                        trace, [&]() -> nxtrt::task<int> {
-                        co_return co_await nxtrt::with_env<
-                            nxtrt::trace_current_span_key>(
-                            root.span_id(), [&]() -> nxtrt::task<int> {
-                            co_return co_await nxtrt::with_trace_span(
-                                "child",
-                                []() -> nxtrt::task<int> {
-                                co_await nxtrt::yield();
-                                co_return 42;
-                            });
+                        nxtrt::trace_current_span_key>(
+                        root.span_id(), [&]() -> nxtrt::task<int> {
+                        co_return co_await nxtrt::with_trace_span(
+                            "child",
+                            []() -> nxtrt::task<int> {
+                            co_await nxtrt::yield();
+                            co_return 42;
                         });
                     });
                 });
