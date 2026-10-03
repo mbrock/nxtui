@@ -82,7 +82,7 @@ stopped before it started settles as cancelled. `settle_range(range, execution)`
 the same for a homogeneous range and returns `std::vector<outcome<T>>` in range
 order.
 
-The group subclass decides, as each job settles, whether to stop the rest:
+The policy predicate decides, as each job settles, whether to stop the rest:
 
 - `all_group` (the default) lets every job finish;
 - `fail_fast_group` and `first_success_group` stop the others on the first failure
@@ -90,21 +90,34 @@ The group subclass decides, as each job settles, whether to stop the rest:
 - `first_completion_group` stops the others when any job settles;
 - `primary_group` stops the companions when job 0, the primary, settles.
 
-Custom groups derive from `nxtrt::group` and override
-`bool should_stop(std::size_t index, bool failed) const noexcept`. Pass a
-concrete group by value, for example
-`settle(std::tuple{std::move(work), std::move(watcher)}, primary_group{})`.
-The group is move-only; its coordination state lives in the
-settle coroutine frame and must not be moved while running.
+Policies are ordinary callables with signature
+`bool(std::size_t index, bool failed) noexcept`, passed by value. For example,
+`settle(std::tuple{std::move(work), std::move(watcher)}, primary_group{})`, or
+use a lambda to stop on a configured index:
 
-Group subclasses see the task promise's success or failure at final suspension.
+```cpp
+settle(std::move(tasks), [index](std::size_t settled, bool) noexcept {
+    return settled == index;
+});
+```
+
+Each child has a wrapper coroutine that awaits it, consults the policy, and
+counts down. The combiner awaits that countdown before returning; there are
+no group objects or per-child completion observers. Stop propagates through
+the wrappers' normal task-await relationships. Policy notification runs when
+the wrapper resumes, one deck turn after a running child finishes, rather
+than inside the child's final suspension. Cancellation is cooperative, so
+companions may make progress or finish before that notification requests stop.
+Each child also costs a wrapper frame and an additional deck task slot.
+
+Policies see the task promise's success or failure without moving its value.
 Results stay in their promises until all started tasks have drained, then move
 into the returned outcomes. Initial extraction errors become exception outcomes
 without changing the group's stopping decision. Subsequent moves while constructing
 or delivering the result tuple/vector can still throw; children are already
 drained at that point.
 
-A stop chosen by the group subclass is a normal finish. Outside cancellation stops the
+A stop chosen by the policy is a normal finish. Outside cancellation stops the
 group's tasks and drains them before propagating cancellation.
 
 The usual helpers are written over `settle`. `when_all(tuple)` /

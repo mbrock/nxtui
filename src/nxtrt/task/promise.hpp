@@ -204,14 +204,6 @@ struct promise_base
         completion = &observer;
     }
 
-    void enqueue_self(std::coroutine_handle<> handle)
-    {
-        auto * current = detail::current_env;
-        if (current == nullptr || current->current_deck == nullptr)
-            throw runtime_error{"nxtrt task enqueued without a deck"};
-        current->current_deck->enqueue(handle, this);
-    }
-
     void unregister_from_deck() noexcept;
 
     /// Identity assigned by the deck task registry when the task is first

@@ -201,11 +201,11 @@ nxtrt::task<void> run_clients(
             nxtrt::rethrow(outcome.error());
 }
 
-struct echo_load_group : nxtrt::primary_group
+struct echo_load_group
 {
-    bool should_stop(std::size_t index, bool failed) const noexcept override
+    bool operator()(std::size_t index, bool failed) const noexcept
     {
-        return primary_group::should_stop(index, failed) || failed;
+        return index == 0 || failed;
     }
 };
 

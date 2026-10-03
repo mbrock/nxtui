@@ -200,18 +200,19 @@ trick applied to tasks themselves.
 A fixed group is a set of tasks awaited by one task. @ref nxtrt::settle "settle"
 takes a tuple of tasks, owns them directly, runs them concurrently, and does not
 return until every started task has settled. Task factories must be called
-before entering the group. The shared @ref nxtrt::group "group" base keeps the
-state needed to stop children and drain them; its subclasses decide when a
-completion should stop the others. Fixed groups do not use a pool.
+before entering the group. One wrapper coroutine per child awaits completion,
+consults a stop predicate, and counts down; the combiner awaits the countdown.
+The state lives in coroutine frames, without a group class or per-child
+completion observers. Fixed groups do not use a pool.
 
 What the caller gets back is not a handle to running work but a settled
 `outcome<T>` per job — `std::expected<T, std::exception_ptr>` — in input
 order. Nothing remains to redeem later: by the time the caller receives the
 outcomes, the executions are over and their frames are gone. The built-in
-subclasses are `all_group`, `fail_fast_group`, `first_success_group`,
-`first_completion_group`, and `primary_group`. Custom subclasses override
-`should_stop(index, failed)`. This lets a helper see every outcome before
-deciding what to throw, without dropped failures.
+predicates are `all_group`, `fail_fast_group`, `first_success_group`,
+`first_completion_group`, and `primary_group`. Custom predicates are ordinary
+callables `bool(std::size_t index, bool failed) noexcept`. This lets a helper
+see every outcome before deciding what to throw, without dropped failures.
 
 `when_all`, `wait_any`, `with_timeout` are not new schedulers. They are
 small functions over `settle`, which is written over tasks and the deck.

@@ -4,7 +4,6 @@
 #include "nxtrt/compression.cpp"
 #include "nxtrt/crypto.cpp"
 #include "nxtrt/format.cpp"
-#include "nxtrt/group.cpp"
 #include "nxtrt/tls.cpp"
 #include "nxtrt/wand/kqueue.cpp"
 #include "nxt/crypto.cpp"

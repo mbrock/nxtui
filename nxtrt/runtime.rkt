@@ -57,15 +57,19 @@ ontology nxt "https://swa.sh/nxt#"
 model runtime-model
   signature deck
     has-ready var set task
-  // Fixed task-only groups directly own their children; bounded streams
+  // Fixed task-only combiners own children and wrapper tasks; bounded streams
   // admit a feed of ideas into a pool. Stop belongs to tasks: stopping an
   // owner drains its started children/jobs before returning. Once
   // wishes exist, both timeouts and outside stops drain their execs under
   // the same lifecycle below. HTTP connections use a pool; Wisp callbacks
   // await native tasks directly, and guest continuations stay in the Wisp
   // heap. Coroutine frames use the ordinary allocator and are not modeled.
-  // This model describes ownership and close/drain. Group results stay in
-  // child promises; values and positional collection are not modeled.
+  // This model describes ownership and close/drain. Each wrapper awaits its
+  // child, observes completion, and counts down; return waits for all started
+  // wrappers to finish, including on outside stop or startup failure. Wrapper
+  // frames, extra deck slots, and the deck turn between child final suspension
+  // and policy notification are abstracted out. Group results stay in child
+  // promises; values and positional collection are not modeled.
   // slots is fixed capacity; consuming/discarding are events on this step.
   // admitted records job provenance, not current occupancy; slot.job is the
   // live/result identity. Result values, cancellation delivery,
@@ -93,8 +97,8 @@ model runtime-model
     stop-requested var set task
     stopping var lone group-stop
     returned var lone group-return
-    // Abstract completion events accepted by group::should_stop. Concrete
-    // C++ group subclasses share this lifecycle; an empty set represents
+    // Abstract observed completion events accepted by the stop predicate.
+    // C++ callable policies share this lifecycle; an empty set represents
     // all_group, which waits for all children without requesting stop.
     stop-trigger set task
   signature group-stop

@@ -34,6 +34,17 @@ static_assert(!tuple_when_all_input<int_task_factory>);
 static_assert(!tuple_wait_any_input<int_task_factory>);
 static_assert(!range_settle_input<int_task_factory>);
 
+template<typename Policy>
+concept settle_policy = requires(Policy policy, nxtrt::task<int> child) {
+    nxtrt::settle(std::tuple{std::move(child)}, std::move(policy));
+};
+
+static_assert(settle_policy<decltype([](std::size_t, bool) noexcept {
+    return false;
+})>);
+static_assert(
+    !settle_policy<decltype([](std::size_t, bool) { return false; })>);
+
 nxtrt::task<std::unique_ptr<int>> owned_value_after_yield(
     std::unique_ptr<int> value, int & starts)
 {
@@ -71,19 +82,26 @@ nxtrt::task<void> fail_later_moves(bool & fail_moves)
     fail_moves = true;
 }
 
-struct indexed_group : nxtrt::group
+nxtrt::task<void> observe_stop_turns(std::vector<bool> & states)
+{
+    states.push_back(nxtrt::stop_requested());
+    co_await nxtrt::yield();
+    states.push_back(nxtrt::stop_requested());
+}
+
+struct indexed_group
 {
     std::size_t index;
 
     explicit indexed_group(std::size_t index) : index(index) {}
 
-    bool should_stop(std::size_t settled, bool) const noexcept override
+    bool operator()(std::size_t settled, bool) const noexcept
     {
         return settled == index;
     }
 };
 
-struct observed_failure_group : nxtrt::group
+struct observed_failure_group
 {
     int & failures;
     int & completions;
@@ -92,7 +110,7 @@ struct observed_failure_group : nxtrt::group
         : failures(failures), completions(completions)
     {}
 
-    bool should_stop(std::size_t, bool failed) const noexcept override
+    bool operator()(std::size_t, bool failed) const noexcept
     {
         ++completions;
         failures += failed;
@@ -248,7 +266,8 @@ void declare_runtime_group_tests()
                 expect(events.empty());
             };
 
-        "a group subclass can choose a configured child"_test = []() -> nxtrt::task<void> {
+        "a policy can choose a configured child"_test =
+            []() -> nxtrt::task<void> {
             auto events = std::vector<int>{};
             auto outcomes = co_await nxtrt::settle(
                 std::tuple{
@@ -632,27 +651,31 @@ void declare_runtime_group_tests()
                 expect(events == std::vector<int>{71, 72});
             };
 
-        "startup failure drains scheduled children before rethrow"_test = [] {
-            auto storage = nxtrt::static_deck_task_storage<3>{};
-            auto deck = nxtrt::deck{storage};
-            auto events = std::vector<int>{};
-            auto failed = false;
-            try {
-                (void)deck.sync_wait([&] {
-                    auto tasks = std::vector<nxtrt::task<int>>{};
-                    for (auto i = 0; i != 8; ++i)
-                        tasks.push_back(tuple_wait_for_stop(events, i));
-                    return nxtrt::settle_range(std::move(tasks));
-                });
-            } catch (const nxtrt::runtime_error &) {
-                failed = true;
-            }
-            expect(failed);
-            expect(!events.empty());
-            expect(deck.empty());
-        };
+        "child startup failure drains scheduled children before rethrow"_test =
+            [] {
+                // settle is the root: it, run_group, eight wrappers, and
+                // one child fit. Scheduling the second child fails after
+                // the first was queued.
+                auto storage = nxtrt::static_deck_task_storage<11>{};
+                auto deck = nxtrt::deck{storage};
+                auto events = std::vector<int>{};
+                auto failed = false;
+                try {
+                    (void) deck.sync_wait([&] {
+                        auto tasks = std::vector<nxtrt::task<int>>{};
+                        for (auto i = 0; i != 8; ++i)
+                            tasks.push_back(tuple_wait_for_stop(events, i));
+                        return nxtrt::settle_range(std::move(tasks));
+                    });
+                } catch (const nxtrt::runtime_error &) {
+                    failed = true;
+                }
+                expect(failed);
+                expect(events == std::vector<int>{0});
+                expect(deck.empty());
+            };
 
-        "group subclasses work with ranges"_test = []() -> nxtrt::task<void> {
+        "policies work with ranges"_test = []() -> nxtrt::task<void> {
             auto events = std::vector<int>{};
             auto tasks = std::vector<nxtrt::task<int>>{};
             tasks.push_back(tuple_wait_for_stop(events, 9));
@@ -664,44 +687,62 @@ void declare_runtime_group_tests()
             expect(events == std::vector<int>{9});
         };
 
-        "group execution detaches observers before returning"_test =
-            []() -> nxtrt::task<void> {
-                auto execution = nxtrt::all_group{};
-                auto child = value_after_yield(17);
-                auto children = std::array<nxtrt::detail::group_child, 1>{};
-                children[0].bind(child);
-                co_await execution.run(children);
-                expect(child.done());
-                expect(children[0].owner == nullptr);
-                expect(child.handle().promise().completion == nullptr);
+        "wrapper startup failure drains only scheduled wrappers"_test = [] {
+            // settle is the root: it, run_group, and one wrapper fit.
+            auto storage = nxtrt::static_deck_task_storage<3>{};
+            auto deck = nxtrt::deck{storage};
+            auto events = std::vector<int>{};
+            auto failed = false;
+            try {
+                (void) deck.sync_wait([&] {
+                    return nxtrt::settle(
+                        std::tuple{
+                            tuple_wait_for_stop(events, 41),
+                            tuple_wait_for_stop(events, 23),
+                        });
+                });
+            } catch (const nxtrt::runtime_error & error) {
+                failed = std::string_view{error.what()}
+                         == "nxtrt deck task table is full";
+            }
+            expect(failed);
+            expect(events.empty());
+            expect(deck.empty());
+        };
 
-                // Reusing an idle group with fresh records must also be safe.
-                auto next = value_after_yield(23);
-                auto next_children = std::array<nxtrt::detail::group_child, 1>{};
-                next_children[0].bind(next);
-                co_await execution.run(next_children);
-                expect(next.done());
-                expect(next_children[0].owner == nullptr);
-                expect(next.handle().promise().completion == nullptr);
-            };
-
-        "group execution detaches records after setup failure"_test =
+        "a lambda policy needs no group object"_test =
             []() -> nxtrt::task<void> {
-                auto execution = nxtrt::all_group{};
-                auto child = value_after_yield(17);
-                auto children = std::array<nxtrt::detail::group_child, 2>{};
-                children[0].bind(child);
-                auto failed = false;
-                try {
-                    co_await execution.run(children);
-                } catch (const nxtrt::runtime_error &) {
-                    failed = true;
-                }
-                expect(failed);
-                expect(!child.done());
-                expect(children[0].owner == nullptr);
-                expect(child.handle().promise().completion == nullptr);
-            };
+            auto events = std::vector<int>{};
+            auto trigger = std::size_t{1};
+            auto outcomes = co_await nxtrt::settle(
+                std::tuple{
+                    tuple_wait_for_stop(events, 13),
+                    value_after_yield(37),
+                },
+                [trigger](std::size_t index, bool) noexcept {
+                    return index == trigger;
+                });
+            expect(
+                nxtrt::is_operation_cancelled(
+                    std::get<0>(outcomes).error()));
+            expect(std::get<1>(outcomes).value() == 37);
+            expect(events == std::vector<int>{13});
+        };
+
+        "policy stop runs on the wrapper continuation turn"_test =
+            []() -> nxtrt::task<void> {
+            auto states = std::vector<bool>{};
+            auto finish = []() -> nxtrt::task<void> { co_return; };
+            auto outcomes = co_await nxtrt::settle(
+                std::tuple{finish(), observe_stop_turns(states)},
+                nxtrt::first_completion_group{});
+            // The companion starts before the first child's wrapper
+            // resumes, then observes stop on its next turn. A final-suspend
+            // observer would stop it before its body starts: {true, true}.
+            expect(states == std::vector<bool>{false, true});
+            expect(std::get<0>(outcomes).has_value());
+            expect(std::get<1>(outcomes).has_value());
+        };
     };
 }
 

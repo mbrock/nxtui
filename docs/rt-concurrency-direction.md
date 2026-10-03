@@ -17,7 +17,7 @@ implemented contract; guest structured concurrency remains a design question.
 | --- | --- |
 | `idea<Fn>`, `idea_result_t<Fn>` | Implemented concepts/traits for concrete task- or hope-producing callables |
 | `pool<Idea>` | Implemented: borrowed slots, direct task ownership, completion-order result feed |
-| Groups: `settle`, `settle_range`, `group` subclasses | Task-only public APIs; direct tuple/vector task ownership with stable completion observers, drain before result extraction, and typed `outcome<T>` results |
+| Groups: `settle`, `settle_range`, callable stop predicates | Task-only public APIs; direct tuple/vector task ownership with wrapper coroutines and a countdown, drain before result extraction, and typed `outcome<T>` results |
 | `when_all`, `wait_any`, `with_timeout`, `poll_until_after` | Implemented over `settle` |
 | `drain(feed, capacity)`, `pool_land<Idea>` | Implemented: bounded evaluation of a feed of ideas, and owned land for a pool |
 | Cancellation | Per task: stop propagates to the awaited task, and a group stops its own jobs |
@@ -45,10 +45,11 @@ relationship. The runtime now keeps them apart. Frames come from the ordinary
 allocator. A pool owns pending task handles directly in its slots. The deck
 identifies and schedules those tasks without owning their frames. Fixed
 composition (`settle`) directly owns tuple/vector tasks and observes completion
-through stable observers. It does not lower through a pool, `group_recipe`,
-wrapper tasks, or a separate intermediate results tuple. Stop belongs to tasks: it
-propagates from an awaiting task to the task it awaits, and a group stops its
-own jobs. Nothing spawns into an ambient scope; work is owned by the group it
+through wrapper coroutines that consult a stop predicate and count down. It does
+not lower through a pool, `group_recipe`, or a separate intermediate results
+tuple. Stop belongs to tasks: it propagates from an awaiting task to the task
+it awaits, and a group stops its own jobs. Nothing spawns into an ambient
+scope; work is owned by the group it
 was handed to.
 
 The goal is shared lifetime rules, not one universal container or a configurable
@@ -165,10 +166,10 @@ borrowed land; a ring with prefix retirement was rejected because long-lived
 frames pin the prefix.
 
 The task-only tuple and range helpers own their fixed membership directly,
-without pool backing or a public deed. Stable observers let group subclasses see
-promise success/failure at final suspension. All started tasks drain before
-results move from promises into the returned outcomes. Initial extraction errors
-become exception outcomes without changing the group's stopping decision; subsequent
+without pool backing or a public deed. Wrapper coroutines let stop predicates see
+promise success/failure when the awaiting wrapper resumes. All started tasks
+drain before results move from promises into the returned outcomes. Initial
+extraction errors become exception outcomes without changing the group's stopping decision; subsequent
 moves of the result tuple/vector can throw after drain.
 Outside cancellation stops and drains the group before propagating.
 
@@ -205,10 +206,10 @@ boundary. The pool does not collect every failure during close, and successful
 unconsumed outputs from the same pump may be discarded.
 
 Groups differ: `settle` and `settle_range` record every job's outcome and
-consult the group subclass as each one settles, so a failure stops the others only
-when the subclass says so. This unifies ownership and drain machinery for fixed
-batches, but does not change the general pool's consumer-driven error handling
-described above. `drain` uses the consumer-driven path: the first failure
+consult the stop predicate as each wrapper observes completion, so a failure
+stops the others only when the predicate says so. This unifies ownership and
+drain machinery for fixed batches, but does not change the general pool's
+consumer-driven error handling described above. `drain` uses the consumer-driven path: the first failure
 stops admission, drains the running jobs, and is rethrown.
 
 ## Selection can be a feed operation; lifetime must accompany it
