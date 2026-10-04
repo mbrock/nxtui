@@ -27,6 +27,24 @@ struct source_machine
     evaluator & vm = owner->machine;
     root last{h};
 
+    // Unlike loader's individually counted read/step turns, this drives
+    // one run in actual evaluator batches, with collection between them.
+    word evaluate(std::string_view text, std::size_t quantum)
+    {
+        last.set(vm.start(reader{h, vm, text}.next().value()));
+        for (std::size_t turns = 0; turns < 40000; ++turns) {
+            const auto state = vm.advance(last.get(), quantum);
+            vm.collect();
+            if (state == evaluation::failed)
+                throw std::runtime_error(
+                    print(h, h.get<tag::run, field::err>(last.get())));
+            if (state == evaluation::done)
+                return h.get<tag::run, field::val>(last.get());
+        }
+        throw std::runtime_error(
+            "Wisp evaluation exhausted its test budget");
+    }
+
     word load(std::string_view text, std::size_t quantum = 257)
     {
         loader source{h, vm, text};

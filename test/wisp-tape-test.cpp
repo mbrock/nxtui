@@ -455,6 +455,50 @@ static suite tape_tests{
                      == 32u));
             };
 
+        "every batch boundary is a complete resumable tape"_test = [] {
+            for (auto quantum : {1u, 7u, 4096u}) {
+                heap h;
+                evaluator vm{h};
+                root run{
+                    h,
+                    vm.start(
+                        reader{h, vm, R"(
+                    (call-with-prompt 'p
+                      (%fn nil ()
+                        (let ((a 11) (b (gc)))
+                          (- a (send-with-default! 'p 3 nil) 2)))
+                      (%fn nil (v k)
+                        (+ (call k v) (call k (+ v 1))))))"}
+                            .next()
+                            .value())};
+                auto state = evaluation::runnable;
+                for (unsigned turn = 0;
+                     turn < 512 && state == evaluation::runnable;
+                     ++turn) {
+                    state = vm.advance(run.get(), quantum);
+                    auto restored =
+                        tape::decode(tape::encode(vm, run.get()));
+                    auto copied = evaluation::runnable;
+                    for (unsigned n = 0;
+                         n < 10 && copied == evaluation::runnable;
+                         ++n) {
+                        restored->machine.collect();
+                        copied = restored->machine.advance(
+                            restored->entry.get(), 4096);
+                    }
+                    expect(copied == evaluation::done);
+                    expect(
+                        (restored->storage.get<tag::run, field::val>(
+                             restored->entry.get())
+                         == fixnum(11)));
+                    vm.collect();
+                }
+                expect(state == evaluation::done);
+                expect(
+                    (h.get<tag::run, field::val>(run.get()) == fixnum(11)));
+            }
+        };
+
         "mid-argument accumulation survives restore and corrupt cursors signal conditions"_test =
             [] {
                 heap h;

@@ -361,6 +361,10 @@ void run(const benchmark & b, mode m, unsigned iterations, unsigned warmup)
         COUNTER(continuation_boundaries);
         COUNTER(continuation_pushes);
         COUNTER(continuation_copy_words);
+        COUNTER(evaluator_batches);
+        COUNTER(cached_pushes);
+        COUNTER(cache_pulls);
+        COUNTER(cache_spills);
         COUNTER(arguments_accumulated);
         COUNTER(lists_scanned);
         COUNTER(list_cells_scanned);
@@ -382,6 +386,7 @@ void run(const benchmark & b, mode m, unsigned iterations, unsigned warmup)
         array_field("lexical_depth", counters.lexical_depth);
         array_field("allocations", counters.allocations);
         array_field("gc_copies", counters.gc_copies);
+        array_field("cache_flushed", counters.cache_flushed);
     }
     std::cout << "}\n";
 }

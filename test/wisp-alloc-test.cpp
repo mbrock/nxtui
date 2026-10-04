@@ -12,12 +12,14 @@ namespace {
 
 constexpr auto unlimited = std::numeric_limits<std::size_t>::max();
 auto remaining = unlimited;
+std::size_t attempts = 0;
 
 struct fail_after
 {
     explicit fail_after(std::size_t n)
     {
         remaining = n;
+        attempts = 0;
     }
 
     ~fail_after()
@@ -30,6 +32,7 @@ struct fail_after
 
 void * operator new(std::size_t size)
 {
+    ++attempts;
     if (remaining == 0)
         throw std::bad_alloc{};
     if (remaining != unlimited)
@@ -102,6 +105,41 @@ static suite allocation_tests{
                          == fixnum(expected)))
                         << source;
                 }
+            };
+
+        "evaluation allocation panic does not allocate during unwinding"_test =
+            [] {
+                std::size_t failures = 0;
+                bool succeeded = false;
+                for (std::size_t n = 0; n < 64 && !succeeded; ++n) {
+                    heap h;
+                    evaluator vm{h};
+                    const auto form =
+                        *reader{
+                            h,
+                            vm,
+                            "(+ 7 (let ((x (vector 11 19))) (head (list (vector-get x 1)))))"}
+                             .next();
+                    const auto run = vm.start(form);
+                    try {
+                        fail_after fault{n};
+                        succeeded =
+                            vm.advance(run, 1000) == evaluation::done;
+                    } catch (const std::bad_alloc &) {
+                        ++failures;
+                        // A rollback, condition delivery, or emergency
+                        // flush after the failed allocation would try
+                        // again.
+                        const auto observed = attempts;
+                        expect(observed == n + 1);
+                    }
+                    if (succeeded)
+                        expect(
+                            (h.get<tag::run, field::val>(run)
+                             == fixnum(26)));
+                    // A panicked machine is disposed of, never retried.
+                }
+                expect(succeeded && failures > 0u);
             };
 
         "every partial column allocation leaves old rows intact"_test = [] {

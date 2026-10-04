@@ -102,14 +102,16 @@ the heap row at `way`.
 
 A transition that only reads the top heap frame and pops it (a branch, a
 sequence's last form, a single-argument call) needs nothing more. A
-transition that writes it first moves it into the cache: the cached copy
-replaces it, and `way` becomes its `hop`. If the heap row is frozen, its
-mutable progress must also be copied, as in today's copy-on-write: copying
-only the frame columns would still share the progress vector. If it is not,
-the row was reachable only from this run, so moving it is safe and the old
-row becomes garbage. Either way, writes then happen natively. This is the
-underflow handler of segmented stacks: reinstated frames come back lazily,
-one at a time.
+transition that writes a frozen frame first copies it into the cache, and
+`way` becomes its `hop`. Its mutable progress must also be copied, as in
+today's copy-on-write: copying only the frame columns would still share the
+progress vector. Reinstated frozen frames come back lazily, one at a time.
+
+A writable heap row stays in place. Although it is not shared with another
+continuation, the transition-entry run row still refers to it: a reflective
+callee can inspect its own run after the call frame has been popped and see
+that row's completed argument progress. Writing through preserves that
+identity and avoids creating another row at the next flush.
 
 ### Flush points
 
@@ -131,6 +133,14 @@ The set of observing builtins is a property of each builtin, declared in the
 builtin table next to its existing `control` flag, not a separate list.
 Lexical environments are untouched: they are already shared heap storage, so
 `ENV` and source escapes need no flush.
+
+Run reflection preserves the transition-entry view, not halfway-updated
+registers. Each transition remembers its entry registers and the cached
+prefix they name; spills update that prefix's heap link. If the transition
+pops its top cached frame, retain it until the transition ends and only
+materialize it if an observing builtin needs the entry view. This is an
+observation snapshot, not an undo record: in-place progress changes remain
+visible, and nothing is rewound.
 
 ### Batching transitions
 

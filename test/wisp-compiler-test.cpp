@@ -116,6 +116,53 @@ static suite compiler_tests{
                     "((1 10 2) (1 20 3))");
             };
 
+        "deep cached continuations resume twice after GC and tape restore"_test
+            .slow()
+            .with_timeout(std::chrono::seconds{30}) = [] {
+            for (bool lowered : {false, true}) {
+                for (auto quantum : {1u, 17u, 4096u}) {
+                    source_machine m{compiler_image()};
+                    m.load(R"((defvar saved nil)
+                              (defvar ticks 0)
+                              (defun cache-deep (n)
+                                (if (< n 1)
+                                    (+ (send! 'pause)
+                                       (do (set! ticks (+ ticks 1)) ticks))
+                                    (+ n (cache-deep (- n 1)) n))))");
+                    if (lowered)
+                        m.load("(lower-function! #'cache-deep)");
+                    profile counters;
+                    m.h.profiling(&counters);
+                    expect(
+                        print(
+                            m.h,
+                            m.evaluate(
+                                R"(
+                        (call-with-prompt 'pause
+                          (fn () (cache-deep 129))
+                          (fn (value k) (set! saved k) 'paused)))",
+                                quantum))
+                        == "PAUSED");
+                    m.h.profiling(nullptr);
+                    if (profile_enabled && quantum == 4096)
+                        expect(counters.cache_spills > 0u);
+                    const auto saved = tape::encode(m.vm);
+                    for (int copy = 0; copy < 2; ++copy) {
+                        source_machine restored{tape::decode(saved)};
+                        // Twice sum(1..129), plus distinct resume values
+                        // and one shared increment per resumption.
+                        expect(
+                            print(
+                                restored.h,
+                                restored.evaluate(
+                                    "(list (call saved 7) (call saved 19) ticks)",
+                                    quantum))
+                            == "(16778 16791 2)");
+                    }
+                }
+            }
+        };
+
         "tapes reject code records that MAKE-CODE would refuse"_test = [] {
             source_machine m{compiler_image()};
             m.load("(defvar program (lower (analyze '(+ 1 2))))");

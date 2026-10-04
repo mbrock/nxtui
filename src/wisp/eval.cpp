@@ -322,6 +322,8 @@ struct eval_step
     values active_runs;
     word step_target = nil;
     row<tag::run> entry{};
+    std::size_t depth = 0, entry_depth = 0;
+    std::optional<evaluator::cached_frame> popped_entry = std::nullopt;
 
     evaluation state() const
     {
@@ -335,17 +337,30 @@ struct eval_step
     void begin_transition()
     {
         entry = {exp, val, err, env, way, meta};
+        entry_depth = depth;
+        popped_entry.reset();
     }
 
     void observe()
     {
         // Self-inspection sees the same transition-entry run row as the
         // one-step evaluator, including in-place heap progress mutations.
+        flush(cache_flush::observation);
+        if (popped_entry) {
+            auto & entry_way = entry[column_index<tag::run, field::way>()];
+            const auto & f = *popped_entry;
+            entry_way =
+                h.make<tag::ktx>({entry_way, f.env, f.fun, f.acc, f.arg});
+            if (auto * p = h.profiling())
+                ++p->cache_flushed[std::size_t(cache_flush::observation)];
+            popped_entry.reset();
+        }
         h.put<tag::run>(active_runs.back(), entry);
     }
 
     void commit()
     {
+        flush(cache_flush::batch);
         h.put<tag::run>(
             active_runs.back(), {exp, val, err, env, way, meta});
     }
@@ -803,53 +818,121 @@ struct eval_step
     // Boundary traversal and public continuation views stay heap-based.
     bool segment_empty() const
     {
-        return way == top;
+        return depth == 0 && way == top;
     }
 
-    word frame_identity() const
+    word frame_identity()
     {
+        flush(cache_flush::condition);
         return way;
     }
 
-    std::array<word, 4> frame() const
+    evaluator::cached_frame frame() const
     {
+        if (depth != 0)
+            return vm.frames_[depth - 1];
         const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(way);
         return {saved_env, fun, acc, arg};
     }
 
     word frame_acc() const
     {
-        return h.get<tag::ktx, field::acc>(way);
+        return depth != 0 ? vm.frames_[depth - 1].acc
+                          : h.get<tag::ktx, field::acc>(way);
     }
 
     void set_acc(word acc)
     {
+        if (depth != 0) {
+            vm.frames_[depth - 1].acc = acc;
+            return;
+        }
         assert(!h.continuation_frozen(way));
         h.set<tag::ktx, field::acc>(way, acc);
     }
 
     void set_position(word arg)
     {
+        if (depth != 0) {
+            vm.frames_[depth - 1].arg = arg;
+            return;
+        }
         assert(!h.continuation_frozen(way));
         h.set<tag::ktx, field::arg>(way, arg);
     }
 
     void pop()
     {
+        if (depth != 0) {
+            // A reflective callee can still read the entry run's popped
+            // frame. Retain it lazily, with its completed progress.
+            if (depth == entry_depth) {
+                assert(!popped_entry);
+                popped_entry = vm.frames_[depth - 1];
+                --entry_depth;
+            }
+            --depth;
+            return;
+        }
         way = h.get<tag::ktx, field::hop>(way);
     }
 
     void writable_frame()
     {
-        if (h.continuation_frozen(way))
-            way = h.copy_continuation_frame(way);
+        if (depth != 0 || !h.continuation_frozen(way))
+            return;
+        auto f = frame();
+        const auto kind = tag_of(f.fun);
+        if ((kind == tag::fun || kind == tag::jet || kind == tag::rec)
+            && tag_of(f.acc) == tag::v32) {
+            f.acc = h.clonev32(f.acc);
+            if (auto * p = h.profiling())
+                p->continuation_copy_words += h.v32slice(f.acc).size();
+        }
+        // The frozen row remains the transition-entry view. Its private
+        // replacement is not part of that view's cached prefix.
+        way = h.get<tag::ktx, field::hop>(way);
+        vm.frames_[depth++] = f;
+        if (auto * p = h.profiling())
+            ++p->cache_pulls;
     }
 
     void push(word fun, word acc, word arg)
     {
-        way = h.make<tag::ktx>({way, env, fun, acc, arg});
-        if (auto * p = h.profiling())
+        if (depth == vm.frames_.size()) {
+            spill(depth / 2, cache_flush::spill);
+            if (auto * p = h.profiling())
+                ++p->cache_spills;
+        }
+        vm.frames_[depth++] = {env, fun, acc, arg};
+        if (auto * p = h.profiling()) {
             ++p->continuation_pushes;
+            ++p->cached_pushes;
+        }
+    }
+
+    void spill(std::size_t count, cache_flush reason)
+    {
+        assert(count <= depth && entry_depth <= depth);
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto & f = vm.frames_[i];
+            way = h.make<tag::ktx>({way, f.env, f.fun, f.acc, f.arg});
+            if (i < entry_depth)
+                entry[column_index<tag::run, field::way>()] = way;
+        }
+        entry_depth -= std::min(count, entry_depth);
+        std::move(
+            vm.frames_.begin() + count,
+            vm.frames_.begin() + depth,
+            vm.frames_.begin());
+        depth -= count;
+        if (auto * p = h.profiling())
+            p->cache_flushed[std::size_t(reason)] += count;
+    }
+
+    void flush(cache_flush reason)
+    {
+        spill(depth, reason);
     }
 
     word lookup(word sym, bool assign = false, word value = nil)
@@ -1906,12 +1989,14 @@ struct eval_step
 
     void install(control_context ctx)
     {
+        assert(depth == 0);
         way = ctx.way;
         meta = ctx.meta;
     }
 
     word boundary(word kind, word key, word value)
     {
+        flush(cache_flush::boundary);
         return h.make<tag::ktx>(
             {meta, env, kind, key, h.newv32(std::array{value, way})});
     }
@@ -1962,6 +2047,7 @@ struct eval_step
 
     control_context compose(control_context captured)
     {
+        flush(cache_flush::capture);
         if (captured.way == top && captured.meta == top)
             return {way, meta};
         h.freeze_continuations();
@@ -2018,6 +2104,7 @@ struct eval_step
 
     void send(word prompt_tag, word value, word fallback)
     {
+        flush(cache_flush::capture);
         send_from({way, meta}, prompt_tag, value, fallback, false);
     }
 
@@ -2031,6 +2118,7 @@ struct eval_step
     void
     send_to(word continuation, word prompt_tag, word value, word fallback)
     {
+        flush(cache_flush::capture);
         send_from(context(continuation), prompt_tag, value, fallback, true);
     }
 
@@ -2051,6 +2139,7 @@ struct eval_step
 
     void get_cc()
     {
+        flush(cache_flush::capture);
         give(snapshot({way, meta}));
     }
 
@@ -2341,12 +2430,15 @@ evaluation evaluator::execute(word run, std::size_t budget, bool poll_gc)
                 way,
                 meta,
                 active.first(depth)};
+            if (auto * p = heap_.profiling())
+                ++p->evaluator_batches;
             do {
                 s.begin_transition();
                 try {
                     s.once();
                 } catch (const condition & c) {
                     try {
+                        s.flush(cache_flush::condition);
                         s.send(known("ERROR"), c.value, nah);
                     } catch (const condition & unhandled) {
                         s.err = unhandled.value;

@@ -14,6 +14,16 @@ inline constexpr bool profile_enabled = true;
 inline constexpr bool profile_enabled = false;
 #endif
 
+enum class cache_flush {
+    batch,
+    capture,
+    boundary,
+    observation,
+    spill,
+    condition,
+    count
+};
+
 /// Host-local, never serialized. Enable with Meson's -Dwisp_profile=true,
 /// then attach to a heap. Disabled builds compile out hot-path recording.
 /// Counters describe this evaluator's operations, not a portable bytecode
@@ -26,6 +36,10 @@ struct profile
     std::uint64_t continuation_captures = 0, continuation_boundaries = 0;
     std::uint64_t continuation_pushes = 0, arguments_accumulated = 0;
     std::uint64_t continuation_copy_words = 0;
+    std::uint64_t evaluator_batches = 0, cached_pushes = 0;
+    std::uint64_t cache_pulls = 0, cache_spills = 0;
+    std::array<std::uint64_t, std::size_t(cache_flush::count)>
+        cache_flushed{};
     std::uint64_t lists_scanned = 0, list_cells_scanned = 0;
     std::uint64_t lexical_lookups = 0, lexical_frames = 0;
     std::uint64_t lexical_comparisons = 0, lexical_global_fallbacks = 0;

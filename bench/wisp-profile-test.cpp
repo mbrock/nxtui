@@ -110,6 +110,11 @@ int main()
                 && sum.arguments_accumulated == 2 * scale,
             "call arity");
         require(sum.continuation_pushes == scale, "argument frame");
+        require(sum.cached_pushes == scale, "cached argument frame");
+        require(sum.evaluator_batches == scale, "one batch for arithmetic");
+        require(
+            sum.allocations[std::size_t(tag::ktx)] == 0,
+            "short-lived frame reached the heap");
         require(
             sum.allocations[std::size_t(tag::run)] == 0, "counted setup");
         auto middle = evaluate("(let ((a 11) (b 22) (c 33)) b)", 22);
@@ -159,11 +164,23 @@ int main()
             effect.continuation_captures == scale
                 && effect.continuation_calls == scale,
             "capture and resume");
+        require(
+            effect.cache_flushed[std::size_t(cache_flush::capture)]
+                >= scale,
+            "capture did not materialize pending frames");
         auto missed = evaluate("(send-with-default! 'absent 1 29)", 29);
         require(
             missed.continuation_searches == scale
                 && missed.continuation_captures == 0,
             "missing prompt must not count capture");
+        std::string nested = "1";
+        for (int i = 0; i < 99; ++i)
+            nested = "(+ 2 " + nested + ")";
+        auto deep = evaluate(nested, 199);
+        require(deep.cache_spills >= scale, "deep frames did not spill");
+        require(
+            deep.cache_flushed[std::size_t(cache_flush::spill)] >= scale,
+            "spill did not write heap frames");
         std::cout
             << "semantic counters: allocation/GC separation, transitions, arity, lookup depth, dynamic lookup, effects, opt-out OK\n";
     } catch (const std::exception & error) {

@@ -149,6 +149,14 @@ private:
 
     evaluation execute(word run, std::size_t budget, bool poll_gc);
 
+    struct cached_frame
+    {
+        word env, fun, acc, arg;
+    };
+
+    // Empty at every normal evaluator return; never roots or tape state.
+    std::array<cached_frame, 64> frames_;
+
     struct jet_info
     {
         std::string_view name;
