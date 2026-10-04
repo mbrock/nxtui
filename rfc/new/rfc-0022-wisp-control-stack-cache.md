@@ -1,7 +1,8 @@
 # RFC 0022: Wisp Control Stack Cache {#rfc_wisp_stack_cache}
 
-Status: implemented, including inline progress. The stage 4 timing
-non-regression criterion is not fully met; see measurements below.
+Status: implemented, including inline progress and live self-inspection.
+The initial implementation missed the stage 4 timing non-regression criterion;
+the historical measurements and targeted follow-up are below.
 
 ## Proposal
 
@@ -309,6 +310,40 @@ the whole process, including setup. Original `evaluator::step` self time was
 26.01% / 18.20%; the batched replacement `execute` was 7.58% / 7.79%.
 The completed cache/progress implementation was 13.72% / 13.59%, reflecting
 additional bookkeeping and a different distribution of remaining work.
+
+## Live self-inspection follow-up (2026-10-04)
+
+Removing transition-entry preservation eliminates 4 KiB of scratch storage
+per evaluator, popped-progress copies, and entry-register bookkeeping on every
+transition. The new guest test first failed on the old implementation with
+`TYPE-MISMATCH EVALUATOR 11`, demonstrating that resumption re-entered the
+inspection call. It now passes for direct, `CALL`, and `APPLY` invocations in
+source and lowered code. Native tests cover batches of 1, 7, and 4,096
+transitions, collection, frozen progress, and repeated resumption. The full
+assertion-enabled Clang suite passed again: 14 passes, four expected failures,
+and zero failures, including slow suites. Disabled profiling counters also
+passed.
+
+[Follow-up timing samples](../../bench/wisp/results/2026-10-04-live-run-inspection.jsonl)
+compare the initial inline-progress implementation with the simplified
+evaluator. Five adjacent before/after pairs per workload and mode alternate
+execution order, pinned to CPU 0 without concurrent builds or tests. TAK uses
+20 iterations, router misses 10,000, and both use three warmups. These are
+uninstrumented Clang release builds with the same GC policy. The file includes
+commands, revisions, executable and shared-library hashes, and build options.
+
+| Workload | Before, ms/run | After, ms/run | Median paired time change |
+| --- | ---: | ---: | ---: |
+| TAK, source | 40.291 | 37.285 | −7.9% |
+| TAK, lowered library | 28.967 | 26.365 | −9.4% |
+| Router miss, source | 0.05810 | 0.05453 | −5.7% |
+| Router miss, lowered library | 0.03683 | 0.03415 | −7.9% |
+
+The time columns are separate medians; the change column is the median of
+paired ratios. Absolute times differ from the earlier sweep, so use the
+within-run comparisons rather than attributing that difference to code.
+This follow-up measures two workloads, not a full revalidation of stage 4's
+effect/router non-regression criterion against the frame-only cache.
 
 ## Open questions
 
