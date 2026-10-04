@@ -133,3 +133,34 @@
   (defstruct point x y)
   (expect-equal (condition-type (fn () (eval (make-point 1 2))))
                 'invalid-expression))
+
+(deftest "addressed references read and write the environment"
+  (expect-equal
+   (prepared-eval
+    '(let ((a 1) (b 2))
+       (let ((f (fn (c) (set! b (+ b c)) (list a b c))))
+         (call f 10)
+         (call f 20))))
+   '(1 32 20)))
+
+(deftest "an address that no longer fits falls back to lookup"
+  (let* ((node (analyze '(let ((x 41)) (+ x 1))))
+         (reference (vector-get (ir-call-arguments (ir-let-body node)) 0)))
+    (set-ir-reference-depth! reference 7)
+    (expect-equal (eval node) 42)))
+
+(deftest "the base library and compiler run prepared" :slow
+  (expect (> (prepare-package! (find-package "WISP")) 200))
+  (expect-equal (map (fn (x) (* x x)) '(1 2 3)) '(1 4 9))
+  (expect-equal (filter '(1 2 3 4) (fn (x) (eq? 0 (mod x 2)))) '(2 4))
+  (expect-equal (try (error 'boom 1) (catch (e k) (type-of e))) 'boom)
+  (expect-equal (call-with-effect-handler 'ask
+                  (fn () (+ (send! 'ask 2) (send! 'ask 3)))
+                  (fn (request resume raise) (call resume (* request 10))))
+                50)
+  (defstruct pair-of left right)
+  (expect-equal (pair-of-right (make-pair-of 1 2)) 2)
+  (expect-equal `(a ,(+ 1 2) ,@(list 4 5)) '(a 3 4 5))
+  ;; The prepared compiler analyzes and runs code, itself included.
+  (expect-equal (prepared-eval '(let ((x 2)) (* x 21))) 42)
+  (expect (> (prepare-package! (find-package "WISP")) 200)))

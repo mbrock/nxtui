@@ -328,3 +328,42 @@
     (expect (eq? (record-type node) <ir-let>))
     (expect-equal (map #'ir-binding-name (ir-captures inner))
                   '(n step x notes))))
+
+;;; Lexical addresses
+
+(defun address (reference)
+  (list (ir-binding-name (ir-reference-binding reference))
+        (ir-reference-depth reference)
+        (ir-reference-index reference)))
+
+(deftest "references carry the address of their runtime slot"
+  (let* ((function (ir-closure-function
+                    (analyze '(fn (a b)
+                                (let ((x 1) (y 2))
+                                  (list a b x y))))))
+         (call-node (ir-let-body (ir-function-body function))))
+    ;; LET's runtime scope lists its clauses last first.
+    (expect-equal (map #'address
+                       (list-from-vector (ir-call-arguments call-node)))
+                  '((a 1 0) (b 1 1) (x 0 1) (y 0 0)))))
+
+(deftest "a LET without clauses adds no runtime scope"
+  (let ((function (ir-closure-function
+                   (analyze '(fn (a) (let () a))))))
+    (expect-equal (address (ir-function-body function)) '(a 0 0))))
+
+(deftest "duplicates address the slot that lookup finds"
+  (expect-equal (address (ir-let-body (analyze '(let ((x 1) (x 2)) x))))
+                '(x 0 0))
+  (expect-equal (address (ir-function-body
+                          (ir-closure-function (analyze '(fn (x x) x)))))
+                '(x 0 0)))
+
+(deftest "bindings without a runtime scope have no address"
+  (let ((x (make-ir-binding 'x nil)))
+    (expect-equal (address (analyze 'x (list x))) '(x nil nil))))
+
+(deftest "the checker rejects a wrong address"
+  (let ((node (analyze '(let ((x 1)) x))))
+    (set-ir-reference-depth! (ir-let-body node) 3)
+    (expect-equal (problem-kinds node) '(:wrong-address))))

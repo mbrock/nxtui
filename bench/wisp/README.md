@@ -36,7 +36,13 @@ in any build directory, including debug builds. JSON records carry build type,
 compiler, build-time Git revision (with `-dirty` when appropriate), and GC policy.
 An archive without Git reports `unknown`, not a guessed revision.
 
-Arguments are `[all|NAME|--list] [ITERATIONS [WARMUP]]`. Counts must be positive
+Arguments are `[--prepared|--prepared-library] [all|NAME|--list]
+[ITERATIONS [WARMUP]]`. By default everything is source-interpreted.
+`--prepared` loads the guest compiler and evaluates each benchmark
+definition through `PREPARED-EVAL`, so benchmark functions run as RFC 0020
+IR while the base library stays interpreted; `--prepared-library` also
+prepares every function in the `WISP` package first. Records carry the
+`mode`. Counts must be positive
 31-bit fixnums; warmup may be zero. Default counts match `core/benchmark.zig`:
 25,000 for call/lookup, 1,000 for effects, 1 for TAK, 100 for the other programs.
 Setup and warmup run separately for each case; both warmup and timed results

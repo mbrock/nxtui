@@ -200,7 +200,7 @@ consteval ir_shape shape(
 constexpr std::array ir_shapes{
     shape(ir::constant, "IR-CONSTANT", {"VALUE"}),
     shape(ir::lookup, "IR-LOOKUP", {"SYMBOL"}),
-    shape(ir::reference, "IR-REFERENCE", {"BINDING"}),
+    shape(ir::reference, "IR-REFERENCE", {"BINDING", "DEPTH", "INDEX"}),
     shape(ir::function_reference, "IR-FUNCTION-REFERENCE", {"SYMBOL"}),
     shape(ir::assignment, "IR-ASSIGNMENT", {"TARGET", "VALUE"}),
     shape(ir::call, "IR-CALL", {"CALLEE", "ARGUMENTS"}),
@@ -481,20 +481,28 @@ struct eval_step
             return std::nullopt;
         const auto descriptor = h.words<tag::rec>(x)[0];
         if (vm.ir_layout_epoch_ != h.epoch()) {
-            vm.ir_layout_count_ = 0;
+            vm.ir_layouts_.fill({});
             vm.ir_layout_epoch_ = h.epoch();
         }
-        for (std::size_t i = 0; i < vm.ir_layout_count_; ++i)
-            if (vm.ir_layouts_[i].descriptor == descriptor)
-                return ir_node{
-                    ir(vm.ir_layouts_[i].kind), vm.ir_layouts_[i]};
-        const auto layout = ir_layout_of(descriptor);
-        if (!layout)
-            return std::nullopt;
-        if (vm.ir_layout_count_ == vm.ir_layouts_.size())
-            vm.ir_layout_count_ = 0;
-        vm.ir_layouts_[vm.ir_layout_count_++] = *layout;
-        return ir_node{ir(layout->kind), *layout};
+        // Open addressing with linear probing; a full table starts over.
+        constexpr auto size = std::tuple_size_v<decltype(vm.ir_layouts_)>;
+        static_assert(size == 64, "the hash keeps six bits");
+        auto slot = (descriptor * 2654435761u) >> 26;
+        for (std::size_t probe = 0; probe < size;
+             ++probe, slot = (slot + 1) % size) {
+            auto & entry = vm.ir_layouts_[slot];
+            if (entry.descriptor == descriptor)
+                return ir_node{ir(entry.kind), entry};
+            if (entry.descriptor != nil)
+                continue;
+            const auto layout = ir_layout_of(descriptor);
+            if (!layout)
+                return std::nullopt;
+            entry = *layout;
+            return ir_node{ir(layout->kind), *layout};
+        }
+        vm.ir_layouts_.fill({});
+        return ir_of(x);
     }
 
     // A descriptor made by DEFSTRUCT is #S(STRUCT-TYPE name slots).
@@ -608,9 +616,9 @@ struct eval_step
             return;
         case ir::reference:
             // Prepared scopes build the same environments as source
-            // evaluation, so a binding resolves by name, correct by
-            // construction until lexical addresses replace the search.
-            give(lookup(binding_name(x, ir_field(x, node, 0))));
+            // evaluation, so the address names the slot that lookup by
+            // name would find.
+            give(reference_value(x, node));
             return;
         case ir::function_reference:
             function(ir_field(x, node, 0));
@@ -676,6 +684,65 @@ struct eval_step
         }
     }
 
+    // The scope vector and value position a reference's lexical address
+    // names, or nothing when it has no address or the address does not fit
+    // the environment, which then falls back to lookup by name.
+    std::optional<std::pair<word, std::size_t>>
+    addressed(word x, const ir_node & node)
+    {
+        const auto depth = ir_field(x, node, 1);
+        const auto index = ir_field(x, node, 2);
+        if (tag_of(depth) != tag::integer || tag_of(index) != tag::integer
+            || integer(depth) < 0 || integer(index) < 0)
+            return std::nullopt;
+        auto cur = env;
+        for (auto d = integer(depth); d > 0; --d) {
+            if (tag_of(cur) != tag::duo)
+                return std::nullopt;
+            cur = h.get<tag::duo, field::cdr>(cur);
+        }
+        if (tag_of(cur) != tag::duo)
+            return std::nullopt;
+        const auto scope = h.get<tag::duo, field::car>(cur);
+        const auto at = 2 * std::size_t(integer(index)) + 1;
+        if (tag_of(scope) != tag::v32 || at >= h.v32slice(scope).size())
+            return std::nullopt;
+        return std::pair{scope, at};
+    }
+
+    word reference_value(word x, const ir_node & node)
+    {
+        if (const auto slot = addressed(x, node))
+            return h.v32slice(slot->first)[slot->second];
+        return lookup(binding_name(x, ir_field(x, node, 0)));
+    }
+
+    // The value of an operand that needs no transitions of its own: a
+    // constant, a lexical reference, or a function cell. None can suspend
+    // or have an effect, so a call evaluates them in place, in order.
+    bool immediate(word x, word & value)
+    {
+        const auto node = ir_of(x);
+        if (!node)
+            return false;
+        switch (node->kind) {
+        case ir::constant:
+            value = ir_field(x, *node, 0);
+            return true;
+        case ir::reference:
+            value = reference_value(x, *node);
+            return true;
+        case ir::function_reference: {
+            const auto name = ir_field(x, *node, 0);
+            require(name, tag::sym);
+            value = h.get<tag::sym, field::fun>(name);
+            return true;
+        }
+        default:
+            return false;
+        }
+    }
+
     // As in source application, the callee is resolved before any
     // argument runs and kept for the rest of the call. Prepared code fixes
     // the special operators and expands macros when it is prepared, so a
@@ -695,20 +762,28 @@ struct eval_step
             fail("INVALID-FUNCTION", {fun});
         const auto args = ir_field(x, node, 1);
         const auto size = ir_vector_size(x, args);
-        if (size == 0) {
-            call(fun, {});
-            return;
-        }
-        // One argument needs no progress vector: the frame keeps the
-        // callee itself. Otherwise the vector is [callee, arguments...].
-        if (size == 1) {
-            push(x, fun, fixnum(0));
-        } else {
-            const auto progress = h.filledv32(size + 1, nil);
-            h.v32set(progress, 0, fun);
-            push(x, progress, fixnum(0));
-        }
-        enter(h.v32slice(args)[0]);
+        with_words(size, [&](std::span<word> xs) {
+            std::size_t ready = 0;
+            while (ready < size
+                   && immediate(h.v32slice(args)[ready], xs[ready]))
+                ++ready;
+            if (ready == size) {
+                call(fun, xs);
+                return;
+            }
+            // A lone argument needs no progress vector: the frame keeps
+            // the callee itself. Otherwise it is [callee, arguments...].
+            if (size == 1) {
+                push(x, fun, fixnum(0));
+            } else {
+                const auto progress = h.filledv32(size + 1, nil);
+                h.v32set(progress, 0, fun);
+                for (std::size_t i = 0; i < ready; ++i)
+                    h.v32set(progress, i + 1, xs[i]);
+                push(x, progress, fixnum(int(ready)));
+            }
+            enter(h.v32slice(args)[ready]);
+        });
     }
 
     void proceed_prepared(word x, word acc, word arg, word hop)
@@ -725,9 +800,15 @@ struct eval_step
             const auto target = ir_field(x, *node, 0);
             const auto kind = ir_of(target);
             word name = nil;
-            if (kind && kind->kind == ir::reference)
+            if (kind && kind->kind == ir::reference) {
+                if (const auto slot = addressed(target, *kind)) {
+                    h.v32set(slot->first, slot->second, val);
+                    way = hop;
+                    give(val);
+                    return;
+                }
                 name = binding_name(target, ir_field(target, *kind, 0));
-            else if (kind && kind->kind == ir::lookup)
+            } else if (kind && kind->kind == ir::lookup)
                 name = ir_field(target, *kind, 0);
             else
                 fail("INVALID-EXPRESSION", {x});
@@ -809,9 +890,14 @@ struct eval_step
             || h.v32slice(progress).size() != size + 1)
             fail("INVALID-CONTINUATION", {way});
         h.v32set(progress, i + 1, val);
-        if (i + 1 < size) {
-            h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
-            enter(h.v32slice(args)[i + 1]);
+        auto next = i + 1;
+        for (word value; next < size
+                         && immediate(h.v32slice(args)[next], value);
+             ++next)
+            h.v32set(progress, next + 1, value);
+        if (next < size) {
+            h.set<tag::ktx, field::arg>(way, fixnum(int(next)));
+            enter(h.v32slice(args)[next]);
             return;
         }
         with_words(size, [&](std::span<word> xs) {
@@ -2193,6 +2279,8 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::closure_part<field::cnt>>(
             "FUNCTION-CALL-COUNT"),
         builtin::bind<&eval_step::closure_part<field::exp>>("CODE"),
+        builtin::bind<&eval_step::closure_part<field::par>>(
+            "FUNCTION-PARAMETERS"),
         builtin::bind<&eval_step::set_closure<field::exp>>("SET-CODE!"),
         builtin::bind<&eval_step::set_closure<field::sym>>(
             "SET-FUNCTION-NAME!"),

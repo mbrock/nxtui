@@ -895,6 +895,53 @@ Each step is a small, separately tested commit.
    collection after every transition, saves a tape before resuming, and
    resumes twice in each of two restored machines.
 
+### First measurements of record execution
+
+Three refinements followed the first executor. Calls evaluate *immediate*
+operands, constants, lexical references, and function cells, in place,
+since none can suspend or have an effect, so `(- x 1)` is one transition
+with no frame. References carry lexical addresses computed by analysis,
+which the checker verifies and the executor bounds-checks before falling
+back to lookup by name. `prepare-function!` and `prepare-package!` give
+existing closures prepared code; the base library, compiler, and host
+adapter, 317 functions, run prepared, and the prepared compiler prepares
+them again.
+
+`wisp-bench --prepared` and `--prepared-library` measure this against
+source interpretation. Medians of five runs of the release build at
+`836a6ea` plus these changes, Clang 23.1 on macOS, with ratio meaning
+source time over prepared time:
+
+| Benchmark | Source | Prepared | Ratio | Prepared library | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| call-1 | 0.3 µs | 0.2 µs | 1.18 | 0.3 µs | 1.12 |
+| call-16 | 0.9 µs | 0.5 µs | 1.97 | 0.5 µs | 1.76 |
+| lookup-last-16 | 0.9 µs | 0.5 µs | 1.90 | 0.5 µs | 1.71 |
+| lookup-inner-8 | 1.2 µs | 1.2 µs | 1.05 | 1.2 µs | 0.98 |
+| effect-deep | 34.9 µs | 29.4 µs | 1.19 | 30.7 µs | 1.14 |
+| tak | 31.2 ms | 30.5 ms | 1.03 | 33.6 ms | 0.93 |
+| deriv | 19.8 µs | 20.6 µs | 0.96 | 24.6 µs | 0.81 |
+| diviter | 259 µs | 305 µs | 0.85 | 309 µs | 0.84 |
+| divrec | 233 µs | 290 µs | 0.81 | 283 µs | 0.82 |
+| stdlib-list | 399 µs | 406 µs | 0.98 | 406 µs | 0.98 |
+| router-hit | 67.8 µs | 67.8 µs | 1.00 | 70.9 µs | 0.96 |
+
+Prepared code does much less work: TAK takes 43% fewer evaluator steps,
+and in library mode it makes no lexical name searches at all. But each
+record transition costs more than a source one, about 38 ns against 23 ns
+on TAK, because every transition decodes generic DEFSTRUCT records:
+descriptor recognition, slot positions, and several record reads per
+operand. Prepared library code also enlarges the heap, which doubled
+collection time on TAK. Wide calls and deep lookups, where the IR removes
+the most rediscovery, run up to twice as fast; whole programs break even
+or lose up to 20%.
+
+This confirms the RFC's division of labor. Record execution established
+the semantics, including multi-shot resumption, tapes, and mixed calls,
+and showed that the removable work is real. Speed comes from lowering the
+records into a compact representation that needs no decoding per
+transition, which is stage 4.
+
 Stages 3 through 6 then proceed as described above, with a working executor
 to measure. Delay instruction packing until we can inspect, save, restore, and
 resume the suspended-argument computation with the intended semantics.

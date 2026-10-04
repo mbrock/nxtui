@@ -39,8 +39,14 @@
 (defstruct ir-binding name owner)
 
 ;; A use of a known lexical binding. Every use of one binder
-;; shares its IR-BINDING object.
-(defstruct ir-reference binding)
+;; shares its IR-BINDING object. DEPTH and INDEX, when known, are
+;; the binding's lexical address: how many runtime scopes to skip
+;; and which name/value pair of that scope's vector holds it.
+;; RFC 0020 does not support changing an environment's shape, so
+;; analysis can compute the address once; a reference to a
+;; binding without a runtime scope behind it has none, and looks
+;; its name up instead.
+(defstruct ir-reference binding (depth nil) (index nil))
 
 ;; A value lookup that analysis did not resolve lexically: the
 ;; runtime searches lexical scope, then dynamic bindings and the
@@ -136,20 +142,46 @@
   (or (nil? x) (eq? x t) (integer? x) (string? x) (vector? x)
       (and (symbol? x) (not (%ir-name? x)))))
 
-;; SCOPE lists the IR-BINDINGs in scope, innermost first.
+;; SCOPE lists the IR-BINDINGs in scope, innermost first, in the
+;; order of their runtime scope vectors. A :FRAME marker ends the
+;; bindings of each runtime scope; bindings after the last marker,
+;; such as those a caller passes to ANALYZE, have no runtime scope
+;; and so no address.
 (defun %ir-resolve (symbol scope)
-  (let ((found (find scope
-                     (fn (binding)
-                       (eq? (ir-binding-name binding) symbol)))))
-    (if found
-        (make-ir-reference (head found))
-      (make-ir-lookup symbol))))
+  (%ir-resolve-loop symbol scope 0 0))
+
+(defun %ir-resolve-loop (symbol scope depth index)
+  (cond ((nil? scope) (make-ir-lookup symbol))
+        ((eq? (head scope) :frame)
+         (%ir-resolve-loop symbol (tail scope) (+ depth 1) 0))
+        ((eq? (ir-binding-name (head scope)) symbol)
+         (make-ir-reference (head scope)
+                            (%ir-address-depth (tail scope) depth)
+                            (%ir-address-depth (tail scope) index)))
+        (t (%ir-resolve-loop symbol (tail scope) depth (+ index 1)))))
+
+;; An address part, if a :FRAME marker closes the binding's scope.
+(defun %ir-address-depth (rest part)
+  (when (%ir-memq :frame rest) part))
+
+;; The scope inside a function, whose parameters form one runtime
+;; scope in source order, and inside a LET with clauses, whose
+;; runtime scope lists its clauses last first.
+(defun %ir-function-scope (bindings scope)
+  (append bindings (cons :frame scope)))
+
+(defun %ir-let-scope (bindings scope)
+  (reverse-append bindings (cons :frame scope)))
+
+;; The bindings of a scope, without its markers.
+(defun %ir-scope-bindings (scope)
+  (filter scope (fn (x) (not (eq? x :frame)))))
 
 (defun analyze (form &optional scope)
   (cond ((%ir-self-evaluating? form) (make-ir-constant form))
         ((symbol? form) (%ir-resolve form scope))
         ((pair? form) (%ir-analyze-form form scope))
-        (t (make-ir-source form scope))))
+        (t (make-ir-source form (%ir-scope-bindings scope)))))
 
 (defun %ir-analyze-list (forms scope)
   (map (fn (form) (analyze form scope)) forms))
@@ -163,7 +195,7 @@
   (let ((operator (head form))
         (count (%ir-list-length (tail form))))
     (cond ((not (and (%ir-name? operator) count))
-           (make-ir-source form scope))
+           (make-ir-source form (%ir-scope-bindings scope)))
           ((ir-special-operator? operator)
            (%ir-analyze-special operator form count scope))
           ((and (eq? operator '%set!) (eq? count 2)
@@ -196,7 +228,7 @@
           ((and (eq? operator '%fn) (eq? count 3))
            (%ir-analyze-function form (head arguments) (second arguments)
                                  (third arguments) scope))
-          (t (make-ir-source form scope)))))
+          (t (make-ir-source form (%ir-scope-bindings scope))))))
 
 (defun %ir-quoted-name? (x)
   (and (pair? x)
@@ -228,7 +260,8 @@
 ;; bindings into SCOPE in reverse keeps that lookup order.
 (defun %ir-analyze-let (form clauses body scope)
   (cond
-    ((not (%ir-let-clauses? clauses)) (make-ir-source form scope))
+    ((not (%ir-let-clauses? clauses))
+     (make-ir-source form (%ir-scope-bindings scope)))
     ((nil? clauses) (%ir-analyze-body body scope))
     (t (let* ((node (make-ir-let nil nil nil))
               (bindings (map (fn (clause)
@@ -242,7 +275,7 @@
                 clauses)))
          (set-ir-let-body!
           node
-          (%ir-analyze-body body (reverse-append bindings scope)))
+          (%ir-analyze-body body (%ir-let-scope bindings scope)))
          node))))
 
 ;; Parse a parameter list as source argument binding does: a
@@ -284,7 +317,7 @@
   (let ((parsed (%ir-parse-parameters parameters)))
     (if (or (nil? parsed)
             (not (or (nil? name) (%ir-name? name))))
-        (make-ir-source form scope)
+        (make-ir-source form (%ir-scope-bindings scope))
       (let* ((function (make-ir-function name nil nil nil body))
              (bind (fn (parameter) (make-ir-binding parameter function)))
              (required (map bind (head parsed)))
@@ -300,7 +333,8 @@
                              parameters))
         (set-ir-function-bindings! function (vector-from-list bindings))
         (set-ir-function-body! function
-                               (analyze body (append bindings scope)))
+                               (analyze body
+                                        (%ir-function-scope bindings scope)))
         (make-ir-closure function)))))
 
 
@@ -316,6 +350,36 @@
 ;; a closure whose calls run prepared code.
 (defun prepared-eval (form)
   (eval (analyze form)))
+
+;; Give an existing closure prepared code analyzed from its
+;; parameters and source body, and return T, or NIL when the
+;; parameters cannot be analyzed. The closure keeps its captured
+;; environment: names its body does not bind are runtime lookups,
+;; which find that environment as source evaluation would.
+(defun prepare-function! (function)
+  (let ((node (analyze (list '%fn
+                             (function-name function)
+                             (function-parameters function)
+                             (code function)))))
+    (when (ir-closure? node)
+      (set-code! function (ir-closure-function node))
+      t)))
+
+;; Prepare every function, not macro or primitive, named by a
+;; symbol in PACKAGE, and return how many were prepared.
+(defun prepare-package! (package)
+  (%prepare-each! (package-symbols package) 0))
+
+(defun %prepare-each! (symbols count)
+  (if (nil? symbols) count
+    (let ((function (symbol-function (head symbols))))
+      (%prepare-each!
+       (tail symbols)
+       (if (and (eq? (type-of function) 'function)
+                (not (jet? function))
+                (prepare-function! function))
+           (+ count 1)
+         count)))))
 
 
 
@@ -444,6 +508,22 @@
       (list-from-vector nodes)
     (%ir-problem state :not-a-vector owner nodes)))
 
+;; A reference's address must be the one its scope implies, so
+;; prepared execution reads the slot that name lookup would find.
+(defun %ir-check-address (node scope state)
+  (let ((binding (ir-reference-binding node)))
+    (when (ir-binding? binding)
+      (let ((expected (%ir-resolve (ir-binding-name binding) scope)))
+        (unless (and (ir-reference? expected)
+                     (eq? (ir-reference-binding expected) binding)
+                     (equal? (ir-reference-depth expected)
+                             (ir-reference-depth node))
+                     (equal? (ir-reference-index expected)
+                             (ir-reference-index node)))
+          (%ir-problem state :wrong-address node
+                       (list (ir-reference-depth node)
+                             (ir-reference-index node))))))))
+
 (defun %ir-check-binding-use (owner binding scope state)
   (cond ((not (ir-binding? binding))
          (%ir-problem state :not-a-binding owner binding))
@@ -480,7 +560,9 @@
                     (ir-function-reference-symbol node))))
     ((ir-reference? node)
      (%ir-check-binding-use node (ir-reference-binding node)
-                            scope state))
+                            scope state)
+     (when (%ir-memq (ir-reference-binding node) scope)
+       (%ir-check-address node scope state)))
     ((ir-assignment? node)
      (let ((target (ir-assignment-target node)))
        (if (or (ir-reference? target) (ir-lookup? target))
@@ -531,7 +613,7 @@
         (%ir-check-binders node bindings state)
         (%ir-check-each initializers scope ancestors state)
         (%ir-check (ir-let-body node)
-                   (reverse-append bindings scope)
+                   (%ir-let-scope bindings scope)
                    ancestors state)))))
 
 (defun %ir-check-function (node scope ancestors state)
@@ -547,7 +629,7 @@
       (do
         (%ir-check-binders node bindings state)
         (%ir-check (ir-function-body node)
-                   (append bindings scope)
+                   (%ir-function-scope bindings scope)
                    ancestors state)))))
 
 ;; The parameter record and the binding vector describe the same

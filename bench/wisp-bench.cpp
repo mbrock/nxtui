@@ -142,6 +142,26 @@ const auto cases = std::to_array<benchmark>({
      "not-found"},
 });
 
+// How benchmark code runs. Source mode interprets everything. Prepared
+// mode loads the compiler and evaluates each benchmark definition through
+// PREPARED-EVAL, so benchmark functions run as IR while the base library
+// stays interpreted. Prepared-library mode also prepares every function in
+// the WISP package first: the base library, the compiler, and the rest.
+enum class mode { source, prepared, prepared_library };
+
+constexpr std::string_view mode_name(mode m)
+{
+    switch (m) {
+    case mode::source:
+        return "source";
+    case mode::prepared:
+        return "prepared";
+    case mode::prepared_library:
+        return "prepared-library";
+    }
+    return "?";
+}
+
 // This is a benchmark host, not a new evaluator GC policy. Match the NXT
 // host's allocation-proportional policy, including its committed
 // safepoints.
@@ -189,6 +209,20 @@ struct runner
             collect_if_needed();
             check(status, input.run());
         } while (status == evaluation::runnable);
+    }
+
+    // Evaluate each top-level form as (PREPARED-EVAL 'form). Words are
+    // not roots: intern the symbol again after each form's collections.
+    void load_prepared(std::string_view text)
+    {
+        reader input{h, vm, text};
+        while (auto form = input.next()) {
+            const auto quoted =
+                h.cons(vm.known("QUOTE"), h.cons(*form, nil));
+            const auto prepare = vm.intern("PREPARED-EVAL");
+            root run{h, vm.start(h.cons(prepare, h.cons(quoted, nil)))};
+            evaluate(run);
+        }
     }
 
     void evaluate(root & run)
@@ -254,12 +288,20 @@ void array_field(
     std::cout << ']';
 }
 
-void run(const benchmark & b, unsigned iterations, unsigned warmup)
+void run(
+    const benchmark & b, mode m, unsigned iterations, unsigned warmup)
 {
     profile counters;
     runner r;
     r.load(base_library());
-    r.load(b.setup);
+    if (m == mode::source) {
+        r.load(b.setup);
+    } else {
+        r.load(compiler_library());
+        if (m == mode::prepared_library)
+            r.load("(prepare-package! (find-package \"WISP\"))");
+        r.load_prepared(b.setup);
+    }
     if (warmup) {
         root run{r.h, r.vm.start(r.invocation(b, warmup))};
         r.evaluate(run);
@@ -280,6 +322,7 @@ void run(const benchmark & b, unsigned iterations, unsigned warmup)
 
     std::cout << "{\"benchmark\":" << std::quoted(b.name);
     field("input", std::quoted(b.input));
+    field("mode", std::quoted(mode_name(m)));
     field("runtime_revision", std::quoted(WISP_BENCH_REVISION));
     field("buildtype", std::quoted(WISP_BENCH_BUILDTYPE));
     field("compiler", std::quoted(__VERSION__));
@@ -351,9 +394,19 @@ unsigned count(std::string_view text, bool zero_allowed)
 int main(int argc, char ** argv)
 {
     try {
+        auto m = mode::source;
+        if (argc > 1 && std::string_view{argv[1]} == "--prepared") {
+            m = mode::prepared;
+            --argc, ++argv;
+        } else if (
+            argc > 1 && std::string_view{argv[1]} == "--prepared-library") {
+            m = mode::prepared_library;
+            --argc, ++argv;
+        }
         if (argc > 4)
             throw std::runtime_error(
-                "usage: wisp-bench [all|NAME|--list] [ITERATIONS [WARMUP]]");
+                "usage: wisp-bench [--prepared|--prepared-library] "
+                "[all|NAME|--list] [ITERATIONS [WARMUP]]");
         const std::string_view selection = argc > 1 ? argv[1] : "all";
         bool matched = false;
         for (const auto & b : cases) {
@@ -363,6 +416,7 @@ int main(int argc, char ** argv)
             } else if (selection == "all" || selection == b.name) {
                 matched = true;
                 run(b,
+                    m,
                     argc > 2 ? count(argv[2], false) : b.iterations,
                     argc > 3 ? count(argv[3], true) : 0);
             }

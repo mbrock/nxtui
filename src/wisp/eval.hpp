@@ -50,7 +50,7 @@ inline constexpr auto known_names = std::to_array<std::string_view>({
     "VALUE", "TARGET", "CALLEE", "ARGUMENTS", "TEST", "CONSEQUENT",
     "ALTERNATIVE", "FORMS", "BINDINGS", "INITIALIZERS", "BODY", "NAME",
     "PARAMETERS", "REQUIRED", "OPTIONAL", "REST", "SOURCE", "FORM", "SCOPE",
-    "OWNER",
+    "OWNER", "DEPTH", "INDEX",
 });
 
 /// A position in `known_names`, found at compile time.
@@ -190,8 +190,8 @@ private:
         std::uint8_t kind = 0;
         std::array<std::uint8_t, 5> at{};
     };
-    std::array<ir_layout, 16> ir_layouts_{};
-    std::size_t ir_layout_count_ = 0;
+    // Direct-mapped by descriptor word; NIL marks an empty entry.
+    std::array<ir_layout, 64> ir_layouts_{};
     std::uint64_t ir_layout_epoch_ = 0;
     // Host-independent fresh keys: unique within this evaluator, not
     // Zig's date/random names or a portable identity across images.
