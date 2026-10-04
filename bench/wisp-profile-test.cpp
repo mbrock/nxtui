@@ -74,6 +74,29 @@ int main()
         require(
             p.allocations[std::size_t(tag::duo)] == scale, "detachment");
 
+        profile copied;
+        heap frames;
+        const auto acc =
+            frames.newv32(std::array{fixnum(11), fixnum(22), fixnum(33)});
+        const auto node =
+            frames.new_words<tag::rec>(std::array{fixnum(256)});
+        const auto frame =
+            frames.make<tag::ktx>({top, nil, node, acc, fixnum(1)});
+        frames.profiling(&copied);
+        const auto clone = frames.copy_continuation_frame(frame);
+        const auto progress = frames.get<tag::ktx, field::acc>(clone);
+        frames.v32set(progress, 0, fixnum(99));
+        require(
+            frames.v32slice(acc)[0] == fixnum(11), "progress was shared");
+        require(
+            copied.continuation_copy_words == 3 * scale,
+            "copied progress words");
+        frames.copy_continuation_frame(
+            frames.make<tag::ktx>({top, nil, node, nil, nil}));
+        require(
+            copied.continuation_copy_words == 3 * scale,
+            "counted absent payload");
+
         auto atom = evaluate("42", 42);
         require(
             atom.evaluator_steps == scale, "one atom is one transition");

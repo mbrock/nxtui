@@ -153,6 +153,53 @@ it for the extent of a body, including across awaits:
 Packages work as in the Zig implementation: `defpackage`, `in-package`, and
 direct-only (non-transitive) use lists. See RFC 0018 for the details.
 
+### Lowered execution {#wisp_lowered}
+
+Source interpretation remains the default. The boot image also includes
+the guest compiler: `analyze`, `ir-check`, and `ir-show` describe semantic
+code; `lower` checks that graph and produces compact executable records.
+Lowering is opt-in:
+
+```lisp
+(lowered-eval '(let ((x 41)) (+ x 1)))     ; => 42
+(code-show (lower (analyze '(let ((x 41)) (+ x 1)))))
+;; => (:LET (X) ((:CONSTANT 41))
+;;      (:CALL + ((:LEXICAL-LOAD 0 0) (:CONSTANT 1))))
+
+(defun add1 (x) (+ x 1))
+(lower-function! #'add1)                  ; => T
+(add1 41)                               ; => 42
+(code #'add1)                            ; => (+ X 1)
+```
+
+`lower-function!` preserves closure identity and its captured environment;
+`lower-package!` lowers the ordinary functions named in a package and returns
+their count. `prepare-function!`, `prepare-package!`, and `prepared-eval`
+retain the semantic-record execution mode as a reference for comparisons.
+`lower` accepts the same optional scope as `ir-check`.
+
+Lowered code keeps no analysis bindings or owner links. Its operation numbers
+and operand kinds come from the native schema exposed by `code-operations`.
+It still runs on Wisp's heap control machine: source and lowered functions can
+call each other, continuations remain multi-shot, and tapes retain suspended
+work. Ordinary vectors remain self-evaluating data, not instructions.
+
+For a pending lowered continuation frame, `(code-frame k)` returns
+`(operation-view position callee completed-values)`, or `nil` for a frame
+from another execution mode. Positions are zero-based; call frames retain the
+callee resolved before the arguments started. `ktx-fun`, `ktx-arg`, and
+`ktx-acc` expose the raw node, cursor, and progress. Resumptions copy progress
+but share lexical locations, just as source execution does.
+
+As in record execution, macros expand at preparation time and syntax is
+snapshotted; changing source conses returned by `code` does not change lowered
+instructions. Function cells and global values remain live. `set-code!`
+with a source form restores source execution; existing suspended work retains
+its original nodes. Code records are currently mutable and checked at runtime,
+not immutable verified bytecode. See
+[RFC 0021](https://github.com/mbrock/nxtui/blob/main/rfc/new/rfc-0021-wisp-lowered-code.md)
+for the representation and the deferred flat-code/activation-frame decisions.
+
 ## Loading files {#wisp_load}
 
 ```sh
@@ -273,8 +320,9 @@ The rules:
 Checkpoints replace the target file atomically, with file and directory
 `fsync`. The executable's image schema is `NXT-WISP-4`:
 `[tag [source path form-start] byte-offset run pending last-result request-serial]`.
-Older host schemas and portable tapes before version 4 (which added records)
-are rejected.
+The portable tape format is version 5, which adds a versioned lowered-operation
+manifest. Older host schemas, older portable tapes, and incompatible operation
+identities or operand layouts are rejected; there is no automatic migration.
 
 ### The tape API {#wisp_tape_api}
 
@@ -286,7 +334,7 @@ machine. Pass `wisp::tape::compression::zlib` as the last argument to
 size limit applies to both the compressed and the expanded bytes, and the
 expanded size is checked before allocation. CLI checkpoints are uncompressed.
 
-The base and host libraries are evaluated once at build time into a
+The base, compiler, and host libraries are evaluated once at build time into a
 zlib-compressed boot tape that is embedded in the executable with `#embed`.
 Fresh runs and REPLs decode a private copy of it; restores use only the
 selected checkpoint. Changes to the libraries, the evaluator, or the codec

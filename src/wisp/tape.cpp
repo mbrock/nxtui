@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "wisp/tape.hpp"
+#include "wisp/code.hpp"
 #include "nxt/crypto.hpp"
 
 #include <istream>
@@ -13,7 +14,7 @@ namespace {
 
 constexpr std::string_view magic = "NXWISP\r\n";
 constexpr std::string_view compressed_magic = "NXWISPZ\n";
-constexpr word version = 4;
+constexpr word version = 5;
 
 void demand(bool good, const char * message)
 {
@@ -131,7 +132,6 @@ struct tape_codec
         }
     };
 
-
     static constexpr std::array roots{
         saved_root{"WISP", &evaluator::base_, 0},
         saved_root{"KEYWORD", &evaluator::keywords_, 0},
@@ -146,7 +146,8 @@ struct tape_codec
         saved_root{"LET", nullptr, known_name::find("LET")},
         saved_root{"PROMPT", nullptr, known_name::find("PROMPT")},
         saved_root{"BINDING", nullptr, known_name::find("BINDING")},
-        saved_root{"CONTINUATION", nullptr, known_name::find("CONTINUATION")},
+        saved_root{
+            "CONTINUATION", nullptr, known_name::find("CONTINUATION")},
         saved_root{"RESUME", nullptr, known_name::find("RESUME")},
         saved_root{"&OPTIONAL", nullptr, known_name::find("&OPTIONAL")},
         saved_root{"&REST", nullptr, known_name::find("&REST")},
@@ -227,8 +228,7 @@ struct tape_codec
                         if (schema<T>::columns[c].kind == field_kind::value)
                             for (auto x : table.col(c))
                                 value(x);
-                    if constexpr (
-                        T == tag::v08 || heap::word_payload<T>) {
+                    if constexpr (T == tag::v08 || heap::word_payload<T>) {
                         const auto size = T == tag::v08 ? h.bytes_.size()
                                                         : h.words_.size();
                         std::uint64_t total = 0;
@@ -340,7 +340,8 @@ struct tape_codec
             if (x != top) {
                 const auto kind = h.get<tag::ktx, field::fun>(x);
                 demand(
-                    !boundary_kind(kind) && kind != vm.known("CONTINUATION"),
+                    !boundary_kind(kind)
+                        && kind != vm.known("CONTINUATION"),
                     "invalid continuation segment");
             }
         };
@@ -446,6 +447,17 @@ struct tape_codec
             out.text(jet.name);
             out.u32(jet.control);
         }
+        // Numeric code identities are persistent, unlike remapped jets.
+        // Reject incompatible layouts, not just different heap schemas.
+        out.u32(code_version);
+        out.count(code_operations.size());
+        for (const auto & operation : code_operations) {
+            out.text(operation.name);
+            out.u32(code_opcode(operation.op));
+            out.count(operation.count);
+            for (std::size_t i = 0; i < operation.count; ++i)
+                out.text(operand_name(operation.operands[i]));
+        }
         out.count(h.bytes_.size());
         out.raw(std::as_bytes(std::span{h.bytes_}));
         out.count(h.words_.size());
@@ -535,6 +547,22 @@ struct tape_codec
             const auto id = word(found - jets.begin());
             demand(seen_jets.insert(id).second, "duplicate builtin");
             jet_map.push_back(id);
+        }
+        demand(in.u32() == code_version, "unsupported code version");
+        demand(
+            in.u32() == code_operations.size(),
+            "unsupported code manifest");
+        for (const auto & operation : code_operations) {
+            demand(
+                in.text() == operation.name, "unsupported code operation");
+            demand(
+                in.u32() == code_opcode(operation.op),
+                "unsupported code opcode");
+            demand(in.u32() == operation.count, "unsupported code layout");
+            for (std::size_t i = 0; i < operation.count; ++i)
+                demand(
+                    in.text() == operand_name(operation.operands[i]),
+                    "unsupported code operand");
         }
         const auto bytes = in.take(in.u32());
         h.bytes_.assign(

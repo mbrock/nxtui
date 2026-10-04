@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // C++ port of mbrock/wisp's core/step.zig and core/jets-{ctl,fun}.zig.
 #include "wisp/eval.hpp"
+#include "wisp/code.hpp"
 #include "wisp/printer.hpp"
 #include "wisp/reader.hpp"
 
@@ -130,7 +131,8 @@ constexpr std::string_view type_name(tag type)
     return "UNKNOWN";
 }
 
-// Index in known_names of each tag's TYPE-OF name, or npos when it has none.
+// Index in known_names of each tag's TYPE-OF name, or npos when it has
+// none.
 constexpr auto type_symbols = [] {
     std::array<std::size_t, 32> table{};
     for (word t = 0; t < table.size(); ++t) {
@@ -157,9 +159,10 @@ struct condition
 };
 
 // Prepared execution (RFC 0020) runs the compiler's semantic records
-// directly. They are DEFSTRUCT instances from compiler.wisp. Each IR type is
-// named here with the slots the executor reads; their positions come from
-// the descriptor's own slot list, so only the DEFSTRUCT defines slot order.
+// directly. They are DEFSTRUCT instances from compiler.wisp. Each IR type
+// is named here with the slots the executor reads; their positions come
+// from the descriptor's own slot list, so only the DEFSTRUCT defines slot
+// order.
 enum class ir : std::uint8_t {
     constant,
     lookup,
@@ -208,8 +211,10 @@ constexpr std::array ir_shapes{
     shape(ir::sequence, "IR-SEQUENCE", {"FORMS"}),
     shape(ir::let, "IR-LET", {"BINDINGS", "INITIALIZERS", "BODY"}),
     shape(ir::closure, "IR-CLOSURE", {"FUNCTION"}),
-    shape(ir::function, "IR-FUNCTION", {"NAME", "PARAMETERS", "BODY",
-                                        "SOURCE"}),
+    shape(
+        ir::function,
+        "IR-FUNCTION",
+        {"NAME", "PARAMETERS", "BODY", "SOURCE"}),
     shape(ir::parameters, "IR-PARAMETERS", {"SOURCE"}),
     shape(ir::binding, "IR-BINDING", {"NAME"}),
     shape(ir::source, "IR-SOURCE", {"FORM"}),
@@ -518,7 +523,8 @@ struct eval_step
         for (const auto & shape : ir_shapes) {
             if (vm.known_[shape.name].get() != name)
                 continue;
-            evaluator::ir_layout layout{descriptor, std::uint8_t(shape.kind)};
+            evaluator::ir_layout layout{
+                descriptor, std::uint8_t(shape.kind)};
             for (std::size_t i = 0; i < shape.count; ++i) {
                 const auto wanted = vm.known_[shape.slots[i]].get();
                 std::size_t at = 0;
@@ -582,7 +588,8 @@ struct eval_step
 
     bool control_jet(word fun) const noexcept
     {
-        return tag_of(fun) == tag::jet && payload_of(fun) < builtins().size()
+        return tag_of(fun) == tag::jet
+               && payload_of(fun) < builtins().size()
                && builtins()[payload_of(fun)].control;
     }
 
@@ -590,6 +597,11 @@ struct eval_step
     // the function's body.
     word executable_body(word code)
     {
+        if (lowered_code(code)) {
+            if (lowered_operation(code) != code_op::function)
+                fail("INVALID-FUNCTION", {code});
+            return code_operand(code, 2);
+        }
         const auto node = ir_of(code);
         if (node && node->kind == ir::function)
             return ir_field(code, *node, 2);
@@ -599,6 +611,11 @@ struct eval_step
     // CODE shows a prepared closure's source snapshot, not its IR.
     word source_body(word code)
     {
+        if (lowered_code(code)) {
+            if (lowered_operation(code) != code_op::function)
+                fail("INVALID-FUNCTION", {code});
+            return code_operand(code, 3);
+        }
         const auto node = ir_of(code);
         if (node && node->kind == ir::function)
             return ir_field(code, *node, 3);
@@ -720,8 +737,27 @@ struct eval_step
     // The value of an operand that needs no transitions of its own: a
     // constant, a lexical reference, or a function cell. None can suspend
     // or have an effect, so a call evaluates them in place, in order.
-    bool immediate(word x, word & value)
+    bool immediate(word x, word & value, bool lowered_only = false)
     {
+        if (lowered_only && !lowered_code(x))
+            fail("INVALID-EXPRESSION", {x});
+        if (lowered_code(x)) {
+            switch (lowered_operation(x)) {
+            case code_op::constant:
+                value = code_operand(x, 0);
+                return true;
+            case code_op::lexical_load: {
+                const auto [scope, at] = lowered_address(x);
+                value = h.v32slice(scope)[at];
+                return true;
+            }
+            case code_op::function_cell:
+                value = h.get<tag::sym, field::fun>(code_operand(x, 0));
+                return true;
+            default:
+                return false;
+            }
+        }
         const auto node = ir_of(x);
         if (!node)
             return false;
@@ -761,11 +797,19 @@ struct eval_step
             && (tag_of(fun) != tag::jet || control_jet(fun)))
             fail("INVALID-FUNCTION", {fun});
         const auto args = ir_field(x, node, 1);
+        start_arguments(x, fun, args);
+    }
+
+    // Record and lowered calls share suspended progress and ownership.
+    void start_arguments(word x, word fun, word args)
+    {
         const auto size = ir_vector_size(x, args);
+        const auto lowered = lowered_code(x);
         with_words(size, [&](std::span<word> xs) {
             std::size_t ready = 0;
-            while (ready < size
-                   && immediate(h.v32slice(args)[ready], xs[ready]))
+            while (
+                ready < size
+                && immediate(h.v32slice(args)[ready], xs[ready], lowered))
                 ++ready;
             if (ready == size) {
                 call(fun, xs);
@@ -872,10 +916,15 @@ struct eval_step
         enter(ir_field(x, node, 2));
     }
 
-    void proceed_call(
-        word x, const ir_node & node, word acc, word arg, word hop)
+    void
+    proceed_call(word x, const ir_node & node, word acc, word arg, word hop)
     {
         const auto args = ir_field(x, node, 1);
+        proceed_arguments(x, args, acc, arg, hop);
+    }
+
+    void proceed_arguments(word x, word args, word acc, word arg, word hop)
+    {
         const auto size = ir_vector_size(x, args);
         const auto i = frame_index(arg, size);
         if (size == 1) {
@@ -891,8 +940,9 @@ struct eval_step
             fail("INVALID-CONTINUATION", {way});
         h.v32set(progress, i + 1, val);
         auto next = i + 1;
-        for (word value; next < size
-                         && immediate(h.v32slice(args)[next], value);
+        for (word value;
+             next < size
+             && immediate(h.v32slice(args)[next], value, lowered_code(x));
              ++next)
             h.v32set(progress, next + 1, value);
         if (next < size) {
@@ -907,6 +957,259 @@ struct eval_step
             way = hop;
             call(fun, xs);
         });
+    }
+
+    // * Compact executable nodes (RFC 0021)
+
+    bool lowered_code(word x) const
+    {
+        return tag_of(x) == tag::rec && !h.words<tag::rec>(x).empty()
+               && tag_of(h.words<tag::rec>(x)[0]) == tag::integer;
+    }
+
+    code_op
+    lowered_operation(word x, known_name error = "INVALID-EXPRESSION")
+    {
+        if (!lowered_code(x))
+            fail(error, {x});
+        const auto xs = h.words<tag::rec>(x);
+        const auto op = code_operation_of(xs[0]);
+        if (!op)
+            fail(error, {x});
+        const auto & shape = code_operations[std::size_t(*op)];
+        if (xs.size() != shape.count + 1)
+            fail(error, {x});
+        for (std::size_t i = 0; i < shape.count; ++i) {
+            const auto value = xs[i + 1];
+            bool valid = false;
+            switch (shape.operands[i]) {
+            case operand_kind::value:
+                valid = true;
+                break;
+            case operand_kind::address:
+                valid =
+                    tag_of(value) == tag::integer && integer(value) >= 0;
+                break;
+            case operand_kind::symbol:
+                valid = tag_of(value) == tag::sym;
+                break;
+            case operand_kind::name:
+                valid = value == nil || tag_of(value) == tag::sym;
+                break;
+            case operand_kind::node:
+                valid = lowered_code(value);
+                break;
+            case operand_kind::nodes:
+            case operand_kind::names:
+                valid = tag_of(value) == tag::v32;
+                break;
+            }
+            if (!valid)
+                fail(error, {x});
+        }
+        return *op;
+    }
+
+    // Only after checking arity. Reacquire pool slices after allocations.
+    word code_operand(word x, std::size_t at) const
+    {
+        return h.words<tag::rec>(x)[at + 1];
+    }
+
+    void enter_lowered(word x)
+    {
+        if (!lowered_code(x))
+            fail("INVALID-EXPRESSION", {x});
+        enter(x);
+    }
+
+    std::pair<word, std::size_t> lowered_address(word x)
+    {
+        auto cur = env;
+        for (auto depth = integer(code_operand(x, 0)); depth > 0; --depth) {
+            if (tag_of(cur) != tag::duo)
+                fail("INVALID-EXPRESSION", {x});
+            cur = h.get<tag::duo, field::cdr>(cur);
+        }
+        if (tag_of(cur) != tag::duo)
+            fail("INVALID-EXPRESSION", {x});
+        const auto scope = h.get<tag::duo, field::car>(cur);
+        const auto at = 2 * std::size_t(integer(code_operand(x, 1))) + 1;
+        if (tag_of(scope) != tag::v32 || h.v32slice(scope).size() % 2 != 0
+            || at >= h.v32slice(scope).size())
+            fail("INVALID-EXPRESSION", {x});
+        return {scope, at};
+    }
+
+    void lowered(word x, code_op op)
+    {
+        switch (op) {
+        case code_op::constant:
+            give(code_operand(x, 0));
+            return;
+        case code_op::lexical_load: {
+            const auto [scope, at] = lowered_address(x);
+            give(h.v32slice(scope)[at]);
+            return;
+        }
+        case code_op::global_load:
+            give(lookup(code_operand(x, 0)));
+            return;
+        case code_op::function_cell:
+            function(code_operand(x, 0));
+            return;
+        case code_op::lexical_store:
+            push(x, nil, nil);
+            enter(code_operand(x, 2));
+            return;
+        case code_op::global_store:
+            push(x, nil, nil);
+            enter(code_operand(x, 1));
+            return;
+        case code_op::branch:
+            push(x, nil, nil);
+            enter(code_operand(x, 0));
+            return;
+        case code_op::sequence: {
+            const auto forms = code_operand(x, 0);
+            const auto size = h.v32slice(forms).size();
+            if (size == 0)
+                fail("INVALID-EXPRESSION", {x});
+            if (size > 1)
+                push(x, nil, fixnum(1));
+            enter_lowered(h.v32slice(forms)[0]);
+            return;
+        }
+        case code_op::let: {
+            const auto names = code_operand(x, 0),
+                       inits = code_operand(x, 1);
+            const auto size = h.v32slice(inits).size();
+            if (h.v32slice(names).size() != size)
+                fail("INVALID-EXPRESSION", {x});
+            if (size == 0) {
+                enter(code_operand(x, 2));
+                return;
+            }
+            push(x, h.filledv32(size, nil), fixnum(0));
+            enter_lowered(h.v32slice(inits)[0]);
+            return;
+        }
+        case code_op::call: {
+            const auto name = code_operand(x, 0);
+            const auto fun = h.get<tag::sym, field::fun>(name);
+            if (fun == nil)
+                fail("UNDEFINED-FUNCTION", {name});
+            if (tag_of(fun) != tag::fun
+                && (tag_of(fun) != tag::jet || control_jet(fun)))
+                fail("INVALID-FUNCTION", {fun});
+            start_arguments(x, fun, code_operand(x, 1));
+            return;
+        }
+        case code_op::closure: {
+            const auto code = code_operand(x, 0);
+            if (lowered_operation(code) != code_op::function)
+                fail("INVALID-EXPRESSION", {x});
+            give(h.make<tag::fun>(
+                {env,
+                 code_operand(code, 1),
+                 code,
+                 code_operand(code, 0),
+                 0}));
+            return;
+        }
+        case code_op::source:
+            enter(code_operand(x, 0));
+            return;
+        case code_op::function:
+            enter(code_operand(x, 2));
+            return;
+        }
+    }
+
+    void proceed_lowered(word x, word acc, word arg, word hop)
+    {
+        switch (lowered_operation(x, "INVALID-CONTINUATION")) {
+        case code_op::branch:
+            way = hop;
+            enter(code_operand(x, val == nil ? 2 : 1));
+            return;
+        case code_op::lexical_store: {
+            const auto [scope, at] = lowered_address(x);
+            h.v32set(scope, at, val);
+            way = hop;
+            give(val);
+            return;
+        }
+        case code_op::global_store:
+            give(lookup(code_operand(x, 0), true, val));
+            way = hop;
+            return;
+        case code_op::sequence: {
+            const auto forms = code_operand(x, 0);
+            const auto size = h.v32slice(forms).size();
+            const auto i = frame_index(arg, size);
+            if (i + 1 == size)
+                way = hop;
+            else {
+                writable_frame();
+                h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+            }
+            enter_lowered(h.v32slice(forms)[i]);
+            return;
+        }
+        case code_op::let: {
+            const auto names = code_operand(x, 0),
+                       inits = code_operand(x, 1);
+            const auto size = h.v32slice(inits).size();
+            if (h.v32slice(names).size() != size)
+                fail("INVALID-CONTINUATION", {way});
+            const auto i = frame_index(arg, size);
+            if (tag_of(acc) != tag::v32 || h.v32slice(acc).size() != size)
+                fail("INVALID-CONTINUATION", {way});
+            writable_frame();
+            const auto progress = h.get<tag::ktx, field::acc>(way);
+            h.v32set(progress, i, val);
+            if (i + 1 < size) {
+                h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+                enter_lowered(h.v32slice(inits)[i + 1]);
+                return;
+            }
+            with_words(2 * size, [&](std::span<word> scope) {
+                for (std::size_t k = 0; k < size; ++k) {
+                    const auto j = size - 1 - k;
+                    const auto name = h.v32slice(names)[j];
+                    require(name, tag::sym);
+                    scope[2 * k] = name;
+                    scope[2 * k + 1] = h.v32slice(progress)[j];
+                }
+                env = h.cons(h.newv32(scope), env);
+            });
+            way = hop;
+            enter(code_operand(x, 2));
+            return;
+        }
+        case code_op::call:
+            proceed_arguments(x, code_operand(x, 1), acc, arg, hop);
+            return;
+        default:
+            fail("INVALID-CONTINUATION", {way});
+        }
+    }
+
+    void code_operations_()
+    {
+        word result = nil;
+        for (auto i = code_operations.size(); i > 0; --i) {
+            const auto & shape = code_operations[i - 1];
+            word kinds = nil;
+            for (auto j = shape.count; j > 0; --j)
+                kinds = h.cons(
+                    vm.keyword(operand_name(shape.operands[j - 1])), kinds);
+            const std::array entry{
+                vm.keyword(shape.name), code_opcode(shape.op), kinds};
+            result = h.cons(list(h, entry), result);
+        }
+        give(result);
     }
 
     void push(word fun, word acc, word arg)
@@ -1069,8 +1372,7 @@ struct eval_step
         if (tag_of(fun) == tag::ktx || fun == top) {
             if (args.size() != 1)
                 fail(
-                    "PROGRAM-ERROR",
-                    {vm.known("CONTINUATION-CALL-ERROR")});
+                    "PROGRAM-ERROR", {vm.known("CONTINUATION-CALL-ERROR")});
             install(compose(context(fun)));
             give(args[0]);
             return;
@@ -1209,7 +1511,10 @@ struct eval_step
                 enter(first);
             }
         } else if (tag_of(fun) == tag::rec) {
-            proceed_prepared(fun, acc, arg, hop);
+            if (lowered_code(fun))
+                proceed_lowered(fun, acc, arg, hop);
+            else
+                proceed_prepared(fun, acc, arg, hop);
         } else {
             fail("INVALID-CONTINUATION", {way});
         }
@@ -1645,7 +1950,8 @@ struct eval_step
     {
         require(r, tag::rec);
         const auto index = number(idx);
-        if (index < 0 || std::size_t(index) + 1 >= h.words<tag::rec>(r).size())
+        if (index < 0
+            || std::size_t(index) + 1 >= h.words<tag::rec>(r).size())
             fail("TYPE-MISMATCH", {vm.known("INTEGER"), idx});
         return static_cast<std::size_t>(index) + 1;
     }
@@ -2203,6 +2509,10 @@ struct eval_step
             application(exp);
             break;
         case tag::rec:
+            if (lowered_code(exp)) {
+                lowered(exp, lowered_operation(exp));
+                break;
+            }
             if (const auto node = ir_of(exp)) {
                 prepared(exp, *node);
                 break;
@@ -2300,6 +2610,7 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::record_length>("RECORD-LENGTH"),
         builtin::bind<&eval_step::record_get>("RECORD-GET"),
         builtin::bind<&eval_step::record_set>("RECORD-SET!"),
+        builtin::bind<&eval_step::code_operations_>("CODE-OPERATIONS"),
         builtin::bind<&eval_step::length<tag::v08>>("BYTE-SIZE"),
         builtin::bind<&eval_step::length<tag::v08>>("STRING-LENGTH"),
         builtin::bind<&eval_step::string_equal>("STRING-EQUAL?"),

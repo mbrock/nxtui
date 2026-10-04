@@ -1,12 +1,11 @@
 ;; -*- mode: wisp; fill-column: 64; -*-
-;;; The semantic corpus for RFC 0020's prepared execution.
+;;; Semantic corpus for source, prepared IR, and lowered execution.
 ;;
 ;; Each case is a small program, a list of top-level forms, with
 ;; the value of its last form under source interpretation. Every
 ;; test runs in its own machine, so multi-shot mutation cannot
-;; leak between cases. Only source mode runs today; prepared and
-;; bytecode modes will run the same cases under their own
-;; contracts.
+;; leak between cases. Each execution mode runs the same cases
+;; under its own contract.
 ;;
 ;; Where RFC 0020's liveness contract deliberately makes prepared
 ;; code differ, a case also gives the prepared result and the
@@ -18,9 +17,7 @@
 ;; Cases in declaration order: (name program source prepared reason).
 (defvar *corpus* nil)
 
-;; Each case is a test in source mode and another in prepared
-;; mode, where every top-level form is analyzed and the result
-;; evaluated.
+;; Each case is a test in source, prepared, and lowered modes.
 (defmacro defcase (name program source &optional prepared reason)
   (when (not (eq? (nil? prepared) (nil? reason)))
     (error 'corpus-case-needs-reason name))
@@ -31,6 +28,9 @@
          (expect-equal (run-forms ',program) ',source))
        (deftest ,(string-append name " [prepared]")
          (expect-equal (run-prepared-forms ',program)
+                       ',(if reason prepared source)))
+       (deftest ,(string-append name " [lowered]")
+         (expect-equal (run-lowered-forms ',program)
                        ',(if reason prepared source)))))
 
 (defun run-prepared-forms (forms)
@@ -38,6 +38,29 @@
       (prepared-eval (head forms))
     (do (prepared-eval (head forms))
         (run-prepared-forms (tail forms)))))
+
+(defun run-lowered-forms (forms)
+  (if (nil? (tail forms))
+      (lowered-without-descriptors (head forms))
+    (do (lowered-without-descriptors (head forms))
+        (run-lowered-forms (tail forms)))))
+
+;; After lowering, disable every IR descriptor's name. Even an accidental
+;; call to the old record decoder cannot recognize an IR type. Restore the
+;; names before analyzing the next top-level form (macros are live there).
+(defun lowered-without-descriptors (form)
+  (let* ((node (lower (analyze form)))
+         (descriptors (list <ir-binding> <ir-reference> <ir-lookup>
+                            <ir-function-reference> <ir-constant>
+                            <ir-assignment> <ir-call> <ir-branch>
+                            <ir-sequence> <ir-let> <ir-function>
+                            <ir-parameters> <ir-closure> <ir-source>))
+         (names (map (fn (descriptor) (record-get descriptor 0)) descriptors)))
+    (for-each descriptors (fn (descriptor) (record-set! descriptor 0 nil)))
+    (let ((result (eval node)))
+      (for-each (%ir-zip descriptors names)
+                (fn (pair) (record-set! (head pair) 0 (tail pair))))
+      result)))
 
 ;;; Values and evaluation order
 

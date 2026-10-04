@@ -17,11 +17,11 @@ using clock_type = std::chrono::steady_clock;
 
 // #embed is intentionally used as a C++23 extension.
 #if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wc23-extensions"
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wc23-extensions"
 #elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wc++26-extensions"
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wc++26-extensions"
 #endif
 constexpr unsigned char micro_bytes[] = {
 #embed "wisp/micro.wisp"
@@ -33,9 +33,9 @@ constexpr unsigned char repo_bytes[] = {
 #embed "wisp/repo-benchmarks.wisp"
 };
 #if defined(__clang__)
-#pragma clang diagnostic pop
+#  pragma clang diagnostic pop
 #elif defined(__GNUC__)
-#pragma GCC diagnostic pop
+#  pragma GCC diagnostic pop
 #endif
 
 template<std::size_t N>
@@ -147,7 +147,13 @@ const auto cases = std::to_array<benchmark>({
 // PREPARED-EVAL, so benchmark functions run as IR while the base library
 // stays interpreted. Prepared-library mode also prepares every function in
 // the WISP package first: the base library, the compiler, and the rest.
-enum class mode { source, prepared, prepared_library };
+enum class mode {
+    source,
+    prepared,
+    prepared_library,
+    lowered,
+    lowered_library
+};
 
 constexpr std::string_view mode_name(mode m)
 {
@@ -158,6 +164,10 @@ constexpr std::string_view mode_name(mode m)
         return "prepared";
     case mode::prepared_library:
         return "prepared-library";
+    case mode::lowered:
+        return "lowered";
+    case mode::lowered_library:
+        return "lowered-library";
     }
     return "?";
 }
@@ -211,15 +221,16 @@ struct runner
         } while (status == evaluation::runnable);
     }
 
-    // Evaluate each top-level form as (PREPARED-EVAL 'form). Words are
+    // Prepare each top-level form outside the evaluator timing. Words are
     // not roots: intern the symbol again after each form's collections.
-    void load_prepared(std::string_view text)
+    void load_prepared(std::string_view text, bool lowered)
     {
         reader input{h, vm, text};
         while (auto form = input.next()) {
             const auto quoted =
                 h.cons(vm.known("QUOTE"), h.cons(*form, nil));
-            const auto prepare = vm.intern("PREPARED-EVAL");
+            const auto prepare =
+                vm.intern(lowered ? "LOWERED-EVAL" : "PREPARED-EVAL");
             root run{h, vm.start(h.cons(prepare, h.cons(quoted, nil)))};
             evaluate(run);
         }
@@ -288,8 +299,7 @@ void array_field(
     std::cout << ']';
 }
 
-void run(
-    const benchmark & b, mode m, unsigned iterations, unsigned warmup)
+void run(const benchmark & b, mode m, unsigned iterations, unsigned warmup)
 {
     profile counters;
     runner r;
@@ -300,7 +310,10 @@ void run(
         r.load(compiler_library());
         if (m == mode::prepared_library)
             r.load("(prepare-package! (find-package \"WISP\"))");
-        r.load_prepared(b.setup);
+        if (m == mode::lowered_library)
+            r.load("(lower-package! (find-package \"WISP\"))");
+        r.load_prepared(
+            b.setup, m == mode::lowered || m == mode::lowered_library);
     }
     if (warmup) {
         root run{r.h, r.vm.start(r.invocation(b, warmup))};
@@ -308,7 +321,11 @@ void run(
         r.validate(b, r.h.get<tag::run, field::val>(run.get()));
     }
     root run{r.h, r.vm.start(r.invocation(b, iterations))};
+    // Compare retained code, not setup garbage, and give every mode the
+    // same allocation headroom relative to its actual live heap.
+    r.vm.collect();
     const auto before = heap_bytes(r.h);
+    r.threshold = 2 * before + gc_floor;
     r.h.profiling(&counters);
     const auto start = clock_type::now();
     r.evaluate(run);
@@ -319,6 +336,8 @@ void run(
     r.h.profiling(nullptr);
     const auto after = heap_bytes(r.h);
     r.validate(b, r.h.get<tag::run, field::val>(run.get()));
+    r.vm.collect();
+    const auto live_after = heap_bytes(r.h);
 
     std::cout << "{\"benchmark\":" << std::quoted(b.name);
     field("input", std::quoted(b.input));
@@ -337,6 +356,7 @@ void run(
     field("ns_per_iteration", elapsed / iterations);
     field("heap_bytes_start", before);
     field("heap_bytes_end", after);
+    field("heap_live_bytes_end", live_after);
     field("gc_poll_steps", gc_poll_steps);
     field("gc_floor_bytes", gc_floor);
     field("gc_growth_factor", 2);
@@ -353,6 +373,7 @@ void run(
         COUNTER(continuation_captures);
         COUNTER(continuation_boundaries);
         COUNTER(continuation_pushes);
+        COUNTER(continuation_copy_words);
         COUNTER(arguments_accumulated);
         COUNTER(lists_scanned);
         COUNTER(list_cells_scanned);
@@ -402,10 +423,17 @@ int main(int argc, char ** argv)
             argc > 1 && std::string_view{argv[1]} == "--prepared-library") {
             m = mode::prepared_library;
             --argc, ++argv;
+        } else if (argc > 1 && std::string_view{argv[1]} == "--lowered") {
+            m = mode::lowered;
+            --argc, ++argv;
+        } else if (
+            argc > 1 && std::string_view{argv[1]} == "--lowered-library") {
+            m = mode::lowered_library;
+            --argc, ++argv;
         }
         if (argc > 4)
             throw std::runtime_error(
-                "usage: wisp-bench [--prepared|--prepared-library] "
+                "usage: wisp-bench [--prepared|--prepared-library|--lowered|--lowered-library] "
                 "[all|NAME|--list] [ITERATIONS [WARMUP]]");
         const std::string_view selection = argc > 1 ? argv[1] : "all";
         bool matched = false;

@@ -104,7 +104,7 @@ struct layout
     std::map<std::string, std::size_t> roots, jets;
     std::map<tag, table> tables;
     std::vector<std::size_t> values{32};
-    std::size_t word_count, pins;
+    std::size_t word_count, pins, code_version, code_count, code_opcode;
 
     explicit layout(const bytes & data)
     {
@@ -133,6 +133,19 @@ struct layout
             const auto start = at + 4;
             jets[text()] = start;
             at += 4;
+        }
+        code_version = at;
+        (void) u32();
+        code_count = at;
+        count = u32();
+        for (word i = 0; i < count; ++i) {
+            (void) text();
+            if (i == 0)
+                code_opcode = at;
+            (void) u32();
+            const auto operands = u32();
+            for (word j = 0; j < operands; ++j)
+                (void) text();
         }
         const auto byte_count = u32();
         at += byte_count;
@@ -350,13 +363,13 @@ static suite tape_tests{
                     const auto data = tape::encode(vm, entry.get());
                     expect(tape::encode(vm, entry.get()) == data);
                     expect(
-                        get32(data, 8) == 4u
+                        get32(data, 8) == 5u
                         && get32(data, 12) == word(collect_first));
                     expect(
                         get32(data, 16) == 3u
                         && get32(data, 32) == entry.get());
                     expect(
-                        data[8] == std::byte{4} && data[9] == std::byte{0});
+                        data[8] == std::byte{5} && data[9] == std::byte{0});
                     expect(
                         std::string_view(
                             reinterpret_cast<const char *>(data.data()), 8)
@@ -726,7 +739,11 @@ static suite tape_tests{
                     {8, 1}, // Pre-segmentation tapes are not migrated.
                     {8, 2}, // Old variable/EVAL scope is not migrated.
                     {8, 3}, // Tapes without the record table neither.
-                    {8, 5},
+                    {8, 4}, // Tapes without the code manifest neither.
+                    {8, 6},
+                    {wire.code_version, 2},
+                    {wire.code_count, 0},
+                    {wire.code_opcode, 999999},
                     {12, 2},
                     {16, 0},
                     {28, 2},

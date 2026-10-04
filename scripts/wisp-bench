@@ -33,10 +33,14 @@ def main():
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--benchmarks", default=",".join(PROGRAMS), help="comma-separated names, or all")
     parser.add_argument("--runtimes", default="cpp,zig,python,node,c,racket,sbcl")
+    parser.add_argument("--wisp-modes", default="source", help="C++ modes: source,prepared,prepared-library,lowered,lowered-library")
     parser.add_argument("--output", type=Path, help="JSONL samples + environment (default: build dir/wisp-results.jsonl)")
     args = parser.parse_args()
     if args.samples < 1:
         parser.error("samples must be positive")
+    modes = args.wisp_modes.split(",")
+    if set(modes) - {"source", "prepared", "prepared-library", "lowered", "lowered-library"} or len(set(modes)) != len(modes):
+        parser.error("unknown or duplicate Wisp mode")
     args.build_dir = args.build_dir.resolve()
     cpp = args.build_dir / "bench/wisp-bench"
     available = output([cpp, "--list"]).splitlines()
@@ -76,6 +80,14 @@ def main():
                 "python": {"tak", "deriv", "diviter", "divrec"},
                 "node": {"tak", "deriv", "diviter", "divrec"},
                 "c": {"tak", "deriv", "diviter", "divrec"}}
+    if "cpp" in runtimes:
+        runtimes.remove("cpp")
+        for mode in modes:
+            runtime = "cpp" if mode == "source" else "cpp-" + mode
+            commands[runtime] = [str(cpp)] + ([] if mode == "source" else ["--" + mode])
+            versions[runtime] = "embedded in each sample"
+            supports[runtime] = set(available)
+            runtimes.append(runtime)
     metadata = {"kind": "environment", "platform": platform.platform(),
                 "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "source_revision": output(["git", "rev-parse", "HEAD"]),
@@ -90,7 +102,7 @@ def main():
         metadata["cpu"] = next((line.split(":", 1)[1].strip() for line in cpuinfo.read_text().splitlines()
                                if line.startswith("model name")), "unknown")
     metadata["executable_sha256"] = {r: hashlib.sha256(Path(commands[r][0]).read_bytes()).hexdigest()
-                                      for r in runtimes if r in {"cpp", "zig", "c"}}
+                                      for r in runtimes if r.startswith("cpp") or r in {"zig", "c"}}
     metadata["meson_buildoptions"] = json.loads((args.build_dir / "meson-info/intro-buildoptions.json").read_text())
     metadata["meson_compilers"] = json.loads((args.build_dir / "meson-info/intro-compilers.json").read_text())
     jobs = [(sample, name, runtime) for sample in range(args.samples) for name in names

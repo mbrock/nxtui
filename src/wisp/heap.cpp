@@ -101,11 +101,13 @@ word heap::copy_continuation_frame(word x)
     auto & acc = frame[column_index<tag::ktx, field::acc>()];
     // Lexical environments are shared store. Partially filled argument
     // vectors are mutable control state and must be copied per invocation,
-    // including the progress vectors of prepared frames, whose callee
-    // field holds an IR node record.
+    // including prepared and lowered frames, whose callee holds a record.
     if ((fun == tag::fun || fun == tag::jet || fun == tag::rec)
-        && tag_of(acc) == tag::v32)
+        && tag_of(acc) == tag::v32) {
         acc = clonev32(acc);
+        if (auto * p = profiling())
+            p->continuation_copy_words += v32slice(acc).size();
+    }
     return make<tag::ktx>(frame);
 }
 
@@ -116,7 +118,6 @@ std::string_view heap::v08slice(word x) const noexcept
     auto slice = std::span{bytes_}.subspan(idx, len);
     return {slice.data(), slice.size()};
 }
-
 
 word heap::make_pin(word value)
 {

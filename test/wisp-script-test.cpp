@@ -19,7 +19,7 @@
 #include <vector>
 
 #if !defined(NXT_WISP_TEST_DIR) || !defined(NXT_WISP_SOURCE_DIR)
-#error "the build defines NXT_WISP_TEST_DIR and NXT_WISP_SOURCE_DIR"
+#  error "the build defines NXT_WISP_TEST_DIR and NXT_WISP_SOURCE_DIR"
 #endif
 
 namespace wisp::test {
@@ -115,7 +115,8 @@ struct script_machine
 std::vector<std::filesystem::path> script_files()
 {
     std::vector<std::filesystem::path> files;
-    for (const auto & entry : std::filesystem::directory_iterator{script_dir})
+    for (const auto & entry :
+         std::filesystem::directory_iterator{script_dir})
         if (entry.path().filename().string().ends_with("-test.wisp"))
             files.push_back(entry.path());
     std::ranges::sort(files);
@@ -131,7 +132,8 @@ void declare_file(const std::filesystem::path & file)
     std::vector<std::pair<std::string_view, bool>> tests;
     m.evaluate("(%test-names)", [&](word names) {
         for (auto name : m.list(names))
-            tests.emplace_back(keep(std::string{m.h.v08slice(name)}), false);
+            tests.emplace_back(
+                keep(std::string{m.h.v08slice(name)}), false);
     });
     m.evaluate("(%test-slow-flags)", [&](word flags) {
         auto i = tests.begin();
@@ -143,24 +145,30 @@ void declare_file(const std::filesystem::path & file)
         auto run = [&loaded, i] {
             script_machine fresh{loaded};
             fresh.evaluate(
-                "(%run-test " + std::to_string(i) + ")", [&](word failures) {
+                "(%run-test " + std::to_string(i) + ")",
+                [&](word failures) {
                     for (auto failure : fresh.list(failures))
                         expect(false) << print(fresh.h, failure);
                 });
         };
         if (slow)
-            test_case{name}.slow() = run;
+            // Whole-library preparation/lowering collects at every test
+            // quantum; give slow integration cases a separate deadline.
+            test_case{name}.slow().with_timeout(std::chrono::seconds{30}) =
+                run;
         else
             test_case{name} = run;
     }
 }
 
-static suite script_tests{
-    "WISP TEST FILES", [] {
-        for (const auto & file : script_files())
-            test_case{.name = keep(file.stem().string()), .is_group = true} =
-                [&file] { declare_file(file); };
-    }};
+static suite script_tests{"WISP TEST FILES", [] {
+                              for (const auto & file : script_files())
+                                  test_case{
+                                      .name = keep(file.stem().string()),
+                                      .is_group = true} = [&file] {
+                                      declare_file(file);
+                                  };
+                          }};
 
 } // namespace
 } // namespace wisp::test

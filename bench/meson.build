@@ -32,6 +32,11 @@ if get_option('benchmarks')
   test('wisp-semantic-counters', wisp_profile_test, suite : ['wisp', 'benchmarks'])
   test('wisp-benchmark-fixtures', wisp_bench,
     args : ['all', '1', '0'], suite : ['wisp', 'benchmarks'], timeout : 120)
+  foreach mode : ['prepared', 'prepared-library', 'lowered', 'lowered-library']
+    test('wisp-benchmark-fixtures-' + mode, wisp_bench,
+      args : ['--' + mode, 'all', '1', '0'],
+      suite : ['wisp', 'benchmarks'], timeout : 120)
+  endforeach
   foreach bad_args : [['tak', '0'], ['tak', '-1'], ['tak', '1junk'], ['missing-case']]
     test('wisp-benchmark-reject-' + '-'.join(bad_args), wisp_bench,
       args : bad_args, should_fail : true, suite : ['wisp', 'benchmarks'])

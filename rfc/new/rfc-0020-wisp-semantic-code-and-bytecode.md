@@ -4,9 +4,11 @@ Status: stages 0 through 2 are implemented. The compiler
 (`src/wisp/compiler.wisp`), the graph checker, and record execution in the
 evaluator exist and are tested, and the base library runs prepared. The
 live-code operations of stage 3 exist in part (`prepare-function!`,
-`prepare-package!`, source snapshots, `SET-CODE!`). Lowering and the bytecode
-VM, stages 4 through 6, do not exist; a subsequent RFC should design them from
-the measurements recorded under "First measurements of record execution".
+`prepare-package!`, source snapshots, `SET-CODE!`).
+@ref rfc_wisp_lowered_code "RFC 0021" now implements compact-node lowering
+and execution from these measurements, with `lower-function!` as an opt-in
+installation path. The flat instruction-stream VM and later stages below
+remain unimplemented.
 
 ## Proposal
 

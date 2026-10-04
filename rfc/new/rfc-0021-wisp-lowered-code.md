@@ -1,6 +1,8 @@
 # RFC 0021: Wisp Lowered Code {#rfc_wisp_lowered_code}
 
-Status: proposed. Nothing described here is implemented.
+Status: compact-node lowering and execution implemented, opt-in. Source and
+record execution remain available as references. Flat code, per-activation
+frames, immutable code, and retiring record execution remain deferred.
 
 ## Proposal
 
@@ -113,6 +115,14 @@ where execution resumes with a value. Two shapes are possible.
 symbols, or other nodes. A continuation point is `(node, position)`, as today,
 and the run's expression register holds a node, as today. The executor
 dispatches on the first word instead of decoding a descriptor.
+
+The implementation uses the existing **record** word pool: its type word is
+a versioned fixnum opcode, not an IR descriptor. Ordinary vectors retain their
+self-evaluating data semantics. Code version 1 encodes the version above an
+eight-bit operation index; `src/wisp/code.hpp` owns the operation/operand schema,
+which also produces `CODE-OPERATIONS`, runtime checks, and the tape manifest.
+Portable tapes are now version 5 and reject older tapes or mismatching code
+layouts. No heap tag, run column, or continuation column changed.
 
 **B. Flat code.** Each function is one instruction vector plus a constants
 vector, and a continuation point is `(code object, PC)`. Instructions name
@@ -259,9 +269,11 @@ that would justify them.
 
 ## Installing and inspecting
 
-`prepare-function!` gains a lowering step: analyze, check, lower, install the
-code object, and drop the graph. `analyze` and `ir-show` are unchanged, and a
-caller that wants the IR keeps it by holding the result of `analyze`.
+The implementation keeps `prepare-function!` in record mode for comparisons,
+and adds the opt-in `lower-function!`: analyze, check, lower, install the code
+object, and drop the graph. `lower-package!` does the same for a package;
+`lowered-eval` lowers one source form. `analyze` and `ir-show` are unchanged,
+and a caller that wants the IR keeps it by holding the result of `analyze`.
 
 Lowered code needs its own readable view, since the IR is no longer there to
 show. Provide `code-show`, the counterpart of `ir-show`, printing operations
@@ -269,12 +281,17 @@ by name with their addresses and constants. `KTX-FUN` on a lowered frame
 returns a node; give frames a documented view of operation, position, callee,
 and completed values, as RFC 0020 requires of prepared frames.
 
+`code-show` returns a named operation tree with explicit lexical addresses.
+`code-frame` returns `(operation-view position callee completed-values)` for
+a lowered frame, or NIL otherwise. Positions are zero-based. The raw node and
+saved progress remain available through the existing KTX accessors.
+
 `CODE`, `SET-CODE!`, and the liveness contract behave as they do for record
 execution.
 
 ## Stages and acceptance
 
-### 1. Lower to compact nodes
+### 1. Lower to compact nodes — implemented
 
 Declare the operations in C++ and expose their description. Write the lowering
 pass in Wisp over checked IR. Execute nodes in the evaluator, with the
@@ -286,10 +303,11 @@ a collection after every transition. No lowered transition calls the record
 decoder; a test that deletes the IR structs' descriptors after lowering still
 runs the corpus.
 
-### 2. Drop the graph
+### 2. Drop the graph — implemented with opt-in installation
 
-Make `prepare-function!` lower and release the IR. Prepare the base library
-and compiler in lowered form.
+`lower-function!` lowers and releases the IR; `prepare-function!` remains the
+record reference. The base library and compiler run lowered, including a
+second pass lowering the compiler with the lowered compiler itself.
 
 Acceptance: `wisp-bench` gains a lowered mode. Report, per benchmark and
 against source and record modes: time, evaluator transitions, frame pushes,

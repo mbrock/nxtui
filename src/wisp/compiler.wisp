@@ -3,8 +3,8 @@
 ;;
 ;; Analysis turns source forms into semantic records: ordinary
 ;; DEFSTRUCT instances that make bindings, evaluation order, and
-;; control flow explicit. Nothing here executes those records
-;; yet; the source interpreter is still the only evaluator.
+;; control flow explicit. The heap machine executes these
+;; records or their compact lowering (RFC 0021).
 ;;
 ;; (analyze form) returns the record for one form, and
 ;; (ir-show node) describes a record graph as a readable list.
@@ -766,3 +766,144 @@
     ((ir-source? node)
      (list :source (ir-source-form node)))
     (t (list :unknown node))))
+
+
+
+;;; * Compact lowered code
+
+;; The native schema owns operation identities and operand layouts.
+;; Compact records have a versioned fixnum instead of a descriptor in
+;; their type slot. They hold execution operands, never IR bindings or
+;; owner links. Ordinary vectors remain data, not executable nodes.
+(defvar *code-operations* (code-operations))
+
+(defun %code-description (name)
+  (let ((found (find *code-operations*
+                     (fn (entry) (eq? (head entry) name)))))
+    (if found (head found) (error 'invalid-code-operation name))))
+
+(defun %code-node (name &rest operands)
+  (apply #'record (cons (second (%code-description name)) operands)))
+
+;; Only checked semantic graphs cross this boundary. Keep IR diagnostics
+;; readable, and leave published code stable: edits create a new lowering.
+(defun lower (node &optional scope)
+  (let ((problems (ir-check node scope)))
+    (if problems (error 'invalid-ir problems) (%lower node))))
+
+(defun %lower-all (nodes)
+  (vector-from-list (map #'%lower (list-from-vector nodes))))
+
+(defun %lower-reference (node)
+  (if (integer? (ir-reference-depth node))
+      (%code-node :lexical-load (ir-reference-depth node)
+                               (ir-reference-index node))
+    (%code-node :global-load (ir-binding-name (ir-reference-binding node)))))
+
+(defun %lower-assignment (node)
+  (let* ((target (ir-assignment-target node))
+         (value (%lower (ir-assignment-value node))))
+    (if (and (ir-reference? target)
+             (integer? (ir-reference-depth target)))
+        (%code-node :lexical-store (ir-reference-depth target)
+                                  (ir-reference-index target) value)
+      (%code-node :global-store
+                  (if (ir-reference? target)
+                      (ir-binding-name (ir-reference-binding target))
+                    (ir-lookup-symbol target))
+                  value))))
+
+(defun %lower (node)
+  (cond
+    ((ir-constant? node) (%code-node :constant (ir-constant-value node)))
+    ((ir-reference? node) (%lower-reference node))
+    ((ir-lookup? node) (%code-node :global-load (ir-lookup-symbol node)))
+    ((ir-function-reference? node)
+     (%code-node :function-cell (ir-function-reference-symbol node)))
+    ((ir-assignment? node) (%lower-assignment node))
+    ((ir-call? node)
+     (let ((callee (ir-call-callee node)))
+       (if (ir-function-reference? callee)
+           (%code-node :call (ir-function-reference-symbol callee)
+                             (%lower-all (ir-call-arguments node)))
+         (error 'invalid-ir-callee callee))))
+    ((ir-branch? node)
+     (%code-node :branch (%lower (ir-branch-test node))
+                         (%lower (ir-branch-consequent node))
+                         (%lower (ir-branch-alternative node))))
+    ((ir-sequence? node) (%code-node :sequence (%lower-all (ir-sequence-forms node))))
+    ((ir-let? node)
+     (%code-node :let
+                 (vector-from-list
+                  (map #'ir-binding-name (list-from-vector (ir-let-bindings node))))
+                 (%lower-all (ir-let-initializers node))
+                 (%lower (ir-let-body node))))
+    ((ir-closure? node) (%code-node :closure (%lower (ir-closure-function node))))
+    ((ir-function? node)
+     (%code-node :function (ir-function-name node)
+                           (ir-parameters-source (ir-function-parameters node))
+                           (%lower (ir-function-body node))
+                           (ir-function-source node)))
+    ((ir-source? node) (%code-node :source (ir-source-form node)))
+    (t (error 'invalid-ir node))))
+
+(defun lowered-eval (form)
+  (eval (lower (analyze form))))
+
+;; Keep PREPARE-FUNCTION! in record mode as the executable reference.
+;; Installation preserves closure identity and its captured environment.
+(defun lower-function! (function)
+  (let ((node (analyze (list '%fn (function-name function)
+                             (function-parameters function) (code function)))))
+    (when (ir-closure? node)
+      (set-code! function (record-get (lower node) 0))
+      t)))
+
+(defun lower-package! (package)
+  (length (filter (package-symbols package)
+                  (fn (symbol)
+                    (let ((function (symbol-function symbol)))
+                      (and (eq? (type-of function) 'function)
+                           (not (jet? function))
+                           (lower-function! function)))))))
+
+;; Readable executable inspection, independent of all IR descriptors.
+(defun %code-operation (node)
+  (when (record? node)
+    (head (find *code-operations*
+                (fn (entry) (eq? (second entry) (record-type node)))))))
+
+(defun code-show (node)
+  (let ((description (%code-operation node)))
+    (if (and description
+             (eq? (record-length node) (length (third description))))
+        (cons (head description)
+              (%code-show-operands node (third description) 0))
+      (list :invalid-code node))))
+
+(defun %code-show-operands (node kinds index)
+  (if (nil? kinds) nil
+    (let* ((kind (head kinds)) (value (record-get node index)))
+      (cons (cond ((eq? kind :node) (code-show value))
+                  ((eq? kind :nodes) (map #'code-show (list-from-vector value)))
+                  ((eq? kind :names) (list-from-vector value))
+                  (t value))
+            (%code-show-operands node (tail kinds) (+ index 1))))))
+
+;; A pending lowered frame: (operation-view position callee completed-values).
+;; KTX accessors still expose the raw node and progress for low-level tools.
+(defun %code-completed (values count)
+  (if (eq? count 0) nil
+    (cons (head values) (%code-completed (tail values) (- count 1)))))
+
+(defun code-frame (k)
+  (unless (top? k)
+    (let* ((node (ktx-fun k)) (description (%code-operation node)))
+      (when description
+        (let* ((position (ktx-arg k)) (acc (ktx-acc k))
+               (call? (eq? (head description) :call))
+               (values (when (vector? acc) (list-from-vector acc))))
+          (list (code-show node) position
+                (when call? (if values (head values) acc))
+                (when values
+                  (%code-completed (if call? (tail values) values) position))))))))

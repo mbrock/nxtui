@@ -25,6 +25,7 @@ struct profile
     std::uint64_t continuation_calls = 0, continuation_searches = 0;
     std::uint64_t continuation_captures = 0, continuation_boundaries = 0;
     std::uint64_t continuation_pushes = 0, arguments_accumulated = 0;
+    std::uint64_t continuation_copy_words = 0;
     std::uint64_t lists_scanned = 0, list_cells_scanned = 0;
     std::uint64_t lexical_lookups = 0, lexical_frames = 0;
     std::uint64_t lexical_comparisons = 0, lexical_global_fallbacks = 0;

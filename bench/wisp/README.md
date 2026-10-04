@@ -36,12 +36,15 @@ in any build directory, including debug builds. JSON records carry build type,
 compiler, build-time Git revision (with `-dirty` when appropriate), and GC policy.
 An archive without Git reports `unknown`, not a guessed revision.
 
-Arguments are `[--prepared|--prepared-library] [all|NAME|--list]
+Arguments are `[--prepared|--prepared-library|--lowered|--lowered-library] [all|NAME|--list]
 [ITERATIONS [WARMUP]]`. By default everything is source-interpreted.
 `--prepared` loads the guest compiler and evaluates each benchmark
 definition through `PREPARED-EVAL`, so benchmark functions run as RFC 0020
 IR while the base library stays interpreted; `--prepared-library` also
-prepares every function in the `WISP` package first. Records carry the
+prepares every function in the `WISP` package first. `--lowered` and
+`--lowered-library` do the corresponding work with RFC 0021's compact code,
+without retaining the analysis graphs. The compiler/library transformation
+is outside the execution clock. Records carry the
 `mode`. Counts must be positive
 31-bit fixnums; warmup may be zero. Default counts match `core/benchmark.zig`:
 25,000 for call/lookup, 1,000 for effects, 1 for TAK, 100 for the other programs.
@@ -63,6 +66,17 @@ profile-enabled Wisp executable; it does not silently drop a failing sample.
 python3 scripts/wisp-bench --samples 5 --benchmarks all \
   --runtimes cpp,zig,python,node,c,racket,sbcl \
   --zig-repo /tmp/wisp-reference --output build/wisp-baseline.jsonl
+```
+
+Compare execution representations using the same binary and a fixed shuffled
+serial schedule (pin the sweep to an available CPU, and run no builds/tests
+concurrently):
+
+```sh
+taskset -c 2 python3 scripts/wisp-bench --samples 5 --benchmarks all \
+  --runtimes cpp --build-dir build/wisp-release \
+  --wisp-modes source,prepared,prepared-library,lowered,lowered-library \
+  --output build/wisp-modes.jsonl
 ```
 
 No optional interpreter is downloaded by the sweep. Python/Node/Racket/SBCL
@@ -107,7 +121,15 @@ request or **used bytes ≥ threshold**; initial threshold 1 MiB, next threshold
 `2 * live_bytes + 1 MiB`. Used bytes count table rows and payload lengths, not
 reserved capacity or RSS. Roots protect the run across collection. Polling
 does not yield to NXT or change guest scheduling. Setup/warmup use the same
-policy and carry their threshold into the timed run. Zig's unlimited evaluator
+policy. Immediately before timing, collect setup garbage and reset the
+threshold to `2 * live_bytes + 1 MiB`; this measures retained code rather than
+arbitrary leftover setup allocations, with equal headroom relative to each
+mode's live heap. `heap_bytes_start` is that live size, `heap_bytes_end` is
+used size before validation, and `heap_live_bytes_end` follows an untimed
+post-validation collection. The pre/post collections are not in timed GC
+counters. The published 2026-10-02 baseline carried the setup threshold into
+timing instead, so rerun source alongside other modes rather than comparing
+new results against those old numbers. Zig's unlimited evaluator
 instead collects every 100,000 transitions or on a guest request. Thus a ratio
 compares the implementations with their stated policies, not isolated dispatch.
 
@@ -152,10 +174,14 @@ across languages**. Definitions:
   metadata rows, captures count successful sends, calls count invocations, and
   pushes count ordinary `push` frames. These do not pretend to count every
   logically captured frame in the segmented continuation representation.
+  `continuation_copy_words` counts saved-progress vector words cloned by frame
+  copying (including the callee word of a multi-argument call), not shared
+  lexical locations or all words copied by GC.
 - `allocations` and `gc_copies` are separate arrays indexed by the 32-bit word's
   **tag identity**, not a second type table: DUO=21, SYM=22, FUN=23, MAC=24,
-  V32=25, V08=26, PKG=27, RUN=28, KTX=29, EXT=30. Payload counters count
-  successful new bytes/words versus copied bytes/words. GC count/time includes
+  V32=25, V08=26, PKG=27, RUN=28, KTX=29, EXT=30, REC=31. Payload counters count
+  successful new bytes/words versus copied bytes/words; `v32_words` includes
+  records' shared word-pool use, not only ordinary vectors. GC count/time includes
   successful collection, including reservation. Failed allocation/collection
   is not reported as success.
 
