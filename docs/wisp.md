@@ -140,6 +140,18 @@ once, and saved in a tape. `try` is itself a prompt with the tag `error`,
 and everything the host does for a program (below) is an effect with the tag
 `:host`.
 
+`run` creates a run and `step!` advances it one transition. `run-way` snapshots
+its continuation. A run can inspect itself if its code has a reference to the
+run object; there is no implicit `self` binding or current-run getter.
+
+Run inspection sees the live registers published immediately before the
+observing builtin executes. In particular, self `run-way` excludes its
+already-consumed invocation frame, including calls through `call` or `apply`.
+Resuming that snapshot supplies the inspection's result, just as resuming a
+`get/cc` snapshot supplies the capture's result. This deliberately replaces the
+early C++ port's incidental transition-entry view. Suspended-run inspection
+and frozen-continuation copy-on-write are unchanged.
+
 ### Dynamic variables and packages {#wisp_dynamic}
 
 `defparameter` declares a dynamically scoped variable and `binding` rebinds

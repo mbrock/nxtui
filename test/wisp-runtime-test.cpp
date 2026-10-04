@@ -363,7 +363,7 @@ static suite runtime_tests{
                     == "(#<KEPT> NIL #<KEPT>)");
             };
 
-        "batched run reflection sees the current transition entry"_test =
+        "batched run reflection sees live registers without the consumed call"_test =
             [] {
                 for (const auto quantum : {1u, 7u, 4096u}) {
                     for (const auto expression :
@@ -393,33 +393,50 @@ static suite runtime_tests{
                         } else if (text == "(run-val self)") {
                             expect(value == m.run.get());
                         } else {
-                            const auto name =
-                                text.starts_with("(call")    ? "CALL"
-                                : text.starts_with("(apply") ? "APPLY"
-                                                             : "RUN-WAY";
-                            expect(tag_of(value) == tag::ktx);
-                            expect(
-                                (m.h.get<tag::ktx, field::fun>(value)
-                                 == m.h.get<tag::sym, field::fun>(
-                                     m.vm.intern(name))));
-                            expect(m.h.continuation_frozen(value));
-                            if (text.starts_with("(call")) {
-                                const auto acc =
-                                    m.h.get<tag::ktx, field::acc>(value);
-                                const auto xs = m.h.v32slice(acc);
-                                expect(xs.size() == 3u && xs[0] == 2u);
-                                expect(
-                                    xs[1]
-                                    == m.h.get<tag::sym, field::fun>(
-                                        m.vm.intern("RUN-WAY")));
-                                expect(xs[2] == m.run.get());
-                            }
+                            expect(value == top);
                         }
                     }
                 }
             };
 
-        "self observation preserves frozen and writable entry progress"_test =
+        "batched self snapshots retain outer progress across collection and resumption"_test =
+            [] {
+                for (const auto quantum : {1u, 7u, 4096u}) {
+                    for (
+                        const auto expression :
+                        {"(list 7 (run-way self) 23)",
+                         "(list 7 (call (function run-way) self) 23)",
+                         "(list 7 (apply (function run-way) (list self)) 23)"}) {
+                        runtime_machine m;
+                        m.run.set(m.vm.start(m.form(expression)));
+                        m.h.set<tag::sym, field::val>(
+                            m.vm.intern("SELF"), m.run.get());
+                        auto state = evaluation::runnable;
+                        for (unsigned n = 0;
+                             n < 100 && state == evaluation::runnable;
+                             ++n) {
+                            state = m.vm.advance(m.run.get(), quantum);
+                            m.vm.collect();
+                        }
+                        expect(state == evaluation::done) << expression;
+                        const auto result =
+                            m.h.get<tag::run, field::val>(m.run.get());
+                        const auto tail =
+                            m.h.get<tag::duo, field::cdr>(result);
+                        m.h.set<tag::sym, field::val>(
+                            m.vm.intern("SAVED"),
+                            m.h.get<tag::duo, field::car>(tail));
+                        expect(
+                            print(m.h, m.load("(call saved 11)"))
+                            == "(7 11 23)");
+                        expect(
+                            print(m.h, m.load("(call saved 19)"))
+                            == "(7 19 23)");
+                    }
+                }
+            };
+
+        "self observation drops consumed heap frames without mutating frozen progress"_test =
             [] {
                 for (bool frozen : {false, true}) {
                     runtime_machine m;
@@ -439,9 +456,8 @@ static suite runtime_tests{
                     expect(
                         m.vm.advance(m.run.get(), 4096)
                         == evaluation::done);
-                    expect(
-                        (m.h.get<tag::run, field::val>(m.run.get())
-                         == frame));
+                    expect((
+                        m.h.get<tag::run, field::val>(m.run.get()) == top));
                     expect(m.h.v32slice(progress)[0] == (frozen ? 1u : 2u));
                     expect(
                         m.h.v32slice(progress)[2]

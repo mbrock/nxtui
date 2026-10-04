@@ -158,7 +158,7 @@ private:
 
     // Empty at every normal evaluator return; never roots or tape state.
     std::array<cached_frame, 64> frames_;
-    std::array<word, 1024> progress_, popped_progress_;
+    std::array<word, 1024> progress_;
 
     struct jet_info
     {

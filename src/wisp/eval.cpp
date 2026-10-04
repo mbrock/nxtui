@@ -321,10 +321,8 @@ struct eval_step
     word exp, val, err, env, way, meta;
     values active_runs;
     word step_target = nil;
-    row<tag::run> entry{};
-    std::size_t depth = 0, entry_depth = 0;
+    std::size_t depth = 0;
     std::size_t progress_used = 0;
-    std::optional<evaluator::cached_frame> popped_entry = std::nullopt;
 
     evaluation state() const
     {
@@ -335,38 +333,10 @@ struct eval_step
                    : evaluation::runnable;
     }
 
-    void begin_transition()
+    void commit(cache_flush reason = cache_flush::batch)
     {
-        entry = {exp, val, err, env, way, meta};
-        entry_depth = depth;
-        popped_entry.reset();
-    }
-
-    void observe()
-    {
-        // Self-inspection sees the same transition-entry run row as the
-        // one-step evaluator, including in-place heap progress mutations.
-        flush(cache_flush::observation);
-        if (popped_entry) {
-            auto & entry_way = entry[column_index<tag::run, field::way>()];
-            const auto & f = *popped_entry;
-            const auto acc = f.progress_size == 0
-                                 ? f.acc
-                                 : h.newv32(
-                                       std::span{vm.popped_progress_}.first(
-                                           f.progress_size));
-            entry_way =
-                h.make<tag::ktx>({entry_way, f.env, f.fun, acc, f.arg});
-            if (auto * p = h.profiling())
-                ++p->cache_flushed[std::size_t(cache_flush::observation)];
-            popped_entry.reset();
-        }
-        h.put<tag::run>(active_runs.back(), entry);
-    }
-
-    void commit()
-    {
-        flush(cache_flush::batch);
+        // Reflection sees the live state, after consuming the call frame.
+        flush(reason);
         h.put<tag::run>(
             active_runs.back(), {exp, val, err, env, way, meta});
     }
@@ -912,16 +882,6 @@ struct eval_step
     void pop()
     {
         if (depth != 0) {
-            // A reflective callee can still read the entry run's popped
-            // frame. Retain it lazily, with its completed progress.
-            if (depth == entry_depth) {
-                assert(!popped_entry);
-                popped_entry = vm.frames_[depth - 1];
-                if (inline_progress())
-                    std::ranges::copy(
-                        progress(), vm.popped_progress_.begin());
-                --entry_depth;
-            }
             progress_used = vm.frames_[depth - 1].progress_begin;
             --depth;
             return;
@@ -948,8 +908,6 @@ struct eval_step
             if (auto * p = h.profiling())
                 p->continuation_copy_words += xs.size();
         }
-        // The frozen row remains the transition-entry view. Its private
-        // replacement is not part of that view's cached prefix.
         way = h.get<tag::ktx, field::hop>(way);
         vm.frames_[depth++] = f;
         if (auto * p = h.profiling())
@@ -969,7 +927,7 @@ struct eval_step
 
     void spill(std::size_t count, cache_flush reason)
     {
-        assert(count <= depth && entry_depth <= depth);
+        assert(count <= depth);
         if (count == 0)
             return;
         for (std::size_t i = 0; i < count; ++i) {
@@ -981,10 +939,7 @@ struct eval_step
                           std::span{vm.progress_}.subspan(
                               f.progress_begin, f.progress_size));
             way = h.make<tag::ktx>({way, f.env, f.fun, acc, f.arg});
-            if (i < entry_depth)
-                entry[column_index<tag::run, field::way>()] = way;
         }
-        entry_depth -= std::min(count, entry_depth);
         const auto released = vm.frames_[count - 1].progress_begin
                               + vm.frames_[count - 1].progress_size;
         if (released != 0)
@@ -1322,7 +1277,7 @@ struct eval_step
                     "PROGRAM-ERROR",
                     {vm.known("INVALID-ARGUMENT-COUNT"), jet});
             if (def.observes)
-                observe();
+                commit(cache_flush::observation);
             def.invoke(*this, args);
         } catch (const condition & c) {
             fail("BUILTIN-FAILURE", {jet, c.value});
@@ -2511,7 +2466,6 @@ evaluation evaluator::execute(word run, std::size_t budget, bool poll_gc)
             if (auto * p = heap_.profiling())
                 ++p->evaluator_batches;
             do {
-                s.begin_transition();
                 try {
                     s.once();
                 } catch (const condition & c) {

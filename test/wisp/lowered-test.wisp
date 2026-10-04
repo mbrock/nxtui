@@ -64,6 +64,31 @@
   (expect-equal (call saved-lowered 10) '(1 10 2))
   (expect-equal (call saved-lowered 20) '(1 20 3)))
 
+(deftest "self RUN-WAY captures the live continuation after the call"
+  (defvar inspected-run nil)
+  (defun step-inspected (n)
+    (unless (eq? n 0)
+      (step! inspected-run)
+      (step-inspected (- n 1))))
+  (map
+   (fn (lowered)
+     (map
+      (fn (invocation)
+        (let ((form (list 'list 7 invocation 23)))
+          (set! inspected-run
+                (run (if lowered (lower (analyze form)) form)))
+          (step-inspected 100)
+          (expect-equal (run-err inspected-run) nil)
+          (let ((snapshot (second (run-val inspected-run))))
+            (gc)
+            ;; Resuming supplies the inspection's result, not its run argument.
+            (expect-equal (call snapshot 11) '(7 11 23))
+            (expect-equal (call snapshot 19) '(7 19 23)))))
+      '((run-way inspected-run)
+        (call (function run-way) inspected-run)
+        (apply (function run-way) (list inspected-run)))))
+   '(nil t)))
+
 (deftest "lowered LET initializers copy progress but share outer storage"
   (defvar saved-let nil)
   (expect-equal

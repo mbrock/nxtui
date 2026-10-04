@@ -175,7 +175,7 @@ across languages**. Definitions:
   operations (frame or progress capacity). `cache_flushed` counts materialized
   frames by reason: batch, capture, boundary, observation, spill, condition.
   `continuation_pushes` remains logical pushes; `allocations[29]` counts actual
-  heap `ktx` rows, including boundaries and reflected entry snapshots.
+  heap `ktx` rows, including boundaries and continuation wrappers.
 - `arguments_accumulated`: evaluated ordinary call arguments; special-form
   syntax is not accumulated. `lists_scanned` counts successfully validated list
   scans and `list_cells_scanned` counts their cells, including repeated scans.

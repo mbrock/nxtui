@@ -67,7 +67,9 @@ And collection runs only between `advance` calls (`GC` sets a flag that stops
 1. **Observational equivalence.** Wherever the heap can be observed, it
    holds exactly the frames, progress, and boundaries the all-heap evaluator
    would have produced. Multi-shot resumption, shared lexical locations, and
-   per-resumption progress keep their current semantics.
+   per-resumption progress keep their current semantics. The deliberate
+   exception is self-inspection: it sees live registers at the observation
+   point, not the previous transition-entry view (see below).
 2. **Heap-only control at rest.** When `step` or `advance` returns normally,
    including a failed run after an unhandled guest condition, the cache is
    empty and the run row is current. Tapes, the collector, and the host never
@@ -112,11 +114,8 @@ transition that writes a frozen frame first copies it into the cache, and
 today's copy-on-write: copying only the frame columns would still share the
 progress vector. Reinstated frozen frames come back lazily, one at a time.
 
-A writable heap row stays in place. Although it is not shared with another
-continuation, the transition-entry run row still refers to it: a reflective
-callee can inspect its own run after the call frame has been popped and see
-that row's completed argument progress. Writing through preserves that
-identity and avoids creating another row at the next flush.
+A writable heap row stays in place to avoid creating another row at the next
+flush. Only frozen rows need a private replacement before modification.
 
 ### Flush points
 
@@ -139,13 +138,19 @@ builtin table next to its existing `control` flag, not a separate list.
 Lexical environments are untouched: they are already shared heap storage, so
 `ENV` and source escapes need no flush.
 
-Run reflection preserves the transition-entry view, not halfway-updated
-registers. Each transition remembers its entry registers and the cached
-prefix they name; spills update that prefix's heap link. If the transition
-pops its top cached frame, retain it until the transition ends and only
-materialize it if an observing builtin needs the entry view. This is an
-observation snapshot, not an undo record: in-place progress changes remain
-visible, and nothing is rewound.
+Run reflection publishes the live registers immediately before invoking the
+observing builtin. In particular, `RUN-WAY` of the executing run excludes the
+already-consumed call frame, whether invoked directly or through `CALL` or
+`APPLY`. Calling the resulting continuation supplies the inspection's result,
+not its run argument. Inspection of a suspended run still reads its stored
+state; nested `STEP!` commits its caller before switching runs.
+
+This deliberately changes the early C++ evaluator's incidental self-inspection
+behavior. That evaluator exposed transition-entry registers pointing into an
+already-mutated heap. The first cache implementation preserved that view with
+entry-register snapshots, cached-prefix tracking, and a saved popped frame.
+None of that is now required: reflection uses the same flush-and-publish path
+as normal batch completion. Frozen-continuation copy-on-write is unchanged.
 
 ### Batching transitions
 
@@ -153,7 +158,7 @@ visible, and nothing is rewound.
 runs transitions with one `eval_step` state held natively for the batch, and
 writes the row on return or a run switch. `step` requests one transition;
 `advance` passes its budget down instead of calling `step` repeatedly.
-Observing builtins additionally publish the transition-entry view. `STEP!`
+Observing builtins additionally publish the live state. `STEP!`
 chains remain iterative: switching runs commits the current run, and each
 nested target takes exactly one transition. `advance` stops on a pending GC
 request; explicit `step` retains its previous ability to step anyway.
@@ -173,10 +178,9 @@ remaining slices. Pulling a frozen frame copies its progress into this stack.
 A vector larger than the entire native stack uses the existing heap path.
 Source `LET` keeps its existing cons accumulator.
 
-A separate 1,024-word scratch array preserves the popped transition-entry
-frame's progress for a reflective callee, allowing its main slice to be
-reused immediately. Neither array contains roots or tape state at rest. This
-was implemented separately from the frame cache so its allocation and timing
+Pop reclaims progress immediately, without saving a second copy for reflection.
+The native array contains no roots or tape state at rest. Inline progress was
+implemented separately from the frame cache so its allocation and timing
 effects could be measured independently.
 
 ## Stages and acceptance
@@ -217,6 +221,11 @@ router benchmarks (which capture and resume) do not regress beyond noise,
 and progress-copy counts stay correct.
 
 ## Implementation checks and measurements (2026-10-04)
+
+These measurements describe the initial implementation, before the
+self-inspection simplification above removed transition-entry bookkeeping
+and the extra 1,024-word popped-progress array. They are retained as historical
+results, not measurements of the simplified evaluator.
 
 All four stages were committed separately. The final Clang 23 assertion-enabled
 build passed all 18 Meson cases, including slow suites: 14 passed and four
