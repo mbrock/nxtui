@@ -5,6 +5,7 @@
 #include "wisp/printer.hpp"
 #include "wisp/reader.hpp"
 
+#include <cassert>
 #include <concepts>
 #include <functional>
 #include <initializer_list>
@@ -413,7 +414,7 @@ struct eval_step
     {
         if (tag_of(arg) != tag::integer || integer(arg) < 0
             || std::size_t(integer(arg)) >= limit)
-            fail("INVALID-CONTINUATION", {way});
+            fail("INVALID-CONTINUATION", {frame_identity()});
         return std::size_t(integer(arg));
     }
 
@@ -497,21 +498,21 @@ struct eval_step
         });
     }
 
-    void proceed_arguments(word x, word args, word acc, word arg, word hop)
+    void proceed_arguments(word x, word args, word acc, word arg)
     {
         const auto size = vector_size(x, args);
         const auto i = frame_index(arg, size);
         if (size == 1) {
             const std::array one{val};
-            way = hop;
+            pop();
             call(acc, one);
             return;
         }
         writable_frame();
-        const auto progress = h.get<tag::ktx, field::acc>(way);
+        const auto progress = frame_acc();
         if (tag_of(progress) != tag::v32
             || h.v32slice(progress).size() != size + 1)
-            fail("INVALID-CONTINUATION", {way});
+            fail("INVALID-CONTINUATION", {frame_identity()});
         h.v32set(progress, i + 1, val);
         auto next = i + 1;
         for (word value;
@@ -519,7 +520,7 @@ struct eval_step
              ++next)
             h.v32set(progress, next + 1, value);
         if (next < size) {
-            h.set<tag::ktx, field::arg>(way, fixnum(int(next)));
+            set_position(fixnum(int(next)));
             enter(h.v32slice(args)[next]);
             return;
         }
@@ -527,7 +528,7 @@ struct eval_step
             const auto saved = h.v32slice(progress);
             const auto fun = saved[0];
             std::ranges::copy(saved.subspan(1), xs.begin());
-            way = hop;
+            pop();
             call(fun, xs);
         });
     }
@@ -667,33 +668,33 @@ struct eval_step
         }
     }
 
-    void proceed_lowered(word x, word acc, word arg, word hop)
+    void proceed_lowered(word x, word acc, word arg)
     {
         switch (lowered_operation(x, "INVALID-CONTINUATION")) {
         case code_op::branch:
-            way = hop;
+            pop();
             enter(code_operand(x, val == nil ? 2 : 1));
             return;
         case code_op::lexical_store: {
             const auto [scope, at] = lowered_address(x);
             h.v32set(scope, at, val);
-            way = hop;
+            pop();
             give(val);
             return;
         }
         case code_op::global_store:
             give(lookup(code_operand(x, 0), true, val));
-            way = hop;
+            pop();
             return;
         case code_op::sequence: {
             const auto forms = code_operand(x, 0);
             const auto size = h.v32slice(forms).size();
             const auto i = frame_index(arg, size);
             if (i + 1 == size)
-                way = hop;
+                pop();
             else {
                 writable_frame();
-                h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+                set_position(fixnum(int(i + 1)));
             }
             enter_lowered(h.v32slice(forms)[i]);
             return;
@@ -703,15 +704,15 @@ struct eval_step
                        inits = code_operand(x, 1);
             const auto size = h.v32slice(inits).size();
             if (h.v32slice(names).size() != size)
-                fail("INVALID-CONTINUATION", {way});
+                fail("INVALID-CONTINUATION", {frame_identity()});
             const auto i = frame_index(arg, size);
             if (tag_of(acc) != tag::v32 || h.v32slice(acc).size() != size)
-                fail("INVALID-CONTINUATION", {way});
+                fail("INVALID-CONTINUATION", {frame_identity()});
             writable_frame();
-            const auto progress = h.get<tag::ktx, field::acc>(way);
+            const auto progress = frame_acc();
             h.v32set(progress, i, val);
             if (i + 1 < size) {
-                h.set<tag::ktx, field::arg>(way, fixnum(int(i + 1)));
+                set_position(fixnum(int(i + 1)));
                 enter_lowered(h.v32slice(inits)[i + 1]);
                 return;
             }
@@ -725,15 +726,15 @@ struct eval_step
                 }
                 env = h.cons(h.newv32(scope), env);
             });
-            way = hop;
+            pop();
             enter(code_operand(x, 2));
             return;
         }
         case code_op::call:
-            proceed_arguments(x, code_operand(x, 1), acc, arg, hop);
+            proceed_arguments(x, code_operand(x, 1), acc, arg);
             return;
         default:
-            fail("INVALID-CONTINUATION", {way});
+            fail("INVALID-CONTINUATION", {frame_identity()});
         }
     }
 
@@ -763,6 +764,52 @@ struct eval_step
             result = h.cons(list(h, entry), result);
         }
         give(result);
+    }
+
+    // Ordinary-frame access is shared by source and lowered transitions.
+    // Boundary traversal and public continuation views stay heap-based.
+    bool segment_empty() const
+    {
+        return way == top;
+    }
+
+    word frame_identity() const
+    {
+        return way;
+    }
+
+    std::array<word, 4> frame() const
+    {
+        const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(way);
+        return {saved_env, fun, acc, arg};
+    }
+
+    word frame_acc() const
+    {
+        return h.get<tag::ktx, field::acc>(way);
+    }
+
+    void set_acc(word acc)
+    {
+        assert(!h.continuation_frozen(way));
+        h.set<tag::ktx, field::acc>(way, acc);
+    }
+
+    void set_position(word arg)
+    {
+        assert(!h.continuation_frozen(way));
+        h.set<tag::ktx, field::arg>(way, arg);
+    }
+
+    void pop()
+    {
+        way = h.get<tag::ktx, field::hop>(way);
+    }
+
+    void writable_frame()
+    {
+        if (h.continuation_frozen(way))
+            way = h.copy_continuation_frame(way);
     }
 
     void push(word fun, word acc, word arg)
@@ -977,30 +1024,30 @@ struct eval_step
 
     void proceed()
     {
-        if (way == top) {
+        if (segment_empty()) {
             const auto entry = h.read<tag::ktx>(meta);
             install(outer(entry));
             env = entry[column_index<tag::ktx, field::env>()];
             return;
         }
-        const auto [hop, saved_env, fun, acc, arg] = h.read<tag::ktx>(way);
+        const auto [saved_env, fun, acc, arg] = frame();
         env = saved_env;
         if (fun == vm.known("DO")) {
-            way = hop;
+            pop();
             sequence(arg);
         } else if (fun == vm.known("IF")) {
             require(arg, tag::duo);
             const auto [yes, no] = h.read<tag::duo>(arg);
-            way = hop;
+            pop();
             enter(val == nil ? no : yes);
         } else if (fun == vm.known("EVAL")) {
-            way = hop;
+            pop();
             enter(val);
         } else if (fun == vm.known("LET")) {
             // Reverse accumulator: name, value, name, ..., body.
             with_list(acc, [&](std::span<word> xs) {
                 if (xs.empty() || xs.size() % 2 != 0)
-                    fail("INVALID-CONTINUATION", {way});
+                    fail("INVALID-CONTINUATION", {frame_identity()});
                 for (std::size_t i = 0; i + 1 < xs.size(); i += 2)
                     require(xs[i], tag::sym);
                 (void) scan_count(arg);
@@ -1013,15 +1060,15 @@ struct eval_step
                     for (std::size_t i = 0; i < xs.size(); i += 2)
                         std::swap(xs[i], xs[i + 1]);
                     env = h.cons(h.newv32(xs), saved_env);
-                    way = hop;
+                    pop();
                     enter(body);
                 } else {
                     const auto [clause, rest] = h.read<tag::duo>(arg);
                     const auto [name, value] = binding(clause);
                     auto next_acc = h.cons(name, h.cons(val, acc));
                     writable_frame();
-                    h.set<tag::ktx, field::acc>(way, next_acc);
-                    h.set<tag::ktx, field::arg>(way, rest);
+                    set_acc(next_acc);
+                    set_position(rest);
                     enter(value);
                 }
             });
@@ -1030,23 +1077,23 @@ struct eval_step
                 ++p->arguments_accumulated;
             if (acc == nil && arg == nil) {
                 const std::array args{val};
-                way = hop;
+                pop();
                 call(fun, args);
                 return;
             }
             const auto remaining = scan_count(arg);
             writable_frame();
-            auto vector = h.get<tag::ktx, field::acc>(way);
+            auto vector = frame_acc();
             if (vector == nil) {
                 vector = h.filledv32(2 + remaining, nil);
                 h.v32set(vector, 0, 0);
-                h.set<tag::ktx, field::acc>(way, vector);
+                set_acc(vector);
             }
             require(vector, tag::v32);
             const auto xs = h.v32slice(vector);
             if (xs.size() < 2 || xs[0] >= xs.size() - 1
                 || remaining != xs.size() - xs[0] - 2)
-                fail("INVALID-CONTINUATION", {way});
+                fail("INVALID-CONTINUATION", {frame_identity()});
             const auto pos = xs[0];
             h.v32set(vector, pos + 1, val);
             h.v32set(vector, 0, pos + 1);
@@ -1055,18 +1102,18 @@ struct eval_step
                 const auto slice = h.v32slice(vector).subspan(1);
                 with_words(slice.size(), [&](std::span<word> args) {
                     std::ranges::copy(slice, args.begin());
-                    way = hop;
+                    pop();
                     call(fun, args);
                 });
             } else {
                 const auto [first, rest] = h.read<tag::duo>(arg);
-                h.set<tag::ktx, field::arg>(way, rest);
+                set_position(rest);
                 enter(first);
             }
         } else if (tag_of(fun) == tag::rec) {
-            proceed_lowered(fun, acc, arg, hop);
+            proceed_lowered(fun, acc, arg);
         } else {
-            fail("INVALID-CONTINUATION", {way});
+            fail("INVALID-CONTINUATION", {frame_identity()});
         }
     }
 
@@ -1887,12 +1934,6 @@ struct eval_step
         const auto tail =
             way == top ? meta : boundary(vm.known("RESUME"), nil, nil);
         return {captured.way, append_meta(captured.meta, top, tail)};
-    }
-
-    void writable_frame()
-    {
-        if (h.continuation_frozen(way))
-            way = h.copy_continuation_frame(way);
     }
 
     word find_prompt(word source, word prompt_tag)
