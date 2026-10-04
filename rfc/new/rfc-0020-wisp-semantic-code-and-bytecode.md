@@ -1,7 +1,12 @@
 # RFC 0020: Wisp Semantic Code and Bytecode {#rfc_wisp_semantic_code}
 
-Status: proposed. This document specifies an implementation direction; the
-compiler, prepared executor, and bytecode VM described here do not exist yet.
+Status: stages 0 through 2 are implemented. The compiler
+(`src/wisp/compiler.wisp`), the graph checker, and record execution in the
+evaluator exist and are tested, and the base library runs prepared. The
+live-code operations of stage 3 exist in part (`prepare-function!`,
+`prepare-package!`, source snapshots, `SET-CODE!`). Lowering and the bytecode
+VM, stages 4 through 6, do not exist; a subsequent RFC should design them from
+the measurements recorded under "First measurements of record execution".
 
 ## Proposal
 
@@ -938,9 +943,24 @@ or lose up to 20%.
 
 This confirms the RFC's division of labor. Record execution established
 the semantics, including multi-shot resumption, tapes, and mixed calls,
-and showed that the removable work is real. Speed comes from lowering the
-records into a compact representation that needs no decoding per
-transition, which is stage 4.
+and showed that the removable work is real: where preparation eliminates
+dynamic work, programs already run up to twice as fast. The record IR is a
+good compiler representation and a poor execution format, and it should
+stay what it is, ordinary Wisp data that programs can build, inspect,
+transform, and check, rather than be bent into a fast one.
+
+The next stage starts from this proposition. Checked record IR is the
+semantic representation. Executing it directly is correct and sometimes
+faster, but decoding generic records costs 60 to 80% more per transition,
+and retaining a library's IR graphs enlarges the live heap that a copying
+collector must copy. Lowering should therefore produce the smallest
+executable representation that preserves these semantics under two
+criteria: execution never recognizes or decodes an IR record, and
+executable code does not keep its IR graph alive, so analysis objects can
+die unless someone retains them. The operations already visible in the
+executor (constant, lexical load and store by address, function cell,
+call, branch, closure, source escape) are the starting instruction set;
+its encoding should be chosen by measurement, not in advance.
 
 Stages 3 through 6 then proceed as described above, with a working executor
 to measure. Delay instruction packing until we can inspect, save, restore, and
