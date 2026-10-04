@@ -20,7 +20,7 @@ profile evaluate(std::string_view text, std::int32_t expected)
     evaluator vm{h};
     root run{h, vm.start(*reader{h, vm, text}.next())};
     h.profiling(&p);
-    if (vm.advance(run.get(), 1000) != evaluation::done)
+    if (vm.advance(run.get(), 100000) != evaluation::done)
         throw std::runtime_error(
             "run did not finish: " + std::string(text) + ": "
             + print(h, h.get<tag::run, field::err>(run.get())));
@@ -116,7 +116,38 @@ int main()
             sum.allocations[std::size_t(tag::ktx)] == 0,
             "short-lived frame reached the heap");
         require(
+            sum.v32_words == 0, "short-lived progress reached the heap");
+        require(
             sum.allocations[std::size_t(tag::run)] == 0, "counted setup");
+        profile resumed;
+        heap resumed_heap;
+        evaluator resumed_vm{resumed_heap};
+        root pending{
+            resumed_heap,
+            resumed_vm.start(
+                reader{resumed_heap, resumed_vm, "(+ 7 (+ 11 19) 23)"}
+                    .next()
+                    .value())};
+        require(
+            resumed_vm.advance(pending.get(), 3) == evaluation::runnable,
+            "did not stop at partial argument progress");
+        resumed_heap.freeze_continuations();
+        resumed_heap.profiling(&resumed);
+        require(
+            resumed_vm.advance(pending.get(), 1000) == evaluation::done,
+            "frozen progress did not resume");
+        require(
+            resumed_heap.get<tag::run, field::val>(pending.get())
+                == fixnum(60),
+            "frozen progress lost saved arguments");
+        require(
+            resumed.continuation_copy_words == 4 * scale
+                && resumed.cache_pulls == scale,
+            "native progress copying was not counted exactly once");
+        require(
+            resumed.v32_words == 0,
+            "native progress copy allocated a heap vector");
+        resumed_heap.profiling(nullptr);
         auto middle = evaluate("(let ((a 11) (b 22) (c 33)) b)", 22);
         require(
             middle.lexical_lookups == scale
@@ -181,6 +212,25 @@ int main()
         require(
             deep.cache_flushed[std::size_t(cache_flush::spill)] >= scale,
             "spill did not write heap frames");
+        std::string prefix = "(+";
+        for (int i = 1; i <= 32; ++i)
+            prefix += " " + std::to_string(i);
+        nested = "1";
+        for (int i = 0; i < 40; ++i)
+            nested = prefix + " " + nested + ")";
+        auto wide_deep = evaluate(nested, 21121);
+        require(
+            wide_deep.cache_spills >= scale,
+            "progress stack did not spill before the frame cache filled");
+        for (int arity : {1023, 1024}) {
+            std::string call = "(+";
+            for (int i = 1; i <= arity; ++i)
+                call += " " + std::to_string(i);
+            auto edge = evaluate(call + ")", arity * (arity + 1) / 2);
+            require(
+                edge.v32_words == (arity == 1023 ? 0 : 1025 * scale),
+                "inline progress capacity boundary");
+        }
         std::cout
             << "semantic counters: allocation/GC separation, transitions, arity, lookup depth, dynamic lookup, effects, opt-out OK\n";
     } catch (const std::exception & error) {

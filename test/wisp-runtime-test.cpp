@@ -403,6 +403,17 @@ static suite runtime_tests{
                                  == m.h.get<tag::sym, field::fun>(
                                      m.vm.intern(name))));
                             expect(m.h.continuation_frozen(value));
+                            if (text.starts_with("(call")) {
+                                const auto acc =
+                                    m.h.get<tag::ktx, field::acc>(value);
+                                const auto xs = m.h.v32slice(acc);
+                                expect(xs.size() == 3u && xs[0] == 2u);
+                                expect(
+                                    xs[1]
+                                    == m.h.get<tag::sym, field::fun>(
+                                        m.vm.intern("RUN-WAY")));
+                                expect(xs[2] == m.run.get());
+                            }
                         }
                     }
                 }

@@ -323,6 +323,7 @@ struct eval_step
     word step_target = nil;
     row<tag::run> entry{};
     std::size_t depth = 0, entry_depth = 0;
+    std::size_t progress_used = 0;
     std::optional<evaluator::cached_frame> popped_entry = std::nullopt;
 
     evaluation state() const
@@ -349,8 +350,13 @@ struct eval_step
         if (popped_entry) {
             auto & entry_way = entry[column_index<tag::run, field::way>()];
             const auto & f = *popped_entry;
+            const auto acc = f.progress_size == 0
+                                 ? f.acc
+                                 : h.newv32(
+                                       std::span{vm.popped_progress_}.first(
+                                           f.progress_size));
             entry_way =
-                h.make<tag::ktx>({entry_way, f.env, f.fun, f.acc, f.arg});
+                h.make<tag::ktx>({entry_way, f.env, f.fun, acc, f.arg});
             if (auto * p = h.profiling())
                 ++p->cache_flushed[std::size_t(cache_flush::observation)];
             popped_entry.reset();
@@ -536,11 +542,11 @@ struct eval_step
             if (size == 1) {
                 push(x, fun, fixnum(0));
             } else {
-                const auto progress = h.filledv32(size + 1, nil);
-                h.v32set(progress, 0, fun);
+                push(x, nil, fixnum(int(ready)));
+                make_progress(size + 1);
+                set_progress(0, fun);
                 for (std::size_t i = 0; i < ready; ++i)
-                    h.v32set(progress, i + 1, xs[i]);
-                push(x, progress, fixnum(int(ready)));
+                    set_progress(i + 1, xs[i]);
             }
             enter(h.v32slice(args)[ready]);
         });
@@ -557,23 +563,21 @@ struct eval_step
             return;
         }
         writable_frame();
-        const auto progress = frame_acc();
-        if (tag_of(progress) != tag::v32
-            || h.v32slice(progress).size() != size + 1)
+        if (progress().size() != size + 1)
             fail("INVALID-CONTINUATION", {frame_identity()});
-        h.v32set(progress, i + 1, val);
+        set_progress(i + 1, val);
         auto next = i + 1;
         for (word value;
              next < size && immediate(h.v32slice(args)[next], value);
              ++next)
-            h.v32set(progress, next + 1, value);
+            set_progress(next + 1, value);
         if (next < size) {
             set_position(fixnum(int(next)));
             enter(h.v32slice(args)[next]);
             return;
         }
         with_words(size, [&](std::span<word> xs) {
-            const auto saved = h.v32slice(progress);
+            const auto saved = progress();
             const auto fun = saved[0];
             std::ranges::copy(saved.subspan(1), xs.begin());
             pop();
@@ -680,7 +684,8 @@ struct eval_step
                 enter(code_operand(x, 2));
                 return;
             }
-            push(x, h.filledv32(size, nil), fixnum(0));
+            push(x, nil, fixnum(0));
+            make_progress(size);
             enter_lowered(h.v32slice(inits)[0]);
             return;
         }
@@ -754,11 +759,10 @@ struct eval_step
             if (h.v32slice(names).size() != size)
                 fail("INVALID-CONTINUATION", {frame_identity()});
             const auto i = frame_index(arg, size);
-            if (tag_of(acc) != tag::v32 || h.v32slice(acc).size() != size)
+            if (progress().size() != size)
                 fail("INVALID-CONTINUATION", {frame_identity()});
             writable_frame();
-            const auto progress = frame_acc();
-            h.v32set(progress, i, val);
+            set_progress(i, val);
             if (i + 1 < size) {
                 set_position(fixnum(int(i + 1)));
                 enter_lowered(h.v32slice(inits)[i + 1]);
@@ -770,7 +774,7 @@ struct eval_step
                     const auto name = h.v32slice(names)[j];
                     require(name, tag::sym);
                     scope[2 * k] = name;
-                    scope[2 * k + 1] = h.v32slice(progress)[j];
+                    scope[2 * k + 1] = progress()[j];
                 }
                 env = h.cons(h.newv32(scope), env);
             });
@@ -841,6 +845,50 @@ struct eval_step
                           : h.get<tag::ktx, field::acc>(way);
     }
 
+    bool inline_progress() const
+    {
+        return depth != 0 && vm.frames_[depth - 1].progress_size != 0;
+    }
+
+    values progress() const
+    {
+        if (inline_progress()) {
+            const auto & f = vm.frames_[depth - 1];
+            return std::span{vm.progress_}.subspan(
+                f.progress_begin, f.progress_size);
+        }
+        const auto acc = frame_acc();
+        return tag_of(acc) == tag::v32 ? h.v32slice(acc) : values{};
+    }
+
+    void set_progress(std::size_t i, word value)
+    {
+        if (inline_progress()) {
+            const auto & f = vm.frames_[depth - 1];
+            assert(i < f.progress_size);
+            vm.progress_[f.progress_begin + i] = value;
+        } else {
+            h.v32set(frame_acc(), i, value);
+        }
+    }
+
+    void make_progress(std::size_t size)
+    {
+        assert(size != 0 && !inline_progress());
+        if (depth != 0 && size <= vm.progress_.size()) {
+            if (size > vm.progress_.size() - progress_used)
+                spill(depth - 1, cache_flush::spill);
+            assert(size <= vm.progress_.size() - progress_used);
+            auto & f = vm.frames_[depth - 1];
+            f.progress_begin = progress_used;
+            f.progress_size = size;
+            std::fill_n(vm.progress_.begin() + progress_used, size, nil);
+            progress_used += size;
+            return;
+        }
+        set_acc(h.filledv32(size, nil));
+    }
+
     void set_acc(word acc)
     {
         if (depth != 0) {
@@ -869,8 +917,12 @@ struct eval_step
             if (depth == entry_depth) {
                 assert(!popped_entry);
                 popped_entry = vm.frames_[depth - 1];
+                if (inline_progress())
+                    std::ranges::copy(
+                        progress(), vm.popped_progress_.begin());
                 --entry_depth;
             }
+            progress_used = vm.frames_[depth - 1].progress_begin;
             --depth;
             return;
         }
@@ -885,9 +937,16 @@ struct eval_step
         const auto kind = tag_of(f.fun);
         if ((kind == tag::fun || kind == tag::jet || kind == tag::rec)
             && tag_of(f.acc) == tag::v32) {
-            f.acc = h.clonev32(f.acc);
+            const auto xs = h.v32slice(f.acc);
+            if (!xs.empty() && xs.size() <= vm.progress_.size()) {
+                std::ranges::copy(xs, vm.progress_.begin());
+                f.progress_size = progress_used = xs.size();
+                f.acc = nil;
+            } else {
+                f.acc = h.clonev32(f.acc);
+            }
             if (auto * p = h.profiling())
-                p->continuation_copy_words += h.v32slice(f.acc).size();
+                p->continuation_copy_words += xs.size();
         }
         // The frozen row remains the transition-entry view. Its private
         // replacement is not part of that view's cached prefix.
@@ -899,12 +958,9 @@ struct eval_step
 
     void push(word fun, word acc, word arg)
     {
-        if (depth == vm.frames_.size()) {
+        if (depth == vm.frames_.size())
             spill(depth / 2, cache_flush::spill);
-            if (auto * p = h.profiling())
-                ++p->cache_spills;
-        }
-        vm.frames_[depth++] = {env, fun, acc, arg};
+        vm.frames_[depth++] = {env, fun, acc, arg, progress_used, 0};
         if (auto * p = h.profiling()) {
             ++p->continuation_pushes;
             ++p->cached_pushes;
@@ -914,20 +970,41 @@ struct eval_step
     void spill(std::size_t count, cache_flush reason)
     {
         assert(count <= depth && entry_depth <= depth);
+        if (count == 0)
+            return;
         for (std::size_t i = 0; i < count; ++i) {
             const auto & f = vm.frames_[i];
-            way = h.make<tag::ktx>({way, f.env, f.fun, f.acc, f.arg});
+            const auto acc =
+                f.progress_size == 0
+                    ? f.acc
+                    : h.newv32(
+                          std::span{vm.progress_}.subspan(
+                              f.progress_begin, f.progress_size));
+            way = h.make<tag::ktx>({way, f.env, f.fun, acc, f.arg});
             if (i < entry_depth)
                 entry[column_index<tag::run, field::way>()] = way;
         }
         entry_depth -= std::min(count, entry_depth);
+        const auto released = vm.frames_[count - 1].progress_begin
+                              + vm.frames_[count - 1].progress_size;
+        if (released != 0)
+            std::move(
+                vm.progress_.begin() + released,
+                vm.progress_.begin() + progress_used,
+                vm.progress_.begin());
+        progress_used -= released;
         std::move(
             vm.frames_.begin() + count,
             vm.frames_.begin() + depth,
             vm.frames_.begin());
         depth -= count;
-        if (auto * p = h.profiling())
+        for (std::size_t i = 0; i < depth; ++i)
+            vm.frames_[i].progress_begin -= released;
+        if (auto * p = h.profiling()) {
             p->cache_flushed[std::size_t(reason)] += count;
+            if (reason == cache_flush::spill)
+                ++p->cache_spills;
+        }
     }
 
     void flush(cache_flush reason)
@@ -1146,7 +1223,8 @@ struct eval_step
             env = entry[column_index<tag::ktx, field::env>()];
             return;
         }
-        const auto [saved_env, fun, acc, arg] = frame();
+        const auto f = frame();
+        const auto saved_env = f.env, fun = f.fun, acc = f.acc, arg = f.arg;
         env = saved_env;
         if (fun == vm.known("DO")) {
             pop();
@@ -1191,7 +1269,7 @@ struct eval_step
         } else if (tag_of(fun) == tag::fun || tag_of(fun) == tag::jet) {
             if (auto * p = h.profiling())
                 ++p->arguments_accumulated;
-            if (acc == nil && arg == nil) {
+            if (acc == nil && !inline_progress() && arg == nil) {
                 const std::array args{val};
                 pop();
                 call(fun, args);
@@ -1199,23 +1277,22 @@ struct eval_step
             }
             const auto remaining = scan_count(arg);
             writable_frame();
-            auto vector = frame_acc();
-            if (vector == nil) {
-                vector = h.filledv32(2 + remaining, nil);
-                h.v32set(vector, 0, 0);
-                set_acc(vector);
+            if (frame_acc() == nil && !inline_progress()) {
+                make_progress(2 + remaining);
+                set_progress(0, 0);
             }
-            require(vector, tag::v32);
-            const auto xs = h.v32slice(vector);
+            if (!inline_progress())
+                require(frame_acc(), tag::v32);
+            const auto xs = progress();
             if (xs.size() < 2 || xs[0] >= xs.size() - 1
                 || remaining != xs.size() - xs[0] - 2)
                 fail("INVALID-CONTINUATION", {frame_identity()});
             const auto pos = xs[0];
-            h.v32set(vector, pos + 1, val);
-            h.v32set(vector, 0, pos + 1);
+            set_progress(pos + 1, val);
+            set_progress(0, pos + 1);
             if (arg == nil) {
                 // Binding and slice-taking builtins can grow the word pool.
-                const auto slice = h.v32slice(vector).subspan(1);
+                const auto slice = progress().subspan(1);
                 with_words(slice.size(), [&](std::span<word> args) {
                     std::ranges::copy(slice, args.begin());
                     pop();
@@ -2010,6 +2087,7 @@ struct eval_step
 
     word snapshot(control_context ctx)
     {
+        assert(depth == 0);
         h.freeze_continuations();
         if (ctx.meta == top)
             return ctx.way;

@@ -124,7 +124,8 @@ public:
     /// calls, rooting the run and every other host-held value. Return
     /// values are unrooted words. Language errors go to ERROR prompts;
     /// failed delivery populates run.err. Host allocation exceptions escape
-    /// and do not promise rollback or safe retry of the interrupted step.
+    /// as panics: no rollback, cache flush, or safe resumption of the
+    /// interrupted machine is promised.
     evaluation advance(word run, std::size_t budget);
 
     /// GC only requests a safepoint. advance stops early while requested;
@@ -152,10 +153,12 @@ private:
     struct cached_frame
     {
         word env, fun, acc, arg;
+        std::size_t progress_begin = 0, progress_size = 0;
     };
 
     // Empty at every normal evaluator return; never roots or tape state.
     std::array<cached_frame, 64> frames_;
+    std::array<word, 1024> progress_, popped_progress_;
 
     struct jet_info
     {
