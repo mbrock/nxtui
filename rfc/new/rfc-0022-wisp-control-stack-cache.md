@@ -67,17 +67,21 @@ And collection runs only between `advance` calls (`GC` sets a flag that stops
    holds exactly the frames, progress, and boundaries the all-heap evaluator
    would have produced. Multi-shot resumption, shared lexical locations, and
    per-resumption progress keep their current semantics.
-2. **Heap-only control at rest.** When `advance` returns, the cache is empty
-   and the run row is current. Tapes, the collector, and the host never see
-   native control state.
+2. **Heap-only control at rest.** When `step` or `advance` returns normally,
+   including a failed run after an unhandled guest condition, the cache is
+   empty and the run row is current. Tapes, the collector, and the host never
+   need native control state. Host panic unwinding is not a resumable return.
 3. **No native allocation during evaluation.** The cache has fixed capacity,
    allocated with the evaluator. A batch that overflows it spills its oldest
    frames to the heap. The allocation-failure test's guarantee, that small
    evaluations need only existing guest capacity, still holds.
-4. **Atomic transitions.** A guest condition or allocation failure leaves
-   the run at the last completed transition boundary, as now. Writing the
-   cache back to the heap must not fail halfway: reserve table and pool
-   capacity first, then write.
+4. **Preserve failure semantics, without rollback.** Guest conditions are
+   sent to `ERROR` using the current control state, as today; neither native
+   registers nor guest heap mutations are rewound. Host allocation failure
+   is a panic: the C++ exception escapes, and the interrupted machine is not
+   promised to be resumable or safe to retry. This includes allocation
+   failure while materializing cached frames. Panic unwinding must not try
+   to allocate more memory to reconstruct the continuation.
 5. **One frame interface.** The executor reads and writes frames only
    through a small interface (top frame, push, pop, set position, update
    progress), so whether the top frame is cached or a heap row is invisible
@@ -99,11 +103,13 @@ the heap row at `way`.
 A transition that only reads the top heap frame and pops it (a branch, a
 sequence's last form, a single-argument call) needs nothing more. A
 transition that writes it first moves it into the cache: the cached copy
-replaces it, and `way` becomes its `hop`. If the heap row is frozen, this is
-exactly today's copy-on-write. If it is not, the row was reachable only from
-this run, so moving it is safe and the old row becomes garbage. Either way,
-writes then happen natively. This is the underflow handler of segmented
-stacks: reinstated frames come back lazily, one at a time.
+replaces it, and `way` becomes its `hop`. If the heap row is frozen, its
+mutable progress must also be copied, as in today's copy-on-write: copying
+only the frame columns would still share the progress vector. If it is not,
+the row was reachable only from this run, so moving it is safe and the old
+row becomes garbage. Either way, writes then happen natively. This is the
+underflow handler of segmented stacks: reinstated frames come back lazily,
+one at a time.
 
 ### Flush points
 
@@ -135,11 +141,11 @@ writes the row once. `advance` passes its budget down instead of calling
 runs ends the batch for the current run. GC polling still happens at most
 every budget's worth of transitions.
 
-Transition atomicity needs a small undo record: before each transition, the
-registers, the cache depth, and a copy of the top cached frame, since one
-transition mutates at most the top frame and pushes or pops a bounded
-number. On a guest condition or allocation failure, restore it, flush, and
-proceed as now.
+There is no transition undo record. On a guest condition, materialize the
+current continuation and deliver `ERROR`, preserving the existing condition
+semantics. On a host allocation exception, abandon the batch without a
+flush or rollback attempt. The host may catch the exception to dispose of
+the machine, not to resume it.
 
 ### Inline progress (second stage)
 
@@ -161,10 +167,11 @@ columns directly.
 
 ### 2. Batched transitions
 
-Hold the registers natively across a batch, with flush points and the undo
-record, but no frame cache yet. Acceptance: all tests, including allocation
-failure and every slow suite, pass; `evaluator::step`'s share of the native
-profile falls; TAK and the micro cases are measured in both modes.
+Hold the registers natively across a batch, with observation points and the
+existing guest-condition delivery, but no frame cache yet. Acceptance: all
+tests, including allocation failure and every slow suite, pass;
+`evaluator::step`'s share of the native profile falls; TAK and the micro
+cases are measured in both modes.
 
 ### 3. The frame cache
 
