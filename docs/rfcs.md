@@ -46,5 +46,9 @@ parallel Wisp/HTTP work. For the concrete pool API, see
   — implemented: fixed groups (`settle` with `group` subclasses) and streaming
   pools (`drain`) replace firms.
 - @ref rfc_wisp_semantic_code "RFC 0020: Wisp Semantic Code and Bytecode"
-  — proposed: a Wisp compiler over semantic records, heap-resident prepared
-  execution, and incremental lowering to a portable bytecode VM.
+  — record stages implemented: a Wisp compiler over semantic records, a graph
+  checker, and heap-resident prepared execution, with measurements. Lowering
+  continues in RFC 0021.
+- @ref rfc_wisp_lowered_code "RFC 0021: Wisp Lowered Code"
+  — proposed: lower checked records into compact executable nodes that
+  neither decode nor retain the IR, keeping multi-shot frames and tapes.

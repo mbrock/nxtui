@@ -1,0 +1,321 @@
+# RFC 0021: Wisp Lowered Code {#rfc_wisp_lowered_code}
+
+Status: proposed. Nothing described here is implemented.
+
+## Proposal
+
+Lower checked semantic records into a separate executable representation, and
+run that instead of the records. @ref rfc_wisp_semantic_code "RFC 0020" built
+the compiler's record IR and executed it directly; this RFC keeps that IR as
+the semantic representation and designs what replaces it at run time.
+
+The question is narrow: how do we erase the compiler representation while
+preserving everything execution needs, including continuations that are
+captured, collected, saved to tape, and resumed more than once? An opcode
+table is the least interesting part of the answer. The central part is what a
+suspended frame refers to once the IR graph is gone.
+
+The proposal is to start with the smallest representation that answers it:
+**compact executable nodes**, one small word vector per operation, in which a
+continuation point is still a single heap word. Frames, capture, collection,
+and tapes then keep their present shape. A flat instruction vector with
+program counters, and one frame per activation, are the next candidates, to be
+adopted only if measurements show that they pay.
+
+## What RFC 0020 established
+
+Record execution is correct: the whole semantic corpus passes prepared,
+multi-shot resumption survives collection after every transition and a tape
+round trip, and the base library and compiler run prepared.
+
+It also does less work. On TAK it takes 43% fewer evaluator transitions, and
+with lexical addresses it searches no environment by name. Where preparation
+removes real dynamic work, wide calls and deep lexical lookups, programs
+already run up to twice as fast.
+
+But whole programs break even or lose up to 20%, for two measured reasons:
+
+- **Decoding.** Each transition recognizes a generic `DEFSTRUCT` record by its
+  descriptor, finds slot positions, and reads several records per operand. A
+  prepared transition costs about 38 ns against 23 ns for a source one.
+- **Retention.** Prepared code keeps its whole IR graph alive: bindings,
+  owners, parameter records, source scopes. The benchmark machine's heap is
+  485 KiB with the library in source form, 693 KiB with the compiler loaded,
+  and 1324 KiB with the library prepared. The collector copies all live data
+  at every collection, so collection time on TAK doubled.
+
+## Requirements
+
+Lowered code must satisfy two criteria, which together force it to be a
+self-contained execution object:
+
+1. **No IR decoding.** Execution never recognizes or decodes an IR record. If
+   a reference was lowered, the executor already knows it is performing a
+   lexical load.
+2. **No IR retention.** Executable code does not keep its IR graph alive.
+   Analysis objects die after lowering unless someone retains them. A cache
+   attached to the records would meet the first criterion and fail this one.
+
+RFC 0020's semantic commitments and liveness contract carry over unchanged.
+In particular:
+
+- All guest control stays in heap frames. Nothing about a suspended
+  computation lives in native state.
+- A captured continuation can be resumed any number of times. Each resumption
+  owns its progress; all share lexical locations.
+- The callee of a call is resolved before its arguments and kept across
+  suspension. Special operators are fixed and macros are already expanded.
+- Environments keep their present representation, a chain of name/value
+  vectors, so `ENV`, source escapes, and mixed source/lowered calls keep
+  working. Flat closures and unboxed locals remain later projects.
+
+## What a suspended frame needs
+
+The record executor has five kinds of frame. This is everything each one needs
+in order to resume:
+
+| Frame is waiting for | It needs |
+| --- | --- |
+| A branch test | The two continuations to choose between |
+| An assignment's value | The target: a lexical address, or a symbol |
+| A form in a sequence | The position in the sequence |
+| A `LET` initializer | The position, the values so far, the scope's names, the body |
+| A call argument | The position, the resolved callee, the values so far |
+
+Every row reduces to the same three things: *where to continue*, *saved
+values*, and *the environment*. The existing continuation row already has
+exactly those columns:
+
+```text
+ktx:  hop   env   fun              acc             arg
+            ^     where            saved values    position
+            environment
+```
+
+Today `fun` holds an IR node and `arg` an index into it. The frame schema does
+not need to change for lowered code; only what `fun` points to does. Capture,
+the frozen-frame watermark, the rule that a write to a frozen frame first
+copies its saved-value vector, collection, and the tape encoding of frames all
+carry over.
+
+## Continuation points
+
+A *continuation point* is what `fun` and `arg` name together: a place in code
+where execution resumes with a value. Two shapes are possible.
+
+**A. Compact nodes.** Each operation is one small word vector:
+
+```text
+[operation, operand, operand, ...]
+```
+
+`operation` is a fixnum. Operands are fixnums (addresses, counts), constants,
+symbols, or other nodes. A continuation point is `(node, position)`, as today,
+and the run's expression register holds a node, as today. The executor
+dispatches on the first word instead of decoding a descriptor.
+
+**B. Flat code.** Each function is one instruction vector plus a constants
+vector, and a continuation point is `(code object, PC)`. Instructions name
+their continuations by offset.
+
+Shape A is the smaller step. It changes the representation of code and nothing
+about control: the transitions of the record executor map one to one onto
+node operations, and every continuation point is a single heap word plus an
+index, so no register or frame column needs a new meaning.
+
+Shape B has real advantages. One vector per function is cheaper for a copying
+collector than many small rows, it has better locality, and it is the natural
+base for later packing. It also has a cost that shape A avoids: the run must
+name the current point between steps without native state, and the run row
+has an expression register but no program counter. Either the run schema gains
+a column, which changes the tape version, or the active activation's frame
+always stays on top and holds the PC, which commits to one frame per
+activation (below). Saved PCs must also be validated as genuine resume points
+of that exact code object when a tape is restored.
+
+Start with A, measure, and move to B if code size or dispatch cost justifies
+it. Nothing in A's operations or frames blocks that move: B is a different
+encoding of the same operations.
+
+## Node operations
+
+These are the operations the executor already performs, written as nodes. The
+list is an observation, not a frozen instruction set; encoding and any
+packing are decided by measurement.
+
+| Operation | Operands | Frame while waiting |
+| --- | --- | --- |
+| constant | value | none |
+| lexical load | depth, index | none |
+| global load | symbol | none |
+| function cell | symbol | none |
+| lexical store | depth, index, value node | node |
+| global store | symbol, value node | node |
+| branch | test, consequent, alternative | node |
+| sequence | forms | node, position |
+| let | scope names, initializers, body | node, position, values |
+| call | symbol, arguments | node, position, callee and values |
+| closure | code | none |
+| source | form | none |
+
+Three points differ from the record IR.
+
+*Bindings are gone.* A reference becomes a lexical load with its address. Only
+the names of each scope survive, as one constant vector per `LET` and the
+parameter list per function, because the environment stores names and
+reflection and source escapes read them.
+
+*Lexical loads without an address do not exist.* Analysis gives no address to
+a binding that has no runtime scope behind it; lowering turns such a reference
+into a global load, which is what name lookup would do.
+
+*A function's code is a small object, not a node.* It holds the parameter
+list, the body node, the name, and the source body that `CODE` reports. A
+closure's code slot holds this object, as it holds the `ir-function` today.
+The source snapshot is source, not IR, and the function already retains it in
+source mode.
+
+Operands that are constants, lexical loads, or function cells are evaluated in
+place by the operation that uses them, as record execution does now, so
+`(- x 1)` remains one transition with no frame.
+
+## Who defines the layout
+
+RFC 0020 asked that each operation's metadata be defined once. For lowered
+code the definition belongs to C++, because the executor must not learn
+layouts from guest-declared structs; that is the decoding this RFC removes.
+
+Declare each operation once in C++ with its name and operand kinds, in the
+project's schema style, and derive the dispatch table, the validity checks,
+and a description exposed to the guest. The lowering pass is written in Wisp
+and builds nodes from that description; `(code-operations)` or a similar
+primitive returns it. No operation numbers are written twice. Operation
+identities are part of the tape format and need a version, like builtin names.
+
+## Trust and checking
+
+Nodes are word vectors, and a guest can mutate a word vector. The executor
+therefore checks what it reads: that an operand is a vector of the expected
+size, that an address is a non-negative fixnum, and that a lexical address
+fits the environment, with lookup by name unavailable as a fallback because
+the name is gone. A failed check signals a condition. These checks are tag
+comparisons and bounds tests, far cheaper than descriptor decoding, and they
+are part of what must be measured.
+
+`ir-check` remains the gate before lowering: only a checked graph is lowered,
+so well-formedness errors are reported against the IR, where they are
+readable. The runtime checks exist so that mutation or a hostile tape cannot
+make native dispatch read out of bounds, not to report compiler bugs.
+
+An immutable, verified-once code object is a later option. It needs a new heap
+type and a tape version, and it should be justified by the measured cost of
+the runtime checks.
+
+## Frame granularity
+
+Record execution keeps one frame per pending operation. TAK pushes about two
+frames and allocates about six vector words per function call. There is an
+alternative.
+
+**Per operation**, as now. Frames and saved-value vectors are small. After a
+capture, the first write to a frozen frame copies one small vector. Nested
+calls push a frame each.
+
+**Per activation.** One frame per function call, with one vector of
+temporaries for the whole body and a program counter. There are fewer pushes
+and no allocation per call site. But the first write after a capture copies
+the whole activation's temporaries, the set of live temporaries must be
+defined at every resume point so tapes can be validated and frames inspected,
+and tail calls must release or reuse the activation without disturbing frozen
+snapshots.
+
+A conventional VM chooses the second without discussion. For Wisp it is not
+obvious, because multi-shot copying and inspectable progress are what this
+design exists to preserve, and the copy cost moves from "one call's arguments"
+to "one function's temporaries".
+
+Keep per-operation frames for shape A, where they are free. Decide the
+question with numbers before designing shape B, since B's program counter
+interacts with it. The profile counters already report frame pushes and vector
+words; add a counter for words copied when a frozen frame is written, and run
+the effect and router benchmarks, which capture and resume, alongside TAK.
+
+## Retention and code size
+
+Lowering removes bindings, owners, parameter records, and source scopes. What
+remains live per function is its nodes, its scope-name vectors, its constants,
+and its source snapshot.
+
+The collector copies everything live at every collection. That includes the
+library's source conses today, in every mode, so code size is a cost in source
+mode as well and lowering competes with it directly. Report live heap size for
+the library in source, record, and lowered form, and collection time on the
+benchmarks, as primary results.
+
+Two further options follow from the same observation and are out of scope
+here: dropping a function's source snapshot when nobody needs `CODE`, and
+giving long-lived code a space the collector does not copy. Record the numbers
+that would justify them.
+
+## Installing and inspecting
+
+`prepare-function!` gains a lowering step: analyze, check, lower, install the
+code object, and drop the graph. `analyze` and `ir-show` are unchanged, and a
+caller that wants the IR keeps it by holding the result of `analyze`.
+
+Lowered code needs its own readable view, since the IR is no longer there to
+show. Provide `code-show`, the counterpart of `ir-show`, printing operations
+by name with their addresses and constants. `KTX-FUN` on a lowered frame
+returns a node; give frames a documented view of operation, position, callee,
+and completed values, as RFC 0020 requires of prepared frames.
+
+`CODE`, `SET-CODE!`, and the liveness contract behave as they do for record
+execution.
+
+## Stages and acceptance
+
+### 1. Lower to compact nodes
+
+Declare the operations in C++ and expose their description. Write the lowering
+pass in Wisp over checked IR. Execute nodes in the evaluator, with the
+record executor left in place for comparison.
+
+Acceptance: the semantic corpus passes in a third, lowered mode. The
+suspended-argument example resumes twice from each of two restored tapes with
+a collection after every transition. No lowered transition calls the record
+decoder; a test that deletes the IR structs' descriptors after lowering still
+runs the corpus.
+
+### 2. Drop the graph
+
+Make `prepare-function!` lower and release the IR. Prepare the base library
+and compiler in lowered form.
+
+Acceptance: `wisp-bench` gains a lowered mode. Report, per benchmark and
+against source and record modes: time, evaluator transitions, frame pushes,
+vector words, live heap, and collection time. The expectation to test is that
+lowered transitions cost about what source transitions cost while keeping
+record execution's 43% reduction in their number.
+
+### 3. Decide the next representation by measurement
+
+With those numbers, decide whether flat code, per-activation frames, an
+immutable code type, or none of them is worth building, and write that
+decision into this RFC. A change that needs a new heap type or run column
+updates the tape version and its validation in the same patch.
+
+### 4. Retire record execution or keep it as the reference
+
+Once lowered execution passes everything record execution does, decide
+whether the record executor stays as an executable comparison target or is
+removed. The IR, analyzer, and checker stay either way.
+
+## Open questions
+
+- Whether per-node checks are cheap enough, or a verified immutable code type
+  is needed.
+- Whether one frame per pending operation survives measurement, or
+  per-activation frames justify their copying and validation costs.
+- Whether shape B's gains in code size and collection time justify a program
+  counter in the run and resume-point validation in tapes.
+- How much of the source snapshot must be retained, and by whom.
