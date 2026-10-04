@@ -18,7 +18,7 @@ add_project_arguments(nxt_section_args, language : ['c', 'cpp'])
 
 if host_machine.system() == 'darwin'
   add_project_link_arguments('-Wl,-dead_strip', language : ['cpp'])
-else
+elif host_machine.system() != 'windows'
   add_project_link_arguments('-Wl,--gc-sections', language : ['cpp'])
 endif
 
@@ -54,12 +54,23 @@ if nxt_wand != 'auto'
     if host_machine.system() != 'linux'
       error(nxt_wand + ' requires Linux')
     endif
+  elif nxt_wand == 'iocp'
+    if host_machine.system() != 'windows'
+      error('iocp requires Windows/UWP')
+    endif
   elif host_machine.system() not in ['darwin', 'dragonfly', 'freebsd', 'netbsd', 'openbsd']
     error('kqueue requires BSD or macOS')
   endif
   nxt_wand_args = ['-DNXTRT_DEFAULT_WAND=' + nxt_wand + '_wand']
 endif
 message('Default Wand: ' + nxt_wand)
+
+# Windows currently builds the portable coroutine core and its UWP backend,
+# not the POSIX terminal/process/filesystem and CLI layers.
+if host_machine.system() == 'windows'
+  subdir('src/nxtrt/wand')
+  subdir_done()
+endif
 
 utf8proc_dep = dependency(
   'libutf8proc',

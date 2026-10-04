@@ -61,6 +61,10 @@ inline void signal_handler(int) noexcept
 /// Installs a process-wide handler for `signal` that requests a runtime
 /// dump. The handler only sets a flag; a deck prints the dump at its next
 /// round boundary. Replaces any existing handler for that signal.
+#if defined(_WIN32)
+/// UWP has no POSIX signal-triggered dumps; runtime_dump_text is still usable.
+inline void install_signal_dump() {}
+#else
 inline void install_signal_dump(int signal = SIGUSR1)
 {
     struct sigaction action {};
@@ -69,6 +73,7 @@ inline void install_signal_dump(int signal = SIGUSR1)
     action.sa_flags = SA_RESTART;
     ::sigaction(signal, &action, nullptr);
 }
+#endif
 
 /// Returns true once per received dump signal, clearing the request.
 [[nodiscard]] inline bool consume_signal_dump_request() noexcept

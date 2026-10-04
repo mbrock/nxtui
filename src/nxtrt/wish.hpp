@@ -135,16 +135,19 @@ inline auto no_args()
     return wish_args();
 }
 
-inline auto fd_args(int fd)
+template<typename Handle>
+inline auto fd_args(Handle fd)
 {
-    return wish_args(wish_arg{"fd", fd});
+    if constexpr (std::is_pointer_v<Handle>)
+        return wish_args(wish_arg{"fd", reinterpret_cast<std::uintptr_t>(fd)});
+    else
+        return wish_args(wish_arg{"fd", fd});
 }
 
-inline auto fd_bytes_args(int fd, std::size_t bytes)
+template<typename Handle>
+inline auto fd_bytes_args(Handle fd, std::size_t bytes)
 {
-    return wish_args(
-        wish_arg{"fd", fd},
-        wish_arg{"bytes", bytes});
+    return std::array{fd_args(fd)[0], wish_arg{"bytes", bytes}};
 }
 
 inline auto path_args(std::string const & path)

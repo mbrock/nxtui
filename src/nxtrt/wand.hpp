@@ -214,7 +214,8 @@ template<typename Wish>
 /// the task back on the deck.
 ///
 /// Shipped implementations are `uring_wand` (Linux io_uring), `epoll_wand`
-/// (Linux epoll, the Fil-C default), and `kqueue_wand` (macOS and BSD);
+/// (Linux epoll, the Fil-C default), `iocp_wand` (Windows/UWP), and
+/// `kqueue_wand` (macOS and BSD);
 /// `nxtrt::arch::wand` names the build's default. Each one also offers
 /// non-virtual `poll`, `wait`, and `run_until_done` loops that drive a deck.
 ///

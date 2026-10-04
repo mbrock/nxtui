@@ -29,7 +29,7 @@ computation that is coherent, checkable, and cheap at once. The vocabulary
 
 - [`nxtrt`][nxtrt] — the coroutine runtime: [tasks][nxtrt-task], the
   [deck][nxtrt-deck] scheduler, [wand][nxtrt-wand] I/O backends (%io_uring,
-  epoll, kqueue), structured groups over a bounded [pool][nxtrt-pool], byte
+  epoll, kqueue, Windows/UWP IOCP), structured groups over a bounded [pool][nxtrt-pool], byte
   streams, [files][nxtrt-fs], [HTTP][nxtrt-http]/[TLS][nxtrt-tls], and
   [subprocesses][nxtrt-subprocess].
 - [`nxtui`][nxtui] — terminal rendering: typed geometry, styled text, rasters,
@@ -61,6 +61,46 @@ meson compile -C build
 build/nxt-tests
 build/demo/nxt-tui-demo
 ```
+
+### Windows UWP / Xbox
+
+Cross-build the coroutine core and IOCP backend on x86_64 Linux with the
+[nixbox](https://github.com/mbrock/nixbox) flake's MSVC-ABI UWP toolchain:
+
+```sh
+nix build .#nxtrt-iocp
+```
+
+The package installs `nxtrt-iocp.lib`, `nxtrt` core headers,
+`nxtrt-iocp.pc`, and a cross-linked `bin/iocp-tests.exe` Windows test runner.
+Meson selects IOCP automatically on Windows (`-Ddefault_wand=iocp` can force
+it). This is a runtime-only port: POSIX terminal, process, filesystem, HTTP
+layers, and Wisp/CLI tools are not built by the Windows target.
+
+Include `<nxtrt/wand/iocp.hpp>` and call `nxtrt::run_with_iocp(factory)`, or
+attach `nxtrt::arch::wand` to a deck and use `poll(deck)` from a host event
+loop. Supported wishes are `manual`, monotonic `timeout`, file/byte-pipe
+`read_some`/`write_some`, socket `recv_some`/`send_some`, `connect` (ConnectEx),
+and `accept` (AcceptEx). Readiness `poll`/`poll_until` explicitly fail; race
+an actual I/O task with a timeout instead.
+
+On Windows, file wishes borrow native overlapped `HANDLE`s and socket wishes
+borrow pointer-width Winsock `SOCKET`s, not CRT descriptors. Disk operations
+require explicit offsets. The host initializes Winsock, opens handles with
+`FILE_FLAG_OVERLAPPED` / `WSA_FLAG_OVERLAPPED`, and closes them after all wishes
+finish. Call `wand.attach(handle)` once per freshly opened handle before I/O
+(accepted sockets are attached automatically). Reattaching fails, even to the
+same port; newly opened handles need attachment even if their numeric value
+was reused. A handle belongs to one wand's completion port; never enable
+`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`. Cancellation drains the operation
+packet before resuming, and successful I/O still wins a racing stop request.
+Failures use `std::system_error` with Windows/WSA codes. Tracing is host-enabled
+via `nxtrt::trace_enabled`; UWP has no environment-based tracing or SIGUSR1 dump.
+
+Apps still need nixbox's app-container packaging and appropriate manifest
+capabilities. The loopback test runner is for desktop Windows (or Wine), not
+an Xbox deployment: UWP loopback restrictions and console capabilities need
+validation in a packaged app on hardware. Run it from a writable directory.
 
 ## Repository map
 

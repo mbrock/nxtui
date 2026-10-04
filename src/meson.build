@@ -221,6 +221,8 @@ nxt_header_install_excludes = {
     'crypto.cpp',
     'format.cpp',
     'wand/kqueue.cpp',
+    'wand/iocp.cpp',
+    'wand/meson.build',
     'http-server.cpp',
     'tls.cpp',
   ],

@@ -28,6 +28,10 @@ namespace nxtrt {
 /// `yes`, or `on`.
 inline bool trace_env_enabled() noexcept
 {
+#if defined(_WIN32)
+    // UWP's CRT does not expose getenv. Hosts can set trace_enabled directly.
+    return false;
+#else
     auto const * raw = std::getenv("NXT_RT_TRACE");
     if (raw == nullptr)
         return false;
@@ -35,6 +39,7 @@ inline bool trace_env_enabled() noexcept
     auto value = std::string_view{raw};
     return value == "1" || value == "true" || value == "yes"
         || value == "on";
+#endif
 }
 
 /// Whether `trace()` writes; read from the environment at startup and

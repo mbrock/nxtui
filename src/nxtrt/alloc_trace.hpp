@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstdio>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 /**
  * @namespace nxtrt::alloc_trace
@@ -20,11 +22,16 @@ namespace nxtrt::alloc_trace {
 /// allocation paths where a getenv call per event dominated the cost.
 inline bool enabled() noexcept
 {
+#if defined(_WIN32)
+    // UWP's CRT has no process environment API.
+    return false;
+#else
     static const bool on = [] {
         auto const * value = std::getenv("NXT_ALLOC_TRACE");
         return value != nullptr && value[0] != '\0' && value[0] != '0';
     }();
     return on;
+#endif
 }
 
 /// Logs one allocation event if tracing is enabled: ACTION ("new", "del"
@@ -69,7 +76,11 @@ inline void event(
         if (len >= sizeof(line))
             len = sizeof(line) - 1;
         // Tracing is best effort: do not retry or allocate on this hot path.
+#if defined(_WIN32)
+        const auto written = std::fwrite(line, 1, len, stderr);
+#else
         const auto written = ::write(STDERR_FILENO, line, len);
+#endif
         (void)written;
     }
     tracing = false;

@@ -4,12 +4,14 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   inputs.filnix.url = "github:mbrock/filnix";
+  inputs.nixbox.url = "github:mbrock/nixbox";
 
   outputs =
     {
       self,
       nixpkgs,
       filnix,
+      nixbox,
     }:
     let
       systems = [
@@ -37,6 +39,9 @@
             filcPkgs.callPackage ./nix/package.nix {
               cryptoLibrary = filcPkgs.openssl;
             };
+        }
+        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          nxtrt-iocp = nixbox.legacyPackages.x86_64-linux.pkgsXbox.callPackage ./nix/iocp.nix { };
         }
       );
 
@@ -172,6 +177,9 @@
                 ./consumer
                 touch $out
               '';
+        }
+        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          inherit (self.packages.x86_64-linux) nxtrt-iocp;
         }
       );
 

@@ -65,7 +65,7 @@ take_poll_until_result(poll_until_outcomes & outcomes)
 /// rethrown; stopping the awaiting task throws `operation_cancelled`. Needs
 /// a deck with a wand.
 [[nodiscard]] inline task<poll_until_result> poll_until_after(
-    int fd,
+    socket_handle fd,
     short events,
     std::chrono::nanoseconds timeout)
 {

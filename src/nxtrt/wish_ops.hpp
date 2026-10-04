@@ -2,20 +2,32 @@
 
 #include "wish.hpp"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+#else
 #include "nxt/unique-fd.hpp"
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
 
 #include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstring>
-#include <fcntl.h>
 #include <memory>
-#include <poll.h>
 #include <span>
 #include <string>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -29,6 +41,24 @@
 #endif
 
 namespace nxtrt {
+
+#if defined(_WIN32)
+/// Native overlapped file/pipe handle; not a CRT descriptor.
+using io_handle = HANDLE;
+/// Native Winsock socket; never narrowed to an int.
+using socket_handle = SOCKET;
+using socket_length = int;
+using file_offset = std::int64_t;
+inline constexpr io_handle invalid_io_handle = nullptr;
+inline constexpr socket_handle invalid_socket_handle = INVALID_SOCKET;
+#else
+using io_handle = int;
+using socket_handle = int;
+using socket_length = socklen_t;
+using file_offset = off_t;
+inline constexpr io_handle invalid_io_handle = -1;
+inline constexpr socket_handle invalid_socket_handle = -1;
+#endif
 
 #if defined(__linux__)
 /// Seconds-plus-nanoseconds duration carried by timer wishes.
@@ -71,6 +101,7 @@ struct poll_until_result
 using statx_result = struct statx;
 #endif
 
+#if !defined(_WIN32)
 /// Exit status reported by the `wait_child` wish.
 ///
 /// `code` is the raw `siginfo_t::si_code`. `exited`/`exit_code` are set for
@@ -175,6 +206,7 @@ struct pty_child
         return master.get();
     }
 };
+#endif // !defined(_WIN32)
 
 namespace op {
 
@@ -197,6 +229,7 @@ struct manual : wish<void, "manual">
     }
 };
 
+#if !defined(_WIN32)
 /// Opens `path` relative to `dirfd` with openat(2); yields the new fd.
 ///
 /// The caller owns the returned descriptor. io_uring opens it in the
@@ -393,6 +426,7 @@ struct signal_child : wish<void, "signal-child">
             wish_arg{"signal", signal});
     }
 };
+#endif // !defined(_WIN32)
 
 /// Reads at most `buffer.size()` bytes from `fd`; yields the count read,
 /// zero at end of file.
@@ -403,14 +437,14 @@ struct signal_child : wish<void, "signal-child">
 /// for readiness only on `EAGAIN`.
 struct read_some : wish<std::size_t, "read">
 {
-    int fd = -1;
+    io_handle fd = invalid_io_handle;
     std::span<std::byte> buffer;
-    off_t offset = -1;
+    file_offset offset = -1;
 
     constexpr explicit read_some(
-        int fd = -1,
+        io_handle fd = invalid_io_handle,
         std::span<std::byte> buffer = {},
-        off_t offset = -1) noexcept
+        file_offset offset = -1) noexcept
         : fd(fd)
         , buffer(buffer)
         , offset(offset)
@@ -427,14 +461,14 @@ struct read_some : wish<std::size_t, "read">
 /// Offset, buffer lifetime, and `O_NONBLOCK` behave as for `read_some`.
 struct write_some : wish<std::size_t, "write">
 {
-    int fd = -1;
+    io_handle fd = invalid_io_handle;
     std::span<const std::byte> buffer;
-    off_t offset = -1;
+    file_offset offset = -1;
 
     constexpr explicit write_some(
-        int fd = -1,
+        io_handle fd = invalid_io_handle,
         std::span<const std::byte> buffer = {},
-        off_t offset = -1) noexcept
+        file_offset offset = -1) noexcept
         : fd(fd)
         , buffer(buffer)
         , offset(offset)
@@ -450,12 +484,12 @@ struct write_some : wish<std::size_t, "write">
 /// when the peer has shut down.
 struct recv_some : wish<std::size_t, "recv">
 {
-    int fd = -1;
+    socket_handle fd = invalid_socket_handle;
     std::span<std::byte> buffer;
     int flags = 0;
 
     constexpr explicit recv_some(
-        int fd = -1,
+        socket_handle fd = invalid_socket_handle,
         std::span<std::byte> buffer = {},
         int flags = 0) noexcept
         : fd(fd)
@@ -472,12 +506,12 @@ struct recv_some : wish<std::size_t, "recv">
 /// send(2) on socket `fd` with `flags`; yields the count sent.
 struct send_some : wish<std::size_t, "send">
 {
-    int fd = -1;
+    socket_handle fd = invalid_socket_handle;
     std::span<const std::byte> buffer;
     int flags = 0;
 
     constexpr explicit send_some(
-        int fd = -1,
+        socket_handle fd = invalid_socket_handle,
         std::span<const std::byte> buffer = {},
         int flags = 0) noexcept
         : fd(fd)
@@ -499,14 +533,14 @@ struct send_some : wish<std::size_t, "send">
 /// the final `SO_ERROR` as an `errno_error`.
 struct connect : wish<void, "connect">
 {
-    int fd = -1;
+    socket_handle fd = invalid_socket_handle;
     sockaddr_storage address{};
-    socklen_t address_size = 0; // NOLINT(misc-include-cleaner)
+    socket_length address_size = 0;
 
     constexpr explicit connect(
-        int fd = -1,
+        socket_handle fd = invalid_socket_handle,
         sockaddr_storage address = {},
-        socklen_t address_size = 0) noexcept
+        socket_length address_size = 0) noexcept
         : fd(fd)
         , address(address)
         , address_size(address_size)
@@ -518,11 +552,11 @@ struct connect : wish<void, "connect">
     }
 
     static connect from(
-        int fd,
+        socket_handle fd,
         sockaddr const * address,
-        socklen_t address_size)
+        socket_length address_size)
     {
-        if (address_size > sizeof(sockaddr_storage))
+        if (static_cast<std::size_t>(address_size) > sizeof(sockaddr_storage))
             throw runtime_error{"connect address is too large"};
 
         auto op = connect{fd, {}, address_size};
@@ -542,12 +576,13 @@ struct connect : wish<void, "connect">
 /// it immediately and should wrap it in an RAII file descriptor type.
 /// `flags` are accept4(2) flags such as `SOCK_CLOEXEC`; the epoll wand
 /// always adds `SOCK_CLOEXEC | SOCK_NONBLOCK`.
-struct accept : wish<int, "accept">
+struct accept : wish<socket_handle, "accept">
 {
-    int fd = -1;
+    socket_handle fd = invalid_socket_handle;
     int flags = 0;
 
-    constexpr explicit accept(int fd = -1, int flags = 0) noexcept
+    constexpr explicit accept(
+        socket_handle fd = invalid_socket_handle, int flags = 0) noexcept
         : fd(fd)
         , flags(flags)
     {}
@@ -567,10 +602,11 @@ struct accept : wish<int, "accept">
 /// time, since kqueue keys registrations by fd and filter.
 struct poll : wish<int, "poll">
 {
-    int fd = -1;
+    socket_handle fd = invalid_socket_handle;
     short events = 0;
 
-    constexpr explicit poll(int fd = -1, short events = 0) noexcept
+    constexpr explicit poll(
+        socket_handle fd = invalid_socket_handle, short events = 0) noexcept
         : fd(fd)
         , events(events)
     {}
@@ -615,12 +651,12 @@ struct timeout : wish<void, "timeout">
 /// `runtime_error`.
 struct poll_until : wish<poll_until_result, "poll-until">
 {
-    int fd = -1;
+    socket_handle fd = invalid_socket_handle;
     short events = 0;
     kernel_timespec timeout{};
 
     constexpr explicit poll_until(
-        int fd = -1,
+        socket_handle fd = invalid_socket_handle,
         short events = 0,
         kernel_timespec timeout = {}) noexcept
         : fd(fd)
@@ -636,7 +672,7 @@ struct poll_until : wish<poll_until_result, "poll-until">
     }
 
     static poll_until after(
-        int fd,
+        socket_handle fd,
         short events,
         std::chrono::nanoseconds timeout)
     {
@@ -652,6 +688,7 @@ struct poll_until : wish<poll_until_result, "poll-until">
 /// backend, so a new wish type must be listed here.
 using wish_variant = std::variant<
     op::manual,
+#if !defined(_WIN32)
     op::openat,
 #if defined(__linux__)
     op::openat2,
@@ -662,6 +699,7 @@ using wish_variant = std::variant<
     op::spawn_pty,
     op::wait_child,
     op::signal_child,
+#endif
     op::read_some,
     op::write_some,
     op::recv_some,

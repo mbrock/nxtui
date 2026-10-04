@@ -760,6 +760,58 @@ model runtime-model
               in (a has-lifecycle) retired-state
               == (a delivered-result) success-result
 
+  // IOCP has one operation packet, not a separate cancel CQE. CancelIoEx
+  // leaves the exec parked/cancelling (and keeps OVERLAPPED + buffer alive).
+  // Only dequeueing that packet settles it, directly ready to retire.
+  // Timers and pre-submission stops have no kernel packet and are queued.
+  predicate iocp-transitions
+    all ([a exec])
+      no (intersect (a has-settled-phase) draining-phase)
+      (=> (block
+            (in (a has-lifecycle) parked-state)
+            (some (intersect (a has-parked-phase) (union submitted-phase cancelling-phase)))
+            (next-state (in (a has-lifecycle) settled-state)))
+          (some (a operation-result)))
+
+  predicate iocp-retains-until-packet
+    all ([a exec])
+      (=> (block
+            (in (a has-lifecycle) parked-state)
+            (some (intersect (a has-parked-phase) (union submitted-phase cancelling-phase)))
+            (no (a operation-result)))
+          (next-state (in (a has-lifecycle) parked-state)))
+
+  check iocp-storage-waits-for-packet :for ([1 exec wish task prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase success-result cancellation-result] [0 deck pool]) :trace-length 6
+    assume execs-start-prepared
+    assume always structural-invariants
+    assume always lifecycle-transitions
+    assume always iocp-transitions
+    show always iocp-retains-until-packet
+
+  run iocp-cancel-completion-witness :for ([1 exec wish task prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase success-result cancellation-result] [0 deck pool]) :trace-length 7
+    execs-start-prepared
+    always structural-invariants
+    always lifecycle-transitions
+    always iocp-transitions
+    always completion-delivery
+    some ([a exec])
+      next-state
+        in (a has-lifecycle) parked-state
+        == (a has-parked-phase) submitted-phase
+        no (a operation-result)
+        next-state
+          == (a has-parked-phase) cancelling-phase
+          no (a operation-result)
+          next-state
+            == (a has-parked-phase) cancelling-phase
+            == (a operation-result) success-result
+            next-state
+              in (a has-lifecycle) settled-state
+              == (a has-settled-phase) ready-to-retire-phase
+              == (a delivered-result) success-result
+              next-state
+                in (a has-lifecycle) retired-state
+
   check lifecycle-can-complete :for ([1 deck pool wish exec prepared-state parked-state settled-state retired-state queued-phase submitted-phase cancelling-phase ready-to-retire-phase draining-phase] [2 task]) :trace-length 6 :expect sat
     assume execs-start-prepared
     assume always structural-invariants
