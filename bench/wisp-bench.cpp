@@ -142,28 +142,19 @@ const auto cases = std::to_array<benchmark>({
      "not-found"},
 });
 
-// How benchmark code runs. Source mode interprets everything. Prepared
+// How benchmark code runs. Source mode interprets everything. Lowered
 // mode loads the compiler and evaluates each benchmark definition through
-// PREPARED-EVAL, so benchmark functions run as IR while the base library
-// stays interpreted. Prepared-library mode also prepares every function in
-// the WISP package first: the base library, the compiler, and the rest.
-enum class mode {
-    source,
-    prepared,
-    prepared_library,
-    lowered,
-    lowered_library
-};
+// LOWERED-EVAL, so benchmark functions run as compact code while the base
+// library stays interpreted. Lowered-library mode also lowers every
+// function in the WISP package first: the base library, the compiler, and
+// the rest.
+enum class mode { source, lowered, lowered_library };
 
 constexpr std::string_view mode_name(mode m)
 {
     switch (m) {
     case mode::source:
         return "source";
-    case mode::prepared:
-        return "prepared";
-    case mode::prepared_library:
-        return "prepared-library";
     case mode::lowered:
         return "lowered";
     case mode::lowered_library:
@@ -221,17 +212,16 @@ struct runner
         } while (status == evaluation::runnable);
     }
 
-    // Prepare each top-level form outside the evaluator timing. Words are
+    // Lower each top-level form outside the evaluator timing. Words are
     // not roots: intern the symbol again after each form's collections.
-    void load_prepared(std::string_view text, bool lowered)
+    void load_lowered(std::string_view text)
     {
         reader input{h, vm, text};
         while (auto form = input.next()) {
             const auto quoted =
                 h.cons(vm.known("QUOTE"), h.cons(*form, nil));
-            const auto prepare =
-                vm.intern(lowered ? "LOWERED-EVAL" : "PREPARED-EVAL");
-            root run{h, vm.start(h.cons(prepare, h.cons(quoted, nil)))};
+            const auto lower = vm.intern("LOWERED-EVAL");
+            root run{h, vm.start(h.cons(lower, h.cons(quoted, nil)))};
             evaluate(run);
         }
     }
@@ -308,12 +298,9 @@ void run(const benchmark & b, mode m, unsigned iterations, unsigned warmup)
         r.load(b.setup);
     } else {
         r.load(compiler_library());
-        if (m == mode::prepared_library)
-            r.load("(prepare-package! (find-package \"WISP\"))");
         if (m == mode::lowered_library)
             r.load("(lower-package! (find-package \"WISP\"))");
-        r.load_prepared(
-            b.setup, m == mode::lowered || m == mode::lowered_library);
+        r.load_lowered(b.setup);
     }
     if (warmup) {
         root run{r.h, r.vm.start(r.invocation(b, warmup))};
@@ -416,14 +403,7 @@ int main(int argc, char ** argv)
 {
     try {
         auto m = mode::source;
-        if (argc > 1 && std::string_view{argv[1]} == "--prepared") {
-            m = mode::prepared;
-            --argc, ++argv;
-        } else if (
-            argc > 1 && std::string_view{argv[1]} == "--prepared-library") {
-            m = mode::prepared_library;
-            --argc, ++argv;
-        } else if (argc > 1 && std::string_view{argv[1]} == "--lowered") {
+        if (argc > 1 && std::string_view{argv[1]} == "--lowered") {
             m = mode::lowered;
             --argc, ++argv;
         } else if (
@@ -433,7 +413,7 @@ int main(int argc, char ** argv)
         }
         if (argc > 4)
             throw std::runtime_error(
-                "usage: wisp-bench [--prepared|--prepared-library|--lowered|--lowered-library] "
+                "usage: wisp-bench [--lowered|--lowered-library] "
                 "[all|NAME|--list] [ITERATIONS [WARMUP]]");
         const std::string_view selection = argc > 1 ? argv[1] : "all";
         bool matched = false;

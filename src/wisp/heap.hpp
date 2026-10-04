@@ -47,13 +47,6 @@ public:
         return era_;
     }
 
-    /// Counts collections. Unlike the era bit, it never repeats, so a host
-    /// cache keyed by guest words can tell when its keys may have moved.
-    std::uint64_t epoch() const noexcept
-    {
-        return epoch_;
-    }
-
     /// The caller owns the counters and must detach them before
     /// destruction. No per-operation recording or pointer test in
     /// non-profile builds.
@@ -251,7 +244,6 @@ private:
     word next_pin_ = 1;
     root * roots_ = nullptr;
     bool era_ = false;
-    std::uint64_t epoch_ = 0;
     std::size_t frozen_ktx_ = 0;
     externals host_;
     profile * profile_ = nullptr;

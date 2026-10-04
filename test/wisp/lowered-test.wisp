@@ -147,10 +147,54 @@
     (if (eq? n 0) nil (lower-cross-even? (- n 1))))
   (expect-equal (lower-cross-even? 10) t)
   (expect-equal (lower-cross-even? 7) nil)
-  (expect-equal (lower-cross-odd? 7) t)
-  (prepare-function! #'lower-cross-odd?)
-  (expect-equal (lower-cross-even? 7) nil)
   (expect-equal (lower-cross-odd? 7) t))
+
+(defun frame-operations (k limit)
+  (if (or (top? k) (eq? limit 0)) nil
+    (let ((description (%code-operation (ktx-fun k))))
+      (cons (if description (head description) (type-of (ktx-fun k)))
+            (frame-operations (ktx-hop k) (- limit 1))))))
+
+(deftest "mixed lowered and source tail calls stay flat in both directions"
+  (defun mixed-frames-here () (frame-operations (get/cc) 100))
+  (defun lowered-down (n)
+    (if (eq? n 0) (mixed-frames-here) (source-down (- n 1))))
+  (lower-function! #'lowered-down)
+  (defun source-down (n)
+    (if (eq? n 0) (mixed-frames-here) (lowered-down (- n 1))))
+  (expect-equal (lowered-down 4) (lowered-down 4000)))
+
+(deftest "each pending lowered call keeps one frame"
+  (defun nest-frames-here () (frame-operations (get/cc) 100))
+  (defun nest (n)
+    (if (eq? n 0) (nest-frames-here) (head (list (nest (- n 1))))))
+  (lower-function! #'nest)
+  ;; Each level waits in two calls, HEAD and LIST.
+  (expect-equal (- (length (filter (nest 5) (fn (x) (eq? x :call))))
+                   (length (filter (nest 2) (fn (x) (eq? x :call)))))
+                6))
+
+(deftest "lowered assignment reaches globals"
+  (defvar *lowered-counter* 0)
+  (lowered-eval '(set! *lowered-counter* (+ *lowered-counter* 5)))
+  (expect-equal *lowered-counter* 5))
+
+(deftest "a source escape runs in the lowered scope"
+  (let* ((node (analyze '(let ((x 41)) x)))
+         (x (vector-get (ir-let-bindings node) 0)))
+    (set-ir-let-body! node (make-ir-source '(+ x 1) (list x)))
+    (expect-equal (eval (lower node)) 42)))
+
+(deftest "a lowered LET binds duplicate names like source LET"
+  (expect-equal (lowered-eval '(let ((x 1) (x 2)) x)) 2)
+  (expect-equal (lowered-eval '(call (fn (x x) x) 1 2)) 1))
+
+(deftest "semantic records and other structs are not expressions"
+  (defstruct point x y)
+  (expect-equal (condition-type (fn () (eval (make-point 1 2))))
+                'invalid-expression)
+  (expect-equal (condition-type (fn () (eval (analyze '(+ 1 2)))))
+                'invalid-expression))
 
 (deftest "unsupported special forms lower through the source operation"
   (let* ((source-op
@@ -198,6 +242,15 @@
   (let ((package (find-package "WISP")))
     (expect (> (lower-package! package) 200))
     (expect-equal (map (fn (x) (* x x)) '(1 2 3)) '(1 4 9))
+    (expect-equal (filter '(1 2 3 4) (fn (x) (eq? 0 (mod x 2)))) '(2 4))
+    (expect-equal (try (error 'boom 1) (catch (e k) (type-of e))) 'boom)
+    (expect-equal (call-with-effect-handler 'ask
+                    (fn () (+ (send! 'ask 2) (send! 'ask 3)))
+                    (fn (request resume raise) (call resume (* request 10))))
+                  50)
+    (defstruct pair-of left right)
+    (expect-equal (pair-of-right (make-pair-of 1 2)) 2)
+    (expect-equal `(a ,(+ 1 2) ,@(list 4 5)) '(a 3 4 5))
     (expect-equal (lowered-eval '(let ((x 2)) (* x 21))) 42)
     (expect (> (lower-package! package) 200))
     (expect-equal (lowered-eval '(let ((x 3)) (+ x 4))) 7)))

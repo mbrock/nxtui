@@ -53,42 +53,6 @@ static suite compiler_tests{
                 "(T NIL T T (N Y) T)");
         };
 
-        "a prepared call suspended between arguments resumes from tapes"_test =
-            [] {
-                source_machine m{compiler_image()};
-                m.load(R"((defvar saved nil)
-                          (defvar program
-                            (analyze
-                             '(call-with-prompt 'pause
-                                (fn ()
-                                  (let ((x 0))
-                                    (list (do (set! x (+ x 1)) x)
-                                          (send! 'pause)
-                                          (do (set! x (+ x 1)) x))))
-                                (fn (v k) (set! saved k) 'paused)))))");
-                // Run the prepared program with a collection between every
-                // transition, then save the machine before any resumption.
-                m.check(R"((eval program))", "PAUSED");
-                expect(m.load("(eval program)", 1) != nil);
-                const auto saved = tape::encode(m.vm);
-                // Each restored copy is its own machine: resuming twice
-                // inside one shares its lexical store, and copies never
-                // share theirs.
-                for (int copy = 0; copy < 2; ++copy) {
-                    source_machine restored{tape::decode(saved)};
-                    expect(
-                        print(
-                            restored.h,
-                            restored.load(
-                                "(list (call saved 10) (call saved 20))",
-                                1))
-                        == "((1 10 2) (1 20 3))");
-                }
-                m.check(
-                    "(list (call saved 10) (call saved 20))",
-                    "((1 10 2) (1 20 3))");
-            };
-
         "a lowered call suspended between arguments resumes from tapes"_test =
             [] {
                 source_machine m{compiler_image()};
@@ -152,55 +116,30 @@ static suite compiler_tests{
                     "((1 10 2) (1 20 3))");
             };
 
-        "lowered code releases IR bindings and needs no descriptors"_test =
-            [] {
-                source_machine m{compiler_image()};
-                m.load(R"((defvar graph
+        "lowered code releases IR bindings"_test = [] {
+            source_machine m{compiler_image()};
+            m.load(R"((defvar graph
                         (analyze '(let ((x 41)) (fn (y) (+ x y)))))
                       (defvar program (lower graph)))");
-                const auto bindings = [&] {
-                    const auto descriptor = m.h.get<tag::sym, field::val>(
-                        m.vm.intern("<IR-BINDING>"));
-                    std::size_t count = 0;
-                    for (word i = 0; i < m.h.table<tag::rec>().size();
-                         ++i) {
-                        const auto xs = m.h.words<tag::rec>(
-                            pointer(tag::rec, i, m.h.era()));
-                        if (!xs.empty() && xs[0] == descriptor)
-                            ++count;
-                    }
-                    return count;
-                };
-                expect(
-                    bindings() == 2u); // One LET and one parameter binder.
-                m.load("(set! graph nil)");
-                m.h.collect();
-                expect(bindings() == 0u);
-                // Make all IR descriptors unrecognizable to the record
-                // decoder. The source base library and code inspection
-                // still work.
-                for (auto name :
-                     {"BINDING",
-                      "REFERENCE",
-                      "LOOKUP",
-                      "FUNCTION-REFERENCE",
-                      "CONSTANT",
-                      "ASSIGNMENT",
-                      "CALL",
-                      "BRANCH",
-                      "SEQUENCE",
-                      "LET",
-                      "FUNCTION",
-                      "PARAMETERS",
-                      "CLOSURE",
-                      "SOURCE"}) {
-                    const auto descriptor = m.h.get<tag::sym, field::val>(
-                        m.vm.intern(std::string{"<IR-"} + name + ">"));
-                    m.h.set_word<tag::rec>(descriptor, 1, nil);
+            const auto bindings = [&] {
+                const auto descriptor = m.h.get<tag::sym, field::val>(
+                    m.vm.intern("<IR-BINDING>"));
+                std::size_t count = 0;
+                for (word i = 0; i < m.h.table<tag::rec>().size(); ++i) {
+                    const auto xs = m.h.words<tag::rec>(
+                        pointer(tag::rec, i, m.h.era()));
+                    if (!xs.empty() && xs[0] == descriptor)
+                        ++count;
                 }
-                m.check("(call (eval program) 1)", "42");
-                m.check("(head (code-show program))", ":LET");
+                return count;
             };
+            expect(bindings() == 2u); // One LET and one parameter binder.
+            m.load("(set! graph nil)");
+            m.h.collect();
+            expect(bindings() == 0u);
+            m.check("(call (eval program) 1)", "42");
+            m.check("(head (code-show program))", ":LET");
+        };
     }};
 
 } // namespace

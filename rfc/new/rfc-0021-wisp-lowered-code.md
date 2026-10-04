@@ -1,8 +1,9 @@
 # RFC 0021: Wisp Lowered Code {#rfc_wisp_lowered_code}
 
-Status: compact-node lowering and execution implemented, opt-in. Source and
-record execution remain available as references. Flat code, per-activation
-frames, immutable code, and retiring record execution remain deferred.
+Status: compact-node lowering and execution implemented, opt-in. Record
+execution is retired (stage 4); source execution is the reference. A native
+profile motivates an immutable, checked-once code type next. Flat code and
+per-activation frames remain deferred.
 
 ## Proposal
 
@@ -269,8 +270,7 @@ that would justify them.
 
 ## Installing and inspecting
 
-The implementation keeps `prepare-function!` in record mode for comparisons,
-and adds the opt-in `lower-function!`: analyze, check, lower, install the code
+The implementation adds the opt-in `lower-function!`: analyze, check, lower, install the code
 object, and drop the graph. `lower-package!` does the same for a package;
 `lowered-eval` lowers one source form. `analyze` and `ir-show` are unchanged,
 and a caller that wants the IR keeps it by holding the result of `analyze`.
@@ -295,7 +295,7 @@ execution.
 
 Declare the operations in C++ and expose their description. Write the lowering
 pass in Wisp over checked IR. Execute nodes in the evaluator, with the
-record executor left in place for comparison.
+record executor left in place for comparison (since retired, stage 4).
 
 Acceptance: the semantic corpus passes in a third, lowered mode. The
 suspended-argument example resumes twice from each of two restored tapes with
@@ -305,8 +305,8 @@ runs the corpus.
 
 ### 2. Drop the graph — implemented with opt-in installation
 
-`lower-function!` lowers and releases the IR; `prepare-function!` remains the
-record reference. The base library and compiler run lowered, including a
+`lower-function!` lowers and releases the IR; `prepare-function!` remained the
+record reference until stage 4. The base library and compiler run lowered, including a
 second pass lowering the compiler with the lowered compiler itself.
 
 Acceptance: `wisp-bench` gains a lowered mode. Report, per benchmark and
@@ -322,11 +322,19 @@ immutable code type, or none of them is worth building, and write that
 decision into this RFC. A change that needs a new heap type or run column
 updates the tape version and its validation in the same patch.
 
-### 4. Retire record execution or keep it as the reference
+### 4. Retire record execution — implemented
 
-Once lowered execution passes everything record execution does, decide
-whether the record executor stays as an executable comparison target or is
-removed. The IR, analyzer, and checker stay either way.
+Lowered execution passes everything record execution did, and the record
+executor is removed: `prepared-eval`, `prepare-function!`,
+`prepare-package!`, the descriptor layout cache, and the `prepared`
+benchmark modes. The IR, analyzer, and checker stay. Source interpretation
+is the semantic reference; the corpus runs every case in source and lowered
+modes. Evaluating a semantic record now signals `invalid-expression`.
+
+Keeping record execution meant keeping a native decoder for guest-defined
+struct layouts: it found slot positions by name in each descriptor and
+cached them in a table invalidated at every collection, since collection
+moves descriptors. Nothing else needs that machinery.
 
 ## First compact-node measurements and decision
 
@@ -371,10 +379,51 @@ counts make that a candidate, not proof of its CPU share. These measurements
 do not yet justify activation-wide copy costs, a PC/run-schema change, an
 immutable code type, or sacrificing source inspection.
 
+## Native profile
+
+A `perf` profile of release builds (Clang 23.1, frame pointers, pinned to
+one CPU) after the measurements above answers the question they left open.
+This was a different, faster machine: TAK takes about 33 ms in source mode.
+
+The interpreter is bound by instruction count, not memory or branches: about
+3.6 instructions per cycle with few branch misses. Subtracting setup, one TAK
+run costs:
+
+| Mode | Transitions | Instructions/transition | Cycles/transition |
+| --- | ---: | ---: | ---: |
+| Source | 1.46 M | 366 | 100 |
+| Lowered library | 0.83 M | 698 | 177 |
+
+Both take about 146.5 M cycles per run. Lowering removes 43% of transitions,
+and each remaining one costs almost twice as much.
+
+Most of the difference is the per-node check. `lowered_operation` validates
+every operand of a node, including whether each child node is code, every
+time the node is dispatched: from `once`, from `immediate` for each argument,
+and from `proceed_lowered`. It was about 20% of lowered self time. An
+unrolled, schema-derived check that left children to be checked on entry
+gained only about 1%, because the call itself, not the loop, is the cost.
+Checking only the opcode, which is unsafe and was measured only as a bound,
+made lowered-library TAK 0.79× source, DIVITER 0.84×, and backquote 0.88×,
+about 20% faster than checked lowered code.
+
+The checks cannot simply go: code nodes are ordinary records, so `RECORD`
+can fabricate them and `RECORD-SET!` can change them after any check, and
+release builds do not bounds-check heap accessors. Hence the decision below.
+
+`evaluator::step` is also 19–32% of self time in both modes: each transition
+reads and writes the six-column run row, checks `status` several times, and
+enters a `try`. Separately, the Nix development shell's hardening flags and
+semantic interposition in `libnxt-core.so` cost about 10% in both modes
+equally.
+
+**Make code nodes valid by construction.** Guests may not create or mutate
+records with a code opcode through `RECORD` or `RECORD-SET!`; a native
+constructor checks shape once, tape decoding checks restored code, and
+dispatch reads only the opcode.
+
 ## Open questions
 
-- Whether per-node checks are cheap enough, or a verified immutable code type
-  is needed.
 - Whether one frame per pending operation survives measurement, or
   per-activation frames justify their copying and validation costs.
 - Whether shape B's gains in code size and collection time justify a program

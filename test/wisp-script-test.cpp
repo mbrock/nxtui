@@ -152,7 +152,7 @@ void declare_file(const std::filesystem::path & file)
                 });
         };
         if (slow)
-            // Whole-library preparation/lowering collects at every test
+            // Whole-library lowering collects at every test
             // quantum; give slow integration cases a separate deadline.
             test_case{name}.slow().with_timeout(std::chrono::seconds{30}) =
                 run;

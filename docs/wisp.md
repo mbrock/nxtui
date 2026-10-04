@@ -174,9 +174,10 @@ Lowering is opt-in:
 
 `lower-function!` preserves closure identity and its captured environment;
 `lower-package!` lowers the ordinary functions named in a package and returns
-their count. `prepare-function!`, `prepare-package!`, and `prepared-eval`
-retain the semantic-record execution mode as a reference for comparisons.
-`lower` accepts the same optional scope as `ir-check`.
+their count. `lower` accepts the same optional scope as `ir-check`. Semantic
+records themselves are analysis data, not code: evaluating one signals
+`invalid-expression`, and source interpretation is the semantic reference
+that lowered execution is tested against.
 
 Lowered code keeps no analysis bindings or owner links. Its operation numbers
 and operand kinds come from the native schema exposed by `code-operations`.
@@ -191,7 +192,7 @@ callee resolved before the arguments started. `ktx-fun`, `ktx-arg`, and
 `ktx-acc` expose the raw node, cursor, and progress. Resumptions copy progress
 but share lexical locations, just as source execution does.
 
-As in record execution, macros expand at preparation time and syntax is
+Macros expand when code is lowered, and syntax is
 snapshotted; changing source conses returned by `code` does not change lowered
 instructions. Function cells and global values remain live. `set-code!`
 with a source form restores source execution; existing suspended work retains

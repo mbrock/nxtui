@@ -39,14 +39,14 @@ in any build directory, including debug builds. JSON records carry build type,
 compiler, build-time Git revision (with `-dirty` when appropriate), and GC policy.
 An archive without Git reports `unknown`, not a guessed revision.
 
-Arguments are `[--prepared|--prepared-library|--lowered|--lowered-library] [all|NAME|--list]
+Arguments are `[--lowered|--lowered-library] [all|NAME|--list]
 [ITERATIONS [WARMUP]]`. By default everything is source-interpreted.
-`--prepared` loads the guest compiler and evaluates each benchmark
-definition through `PREPARED-EVAL`, so benchmark functions run as RFC 0020
-IR while the base library stays interpreted; `--prepared-library` also
-prepares every function in the `WISP` package first. `--lowered` and
-`--lowered-library` do the corresponding work with RFC 0021's compact code,
-without retaining the analysis graphs. The compiler/library transformation
+`--lowered` loads the guest compiler and evaluates each benchmark
+definition through `LOWERED-EVAL`, so benchmark functions run as RFC 0021
+compact code while the base library stays interpreted; `--lowered-library`
+also lowers every function in the `WISP` package first. Lowering does not
+retain the analysis graphs. (The 2026-10-04 results also include the
+since-retired `prepared` record-execution modes.) The compiler/library transformation
 is outside the execution clock. Records carry the
 `mode`. Counts must be positive
 31-bit fixnums; warmup may be zero. Default counts match `core/benchmark.zig`:
@@ -78,7 +78,7 @@ concurrently):
 ```sh
 taskset -c 2 python3 scripts/wisp-bench --samples 5 --benchmarks all \
   --runtimes cpp --build-dir build/wisp-release \
-  --wisp-modes source,prepared,prepared-library,lowered,lowered-library \
+  --wisp-modes source,lowered,lowered-library \
   --output build/wisp-modes.jsonl
 ```
 

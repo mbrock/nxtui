@@ -1,5 +1,9 @@
 # Compact lowered code: first measurements
 
+> Record execution (the "Record" columns and the `prepared` modes) was
+> retired after these measurements; see RFC 0021's native profile. The raw
+> data remain as recorded.
+
 Measured at [626484a](https://github.com/mbrock/nxtui/commit/626484af31129089d838fd19ee992faec193ea97),
 2026-10-04. This is RFC 0021's compact-node implementation, not a flat
 instruction-stream VM. All **500 timing samples** and **100 diagnostic

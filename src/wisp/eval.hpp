@@ -40,17 +40,6 @@ inline constexpr auto known_names = std::to_array<std::string_view>({
     "UNHANDLED-ERROR",
     // Data markers.
     "STRING-INPUT-STREAM",
-    // The compiler's semantic records (compiler.wisp) and their slots,
-    // which prepared execution finds by name. FUNCTION, BINDING, and
-    // SYMBOL are listed above.
-    "STRUCT-TYPE", "IR-CONSTANT", "IR-LOOKUP", "IR-REFERENCE",
-    "IR-FUNCTION-REFERENCE", "IR-ASSIGNMENT", "IR-CALL", "IR-BRANCH",
-    "IR-SEQUENCE", "IR-LET", "IR-CLOSURE", "IR-FUNCTION", "IR-PARAMETERS",
-    "IR-BINDING", "IR-SOURCE",
-    "VALUE", "TARGET", "CALLEE", "ARGUMENTS", "TEST", "CONSEQUENT",
-    "ALTERNATIVE", "FORMS", "BINDINGS", "INITIALIZERS", "BODY", "NAME",
-    "PARAMETERS", "REQUIRED", "OPTIONAL", "REST", "SOURCE", "FORM", "SCOPE",
-    "OWNER", "DEPTH", "INDEX",
 });
 
 /// A position in `known_names`, found at compile time.
@@ -181,18 +170,6 @@ private:
     std::array<root, known_names.size()> known_;
     bool collect_ = false;
 
-    // Where prepared execution finds each slot of an IR node type, keyed
-    // by DEFSTRUCT descriptor. Valid only for the heap epoch it was built
-    // in, since collection moves descriptors.
-    struct ir_layout
-    {
-        word descriptor = nil;
-        std::uint8_t kind = 0;
-        std::array<std::uint8_t, 5> at{};
-    };
-    // Direct-mapped by descriptor word; NIL marks an empty entry.
-    std::array<ir_layout, 64> ir_layouts_{};
-    std::uint64_t ir_layout_epoch_ = 0;
     // Host-independent fresh keys: unique within this evaluator, not
     // Zig's date/random names or a portable identity across images.
     std::uint64_t next_key_ = 0;

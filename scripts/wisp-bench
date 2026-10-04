@@ -33,13 +33,13 @@ def main():
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--benchmarks", default=",".join(PROGRAMS), help="comma-separated names, or all")
     parser.add_argument("--runtimes", default="cpp,zig,python,node,c,racket,sbcl")
-    parser.add_argument("--wisp-modes", default="source", help="C++ modes: source,prepared,prepared-library,lowered,lowered-library")
+    parser.add_argument("--wisp-modes", default="source", help="C++ modes: source,lowered,lowered-library")
     parser.add_argument("--output", type=Path, help="JSONL samples + environment (default: build dir/wisp-results.jsonl)")
     args = parser.parse_args()
     if args.samples < 1:
         parser.error("samples must be positive")
     modes = args.wisp_modes.split(",")
-    if set(modes) - {"source", "prepared", "prepared-library", "lowered", "lowered-library"} or len(set(modes)) != len(modes):
+    if set(modes) - {"source", "lowered", "lowered-library"} or len(set(modes)) != len(modes):
         parser.error("unknown or duplicate Wisp mode")
     args.build_dir = args.build_dir.resolve()
     cpp = args.build_dir / "bench/wisp-bench"

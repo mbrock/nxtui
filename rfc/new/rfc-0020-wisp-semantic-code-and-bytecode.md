@@ -1,14 +1,15 @@
 # RFC 0020: Wisp Semantic Code and Bytecode {#rfc_wisp_semantic_code}
 
-Status: stages 0 through 2 are implemented. The compiler
-(`src/wisp/compiler.wisp`), the graph checker, and record execution in the
-evaluator exist and are tested, and the base library runs prepared. The
-live-code operations of stage 3 exist in part (`prepare-function!`,
-`prepare-package!`, source snapshots, `SET-CODE!`).
-@ref rfc_wisp_lowered_code "RFC 0021" now implements compact-node lowering
-and execution from these measurements, with `lower-function!` as an opt-in
-installation path. The flat instruction-stream VM and later stages below
-remain unimplemented.
+Status: stages 0 through 2 were implemented. The compiler
+(`src/wisp/compiler.wisp`) and the graph checker exist and are tested.
+Record execution, stage 2, served its purpose and has been retired: the
+evaluator no longer executes semantic records, which are now analysis data
+that @ref rfc_wisp_lowered_code "RFC 0021" lowers into compact executable
+nodes. The live-code operations of stage 3 exist through lowering
+(`lower-function!`, `lower-package!`, source snapshots, `SET-CODE!`). The
+sections below describing prepared execution record the design as it was
+built and measured. The flat instruction-stream VM and later stages remain
+unimplemented.
 
 ## Proposal
 

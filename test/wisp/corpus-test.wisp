@@ -1,5 +1,5 @@
 ;; -*- mode: wisp; fill-column: 64; -*-
-;;; Semantic corpus for source, prepared IR, and lowered execution.
+;;; Semantic corpus for source and lowered execution.
 ;;
 ;; Each case is a small program, a list of top-level forms, with
 ;; the value of its last form under source interpretation. Every
@@ -7,60 +7,34 @@
 ;; leak between cases. Each execution mode runs the same cases
 ;; under its own contract.
 ;;
-;; Where RFC 0020's liveness contract deliberately makes prepared
-;; code differ, a case also gives the prepared result and the
+;; Where RFC 0020's liveness contract deliberately makes compiled
+;; code differ, a case also gives the compiled result and the
 ;; reason, which makes this file the mode/behavior matrix:
 ;;
 ;;   (defcase NAME PROGRAM SOURCE-RESULT
-;;     [PREPARED-RESULT REASON])
+;;     [COMPILED-RESULT REASON])
 
-;; Cases in declaration order: (name program source prepared reason).
+;; Cases in declaration order: (name program source compiled reason).
 (defvar *corpus* nil)
 
-;; Each case is a test in source, prepared, and lowered modes.
-(defmacro defcase (name program source &optional prepared reason)
-  (when (not (eq? (nil? prepared) (nil? reason)))
+;; Each case is a test in source and lowered modes.
+(defmacro defcase (name program source &optional compiled reason)
+  (when (not (eq? (nil? compiled) (nil? reason)))
     (error 'corpus-case-needs-reason name))
   `(do (set! *corpus*
              (append *corpus* (list (list ,name ',program ',source
-                                          ',prepared ,reason))))
+                                          ',compiled ,reason))))
        (deftest ,name
          (expect-equal (run-forms ',program) ',source))
-       (deftest ,(string-append name " [prepared]")
-         (expect-equal (run-prepared-forms ',program)
-                       ',(if reason prepared source)))
        (deftest ,(string-append name " [lowered]")
          (expect-equal (run-lowered-forms ',program)
-                       ',(if reason prepared source)))))
-
-(defun run-prepared-forms (forms)
-  (if (nil? (tail forms))
-      (prepared-eval (head forms))
-    (do (prepared-eval (head forms))
-        (run-prepared-forms (tail forms)))))
+                       ',(if reason compiled source)))))
 
 (defun run-lowered-forms (forms)
   (if (nil? (tail forms))
-      (lowered-without-descriptors (head forms))
-    (do (lowered-without-descriptors (head forms))
+      (lowered-eval (head forms))
+    (do (lowered-eval (head forms))
         (run-lowered-forms (tail forms)))))
-
-;; After lowering, disable every IR descriptor's name. Even an accidental
-;; call to the old record decoder cannot recognize an IR type. Restore the
-;; names before analyzing the next top-level form (macros are live there).
-(defun lowered-without-descriptors (form)
-  (let* ((node (lower (analyze form)))
-         (descriptors (list <ir-binding> <ir-reference> <ir-lookup>
-                            <ir-function-reference> <ir-constant>
-                            <ir-assignment> <ir-call> <ir-branch>
-                            <ir-sequence> <ir-let> <ir-function>
-                            <ir-parameters> <ir-closure> <ir-source>))
-         (names (map (fn (descriptor) (record-get descriptor 0)) descriptors)))
-    (for-each descriptors (fn (descriptor) (record-set! descriptor 0 nil)))
-    (let ((result (eval node)))
-      (for-each (%ir-zip descriptors names)
-                (fn (pair) (record-set! (head pair) 0 (tail pair))))
-      result)))
 
 ;;; Values and evaluation order
 
@@ -178,7 +152,7 @@
    (defmacro late () 2)
    (uses-late))
   2
-  1 "preparation expands macros once")
+  1 "compilation expands macros once")
 
 (defcase "a function that becomes a macro during its arguments is still called"
   ((defun shape (x) (list 'function x))
@@ -192,14 +166,14 @@
    (defmacro shifty (x) (list 'quote (list 'macro x)))
    (try (calls-shifty) (catch (e k) (type-of e))))
   (macro 5)
-  invalid-function "a prepared call site signals instead of expanding")
+  invalid-function "a compiled call site signals instead of expanding")
 
 (defcase "editing a function's source conses changes its behavior"
   ((defun edit-me () (+ 1 2))
    (set-head! (tail (code #'edit-me)) 10)
    (edit-me))
   12
-  3 "prepared code snapshots its syntax")
+  3 "compiled code snapshots its syntax")
 
 ;;; Reflection and evaluation scope
 

@@ -32,7 +32,7 @@ if get_option('benchmarks')
   test('wisp-semantic-counters', wisp_profile_test, suite : ['wisp', 'benchmarks'])
   test('wisp-benchmark-fixtures', wisp_bench,
     args : ['all', '1', '0'], suite : ['wisp', 'benchmarks'], timeout : 120)
-  foreach mode : ['prepared', 'prepared-library', 'lowered', 'lowered-library']
+  foreach mode : ['lowered', 'lowered-library']
     test('wisp-benchmark-fixtures-' + mode, wisp_bench,
       args : ['--' + mode, 'all', '1', '0'],
       suite : ['wisp', 'benchmarks'], timeout : 120)

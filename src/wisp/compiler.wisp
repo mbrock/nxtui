@@ -3,8 +3,9 @@
 ;;
 ;; Analysis turns source forms into semantic records: ordinary
 ;; DEFSTRUCT instances that make bindings, evaluation order, and
-;; control flow explicit. The heap machine executes these
-;; records or their compact lowering (RFC 0021).
+;; control flow explicit. LOWER turns a checked graph into
+;; compact code that the heap machine executes (RFC 0021).
+;; The records themselves are never executed.
 ;;
 ;; (analyze form) returns the record for one form, and
 ;; (ir-show node) describes a record graph as a readable list.
@@ -78,9 +79,9 @@
 ;; The code of a function literal. PARAMETERS is an
 ;; IR-PARAMETERS; BINDINGS is a vector of every parameter binding
 ;; in source order. The function owns its parameter bindings.
-;; SOURCE is the body form it was analyzed from: a prepared
+;; SOURCE is the body form it was analyzed from: a lowered
 ;; closure's CODE shows that snapshot, and editing it does not
-;; change the analyzed BODY.
+;; change the compiled BODY.
 (defstruct ir-function name parameters bindings body source)
 
 ;; REQUIRED and OPTIONAL are vectors of bindings, and REST is a
@@ -105,7 +106,7 @@
 
 ;;; * Analysis
 
-;; The core special operators. Prepared code treats them as
+;; The core special operators. Compiled code treats them as
 ;; fixed control structure; RFC 0020 does not support redefining
 ;; them. FN, SET!, DEFUN and the rest are macros over these.
 (defvar *ir-special-operators*
@@ -339,50 +340,6 @@
 
 
 
-;;; * Running prepared code
-
-;; Evaluating an IR node runs it on the same control machine as
-;; source evaluation: its frames are ordinary continuation frames,
-;; so prepared and source code call each other, capture and
-;; resume continuations, and survive collection and tapes.
-;; (prepared-eval form) analyzes FORM and evaluates the result
-;; under public EVAL's scope rule. A function literal evaluates to
-;; a closure whose calls run prepared code.
-(defun prepared-eval (form)
-  (eval (analyze form)))
-
-;; Give an existing closure prepared code analyzed from its
-;; parameters and source body, and return T, or NIL when the
-;; parameters cannot be analyzed. The closure keeps its captured
-;; environment: names its body does not bind are runtime lookups,
-;; which find that environment as source evaluation would.
-(defun prepare-function! (function)
-  (let ((node (analyze (list '%fn
-                             (function-name function)
-                             (function-parameters function)
-                             (code function)))))
-    (when (ir-closure? node)
-      (set-code! function (ir-closure-function node))
-      t)))
-
-;; Prepare every function, not macro or primitive, named by a
-;; symbol in PACKAGE, and return how many were prepared.
-(defun prepare-package! (package)
-  (%prepare-each! (package-symbols package) 0))
-
-(defun %prepare-each! (symbols count)
-  (if (nil? symbols) count
-    (let ((function (symbol-function (head symbols))))
-      (%prepare-each!
-       (tail symbols)
-       (if (and (eq? (type-of function) 'function)
-                (not (jet? function))
-                (prepare-function! function))
-           (+ count 1)
-         count)))))
-
-
-
 ;;; * Captures
 
 ;; The bindings that NODE uses without introducing them, each
@@ -509,7 +466,7 @@
     (%ir-problem state :not-a-vector owner nodes)))
 
 ;; A reference's address must be the one its scope implies, so
-;; prepared execution reads the slot that name lookup would find.
+;; lowered code reads the slot that name lookup would find.
 (defun %ir-check-address (node scope state)
   (let ((binding (ir-reference-binding node)))
     (when (ir-binding? binding)
@@ -850,7 +807,6 @@
 (defun lowered-eval (form)
   (eval (lower (analyze form))))
 
-;; Keep PREPARE-FUNCTION! in record mode as the executable reference.
 ;; Installation preserves closure identity and its captured environment.
 (defun lower-function! (function)
   (let ((node (analyze (list '%fn (function-name function)
