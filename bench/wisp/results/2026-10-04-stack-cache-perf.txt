@@ -1,0 +1,301 @@
+Software CPU-clock sampling, 997 Hz, user space, CPU 0. Hardware cycles/instructions unavailable in this orb.
+Each run: perf record -e cpu-clock:u -F 997 -- taskset -c 0 BUILD/bench/wisp-bench [--lowered-library] tak 100 3
+Whole process, including setup/warmup, not the evaluator-only clock.
+Reports: perf report --stdio --no-children --percent-limit 0.5 --sort dso,symbol. Whitespace compacted.
+
+=== baseline / source ===
+{"benchmark":"tak","input":"18/12/6","mode":"source","runtime_revision":"ab5a709da96bc9bf4302fdc5b2634f4198b37643","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":100,"warmup_iterations":3,"elapsed_ns":7317632450,"ns_per_iteration":73176324,"heap_bytes_start":63330,"heap_bytes_end":892206,"heap_live_bytes_end":63354,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1177812,"checked":true}
+[ perf record: Woken up 2 times to write data ]
+[ perf record: Captured and wrote 0.281 MB build/rfc0022-perf-baseline-source.data (7289 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cpu-clock:u'
+# Event count (approx.): 7310932601
+#
+# Overhead Shared Object Symbol IPC [IPC Coverage]
+#
+ 26.01% libnxt-core.so [.] wisp::evaluator::step(unsigned int) - -
+ 12.72% libnxt-core.so [.] wisp::eval_step::proceed() - -
+ 10.14% libnxt-core.so [.] wisp::eval_step::application(unsigned int) - -
+ 6.09% libnxt-core.so [.] wisp::eval_step::once() - -
+ 5.94% libnxt-core.so [.] wisp::eval_step::lookup(unsigned int, bool, unsigned int) - -
+ 3.54% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 2.98% libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+ 2.26% libnxt-core.so [.] wisp::tidy::copy(unsigned int) - -
+ 2.22% libc.so.6 [.] __memmove_evex_unaligned_erms - -
+ 2.09% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 1.85% libnxt-core.so [.] wisp::eval_step::call(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.74% libnxt-core.so [.] wisp::eval_step::scan_count(unsigned int) - -
+ 1.74% libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push(std::array<unsigned int, 5ul>) - -
+ 1.71% libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push(std::array<unsigned int, 2ul>) - -
+ 1.61% libnxt-core.so [.] wisp::evaluator::advance(unsigned int, unsigned long) - -
+ 1.39% libnxt-core.so [.] wisp::eval_step::writable_frame() - -
+ 1.18% libnxt-core.so [.] wisp::eval_step::operate(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.11% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append(unsigned long, unsigned int const&) - -
+ 1.07% libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push(std::array<unsigned int, 2ul>) - -
+ 1.03% libnxt-core.so [.] wisp::heap::filledv32(unsigned long, unsigned int) - -
+ 0.93% libnxt-core.so [.] wisp::heap::append_words(std::span<unsigned int const, 18446744073709551615ul>) - -
+ 0.91% libnxt-core.so [.] void wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>(unsigned long, wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}&&) - -
+ 0.78% libnxt-core.so [.] wisp::eval_step::require(unsigned int, wisp::tag) - -
+ 0.77% libnxt-core.so [.] _ZN4wisp9eval_step4onceEv$plt - -
+ 0.77% libnxt-core.so [.] _ZN4wisp9evaluator4stepEj$plt - -
+ 0.75% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append(unsigned long) - -
+ 0.58% libnxt-core.so [.] unsigned int wisp::heap::new_words<(wisp::tag)25>(std::span<unsigned int const, 18446744073709551615ul>) requires word_payload<(wisp::tag)25> - -
+
+
+#
+# (Tip: When collecting LBR backtraces use --stitch-lbr to handle more than 32 deep entries: perf record --call-graph lbr ; perf report --stitch-lbr)
+#
+
+=== baseline / lowered ===
+{"benchmark":"tak","input":"18/12/6","mode":"lowered-library","runtime_revision":"ab5a709da96bc9bf4302fdc5b2634f4198b37643","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":100,"warmup_iterations":3,"elapsed_ns":5420581203,"ns_per_iteration":54205812,"heap_bytes_start":265292,"heap_bytes_end":983852,"heap_live_bytes_end":265316,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1581560,"checked":true}
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.249 MB build/rfc0022-perf-baseline-lowered.data (6450 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 6K of event 'cpu-clock:u'
+# Event count (approx.): 6469408050
+#
+# Overhead Shared Object Symbol IPC [IPC Coverage]
+#
+ 18.20% libnxt-core.so [.] wisp::evaluator::step(unsigned int) - -
+ 7.10% libnxt-core.so [.] wisp::eval_step::lowered(unsigned int, wisp::code_op) - -
+ 6.33% libnxt-core.so [.] wisp::eval_step::immediate(unsigned int, unsigned int&) - -
+ 6.03% libnxt-core.so [.] wisp::eval_step::once() - -
+ 5.67% libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 5.21% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 4.70% libnxt-core.so [.] wisp::eval_step::proceed() - -
+ 4.42% libnxt-core.so [.] wisp::tidy::copy(unsigned int) - -
+ 4.03% libnxt-core.so [.] wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int, unsigned int) - -
+ 2.91% libc.so.6 [.] __memmove_evex_unaligned_erms - -
+ 2.45% libnxt-core.so [.] wisp::eval_step::proceed_arguments(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int) - -
+ 2.43% libnxt-core.so [.] wisp::eval_step::lowered_address(unsigned int) - -
+ 2.33% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 1.97% libnxt-core.so [.] wisp::eval_step::call(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.86% libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int) - -
+ 1.43% libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push(std::array<unsigned int, 5ul>) - -
+ 1.38% libnxt-core.so [.] wisp::eval_step::application(unsigned int) - -
+ 1.30% libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push(std::array<unsigned int, 2ul>) - -
+ 1.15% libnxt-core.so [.] wisp::loader::advance(unsigned long) - -
+ 0.91% libnxt-core.so [.] wisp::heap::append_words(std::span<unsigned int const, 18446744073709551615ul>) - -
+ 0.88% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append(unsigned long) - -
+ 0.79% libnxt-core.so [.] wisp::evaluator::advance(unsigned int, unsigned long) - -
+ 0.76% libnxt-core.so [.] wisp::eval_step::writable_frame() - -
+ 0.74% libnxt-core.so [.] _ZN4wisp9eval_step4onceEv$plt - -
+ 0.74% libnxt-core.so [.] _ZN4wisp9evaluator4stepEj$plt - -
+ 0.73% libnxt-core.so [.] wisp::eval_step::operate(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 0.71% libnxt-core.so [.] unsigned int wisp::heap::new_words<(wisp::tag)25>(std::span<unsigned int const, 18446744073709551615ul>) requires word_payload<(wisp::tag)25> - -
+ 0.67% libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push(std::array<unsigned int, 2ul>) - -
+ 0.57% libnxt-core.so [.] auto wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >(wisp::tab<(wisp::tag)21>&, wisp::tab<(wisp::tag)22>&, wisp::tab<(wisp::tag)23>&, wisp::tab<(wisp::tag)24>&, wisp::tab<(wisp::tag)25>&, wisp::tab<(wisp::tag)26>&, wisp::tab<(wisp::tag)27>&, wisp::tab<(wisp::tag)28>&, wisp::tab<(wisp::tag)29>&, wisp::tab<(wisp::tag)30>&, wisp::tab<(wisp::tag)20>&) const - -
+ 0.56% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append(unsigned long, unsigned int const&) - -
+ 0.54% libnxt-core.so [.] unsigned int wisp::tidy::push<(wisp::tag)20>(unsigned int) - -
+ 0.54% libnxt-core.so [.] wisp::heap::filledv32(unsigned long, unsigned int) - -
+ 0.53% libnxt-core.so [.] _ZN4wisp9eval_step15lowered_addressEj$plt - -
+ 0.53% libnxt-core.so [.] void std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >(__gnu_cxx::__normal_iterator<unsigned int*, std::vector<unsigned int, std::allocator<unsigned int> > >, __gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag>, __gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag>, std::forward_iterator_tag) - -
+
+
+#
+# (Tip: To analyze cache line scalability issues use perf c2c record ... ; perf c2c report)
+#
+
+=== batch / source ===
+{"benchmark":"tak","input":"18/12/6","mode":"source","runtime_revision":"5fd09a88ad6a8595a172a9c76181d694711e3d6e","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":100,"warmup_iterations":3,"elapsed_ns":4861353333,"ns_per_iteration":48613533,"heap_bytes_start":63330,"heap_bytes_end":892206,"heap_live_bytes_end":63354,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1177812,"checked":true}
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.190 MB build/rfc0022-perf-batch-source.data (4879 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 4K of event 'cpu-clock:u'
+# Event count (approx.): 4893680911
+#
+# Overhead Shared Object Symbol IPC [IPC Coverage]
+#
+ 19.27% libnxt-core.so [.] wisp::eval_step::proceed() - -
+ 13.28% libnxt-core.so [.] wisp::eval_step::application(unsigned int) - -
+ 7.58% libnxt-core.so [.] wisp::evaluator::execute(unsigned int, unsigned long, bool) - -
+ 6.29% libnxt-core.so [.] wisp::eval_step::once() - -
+ 6.27% libnxt-core.so [.] wisp::eval_step::lookup(unsigned int, bool, unsigned int) - -
+ 5.08% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 3.30% libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+ 3.12% libc.so.6 [.] __memmove_evex_unaligned_erms - -
+ 2.79% libnxt-core.so [.] wisp::tidy::copy(unsigned int) - -
+ 2.60% libnxt-core.so [.] wisp::eval_step::writable_frame() - -
+ 2.40% libnxt-core.so [.] wisp::eval_step::scan_count(unsigned int) - -
+ 2.34% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 2.23% libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push(std::array<unsigned int, 5ul>) - -
+ 1.93% libnxt-core.so [.] wisp::eval_step::operate(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.93% libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push(std::array<unsigned int, 2ul>) - -
+ 1.72% libnxt-core.so [.] wisp::eval_step::call(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.35% libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push(std::array<unsigned int, 2ul>) - -
+ 1.25% libnxt-core.so [.] void wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>(unsigned long, wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}&&) - -
+ 1.23% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append(unsigned long, unsigned int const&) - -
+ 1.23% libnxt-core.so [.] wisp::heap::append_words(std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.17% libnxt-core.so [.] wisp::heap::filledv32(unsigned long, unsigned int) - -
+ 1.00% libnxt-core.so [.] _ZN4wisp9eval_step4onceEv$plt - -
+ 0.98% libnxt-core.so [.] wisp::eval_step::require(unsigned int, wisp::tag) - -
+ 0.94% libnxt-core.so [.] unsigned int wisp::heap::new_words<(wisp::tag)25>(std::span<unsigned int const, 18446744073709551615ul>) requires word_payload<(wisp::tag)25> - -
+ 0.74% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append(unsigned long) - -
+ 0.59% libnxt-core.so [.] _ZN4wisp9eval_step6lookupEjbj$plt - -
+
+
+#
+# (Tip: To analyze particular parallelism levels, try: perf report --latency --parallelism=32-64)
+#
+
+=== batch / lowered ===
+{"benchmark":"tak","input":"18/12/6","mode":"lowered-library","runtime_revision":"5fd09a88ad6a8595a172a9c76181d694711e3d6e","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":100,"warmup_iterations":3,"elapsed_ns":4402829468,"ns_per_iteration":44028294,"heap_bytes_start":265292,"heap_bytes_end":983852,"heap_live_bytes_end":265316,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1581560,"checked":true}
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.208 MB build/rfc0022-perf-batch-lowered.data (5363 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cpu-clock:u'
+# Event count (approx.): 5379137267
+#
+# Overhead Shared Object Symbol IPC [IPC Coverage]
+#
+ 8.30% libnxt-core.so [.] wisp::eval_step::lowered(unsigned int, wisp::code_op) - -
+ 7.79% libnxt-core.so [.] wisp::evaluator::execute(unsigned int, unsigned long, bool) - -
+ 7.10% libnxt-core.so [.] wisp::eval_step::once() - -
+ 6.30% libnxt-core.so [.] wisp::eval_step::immediate(unsigned int, unsigned int&) - -
+ 6.28% libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 5.61% libnxt-core.so [.] wisp::eval_step::proceed() - -
+ 5.46% libnxt-core.so [.] wisp::tidy::copy(unsigned int) - -
+ 5.35% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 5.28% libnxt-core.so [.] wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int) - -
+ 3.54% libnxt-core.so [.] wisp::eval_step::proceed_arguments(unsigned int, unsigned int, unsigned int, unsigned int) - -
+ 3.41% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 2.91% libnxt-core.so [.] wisp::eval_step::lowered_address(unsigned int) - -
+ 2.59% libc.so.6 [.] __memmove_evex_unaligned_erms - -
+ 2.05% libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int) - -
+ 1.88% libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push(std::array<unsigned int, 5ul>) - -
+ 1.83% libnxt-core.so [.] wisp::eval_step::call(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.75% libnxt-core.so [.] wisp::loader::advance(unsigned long) - -
+ 1.60% libnxt-core.so [.] wisp::eval_step::application(unsigned int) - -
+ 1.49% libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push(std::array<unsigned int, 2ul>) - -
+ 1.32% libnxt-core.so [.] wisp::eval_step::operate(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.21% libnxt-core.so [.] wisp::heap::append_words(std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.03% libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push(std::array<unsigned int, 2ul>) - -
+ 0.97% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append(unsigned long) - -
+ 0.90% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append(unsigned long, unsigned int const&) - -
+ 0.84% libnxt-core.so [.] unsigned int wisp::heap::new_words<(wisp::tag)25>(std::span<unsigned int const, 18446744073709551615ul>) requires word_payload<(wisp::tag)25> - -
+ 0.69% libnxt-core.so [.] auto wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >(wisp::tab<(wisp::tag)21>&, wisp::tab<(wisp::tag)22>&, wisp::tab<(wisp::tag)23>&, wisp::tab<(wisp::tag)24>&, wisp::tab<(wisp::tag)25>&, wisp::tab<(wisp::tag)26>&, wisp::tab<(wisp::tag)27>&, wisp::tab<(wisp::tag)28>&, wisp::tab<(wisp::tag)29>&, wisp::tab<(wisp::tag)30>&, wisp::tab<(wisp::tag)20>&) const - -
+ 0.67% libnxt-core.so [.] _ZN4wisp9eval_step4onceEv$plt - -
+ 0.60% libnxt-core.so [.] wisp::eval_step::lookup(unsigned int, bool, unsigned int) - -
+ 0.58% libnxt-core.so [.] unsigned int wisp::tidy::push<(wisp::tag)20>(unsigned int) - -
+ 0.56% libnxt-core.so [.] wisp::heap::filledv32(unsigned long, unsigned int) - -
+ 0.56% libnxt-core.so [.] wisp::tidy::tidy(wisp::heap&) - -
+ 0.52% libnxt-core.so [.] void std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >(__gnu_cxx::__normal_iterator<unsigned int*, std::vector<unsigned int, std::allocator<unsigned int> > >, __gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag>, __gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag>, std::forward_iterator_tag) - -
+ 0.52% libnxt-core.so [.] wisp::tidy::run() - -
+ 0.50% libnxt-core.so [.] wisp::eval_step::writable_frame() - -
+
+
+#
+# (Tip: To compare scalability of two workload samples use perf diff -c ratio file1 file2)
+#
+
+=== inline / source ===
+{"benchmark":"tak","input":"18/12/6","mode":"source","runtime_revision":"33da99a201a7d8bfe7fd805e54a375c5c38e165c","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":100,"warmup_iterations":3,"elapsed_ns":4917324670,"ns_per_iteration":49173246,"heap_bytes_start":63330,"heap_bytes_end":1042826,"heap_live_bytes_end":63354,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1177108,"checked":true}
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.197 MB build/rfc0022-perf-inline-source.data (5082 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cpu-clock:u'
+# Event count (approx.): 5097291738
+#
+# Overhead Shared Object Symbol IPC [IPC Coverage]
+#
+ 13.95% libnxt-core.so [.] wisp::eval_step::proceed() - -
+ 13.72% libnxt-core.so [.] wisp::evaluator::execute(unsigned int, unsigned long, bool) - -
+ 9.62% libnxt-core.so [.] wisp::eval_step::application(unsigned int) - -
+ 8.13% libnxt-core.so [.] wisp::eval_step::lookup(unsigned int, bool, unsigned int) - -
+ 5.71% libnxt-core.so [.] wisp::eval_step::once() - -
+ 5.12% libnxt-core.so [.] wisp::eval_step::set_progress(unsigned long, unsigned int) - -
+ 4.76% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 3.29% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 2.99% libnxt-core.so [.] wisp::eval_step::operate(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 2.95% libc.so.6 [.] __memmove_evex_unaligned_erms - -
+ 2.91% libnxt-core.so [.] void wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>(unsigned long, wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}&&) - -
+ 2.70% libnxt-core.so [.] wisp::eval_step::call(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 2.52% libnxt-core.so [.] wisp::eval_step::progress() const - -
+ 2.42% libnxt-core.so [.] wisp::eval_step::scan_count(unsigned int) - -
+ 1.50% libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+ 1.50% libnxt-core.so [.] wisp::eval_step::make_progress(unsigned long) - -
+ 1.38% libnxt-core.so [.] wisp::heap::append_words(std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.36% libnxt-core.so [.] _ZN4wisp9eval_step4onceEv$plt - -
+ 1.14% libnxt-core.so [.] wisp::tidy::copy(unsigned int) - -
+ 1.00% libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push(std::array<unsigned int, 2ul>) - -
+ 0.92% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append(unsigned long) - -
+ 0.87% libnxt-core.so [.] _ZN4wisp9eval_step12set_progressEmj$plt - -
+ 0.83% libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push(std::array<unsigned int, 2ul>) - -
+ 0.73% libnxt-core.so [.] unsigned int wisp::heap::new_words<(wisp::tag)25>(std::span<unsigned int const, 18446744073709551615ul>) requires word_payload<(wisp::tag)25> - -
+ 0.69% libnxt-core.so [.] _ZN4wisp9eval_step6lookupEjbj$plt - -
+ 0.57% libnxt-core.so [.] _ZNK4wisp9eval_step8progressEv$plt - -
+ 0.57% libnxt-core.so [.] wisp::eval_step::pop() - -
+ 0.55% libnxt-core.so [.] wisp::eval_step::writable_frame() - -
+
+
+#
+# (Tip: Show user configuration overrides: perf config --user --list)
+#
+
+=== inline / lowered ===
+{"benchmark":"tak","input":"18/12/6","mode":"lowered-library","runtime_revision":"33da99a201a7d8bfe7fd805e54a375c5c38e165c","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":100,"warmup_iterations":3,"elapsed_ns":3638765318,"ns_per_iteration":36387653,"heap_bytes_start":265292,"heap_bytes_end":1054808,"heap_live_bytes_end":265316,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1581224,"checked":true}
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.194 MB build/rfc0022-perf-inline-lowered.data (4989 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 4K of event 'cpu-clock:u'
+# Event count (approx.): 5004011901
+#
+# Overhead Shared Object Symbol IPC [IPC Coverage]
+#
+ 13.59% libnxt-core.so [.] wisp::evaluator::execute(unsigned int, unsigned long, bool) - -
+ 9.28% libnxt-core.so [.] wisp::eval_step::once() - -
+ 7.04% libnxt-core.so [.] wisp::eval_step::immediate(unsigned int, unsigned int&) - -
+ 6.21% libnxt-core.so [.] wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int) - -
+ 6.05% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 5.83% libnxt-core.so [.] wisp::eval_step::lowered(unsigned int, wisp::code_op) - -
+ 5.51% libnxt-core.so [.] wisp::eval_step::proceed() - -
+ 3.73% libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 3.61% libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 3.45% libnxt-core.so [.] wisp::eval_step::proceed_arguments(unsigned int, unsigned int, unsigned int, unsigned int) - -
+ 2.93% libnxt-core.so [.] wisp::eval_step::lowered_address(unsigned int) - -
+ 2.59% libnxt-core.so [.] wisp::tidy::copy(unsigned int) - -
+ 2.47% libnxt-core.so [.] wisp::eval_step::call(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 2.08% libc.so.6 [.] __memmove_evex_unaligned_erms - -
+ 1.66% libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int) - -
+ 1.52% libnxt-core.so [.] wisp::eval_step::application(unsigned int) - -
+ 1.40% libnxt-core.so [.] wisp::eval_step::operate(unsigned int, std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.36% libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push(std::array<unsigned int, 2ul>) - -
+ 1.34% libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append(unsigned long) - -
+ 1.26% libnxt-core.so [.] wisp::heap::append_words(std::span<unsigned int const, 18446744073709551615ul>) - -
+ 1.14% libnxt-core.so [.] wisp::loader::advance(unsigned long) - -
+ 1.12% libnxt-core.so [.] wisp::eval_step::proceed_arguments(unsigned int, unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()(std::span<unsigned int, 18446744073709551615ul>) const - -
+ 0.96% libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push(std::array<unsigned int, 2ul>) - -
+ 0.92% libnxt-core.so [.] wisp::eval_step::lookup(unsigned int, bool, unsigned int) - -
+ 0.62% libnxt-core.so [.] unsigned int wisp::heap::new_words<(wisp::tag)25>(std::span<unsigned int const, 18446744073709551615ul>) requires word_payload<(wisp::tag)25> - -
+ 0.56% libnxt-core.so [.] _ZN4wisp9eval_step4onceEv$plt - -
+ 0.54% libnxt-core.so [.] wisp::eval_step::set_progress(unsigned long, unsigned int) - -
+
+
+#
+# (Tip: System-wide collection from all CPUs: perf record -a)
+#
+

@@ -18,6 +18,9 @@ samples across six runtimes, and a separate semantic-counter run.
 The [2026-10-04 lowered-code comparison](LOWERED.md) includes 500 checked
 samples across source, record, and compact execution modes, retained-heap and
 progress-copy diagnostics, and the remaining performance regressions.
+The [RFC 0022 implementation measurements](../../rfc/new/rfc-0022-wisp-control-stack-cache.md)
+compare batching, frame caching, and inline progress, including the remaining
+inline-progress timing regression and the separate allocation diagnostics.
 
 ## Build, check, and measure
 
@@ -166,6 +169,13 @@ across languages**. Definitions:
 - `evaluator_steps`: entries to `eval_step::once`, including nested STEP!
   targets, excluding polls of finished runs. Calls are classified at dispatch;
   `call_arity` buckets 0–15 are exact, bucket 16 means ≥16 arguments.
+- `evaluator_batches`: native register batches, including nested STEP! targets.
+  `cached_pushes` counts new ordinary frames, `cache_pulls` counts frozen heap
+  frames copied into the cache, and `cache_spills` counts capacity-driven spill
+  operations (frame or progress capacity). `cache_flushed` counts materialized
+  frames by reason: batch, capture, boundary, observation, spill, condition.
+  `continuation_pushes` remains logical pushes; `allocations[29]` counts actual
+  heap `ktx` rows, including boundaries and reflected entry snapshots.
 - `arguments_accumulated`: evaluated ordinary call arguments; special-form
   syntax is not accumulated. `lists_scanned` counts successfully validated list
   scans and `list_cells_scanned` counts their cells, including repeated scans.
@@ -177,9 +187,10 @@ across languages**. Definitions:
   metadata rows, captures count successful sends, calls count invocations, and
   pushes count ordinary `push` frames. These do not pretend to count every
   logically captured frame in the segmented continuation representation.
-  `continuation_copy_words` counts saved-progress vector words cloned by frame
-  copying (including the callee word of a multi-argument call), not shared
-  lexical locations or all words copied by GC.
+  `continuation_copy_words` counts saved-progress words copied from frozen
+  frames, whether into native storage or a new heap vector (including the
+  callee word of a multi-argument call). It excludes shared lexical locations,
+  cache compaction/materialization, and words copied by GC.
 - `allocations` and `gc_copies` are separate arrays indexed by the 32-bit word's
   **tag identity**, not a second type table: DUO=21, SYM=22, FUN=23, MAC=24,
   V32=25, V08=26, PKG=27, RUN=28, KTX=29, EXT=30, REC=31. Payload counters count
