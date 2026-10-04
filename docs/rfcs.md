@@ -53,3 +53,7 @@ parallel Wisp/HTTP work. For the concrete pool API, see
   — implemented, opt-in: checked records lower into compact executable nodes
   that neither decode nor retain the IR, keeping multi-shot frames and tapes.
   Record execution is retired.
+- @ref rfc_wisp_stack_cache "RFC 0022: Wisp Control Stack Cache"
+  — proposed: keep the youngest continuation frames in a fixed native cache
+  and run batches of transitions, writing control to the heap only where it
+  can be observed. Applies to source and lowered execution.
