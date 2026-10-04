@@ -21,6 +21,9 @@ progress-copy diagnostics, and the remaining performance regressions.
 The [RFC 0022 implementation measurements](../../rfc/new/rfc-0022-wisp-control-stack-cache.md)
 compare batching, frame caching, and inline progress, including the remaining
 inline-progress timing regression and the separate allocation diagnostics.
+The [2026-10-04 CPU sampling survey](SAMPLING.md) profiles seven workloads in
+source and lowered-library modes, identifies call/operand-processing hotspots,
+and measures the retained-heap growth in long effect runs.
 
 ## Build, check, and measure
 

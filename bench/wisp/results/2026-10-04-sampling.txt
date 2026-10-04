@@ -1,0 +1,1571 @@
+CPU-clock user-space sampling, 997Hz, DWARF 8192-byte call stacks, CPU 2.
+Release -O3 with debug symbols; semantic counters disabled.
+First 2000ms excluded; steady-state process samples, not exact evaluator boundaries.
+Flat tables report self time (no children, no inline expansion).
+Stack-analysis records contain inclusive counts; caller reports include children.
+Instruction annotations report local percentages within the annotated function.
+
+=== lowered-library / router-hit ===
+{"benchmark":"router-hit","input":"8-pattern-late-hit","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","router_semantics":"guest-continuation-prompts","profile_enabled":false,"iterations":219591,"warmup_iterations":0,"elapsed_ns":12919200243,"ns_per_iteration":58833,"heap_bytes_start":258793,"heap_bytes_end":979057,"heap_live_bytes_end":259205,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1567010,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 377 times to write data ]
+[ perf record: Captured and wrote 94.198 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-router-hit.data (11673 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u'
+# Event count (approx.): 11708124057
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+14.67% 1713 libnxt-core.so [.] wisp::eval_step::lowered - -
+10.70% 1249 libnxt-core.so [.] wisp::eval_step::immediate - -
+9.51% 1110 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+8.78% 1025 libnxt-core.so [.] wisp::eval_step::once - -
+6.39% 746 libnxt-core.so [.] wisp::eval_step::bind - -
+5.83% 680 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.32% 387 libnxt-core.so [.] wisp::evaluator::execute - -
+3.31% 386 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.09% 361 libnxt-core.so [.] wisp::tidy::copy - -
+2.71% 316 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.56% 299 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.45% 286 libnxt-core.so [.] wisp::eval_step::call - -
+1.94% 226 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+1.90% 222 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.86% 217 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.33% 155 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.26% 147 libnxt-core.so [.] wisp::eval_step::operate - -
+1.26% 147 libnxt-core.so [.] wisp::heap::append_words - -
+1.11% 129 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.97% 113 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.97% 113 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.94% 110 libnxt-core.so [.] wisp::eval_step::once - -
+0.90% 105 libnxt-core.so [.] wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+0.74% 86 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.66% 77 libnxt-core.so [.] wisp::eval_step::spill - -
+0.51% 59 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+
+
+#
+# (Tip: To show IPC for sampling periods use perf record -e '{cycles,instructions}:S' and then browse context)
+#
+
+=== lowered-library / deriv ===
+{"benchmark":"deriv","input":"canonical-expression","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":654058,"warmup_iterations":0,"elapsed_ns":12845903428,"ns_per_iteration":19640,"heap_bytes_start":265292,"heap_bytes_end":1110028,"heap_live_bytes_end":265692,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1580208,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 371 times to write data ]
+[ perf record: Captured and wrote 92.621 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-deriv.data (11470 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u'
+# Event count (approx.): 11504513230
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+11.73% 1346 libnxt-core.so [.] wisp::eval_step::immediate - -
+11.26% 1291 libnxt-core.so [.] wisp::eval_step::lowered - -
+9.22% 1058 libnxt-core.so [.] wisp::eval_step::once - -
+7.85% 900 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+7.31% 839 libnxt-core.so [.] wisp::eval_step::bind - -
+6.53% 749 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+4.59% 526 libnxt-core.so [.] wisp::evaluator::execute - -
+3.95% 453 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.28% 376 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+3.14% 360 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.96% 339 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.53% 290 libnxt-core.so [.] wisp::tidy::copy - -
+2.49% 286 libnxt-core.so [.] wisp::eval_step::call - -
+2.08% 239 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.01% 230 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.69% 194 libnxt-core.so [.] wisp::eval_step::operate - -
+1.29% 148 libnxt-core.so [.] wisp::heap::append_words - -
+1.16% 133 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.03% 118 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.90% 103 libnxt-core.so [.] wisp::eval_step::once - -
+0.89% 102 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.88% 101 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.86% 99 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.85% 97 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.77% 88 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.58% 67 libnxt-core.so [.] wisp::eval_step::immediate - -
+
+
+#
+# (Tip: Use --symfs <dir> if your symbol files are in non-standard locations)
+#
+
+=== lowered-library / effect-deep ===
+{"benchmark":"effect-deep","input":"count","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":356845,"warmup_iterations":0,"elapsed_ns":13784473496,"ns_per_iteration":38628,"heap_bytes_start":258803,"heap_bytes_end":1599474419,"heap_live_bytes_end":1577513739,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":2192287774,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 411 times to write data ]
+[ perf record: Captured and wrote 102.651 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-effect-deep.data (12734 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 12K of event 'cpu-clock:u'
+# Event count (approx.): 12772316606
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ ................... ............................................................................
+#
+18.13% 2309 libnxt-core.so [.] wisp::tidy::copy - -
+7.66% 976 libnxt-core.so [.] wisp::eval_step::immediate - -
+7.34% 935 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+5.25% 669 libnxt-core.so [.] wisp::eval_step::lowered - -
+5.00% 637 libnxt-core.so [.] wisp::eval_step::once - -
+4.11% 523 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.84% 489 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+3.53% 450 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)25> - -
+3.27% 417 libnxt-core.so [.] wisp::eval_step::bind - -
+2.42% 308 libnxt-core.so [.] wisp::tidy::run - -
+2.28% 290 libnxt-core.so [.] wisp::tidy::copy - -
+2.25% 287 libnxt-core.so [.] wisp::eval_step::proceed - -
+2.24% 285 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+2.23% 284 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> > - -
+2.21% 282 libnxt-core.so [.] wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> > - -
+2.03% 258 libnxt-core.so [.] wisp::tidy::pull<(wisp::tag)29> - -
+1.94% 247 libnxt-core.so [.] wisp::evaluator::execute - -
+1.77% 225 libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push - -
+1.52% 194 libnxt-core.so [.] wisp::eval_step::call - -
+1.52% 193 libnxt-core.so [.] wisp::eval_step::spill - -
+1.51% 192 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+1.45% 185 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.34% 170 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+1.15% 146 libnxt-core.so [.] wisp::heap::append_words - -
+1.14% 145 libnxt-core.so [.] wisp::eval_step::operate - -
+0.87% 111 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.82% 104 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+0.82% 104 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.76% 97 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.71% 90 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+0.68% 86 libnxt-core.so [.] wisp::tidy::tidy - -
+0.62% 79 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)20> - -
+0.51% 65 libnxt-core.so [.] wisp::eval_step::immediate - -
+
+
+#
+# (Tip: If you prefer Intel style assembly, try: perf annotate -M intel)
+#
+
+=== lowered-library / tak ===
+{"benchmark":"tak","input":"18/12/6","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":429,"warmup_iterations":0,"elapsed_ns":12250750708,"ns_per_iteration":28556528,"heap_bytes_start":265292,"heap_bytes_end":857752,"heap_live_bytes_end":265316,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1581600,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 357 times to write data ]
+[ perf record: Captured and wrote 89.182 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-tak.data (11058 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u'
+# Event count (approx.): 11091273522
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+11.54% 1276 libnxt-core.so [.] wisp::eval_step::immediate - -
+10.37% 1147 libnxt-core.so [.] wisp::eval_step::once - -
+8.98% 993 libnxt-core.so [.] wisp::eval_step::lowered - -
+8.48% 938 libnxt-core.so [.] wisp::eval_step::bind - -
+8.46% 935 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+5.25% 581 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+4.75% 525 libnxt-core.so [.] wisp::evaluator::execute - -
+4.30% 476 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+4.21% 465 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.98% 440 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.26% 361 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.79% 308 libnxt-core.so [.] wisp::tidy::copy - -
+2.65% 293 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.25% 249 libnxt-core.so [.] wisp::eval_step::call - -
+1.56% 172 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.40% 155 libnxt-core.so [.] wisp::heap::append_words - -
+1.18% 130 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.09% 121 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.04% 115 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.02% 113 libnxt-core.so [.] wisp::eval_step::operate - -
+0.88% 97 libnxt-core.so [.] wisp::eval_step::once - -
+0.73% 81 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.55% 61 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.53% 59 libnxt-core.so [.] wisp::eval_step::make_progress - -
+
+
+#
+# (Tip: To see list of saved events and attributes: perf evlist -v)
+#
+
+=== source / call-16 ===
+{"benchmark":"call-16","input":"count","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":11352886,"warmup_iterations":0,"elapsed_ns":11961091095,"ns_per_iteration":1053,"heap_bytes_start":56520,"heap_bytes_end":638092,"heap_live_bytes_end":56528,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1161824,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 319 times to write data ]
+[ perf record: Captured and wrote 79.739 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-call-16.data (9887 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 9K of event 'cpu-clock:u'
+# Event count (approx.): 9916749983
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+23.00% 2274 libnxt-core.so [.] wisp::eval_step::scan_count - -
+18.77% 1856 libnxt-core.so [.] wisp::eval_step::proceed - -
+9.45% 934 libnxt-core.so [.] wisp::evaluator::execute - -
+6.68% 660 libnxt-core.so [.] wisp::eval_step::set_progress - -
+5.97% 590 libnxt-core.so [.] wisp::eval_step::application - -
+5.55% 549 libnxt-core.so [.] wisp::eval_step::once - -
+4.35% 430 libnxt-core.so [.] wisp::eval_step::bind - -
+3.34% 330 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.47% 244 libnxt-core.so [.] wisp::eval_step::progress - -
+1.73% 171 libnxt-core.so [.] wisp::eval_step::lookup - -
+1.54% 152 libnxt-core.so [.] wisp::eval_step::once - -
+1.44% 142 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.39% 137 libnxt-core.so [.] wisp::eval_step::set_progress - -
+1.36% 134 libnxt-core.so [.] wisp::eval_step::call - -
+1.26% 125 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.20% 119 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.12% 111 libnxt-core.so [.] wisp::eval_step::operate - -
+0.99% 98 libnxt-core.so [.] wisp::tidy::copy - -
+0.97% 96 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+0.87% 86 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.78% 77 libnxt-core.so [.] wisp::eval_step::scan_count - -
+0.72% 71 libnxt-core.so [.] wisp::eval_step::progress - -
+0.65% 64 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.62% 61 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+0.61% 60 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+
+
+#
+# (Tip: For a higher level overview, try: perf report --sort comm,dso)
+#
+
+=== source / effect-deep ===
+{"benchmark":"effect-deep","input":"count","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":290620,"warmup_iterations":0,"elapsed_ns":15225524015,"ns_per_iteration":52389,"heap_bytes_start":56408,"heap_bytes_end":1353768184,"heap_live_bytes_end":1292734196,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1909191744,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 424 times to write data ]
+[ perf record: Captured and wrote 105.883 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-effect-deep.data (13137 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 13K of event 'cpu-clock:u'
+# Event count (approx.): 13176529233
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+15.65% 2056 libnxt-core.so [.] wisp::tidy::copy - -
+10.71% 1407 libnxt-core.so [.] wisp::eval_step::proceed - -
+7.27% 955 libnxt-core.so [.] wisp::eval_step::application - -
+6.26% 823 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+5.95% 782 libnxt-core.so [.] wisp::evaluator::execute - -
+4.42% 581 libnxt-core.so [.] wisp::eval_step::set_progress - -
+3.03% 398 libnxt-core.so [.] wisp::eval_step::once - -
+2.89% 380 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)25> - -
+2.61% 343 libnxt-core.so [.] wisp::eval_step::lookup - -
+2.31% 304 libnxt-core.so [.] wisp::eval_step::bind - -
+1.96% 258 libnxt-core.so [.] wisp::eval_step::operate - -
+1.93% 254 libnxt-core.so [.] wisp::eval_step::call - -
+1.90% 250 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> > - -
+1.89% 248 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.88% 247 libnxt-core.so [.] wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> > - -
+1.68% 221 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.64% 215 libnxt-core.so [.] wisp::tidy::copy - -
+1.55% 203 libnxt-core.so [.] wisp::eval_step::progress - -
+1.54% 202 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.54% 202 libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push - -
+1.43% 188 libnxt-core.so [.] wisp::tidy::run - -
+1.39% 182 libnxt-core.so [.] wisp::tidy::pull<(wisp::tag)29> - -
+1.32% 174 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.20% 158 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+1.16% 152 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.07% 140 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+1.04% 136 libnxt-core.so [.] wisp::eval_step::spill - -
+0.94% 123 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+0.79% 104 libnxt-core.so [.] wisp::eval_step::once - -
+0.79% 104 libnxt-core.so [.] wisp::heap::append_words - -
+0.68% 89 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.64% 84 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.61% 80 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.57% 75 libnxt-core.so [.] wisp::tidy::tidy - -
+0.54% 71 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+0.51% 67 libnxt-core.so [.] wisp::eval_step::subtract - -
+0.50% 66 libnxt-core.so [.] wisp::eval_step::progress - -
+
+
+#
+# (Tip: If you prefer Intel style assembly, try: perf annotate -M intel)
+#
+
+=== lowered-library / divrec ===
+{"benchmark":"divrec","input":"1000-cell-list","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":47648,"warmup_iterations":0,"elapsed_ns":12540604573,"ns_per_iteration":263192,"heap_bytes_start":265292,"heap_bytes_end":492832,"heap_live_bytes_end":269300,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1603160,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 364 times to write data ]
+[ perf record: Captured and wrote 90.960 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-divrec.data (11269 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u'
+# Event count (approx.): 11302908421
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+11.04% 1244 libnxt-core.so [.] wisp::eval_step::immediate - -
+8.94% 1007 libnxt-core.so [.] wisp::eval_step::once - -
+8.64% 974 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+8.63% 972 libnxt-core.so [.] wisp::eval_step::lowered - -
+6.31% 711 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+5.82% 656 libnxt-core.so [.] wisp::eval_step::bind - -
+4.29% 484 libnxt-core.so [.] wisp::eval_step::proceed - -
+4.17% 470 libnxt-core.so [.] wisp::evaluator::execute - -
+4.11% 463 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+3.77% 425 libnxt-core.so [.] wisp::tidy::copy - -
+2.66% 300 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+2.62% 295 libnxt-core.so [.] wisp::eval_step::call - -
+2.57% 290 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.09% 236 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.83% 206 libnxt-core.so [.] wisp::eval_step::operate - -
+1.70% 192 libnxt-core.so [.] wisp::eval_step::spill - -
+1.60% 180 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+1.58% 178 libnxt-core.so [.] wisp::heap::append_words - -
+1.38% 156 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.31% 148 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+1.23% 139 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.07% 121 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.90% 101 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.84% 95 libnxt-core.so [.] wisp::eval_step::once - -
+0.52% 59 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.51% 57 libnxt-core.so [.] wisp::tidy::tidy - -
+
+
+#
+# (Tip: To record every process run by a user: perf record -u <user>)
+#
+
+=== source / divrec ===
+{"benchmark":"divrec","input":"1000-cell-list","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":43125,"warmup_iterations":0,"elapsed_ns":12318397690,"ns_per_iteration":285644,"heap_bytes_start":63330,"heap_bytes_end":857906,"heap_live_bytes_end":67338,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1239540,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 328 times to write data ]
+[ perf record: Captured and wrote 81.891 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-divrec.data (10123 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u'
+# Event count (approx.): 10153460107
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+15.27% 1546 libnxt-core.so [.] wisp::eval_step::proceed - -
+13.10% 1326 libnxt-core.so [.] wisp::eval_step::application - -
+10.51% 1064 libnxt-core.so [.] wisp::evaluator::execute - -
+5.64% 571 libnxt-core.so [.] wisp::eval_step::lookup - -
+5.21% 527 libnxt-core.so [.] wisp::eval_step::bind - -
+4.75% 481 libnxt-core.so [.] wisp::eval_step::once - -
+4.23% 428 libnxt-core.so [.] wisp::eval_step::set_progress - -
+3.81% 386 libnxt-core.so [.] wisp::eval_step::call - -
+3.59% 363 libnxt-core.so [.] wisp::eval_step::operate - -
+2.99% 303 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.02% 204 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.84% 186 libnxt-core.so [.] wisp::eval_step::progress - -
+1.75% 177 libnxt-core.so [.] wisp::tidy::copy - -
+1.44% 146 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.41% 143 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.33% 135 libnxt-core.so [.] wisp::heap::append_words - -
+1.32% 134 libnxt-core.so [.] wisp::eval_step::pop - -
+1.30% 132 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+1.25% 127 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.22% 124 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+1.19% 120 libnxt-core.so [.] wisp::eval_step::spill - -
+1.17% 118 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.17% 118 libnxt-core.so [.] wisp::eval_step::once - -
+1.17% 118 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.16% 117 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.09% 110 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.73% 74 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.60% 61 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.55% 56 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.52% 53 libnxt-core.so [.] wisp::eval_step::call - -
+
+
+#
+# (Tip: For hierarchical output, try: perf report --hierarchy)
+#
+
+=== lowered-library / call-16 ===
+{"benchmark":"call-16","input":"count","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":26373626,"warmup_iterations":0,"elapsed_ns":11545734942,"ns_per_iteration":437,"heap_bytes_start":258915,"heap_bytes_end":971927,"heap_live_bytes_end":258923,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1566462,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 345 times to write data ]
+[ perf record: Captured and wrote 86.168 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-call-16.data (10690 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u'
+# Event count (approx.): 10722166210
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+23.62% 2525 libnxt-core.so [.] wisp::eval_step::immediate - -
+11.42% 1221 libnxt-core.so [.] wisp::eval_step::bind - -
+8.09% 865 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+6.34% 678 libnxt-core.so [.] wisp::tidy::copy - -
+5.57% 595 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+5.31% 568 libnxt-core.so [.] wisp::eval_step::once - -
+5.09% 544 libnxt-core.so [.] wisp::eval_step::lowered - -
+4.07% 435 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+3.96% 423 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.60% 385 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+2.09% 223 libnxt-core.so [.] wisp::eval_step::proceed - -
+2.00% 214 libnxt-core.so [.] wisp::eval_step::immediate - -
+1.97% 211 libnxt-core.so [.] wisp::evaluator::execute - -
+1.24% 133 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.09% 116 libnxt-core.so [.] wisp::eval_step::call - -
+1.06% 113 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+0.99% 106 libnxt-core.so [.] wisp::eval_step::operate - -
+0.71% 76 libnxt-core.so [.] wisp::heap::append_words - -
+0.71% 76 libnxt-core.so [.] wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> > - -
+0.70% 75 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)20> - -
+0.68% 73 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.64% 68 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.64% 68 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.63% 67 libnxt-core.so [.] wisp::tidy::run - -
+0.58% 62 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> > - -
+0.56% 60 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.53% 57 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+
+
+#
+# (Tip: To report cacheline events from previous recording: perf c2c report)
+#
+
+=== lowered-library / stdlib-list ===
+{"benchmark":"stdlib-list","input":"64-element-list-pipeline","mode":"lowered-library","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":33259,"warmup_iterations":0,"elapsed_ns":12382003548,"ns_per_iteration":372290,"heap_bytes_start":258793,"heap_bytes_end":550321,"heap_live_bytes_end":258809,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1573074,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 356 times to write data ]
+[ perf record: Captured and wrote 88.998 MB /home/user/workspace/repo/build/wisp-sampling/profiles/lowered-library-stdlib-list.data (11024 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u'
+# Event count (approx.): 11057171216
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+13.00% 1433 libnxt-core.so [.] wisp::eval_step::immediate - -
+9.59% 1057 libnxt-core.so [.] wisp::eval_step::lowered - -
+8.95% 987 libnxt-core.so [.] wisp::eval_step::bind - -
+8.54% 942 libnxt-core.so [.] wisp::eval_step::once - -
+6.40% 706 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+6.11% 674 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.98% 439 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.55% 391 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.42% 377 libnxt-core.so [.] wisp::evaluator::execute - -
+3.13% 345 libnxt-core.so [.] wisp::tidy::copy - -
+2.92% 322 libnxt-core.so [.] wisp::eval_step::call - -
+2.84% 313 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.56% 282 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.53% 279 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+2.45% 270 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.95% 215 libnxt-core.so [.] wisp::eval_step::operate - -
+1.34% 148 libnxt-core.so [.] wisp::heap::append_words - -
+1.32% 145 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.27% 140 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.11% 122 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.94% 104 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.86% 95 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.84% 93 libnxt-core.so [.] wisp::eval_step::once - -
+0.76% 84 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.60% 66 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.58% 64 libnxt-core.so [.] wisp::eval_step::make_progress - -
+
+
+#
+# (Tip: See assembly instructions with percentage: perf annotate <symbol>)
+#
+
+=== source / router-hit ===
+{"benchmark":"router-hit","input":"8-pattern-late-hit","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","router_semantics":"guest-continuation-prompts","profile_enabled":false,"iterations":137586,"warmup_iterations":0,"elapsed_ns":12334498836,"ns_per_iteration":89649,"heap_bytes_start":57143,"heap_bytes_end":994699,"heap_live_bytes_end":57591,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1164054,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 330 times to write data ]
+[ perf record: Captured and wrote 82.308 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-router-hit.data (10185 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u'
+# Event count (approx.): 10215646665
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+13.52% 1377 libnxt-core.so [.] wisp::eval_step::proceed - -
+12.70% 1293 libnxt-core.so [.] wisp::eval_step::application - -
+9.11% 928 libnxt-core.so [.] wisp::evaluator::execute - -
+6.84% 697 libnxt-core.so [.] wisp::eval_step::lookup - -
+5.92% 603 libnxt-core.so [.] wisp::eval_step::once - -
+4.11% 419 libnxt-core.so [.] wisp::eval_step::set_progress - -
+4.04% 411 libnxt-core.so [.] wisp::eval_step::bind - -
+3.25% 331 libnxt-core.so [.] wisp::eval_step::operate - -
+2.92% 297 libnxt-core.so [.] wisp::eval_step::call - -
+2.57% 262 libnxt-core.so [.] wisp::eval_step::with_list<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}> - -
+2.42% 246 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.15% 219 libnxt-core.so [.] wisp::eval_step::binding - -
+1.92% 196 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.74% 177 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.69% 172 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.59% 162 libnxt-core.so [.] wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+1.55% 158 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.40% 143 libnxt-core.so [.] wisp::eval_step::progress - -
+1.31% 133 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+1.29% 131 libnxt-core.so [.] wisp::eval_step::let - -
+1.20% 122 libnxt-core.so [.] wisp::tidy::copy - -
+1.17% 119 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.09% 111 libnxt-core.so [.] wisp::heap::append_words - -
+0.94% 96 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.91% 93 libnxt-core.so [.] wisp::eval_step::once - -
+0.75% 76 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.64% 65 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.61% 62 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.60% 61 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.60% 61 libnxt-core.so [.] wisp::eval_step::pop - -
+
+
+#
+# (Tip: Search options using a keyword: perf report -h <keyword>)
+#
+
+=== source / stdlib-list ===
+{"benchmark":"stdlib-list","input":"64-element-list-pipeline","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":23722,"warmup_iterations":0,"elapsed_ns":12167862340,"ns_per_iteration":512935,"heap_bytes_start":57143,"heap_bytes_end":837211,"heap_live_bytes_end":57159,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1165990,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 324 times to write data ]
+[ perf record: Captured and wrote 80.988 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-stdlib-list.data (10030 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u'
+# Event count (approx.): 10060180270
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+15.71% 1576 libnxt-core.so [.] wisp::eval_step::proceed - -
+11.46% 1149 libnxt-core.so [.] wisp::eval_step::application - -
+9.68% 971 libnxt-core.so [.] wisp::evaluator::execute - -
+7.26% 728 libnxt-core.so [.] wisp::eval_step::lookup - -
+6.40% 642 libnxt-core.so [.] wisp::eval_step::once - -
+5.65% 567 libnxt-core.so [.] wisp::eval_step::bind - -
+5.39% 541 libnxt-core.so [.] wisp::eval_step::set_progress - -
+3.53% 354 libnxt-core.so [.] wisp::eval_step::call - -
+3.30% 331 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.49% 250 libnxt-core.so [.] wisp::eval_step::operate - -
+2.47% 248 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.97% 198 libnxt-core.so [.] wisp::eval_step::progress - -
+1.94% 195 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.81% 182 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.74% 175 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.62% 162 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.29% 129 libnxt-core.so [.] wisp::heap::append_words - -
+1.22% 122 libnxt-core.so [.] wisp::eval_step::once - -
+1.12% 112 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+1.08% 108 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.07% 107 libnxt-core.so [.] wisp::tidy::copy - -
+0.96% 96 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.95% 95 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.94% 94 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.79% 79 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.78% 78 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.68% 68 libnxt-core.so [.] wisp::eval_step::pop - -
+0.60% 60 libnxt-core.so [.] wisp::eval_step::call - -
+0.51% 51 libnxt-core.so [.] wisp::eval_step::progress - -
+
+
+#
+# (Tip: To separate samples by time use perf report --sort time,overhead,sym)
+#
+
+=== source / tak ===
+{"benchmark":"tak","input":"18/12/6","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":313,"warmup_iterations":0,"elapsed_ns":12532387242,"ns_per_iteration":40039575,"heap_bytes_start":63330,"heap_bytes_end":1099314,"heap_live_bytes_end":63354,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1177436,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 337 times to write data ]
+[ perf record: Captured and wrote 84.194 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-tak.data (10431 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u'
+# Event count (approx.): 10462386879
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+16.01% 1670 libnxt-core.so [.] wisp::eval_step::proceed - -
+10.56% 1101 libnxt-core.so [.] wisp::eval_step::application - -
+9.57% 998 libnxt-core.so [.] wisp::evaluator::execute - -
+9.47% 988 libnxt-core.so [.] wisp::eval_step::lookup - -
+6.31% 658 libnxt-core.so [.] wisp::eval_step::set_progress - -
+6.11% 637 libnxt-core.so [.] wisp::eval_step::once - -
+5.53% 577 libnxt-core.so [.] wisp::eval_step::bind - -
+3.38% 353 libnxt-core.so [.] wisp::eval_step::scan_count - -
+3.19% 333 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.00% 313 libnxt-core.so [.] wisp::eval_step::call - -
+2.26% 236 libnxt-core.so [.] wisp::eval_step::operate - -
+2.22% 232 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+2.16% 225 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.15% 224 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.98% 207 libnxt-core.so [.] wisp::eval_step::progress - -
+1.77% 185 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.16% 121 libnxt-core.so [.] wisp::eval_step::once - -
+1.11% 116 libnxt-core.so [.] wisp::heap::append_words - -
+0.99% 103 libnxt-core.so [.] wisp::tidy::copy - -
+0.91% 95 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.81% 84 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.80% 83 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.71% 74 libnxt-core.so [.] wisp::eval_step::progress - -
+0.68% 71 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.68% 71 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.68% 71 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+
+
+#
+# (Tip: For a higher level overview, try: perf report --sort comm,dso)
+#
+
+=== source / deriv ===
+{"benchmark":"deriv","input":"canonical-expression","mode":"source","runtime_revision":"3b543eceef2d9010372c13c17217add7bc0bd648","buildtype":"release","compiler":"Clang 23.1.0","timing":"evaluator-only","profile_enabled":false,"iterations":481560,"warmup_iterations":0,"elapsed_ns":12113023521,"ns_per_iteration":25153,"heap_bytes_start":63330,"heap_bytes_end":557838,"heap_live_bytes_end":63730,"gc_poll_steps":4096,"gc_floor_bytes":1048576,"gc_growth_factor":2,"gc_threshold_end":1176380,"checked":true}
+Events disabled
+Events enabled
+[ perf record: Woken up 323 times to write data ]
+[ perf record: Captured and wrote 80.637 MB /home/user/workspace/repo/build/wisp-sampling/profiles/source-deriv.data (9980 samples) ]
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 9K of event 'cpu-clock:u'
+# Event count (approx.): 10010029820
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+15.05% 1502 libnxt-core.so [.] wisp::eval_step::proceed - -
+13.81% 1378 libnxt-core.so [.] wisp::eval_step::application - -
+9.86% 984 libnxt-core.so [.] wisp::evaluator::execute - -
+7.62% 760 libnxt-core.so [.] wisp::eval_step::once - -
+5.81% 580 libnxt-core.so [.] wisp::eval_step::lookup - -
+5.01% 500 libnxt-core.so [.] wisp::eval_step::set_progress - -
+4.81% 480 libnxt-core.so [.] wisp::eval_step::bind - -
+3.91% 390 libnxt-core.so [.] wisp::eval_step::call - -
+3.37% 336 libnxt-core.so [.] wisp::eval_step::operate - -
+2.88% 287 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.04% 204 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.98% 198 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.82% 182 libnxt-core.so [.] wisp::eval_step::progress - -
+1.71% 171 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.56% 156 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.53% 153 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+1.29% 129 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.19% 119 libnxt-core.so [.] wisp::eval_step::once - -
+1.04% 104 libnxt-core.so [.] wisp::tidy::copy - -
+0.97% 97 libnxt-core.so [.] wisp::heap::append_words - -
+0.86% 86 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.82% 82 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.76% 76 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.75% 75 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.71% 71 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.64% 64 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.59% 59 libnxt-core.so [.] wisp::eval_step::pop - -
+0.55% 55 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.53% 53 libnxt-core.so [.] wisp::eval_step::call - -
+0.53% 53 libnxt-core.so [.] wisp::eval_step::progress - -
+
+
+#
+# (Tip: To browse sample contexts use perf report --sample 10 and select in context menu)
+#
+
+
+=== Stack-window analysis ===
+Window: first through last sample in the timed main loop; excludes identifiable post-validation GC/teardown. Edges are approximate to the 997Hz sample interval.
+
+=== evaluation window / lowered-library / router-hit ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "router-hit", "phase_samples": {"timed-loop": 11249, "unresolved": 423, "outside-timed-loop": 1}, "window_start": 546.631368, "window_end": 558.536417, "window_samples": 11672, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"bind": 1709, "immediate": 1589, "gc": 753, "capture_send": 123, "spill": 118}, "self_samples": {"wisp::eval_step::lowered": 1751, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 113, "wisp::eval_step::start_arguments": 251, "wisp::eval_step::immediate": 1306, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 33, "__memmove_evex_unaligned_erms": 217, "wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 109, "wisp::eval_step::proceed_lowered": 1154, "wisp::eval_step::bind": 762, "wisp::eval_step::proceed_arguments": 231, "wisp::tab<(wisp::tag)25>::push": 176, "wisp::evaluator::execute": 387, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 718, "wisp::tidy::copy": 404, "wisp::tab<(wisp::tag)23>::push": 8, "memcpy$plt": 5, "wisp::tab<(wisp::tag)21>::push": 138, "wisp::eval_step::once": 1135, "wisp::tidy::run": 49, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 344, "wisp::eval_step::type_of": 50, "wisp::eval_step::lowered_address": 334, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 139, "wisp::heap::append_words": 165, "wisp::eval_step::proceed": 386, "wisp::eval_step::call": 314, "wisp::eval_step::operate": 156, "__memset_evex_unaligned": 29, "wisp::tidy::push<(wisp::tag)25>": 20, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 55, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 41, "wisp::tidy::push<(wisp::tag)20>": 45, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 31, "wisp::eval_step::make_progress": 101, "wisp::tidy::tidy": 35, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 17, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 6, "wisp::eval_step::string_equal": 36, "wisp::eval_step::append_meta": 8, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step16call_with_promptEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 23, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 59, "memmove$plt": 25, "wisp::tab<(wisp::tag)20>::push": 21, "wisp::eval_step::spill": 78, "__memcmp_evex_movbe": 17, "memset$plt": 17, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5list_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 6, "wisp::eval_step::send_from": 23, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9is_symbolEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 13, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 1, "wisp::eval_step::lookup": 7, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step7type_ofEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 8, "wisp::eval_step::writable_frame": 24, "std::array<nxtrt::rack<unsigned int>, 3ul>::operator=": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 5, "wisp::tab<(wisp::tag)29>::push": 23, "nxtrt::alloc_trace::event": 3, "__memset_evex_unaligned_erms": 11, "wisp::tidy::pull<(wisp::tag)22>": 6, "cfree@GLIBC_2.2.5": 1, "wisp::tab<(wisp::tag)26>::push": 5, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4sendEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 14, "_int_malloc": 5, "operator new": 1, "_dl_tlsdesc_return": 1, "_int_free_merge_chunk": 2, "std::array<nxtrt::rack<unsigned int>, 5ul>::operator=": 1, "main": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 2, "wisp::tab<(wisp::tag)22>::push": 3, "unlink_chunk.isra.0": 1, "std::array<nxtrt::rack<unsigned int>, 6ul>::operator=": 1, "bcmp$plt": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step12string_equalEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u' (time slices: 546.631368,558.536417)
+# Event count (approx.): 11706118039
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+14.68% 1713 libnxt-core.so [.] wisp::eval_step::lowered - -
+10.70% 1249 libnxt-core.so [.] wisp::eval_step::immediate - -
+9.51% 1110 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+8.78% 1025 libnxt-core.so [.] wisp::eval_step::once - -
+6.39% 746 libnxt-core.so [.] wisp::eval_step::bind - -
+5.83% 680 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.32% 387 libnxt-core.so [.] wisp::evaluator::execute - -
+3.31% 386 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.08% 360 libnxt-core.so [.] wisp::tidy::copy - -
+2.71% 316 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.55% 298 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.45% 286 libnxt-core.so [.] wisp::eval_step::call - -
+1.94% 226 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+1.90% 222 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.86% 217 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.33% 155 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.26% 147 libnxt-core.so [.] wisp::eval_step::operate - -
+1.26% 147 libnxt-core.so [.] wisp::heap::append_words - -
+1.11% 129 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.97% 113 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.97% 113 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.94% 110 libnxt-core.so [.] wisp::eval_step::once - -
+0.90% 105 libnxt-core.so [.] wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+0.74% 86 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.66% 77 libnxt-core.so [.] wisp::eval_step::spill - -
+0.51% 59 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+
+
+#
+# (Tip: If you prefer Intel style assembly, try: perf annotate -M intel)
+#
+
+=== evaluation window / lowered-library / deriv ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "deriv", "phase_samples": {"timed-loop": 11032, "unresolved": 437, "outside-timed-loop": 1}, "window_start": 560.623318, "window_end": 572.425005, "window_samples": 11469, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"bind": 1934, "immediate": 1622, "gc": 624}, "self_samples": {"wisp::eval_step::call": 328, "wisp::eval_step::make_progress": 115, "wisp::eval_step::lowered": 1325, "wisp::eval_step::proceed_arguments": 393, "wisp::eval_step::once": 1161, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 792, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 388, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 133, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 88, "wisp::eval_step::proceed_lowered": 940, "wisp::eval_step::immediate": 1413, "wisp::eval_step::lowered_address": 265, "wisp::eval_step::operate": 200, "wisp::eval_step::start_arguments": 275, "__memmove_evex_unaligned_erms": 339, "wisp::evaluator::execute": 526, "wisp::tidy::copy": 318, "wisp::eval_step::bind": 855, "wisp::eval_step::proceed": 454, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 115, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 27, "wisp::tab<(wisp::tag)25>::push": 112, "wisp::tidy::tidy": 49, "wisp::tab<(wisp::tag)26>::push": 6, "wisp::eval_step::type_of": 41, "wisp::tab<(wisp::tag)21>::push": 140, "wisp::heap::append_words": 165, "wisp::tidy::pull<(wisp::tag)22>": 5, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 97, "cfree@GLIBC_2.2.5": 1, "wisp::eval_step::subtract": 3, "wisp::tab<(wisp::tag)23>::push": 5, "wisp::tidy::run": 34, "__memset_evex_unaligned_erms": 6, "__memset_evex_unaligned": 35, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 43, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5list_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 44, "wisp::tidy::push<(wisp::tag)20>": 46, "memset$plt": 13, "wisp::eval_step::writable_frame": 36, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step7type_ofEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 10, "_int_malloc": 3, "nxtrt::alloc_trace::event": 3, "wisp::tidy::push<(wisp::tag)25>": 9, "wisp::tab<(wisp::tag)20>::push": 9, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 4, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 22, "memmove$plt": 27, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 7, "operator new": 1, "wisp::tidy::pull<(wisp::tag)23>": 5, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 12, "unlink_chunk.isra.0": 1, "_int_free_create_chunk": 1, "__libc_malloc2": 1, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 5, "std::_Tuple_impl<0ul, wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::~_Tuple_impl": 1, "wisp::tab<(wisp::tag)22>::push": 1, "systrim.constprop.0": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 11, "std::array<nxtrt::rack<unsigned int>, 6ul>::operator=": 1, "memcpy$plt": 2, "_dl_tlsdesc_return": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u' (time slices: 560.623318,572.425005)
+# Event count (approx.): 11502507212
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+11.74% 1346 libnxt-core.so [.] wisp::eval_step::immediate - -
+11.26% 1291 libnxt-core.so [.] wisp::eval_step::lowered - -
+9.23% 1058 libnxt-core.so [.] wisp::eval_step::once - -
+7.85% 900 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+7.32% 839 libnxt-core.so [.] wisp::eval_step::bind - -
+6.53% 749 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+4.58% 525 libnxt-core.so [.] wisp::evaluator::execute - -
+3.95% 453 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.28% 376 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+3.14% 360 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.96% 339 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.52% 289 libnxt-core.so [.] wisp::tidy::copy - -
+2.49% 286 libnxt-core.so [.] wisp::eval_step::call - -
+2.08% 239 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.01% 230 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.69% 194 libnxt-core.so [.] wisp::eval_step::operate - -
+1.29% 148 libnxt-core.so [.] wisp::heap::append_words - -
+1.16% 133 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.03% 118 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.90% 103 libnxt-core.so [.] wisp::eval_step::once - -
+0.89% 102 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.88% 101 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.86% 99 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.85% 97 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.77% 88 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.58% 67 libnxt-core.so [.] wisp::eval_step::immediate - -
+
+
+#
+# (Tip: If you prefer Intel style assembly, try: perf annotate -M intel)
+#
+
+=== evaluation window / lowered-library / effect-deep ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "effect-deep", "phase_samples": {"timed-loop": 9962, "unresolved": 563, "outside-timed-loop": 2209}, "window_start": 574.51129, "window_end": 587.256863, "window_samples": 10427, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"gc": 2968, "spill": 738, "bind": 1118, "immediate": 1145, "capture_send": 13, "compose": 3}, "self_samples": {"wisp::tab<(wisp::tag)21>::push": 95, "wisp::tab<(wisp::tag)29>::push": 163, "__memmove_evex_unaligned_erms": 841, "wisp::tidy::copy": 1482, "wisp::tab<(wisp::tag)25>::push": 235, "wisp::tidy::push<(wisp::tag)25>": 264, "wisp::tidy::run": 171, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 153, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 173, "wisp::tidy::pull<(wisp::tag)28>": 2, "wisp::tidy::pull<(wisp::tag)29>": 161, "memcpy$plt": 17, "wisp::tidy::push<(wisp::tag)20>": 55, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 548, "wisp::eval_step::once": 689, "wisp::eval_step::proceed_arguments": 209, "wisp::eval_step::writable_frame": 98, "wisp::evaluator::execute": 247, "wisp::eval_step::spill": 194, "wisp::eval_step::lowered": 693, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 115, "wisp::eval_step::immediate": 1041, "wisp::eval_step::bind": 420, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 191, "wisp::eval_step::proceed_lowered": 513, "memset$plt": 13, "wisp::heap::append_words": 161, "wisp::eval_step::call": 223, "wisp::eval_step::proceed": 287, "wisp::eval_step::lowered_address": 129, "wisp::eval_step::operate": 146, "wisp::eval_step::start_arguments": 206, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 53, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 28, "wisp::eval_step::make_progress": 67, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 111, "memmove$plt": 26, "__memset_evex_unaligned_erms": 4, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 17, "__memset_evex_unaligned": 39, "wisp::eval_step::send_from": 3, "wisp::eval_step::compose": 2, "wisp::tab<(wisp::tag)23>::push": 18, "wisp::tidy::tidy": 48, "wisp::eval_step::subtract": 35, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step16call_with_promptEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 4, "wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 4, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 20, "wisp::tidy::pull<(wisp::tag)24>": 5, "wisp::evaluator::advance": 1, "wisp::tidy::pull<(wisp::tag)23>": 2, "main": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4sendEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 1, "wisp::eval_step::append_meta": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u' (time slices: 574.511290,587.256863)
+# Event count (approx.): 10457371834
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+12.73% 1327 libnxt-core.so [.] wisp::tidy::copy - -
+9.35% 975 libnxt-core.so [.] wisp::eval_step::immediate - -
+8.07% 841 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+6.42% 669 libnxt-core.so [.] wisp::eval_step::lowered - -
+6.11% 637 libnxt-core.so [.] wisp::eval_step::once - -
+5.02% 523 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+4.69% 489 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+4.00% 417 libnxt-core.so [.] wisp::eval_step::bind - -
+2.75% 287 libnxt-core.so [.] wisp::eval_step::proceed - -
+2.37% 247 libnxt-core.so [.] wisp::evaluator::execute - -
+2.36% 246 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)25> - -
+1.90% 198 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.86% 194 libnxt-core.so [.] wisp::eval_step::call - -
+1.85% 193 libnxt-core.so [.] wisp::eval_step::spill - -
+1.84% 192 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+1.77% 185 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.64% 171 libnxt-core.so [.] wisp::tidy::run - -
+1.63% 170 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+1.54% 161 libnxt-core.so [.] wisp::tidy::pull<(wisp::tag)29> - -
+1.49% 155 libnxt-core.so [.] wisp::tidy::copy - -
+1.46% 152 libnxt-core.so [.] wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> > - -
+1.44% 150 libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push - -
+1.40% 146 libnxt-core.so [.] wisp::heap::append_words - -
+1.39% 145 libnxt-core.so [.] wisp::eval_step::operate - -
+1.38% 144 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> > - -
+1.06% 111 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.00% 104 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+0.93% 97 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.86% 90 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+0.67% 70 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.62% 65 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.52% 54 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.51% 53 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+
+
+#
+# (Tip: To see list of saved events and attributes: perf evlist -v)
+#
+
+=== evaluation window / lowered-library / tak ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "tak", "phase_samples": {"timed-loop": 10656, "unresolved": 402}, "window_start": 592.59924, "window_end": 603.82616, "window_samples": 11058, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"immediate": 1583, "bind": 2290, "gc": 672}, "self_samples": {"wisp::eval_step::proceed": 465, "wisp::eval_step::once": 1244, "wisp::evaluator::execute": 525, "wisp::eval_step::immediate": 1337, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 121, "wisp::eval_step::make_progress": 74, "wisp::eval_step::proceed_lowered": 990, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 473, "wisp::eval_step::lowered": 1039, "wisp::tidy::pull<(wisp::tag)22>": 4, "__memset_evex_unaligned": 32, "wisp::eval_step::lowered_address": 411, "wisp::eval_step::start_arguments": 202, "wisp::eval_step::bind": 957, "wisp::tidy::copy": 336, "wisp::tab<(wisp::tag)25>::push": 150, "__memmove_evex_unaligned_erms": 293, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 601, "wisp::eval_step::proceed_arguments": 494, "wisp::eval_step::operate": 117, "wisp::eval_step::writable_frame": 29, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 145, "wisp::tidy::push<(wisp::tag)20>": 45, "wisp::heap::append_words": 171, "wisp::eval_step::call": 282, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4lessEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 44, "wisp::eval_step::subtract": 42, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 11, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 28, "wisp::tab<(wisp::tag)21>::push": 108, "wisp::tidy::tidy": 49, "memmove$plt": 24, "unlink_chunk.isra.0": 1, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 34, "memcpy$plt": 6, "wisp::tidy::run": 35, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 26, "wisp::tidy::push<(wisp::tag)25>": 17, "wisp::tab<(wisp::tag)20>::push": 23, "operator delete": 1, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 2, "wisp::tab<(wisp::tag)28>::reserve": 1, "_int_malloc": 11, "wisp::tidy::pull<(wisp::tag)23>": 3, "memset$plt": 13, "__memset_evex_unaligned_erms": 8, "cfree@GLIBC_2.2.5": 3, "nxtrt::alloc_trace::event": 4, "wisp::tab<(wisp::tag)22>::reserve": 1, "wisp::tab<(wisp::tag)26>::push": 4, "__libc_malloc2": 1, "wisp::tab<(wisp::tag)23>::push": 3, "main": 6, "_int_free_create_chunk": 1, "malloc$plt": 1, "malloc": 3, "wisp::tab<(wisp::tag)22>::push": 2, "_int_free_chunk": 1, "std::array<nxtrt::rack<unsigned int>, 5ul>::~array": 1, "std::array<nxtrt::rack<unsigned int>, 5ul>::operator=": 1, "std::_Tuple_impl<9ul, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::~_Tuple_impl": 1, "_dl_tlsdesc_return": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u' (time slices: 592.599240,603.826160)
+# Event count (approx.): 11090270513
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+11.53% 1275 libnxt-core.so [.] wisp::eval_step::immediate - -
+10.37% 1147 libnxt-core.so [.] wisp::eval_step::once - -
+8.98% 993 libnxt-core.so [.] wisp::eval_step::lowered - -
+8.48% 938 libnxt-core.so [.] wisp::eval_step::bind - -
+8.46% 935 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+5.25% 581 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+4.75% 525 libnxt-core.so [.] wisp::evaluator::execute - -
+4.30% 476 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+4.21% 465 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.98% 440 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.26% 361 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.79% 308 libnxt-core.so [.] wisp::tidy::copy - -
+2.65% 293 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.25% 249 libnxt-core.so [.] wisp::eval_step::call - -
+1.56% 172 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.40% 155 libnxt-core.so [.] wisp::heap::append_words - -
+1.18% 130 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.09% 121 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.04% 115 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.02% 113 libnxt-core.so [.] wisp::eval_step::operate - -
+0.88% 97 libnxt-core.so [.] wisp::eval_step::once - -
+0.73% 81 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.55% 61 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.53% 59 libnxt-core.so [.] wisp::eval_step::make_progress - -
+
+
+#
+# (Tip: To see list of saved events and attributes: perf evlist -v)
+#
+
+=== evaluation window / source / call-16 ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "call-16", "phase_samples": {"timed-loop": 9350, "unresolved": 537}, "window_start": 605.915192, "window_end": 615.985695, "window_samples": 9887, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"scan_count": 2351, "bind": 937, "gc": 154}, "self_samples": {"wisp::eval_step::scan_count": 2351, "wisp::eval_step::once": 701, "wisp::eval_step::proceed": 1856, "wisp::eval_step::set_progress": 797, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 23, "wisp::evaluator::execute": 934, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 20, "wisp::eval_step::make_progress": 134, "wisp::eval_step::call": 150, "wisp::eval_step::lookup": 184, "wisp::eval_step::bind": 431, "wisp::eval_step::application": 605, "__memmove_evex_unaligned_erms": 125, "wisp::tab<(wisp::tag)25>::push": 23, "wisp::eval_step::progress": 315, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 86, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 142, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 331, "wisp::tab<(wisp::tag)21>::push": 30, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 96, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 14, "wisp::eval_step::operate": 111, "wisp::eval_step::writable_frame": 121, "wisp::tidy::copy": 108, "__memset_evex_unaligned_erms": 24, "wisp::eval_step::subtract": 30, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 64, "wisp::tab<(wisp::tag)29>::reserve": 1, "wisp::heap::append_words": 30, "memset$plt": 3, "wisp::tab<(wisp::tag)25>::reserve": 2, "wisp::tab<(wisp::tag)26>::push": 5, "wisp::tidy::run": 1, "wisp::tab<(wisp::tag)22>::push": 1, "__sbrk": 1, "memmove$plt": 10, "nxtrt::alloc_trace::event": 1, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 3, "wisp::tidy::pull<(wisp::tag)22>": 2, "wisp::tab<(wisp::tag)22>::reserve": 1, "cfree@GLIBC_2.2.5": 1, "wisp::tidy::tidy": 6, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 1, "_int_malloc": 2, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append": 1, "wisp::tidy::pull<(wisp::tag)23>": 2, "wisp::eval_step::require": 1, "std::array<nxtrt::rack<unsigned int>, 3ul>::~array": 1, "unlink_chunk.isra.0": 1, "wisp::tidy::pull<(wisp::tag)24>": 1, "wisp::tab<(wisp::tag)23>::push": 1, "_int_free_chunk": 2}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 9K of event 'cpu-clock:u' (time slices: 605.915192,615.985695)
+# Event count (approx.): 9915746974
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+22.99% 2273 libnxt-core.so [.] wisp::eval_step::scan_count - -
+18.77% 1856 libnxt-core.so [.] wisp::eval_step::proceed - -
+9.45% 934 libnxt-core.so [.] wisp::evaluator::execute - -
+6.68% 660 libnxt-core.so [.] wisp::eval_step::set_progress - -
+5.97% 590 libnxt-core.so [.] wisp::eval_step::application - -
+5.55% 549 libnxt-core.so [.] wisp::eval_step::once - -
+4.35% 430 libnxt-core.so [.] wisp::eval_step::bind - -
+3.34% 330 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.47% 244 libnxt-core.so [.] wisp::eval_step::progress - -
+1.73% 171 libnxt-core.so [.] wisp::eval_step::lookup - -
+1.54% 152 libnxt-core.so [.] wisp::eval_step::once - -
+1.44% 142 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.39% 137 libnxt-core.so [.] wisp::eval_step::set_progress - -
+1.36% 134 libnxt-core.so [.] wisp::eval_step::call - -
+1.26% 125 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.20% 119 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.12% 111 libnxt-core.so [.] wisp::eval_step::operate - -
+0.99% 98 libnxt-core.so [.] wisp::tidy::copy - -
+0.97% 96 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+0.87% 86 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.78% 77 libnxt-core.so [.] wisp::eval_step::scan_count - -
+0.72% 71 libnxt-core.so [.] wisp::eval_step::progress - -
+0.65% 64 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.62% 61 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+0.61% 60 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+
+
+#
+# (Tip: To show context switches in perf report sample context add --switch-events to perf record.)
+#
+
+=== evaluation window / source / effect-deep ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "effect-deep", "phase_samples": {"timed-loop": 10712, "unresolved": 722, "outside-timed-loop": 1703}, "window_start": 618.079155, "window_end": 631.412493, "window_samples": 11327, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"spill": 603, "bind": 889, "scan_count": 264, "capture_send": 60, "gc": 2466, "compose": 4}, "self_samples": {"__memmove_evex_unaligned_erms": 779, "wisp::tab<(wisp::tag)21>::push": 146, "wisp::eval_step::call": 292, "wisp::eval_step::progress": 269, "wisp::eval_step::proceed": 1407, "wisp::eval_step::spill": 137, "wisp::eval_step::make_progress": 204, "wisp::eval_step::operate": 258, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 248, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 71, "wisp::eval_step::once": 502, "wisp::tab<(wisp::tag)29>::push": 142, "wisp::tab<(wisp::tag)25>::push": 178, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 92, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 169, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 89, "wisp::evaluator::execute": 782, "wisp::eval_step::subtract": 71, "wisp::eval_step::application": 984, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 140, "wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 10, "wisp::eval_step::scan_count": 264, "wisp::heap::append_words": 120, "wisp::eval_step::writable_frame": 150, "__memset_evex_unaligned_erms": 12, "wisp::eval_step::set_progress": 661, "wisp::eval_step::bind": 309, "wisp::eval_step::pop": 44, "wisp::eval_step::lookup": 362, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2fnEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 9, "memmove$plt": 31, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step16call_with_promptEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 62, "_int_malloc": 1, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 15, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 62, "wisp::eval_step::sequence": 11, "memset$plt": 10, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3letEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 2, "wisp::eval_step::binding": 9, "__memset_evex_unaligned": 30, "wisp::tidy::tidy": 43, "wisp::tidy::copy": 1311, "wisp::tidy::push<(wisp::tag)25>": 245, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 172, "wisp::tidy::run": 113, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 147, "wisp::tidy::pull<(wisp::tag)29>": 94, "wisp::tidy::pull<(wisp::tag)24>": 3, "wisp::tidy::pull<(wisp::tag)23>": 7, "memcpy$plt": 13, "wisp::eval_step::send_from": 4, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4sendEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 3, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5quoteEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 2, "main": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 4, "wisp::eval_step::let": 10, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3do_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 2, "wisp::tab<(wisp::tag)23>::push": 6, "wisp::tidy::pull<(wisp::tag)28>": 2, "wisp::tab<(wisp::tag)29>::reserve": 1, "wisp::eval_step::with_list<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}>": 3, "wisp::eval_step::compose": 2, "wisp::eval_step::append_meta": 3, "wisp::tidy::pull<(wisp::tag)22>": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u' (time slices: 618.079155,631.412493)
+# Event count (approx.): 11360079934
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+12.42% 1407 libnxt-core.so [.] wisp::eval_step::proceed - -
+10.45% 1184 libnxt-core.so [.] wisp::tidy::copy - -
+8.43% 955 libnxt-core.so [.] wisp::eval_step::application - -
+6.90% 781 libnxt-core.so [.] wisp::evaluator::execute - -
+6.88% 779 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+5.13% 581 libnxt-core.so [.] wisp::eval_step::set_progress - -
+3.51% 398 libnxt-core.so [.] wisp::eval_step::once - -
+3.03% 343 libnxt-core.so [.] wisp::eval_step::lookup - -
+2.68% 304 libnxt-core.so [.] wisp::eval_step::bind - -
+2.28% 258 libnxt-core.so [.] wisp::eval_step::operate - -
+2.24% 254 libnxt-core.so [.] wisp::eval_step::call - -
+2.19% 248 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.99% 225 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)25> - -
+1.95% 221 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.79% 203 libnxt-core.so [.] wisp::eval_step::progress - -
+1.54% 174 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.40% 158 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+1.32% 150 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.29% 146 libnxt-core.so [.] wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> > - -
+1.27% 144 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> > - -
+1.24% 140 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+1.20% 136 libnxt-core.so [.] wisp::eval_step::spill - -
+1.19% 135 libnxt-core.so [.] wisp::tab<(wisp::tag)29>::push - -
+1.12% 127 libnxt-core.so [.] wisp::tidy::copy - -
+1.09% 123 libnxt-core.so [.] wisp::eval_step::writable_frame - -
+1.00% 113 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.00% 113 libnxt-core.so [.] wisp::tidy::run - -
+0.92% 104 libnxt-core.so [.] wisp::eval_step::once - -
+0.92% 104 libnxt-core.so [.] wisp::heap::append_words - -
+0.83% 94 libnxt-core.so [.] wisp::tidy::pull<(wisp::tag)29> - -
+0.79% 89 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.74% 84 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.71% 80 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.63% 71 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_ - -
+0.59% 67 libnxt-core.so [.] wisp::eval_step::subtract - -
+0.58% 66 libnxt-core.so [.] wisp::eval_step::progress - -
+0.55% 62 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.55% 62 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+
+
+#
+# (Tip: To show context switches in perf report sample context add --switch-events to perf record.)
+#
+
+=== evaluation window / lowered-library / divrec ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "divrec", "phase_samples": {"timed-loop": 10711, "unresolved": 557, "outside-timed-loop": 1}, "window_start": 635.98309, "window_end": 647.508079, "window_samples": 11268, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"immediate": 1483, "gc": 849, "bind": 1603, "spill": 467}, "self_samples": {"wisp::eval_step::proceed": 484, "wisp::eval_step::lowered": 1016, "wisp::eval_step::immediate": 1303, "wisp::tidy::copy": 461, "wisp::tab<(wisp::tag)21>::push": 128, "wisp::eval_step::proceed_arguments": 495, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 760, "wisp::evaluator::execute": 470, "wisp::eval_step::start_arguments": 341, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 49, "wisp::eval_step::operate": 218, "wisp::eval_step::once": 1102, "wisp::eval_step::lowered_address": 205, "wisp::eval_step::proceed_lowered": 1021, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 314, "wisp::heap::append_words": 193, "wisp::eval_step::call": 331, "wisp::eval_step::bind": 677, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 148, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 40, "wisp::tab<(wisp::tag)20>::push": 14, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 164, "wisp::tab<(wisp::tag)25>::push": 148, "wisp::tidy::push<(wisp::tag)20>": 57, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 156, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 55, "__memset_evex_unaligned_erms": 4, "wisp::eval_step::spill": 193, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 50, "wisp::tab<(wisp::tag)29>::push": 62, "wisp::eval_step::writable_frame": 40, "__memmove_evex_unaligned_erms": 236, "wisp::tidy::tidy": 57, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 28, "wisp::eval_step::make_progress": 54, "wisp::tidy::pull<(wisp::tag)23>": 1, "_int_malloc": 3, "_int_free_create_chunk": 1, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 21, "memmove$plt": 24, "wisp::tidy::pull<(wisp::tag)22>": 5, "wisp::tidy::run": 39, "__memset_evex_unaligned": 31, "wisp::eval_step::lookup": 2, "wisp::tidy::push<(wisp::tag)25>": 23, "memset$plt": 20, "nxtrt::alloc_trace::event": 3, "wisp::tab<(wisp::tag)26>::push": 4, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 3, "memcpy$plt": 1, "wisp::tab<(wisp::tag)26>::reserve": 1, "_int_free_merge_chunk": 1, "wisp::tab<(wisp::tag)22>::push": 3, "malloc": 2, "wisp::tab<(wisp::tag)28>::reserve": 1, "wisp::tab<(wisp::tag)23>::push": 2, "sysmalloc": 1, "std::_Tuple_impl<0ul, wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::~_Tuple_impl": 1, "std::tuple<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::operator=": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u' (time slices: 635.983090,647.508079)
+# Event count (approx.): 11300902403
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+11.03% 1243 libnxt-core.so [.] wisp::eval_step::immediate - -
+8.94% 1007 libnxt-core.so [.] wisp::eval_step::once - -
+8.64% 974 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+8.63% 972 libnxt-core.so [.] wisp::eval_step::lowered - -
+6.31% 711 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+5.82% 656 libnxt-core.so [.] wisp::eval_step::bind - -
+4.30% 484 libnxt-core.so [.] wisp::eval_step::proceed - -
+4.17% 470 libnxt-core.so [.] wisp::evaluator::execute - -
+4.11% 463 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+3.76% 424 libnxt-core.so [.] wisp::tidy::copy - -
+2.66% 300 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+2.62% 295 libnxt-core.so [.] wisp::eval_step::call - -
+2.57% 290 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.09% 236 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.83% 206 libnxt-core.so [.] wisp::eval_step::operate - -
+1.70% 192 libnxt-core.so [.] wisp::eval_step::spill - -
+1.60% 180 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+1.58% 178 libnxt-core.so [.] wisp::heap::append_words - -
+1.38% 156 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.31% 148 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+1.23% 139 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.07% 121 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.90% 101 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.84% 95 libnxt-core.so [.] wisp::eval_step::once - -
+0.52% 59 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.51% 57 libnxt-core.so [.] wisp::tidy::tidy - -
+
+
+#
+# (Tip: Show user configuration overrides: perf config --user --list)
+#
+
+=== evaluation window / source / divrec ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "divrec", "phase_samples": {"timed-loop": 9633, "unresolved": 490}, "window_start": 649.599059, "window_end": 660.03167, "window_samples": 10123, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"bind": 1435, "gc": 309, "spill": 277, "scan_count": 175}, "self_samples": {"wisp::eval_step::progress": 235, "wisp::eval_step::once": 599, "wisp::eval_step::lookup": 627, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 146, "wisp::eval_step::application": 1376, "wisp::tab<(wisp::tag)25>::push": 137, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 322, "__memmove_evex_unaligned_erms": 204, "wisp::eval_step::bind": 539, "wisp::evaluator::execute": 1064, "wisp::eval_step::operate": 365, "wisp::eval_step::proceed": 1547, "wisp::heap::append_words": 150, "wisp::eval_step::call": 439, "wisp::tidy::copy": 191, "wisp::tab<(wisp::tag)29>::push": 29, "wisp::eval_step::set_progress": 489, "wisp::eval_step::scan_count": 175, "wisp::eval_step::writable_frame": 59, "wisp::eval_step::make_progress": 147, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 31, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 132, "memset$plt": 17, "wisp::eval_step::pop": 159, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 134, "cfree@GLIBC_2.2.5": 1, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 110, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 124, "memmove$plt": 30, "wisp::tab<(wisp::tag)21>::push": 140, "wisp::eval_step::spill": 122, "std::__invoke_impl<void, wisp::tidy::tidy(wisp::heap&)::{lambda<wisp::tag... $N0>((wisp::tab<$N0>&)...)#1}, wisp::tab<(wisp::tag)21>&, wisp::tab<(wisp::tag)22>&, wisp::tab<(wisp::tag)23>&, wisp::tab<(wisp::tag)24>&, wisp::tab<(wisp::tag)25>&, wisp::tab<(wisp::tag)26>&, wisp::tab<(wisp::tag)27>&, wisp::tab<(wisp::tag)28>&, wisp::tab<(wisp::tag)29>&, wisp::tab<(wisp::tag)30>&, wisp::tab<(wisp::tag)20>&>": 1, "__memset_evex_unaligned": 30, "wisp::eval_step::require": 28, "wisp::tidy::tidy": 48, "wisp::eval_step::sequence": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 74, "_dl_tlsdesc_return": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 19, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 18, "__memset_evex_unaligned_erms": 7, "wisp::tab<(wisp::tag)26>::push": 3, "wisp::tidy::pull<(wisp::tag)29>": 2, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 2, "nxtrt::alloc_trace::event": 3, "wisp::tidy::push<(wisp::tag)25>": 4, "memcpy$plt": 4, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 16, "wisp::tab<(wisp::tag)22>::push": 4, "std::array<nxtrt::rack<unsigned int>, 5ul>::operator=": 1, "main": 1, "wisp::tab<(wisp::tag)29>::reserve": 1, "unlink_chunk.isra.0": 1, "wisp::tab<(wisp::tag)28>::reserve": 2, "wisp::tidy::pull<(wisp::tag)22>": 2, "wisp::evaluator::advance": 1, "_int_free_chunk": 1, "sysmalloc": 1, "wisp::eval_step::subtract": 1, "wisp::tab<(wisp::tag)21>::reserve": 1, "malloc": 1, "_int_free_merge_chunk": 1, "_int_malloc": 1, "wisp::tidy::run": 1, "wisp::heap::filledv32": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u' (time slices: 649.599059,660.031670)
+# Event count (approx.): 10152457098
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+15.27% 1546 libnxt-core.so [.] wisp::eval_step::proceed - -
+13.10% 1326 libnxt-core.so [.] wisp::eval_step::application - -
+10.51% 1064 libnxt-core.so [.] wisp::evaluator::execute - -
+5.64% 571 libnxt-core.so [.] wisp::eval_step::lookup - -
+5.21% 527 libnxt-core.so [.] wisp::eval_step::bind - -
+4.74% 480 libnxt-core.so [.] wisp::eval_step::once - -
+4.23% 428 libnxt-core.so [.] wisp::eval_step::set_progress - -
+3.81% 386 libnxt-core.so [.] wisp::eval_step::call - -
+3.59% 363 libnxt-core.so [.] wisp::eval_step::operate - -
+2.99% 303 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.02% 204 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.84% 186 libnxt-core.so [.] wisp::eval_step::progress - -
+1.75% 177 libnxt-core.so [.] wisp::tidy::copy - -
+1.44% 146 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.41% 143 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.33% 135 libnxt-core.so [.] wisp::heap::append_words - -
+1.32% 134 libnxt-core.so [.] wisp::eval_step::pop - -
+1.30% 132 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+1.25% 127 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.23% 124 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+1.19% 120 libnxt-core.so [.] wisp::eval_step::spill - -
+1.17% 118 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.17% 118 libnxt-core.so [.] wisp::eval_step::once - -
+1.17% 118 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.16% 117 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.09% 110 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.73% 74 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.60% 61 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.55% 56 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.52% 53 libnxt-core.so [.] wisp::eval_step::call - -
+
+
+#
+# (Tip: Show user configuration overrides: perf config --user --list)
+#
+
+=== evaluation window / lowered-library / call-16 ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "call-16", "phase_samples": {"unresolved": 346, "timed-loop": 10344}, "window_start": 662.120015, "window_end": 672.841349, "window_samples": 10689, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"immediate": 2852, "gc": 1288, "bind": 2735}, "self_samples": {"wisp::eval_step::immediate": 2739, "wisp::eval_step::once": 610, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 71, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 453, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 870, "wisp::eval_step::bind": 1228, "wisp::tidy::copy": 730, "wisp::eval_step::start_arguments": 151, "wisp::eval_step::proceed_arguments": 603, "wisp::eval_step::call": 135, "wisp::eval_step::lowered": 563, "wisp::evaluator::execute": 211, "wisp::eval_step::proceed_lowered": 399, "wisp::tidy::push<(wisp::tag)20>": 82, "wisp::tab<(wisp::tag)21>::push": 92, "__memmove_evex_unaligned_erms": 435, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 60, "wisp::tab<(wisp::tag)22>::push": 3, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 68, "wisp::heap::append_words": 85, "wisp::tab<(wisp::tag)20>::push": 34, "memset$plt": 4, "wisp::tidy::run": 67, "wisp::tidy::pull<(wisp::tag)22>": 7, "wisp::eval_step::make_progress": 77, "wisp::eval_step::lowered_address": 125, "wisp::eval_step::proceed": 223, "memcpy$plt": 13, "__memset_evex_unaligned_erms": 33, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 76, "wisp::eval_step::subtract": 45, "wisp::tab<(wisp::tag)25>::push": 75, "wisp::tidy::tidy": 32, "wisp::eval_step::operate": 106, "wisp::tidy::push<(wisp::tag)25>": 30, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 26, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 7, "memmove$plt": 21, "_int_malloc": 8, "nxtrt::alloc_trace::event": 5, "wisp::tidy::pull<(wisp::tag)23>": 3, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 21, "wisp::eval_step::writable_frame": 18, "std::array<nxtrt::rack<unsigned int>, 6ul>::operator=": 1, "wisp::tab<(wisp::tag)21>::reserve": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 25, "wisp::evaluator::collect": 1, "wisp::tab<(wisp::tag)26>::push": 6, "malloc": 2, "std::array<nxtrt::rack<unsigned int>, 3ul>::operator=": 1, "std::array<nxtrt::rack<unsigned int>, 3ul>::~array": 1, "wisp::evaluator::advance": 1, "_int_free_create_chunk": 1, "wisp::tab<(wisp::tag)28>::reserve": 1, "std::_Tuple_impl<7ul, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::_M_assign<wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 1, "operator new": 1, "wisp::tab<(wisp::tag)24>::push": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u' (time slices: 662.120015,672.841349)
+# Event count (approx.): 10720160192
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+23.62% 2525 libnxt-core.so [.] wisp::eval_step::immediate - -
+11.42% 1221 libnxt-core.so [.] wisp::eval_step::bind - -
+8.09% 865 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+6.34% 678 libnxt-core.so [.] wisp::tidy::copy - -
+5.57% 595 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+5.31% 568 libnxt-core.so [.] wisp::eval_step::once - -
+5.09% 544 libnxt-core.so [.] wisp::eval_step::lowered - -
+4.07% 435 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+3.95% 422 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.60% 385 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+2.09% 223 libnxt-core.so [.] wisp::eval_step::proceed - -
+2.00% 214 libnxt-core.so [.] wisp::eval_step::immediate - -
+1.97% 211 libnxt-core.so [.] wisp::evaluator::execute - -
+1.24% 133 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.09% 116 libnxt-core.so [.] wisp::eval_step::call - -
+1.06% 113 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+0.99% 106 libnxt-core.so [.] wisp::eval_step::operate - -
+0.71% 76 libnxt-core.so [.] wisp::heap::append_words - -
+0.71% 76 libnxt-core.so [.] wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> > - -
+0.70% 75 libnxt-core.so [.] wisp::tidy::push<(wisp::tag)20> - -
+0.67% 72 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.64% 68 libnxt-core.so [.] wisp::eval_step::make_progress - -
+0.64% 68 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.63% 67 libnxt-core.so [.] wisp::tidy::run - -
+0.58% 62 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> > - -
+0.56% 60 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.53% 57 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+
+
+#
+# (Tip: Generate a script for your data: perf script -g <lang>)
+#
+
+=== evaluation window / lowered-library / stdlib-list ===
+{"type": "stack-analysis", "mode": "lowered-library", "benchmark": "stdlib-list", "phase_samples": {"timed-loop": 10555, "unresolved": 469}, "window_start": 674.921665, "window_end": 686.266043, "window_samples": 11023, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"immediate": 1795, "bind": 2282, "gc": 705, "spill": 46}, "self_samples": {"wisp::eval_step::call": 358, "wisp::eval_step::immediate": 1499, "wisp::eval_step::bind": 1004, "wisp::eval_step::start_arguments": 306, "wisp::eval_step::proceed": 391, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 9, "wisp::eval_step::lowered": 1097, "wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 724, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 145, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 471, "wisp::tidy::copy": 374, "wisp::eval_step::once": 1035, "wisp::evaluator::execute": 377, "memmove$plt": 29, "wisp::eval_step::operate": 221, "wisp::eval_step::proceed_lowered": 745, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 22, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 104, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_range_insert<__gnu_cxx::__normal_iterator<unsigned int const*, std::span<unsigned int const, 18446744073709551615ul>::__iter_tag> >": 47, "wisp::heap::append_words": 165, "__memmove_evex_unaligned_erms": 282, "wisp::eval_step::proceed_arguments": 296, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 95, "wisp::tab<(wisp::tag)25>::push": 139, "wisp::tab<(wisp::tag)21>::push": 102, "wisp::eval_step::spill": 20, "memset$plt": 21, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 152, "wisp::eval_step::writable_frame": 22, "wisp::eval_step::lowered_address": 359, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 21, "wisp::eval_step::make_progress": 76, "wisp::tidy::tidy": 37, "wisp::tidy::run": 36, "wisp::tidy::push<(wisp::tag)20>": 45, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 34, "wisp::tidy::push<(wisp::tag)25>": 24, "__memset_evex_unaligned": 25, "__memset_evex_unaligned_erms": 13, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 15, "wisp::tidy::pull<(wisp::tag)29>": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4lessEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 8, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 15, "wisp::tab<(wisp::tag)29>::reserve": 1, "_int_malloc": 6, "wisp::tab<(wisp::tag)28>::push": 1, "nxtrt::alloc_trace::event": 2, "wisp::tab<(wisp::tag)26>::push": 4, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 4, "wisp::tidy::pull<(wisp::tag)22>": 4, "memcpy$plt": 4, "wisp::tab<(wisp::tag)20>::push": 14, "wisp::tab<(wisp::tag)22>::push": 3, "_int_free_merge_chunk": 2, "wisp::tab<(wisp::tag)29>::push": 3, "operator new": 1, "wisp::tab<(wisp::tag)23>::push": 2, "wisp::tab<(wisp::tag)28>::reserve": 1, "main": 1, "wisp::eval_step::proceed_lowered(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 3, "_int_free_create_chunk": 1, "wisp::tidy::pull<(wisp::tag)23>": 2, "_dl_tlsdesc_return": 1, "unlink_chunk.isra.0": 1, "cfree@GLIBC_2.2.5": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cpu-clock:u' (time slices: 674.921665,686.266043)
+# Event count (approx.): 11055165198
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+12.99% 1432 libnxt-core.so [.] wisp::eval_step::immediate - -
+9.59% 1057 libnxt-core.so [.] wisp::eval_step::lowered - -
+8.95% 987 libnxt-core.so [.] wisp::eval_step::bind - -
+8.55% 942 libnxt-core.so [.] wisp::eval_step::once - -
+6.41% 706 libnxt-core.so [.] wisp::eval_step::proceed_lowered - -
+6.12% 674 libnxt-core.so [.] wisp::eval_step::start_arguments(unsigned int, unsigned int, unsigned int)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.98% 439 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.55% 391 libnxt-core.so [.] wisp::eval_step::proceed - -
+3.42% 377 libnxt-core.so [.] wisp::evaluator::execute - -
+3.13% 345 libnxt-core.so [.] wisp::tidy::copy - -
+2.92% 322 libnxt-core.so [.] wisp::eval_step::call - -
+2.84% 313 libnxt-core.so [.] wisp::eval_step::lowered_address - -
+2.56% 282 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.53% 279 libnxt-core.so [.] wisp::eval_step::proceed_arguments - -
+2.45% 270 libnxt-core.so [.] wisp::eval_step::start_arguments - -
+1.95% 215 libnxt-core.so [.] wisp::eval_step::operate - -
+1.33% 147 libnxt-core.so [.] wisp::heap::append_words - -
+1.32% 145 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+1.27% 140 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+1.11% 122 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.94% 104 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.86% 95 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.84% 93 libnxt-core.so [.] wisp::eval_step::once - -
+0.76% 84 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.60% 66 libnxt-core.so [.] wisp::eval_step::immediate - -
+0.58% 64 libnxt-core.so [.] wisp::eval_step::make_progress - -
+
+
+#
+# (Tip: Generate a script for your data: perf script -g <lang>)
+#
+
+=== evaluation window / source / router-hit ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "router-hit", "phase_samples": {"timed-loop": 9707, "unresolved": 478}, "window_start": 688.35094, "window_end": 698.795512, "window_samples": 10184, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"bind": 1362, "scan_count": 242, "capture_send": 63, "gc": 191, "spill": 35}, "self_samples": {"wisp::eval_step::lookup": 758, "wisp::eval_step::application": 1329, "wisp::evaluator::execute": 928, "wisp::eval_step::bind": 418, "wisp::eval_step::proceed": 1377, "wisp::tab<(wisp::tag)21>::push": 216, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 266, "wisp::eval_step::operate": 334, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 65, "wisp::eval_step::progress": 192, "wisp::eval_step::string_equal": 13, "wisp::eval_step::once": 696, "wisp::eval_step::scan_count": 242, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 158, "wisp::eval_step::call": 336, "wisp::eval_step::binding": 226, "wisp::eval_step::make_progress": 141, "wisp::eval_step::with_list<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}>": 267, "wisp::eval_step::set_progress": 468, "wisp::eval_step::writable_frame": 48, "nxtrt::alloc_trace::event": 3, "wisp::eval_step::sequence": 51, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 106, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 133, "__memmove_evex_unaligned_erms": 177, "wisp::tidy::copy": 131, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4sendEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 18, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3do_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 34, "wisp::eval_step::let": 131, "wisp::eval_step::append_meta": 4, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 31, "memset$plt": 9, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step7type_ofEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 43, "wisp::heap::append_words": 121, "wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 166, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 62, "wisp::tab<(wisp::tag)25>::push": 88, "wisp::tidy::pull<(wisp::tag)22>": 7, "wisp::eval_step::spill": 25, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 11, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 6, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 37, "__memset_evex_unaligned": 35, "wisp::eval_step::send_from": 14, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 16, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3letEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 13, "wisp::eval_step::pop": 73, "wisp::tab<(wisp::tag)23>::push": 10, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2fnEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 30, "cfree@GLIBC_2.2.5": 3, "__memcmp_evex_movbe": 9, "wisp::eval_step::type_of": 17, "wisp::tidy::tidy": 14, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9is_symbolEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 2, "_int_malloc": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 1, "memmove$plt": 10, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step16call_with_promptEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 10, "memcpy$plt": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5list_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 5, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step12string_equalEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 4, "wisp::tab<(wisp::tag)26>::push": 2, "operator delete": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5quoteEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 5, "wisp::tab<(wisp::tag)22>::push": 2, "wisp::tab<(wisp::tag)29>::push": 10, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 4, "wisp::eval_step::subtract": 3, "operator new": 3, "wisp::tab<(wisp::tag)29>::reserve": 1, "malloc": 1, "sysmalloc": 2, "__memset_evex_unaligned_erms": 5, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 1, "wisp::eval_step::require": 1, "_int_free_create_chunk": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u' (time slices: 688.350940,698.795512)
+# Event count (approx.): 10213640647
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+13.52% 1377 libnxt-core.so [.] wisp::eval_step::proceed - -
+12.70% 1293 libnxt-core.so [.] wisp::eval_step::application - -
+9.11% 928 libnxt-core.so [.] wisp::evaluator::execute - -
+6.84% 697 libnxt-core.so [.] wisp::eval_step::lookup - -
+5.92% 603 libnxt-core.so [.] wisp::eval_step::once - -
+4.11% 419 libnxt-core.so [.] wisp::eval_step::set_progress - -
+4.04% 411 libnxt-core.so [.] wisp::eval_step::bind - -
+3.25% 331 libnxt-core.so [.] wisp::eval_step::operate - -
+2.92% 297 libnxt-core.so [.] wisp::eval_step::call - -
+2.57% 262 libnxt-core.so [.] wisp::eval_step::with_list<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}> - -
+2.42% 246 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.15% 219 libnxt-core.so [.] wisp::eval_step::binding - -
+1.92% 196 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.74% 177 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.69% 172 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.58% 161 libnxt-core.so [.] wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+1.55% 158 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.40% 143 libnxt-core.so [.] wisp::eval_step::progress - -
+1.31% 133 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+1.29% 131 libnxt-core.so [.] wisp::eval_step::let - -
+1.20% 122 libnxt-core.so [.] wisp::tidy::copy - -
+1.17% 119 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.09% 111 libnxt-core.so [.] wisp::heap::append_words - -
+0.94% 96 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.91% 93 libnxt-core.so [.] wisp::eval_step::once - -
+0.75% 76 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.64% 65 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.61% 62 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.60% 61 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.60% 61 libnxt-core.so [.] wisp::eval_step::pop - -
+
+
+#
+# (Tip: Generate a script for your data: perf script -g <lang>)
+#
+
+=== evaluation window / source / stdlib-list ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "stdlib-list", "phase_samples": {"timed-loop": 9501, "unresolved": 529}, "window_start": 700.87893, "window_end": 711.163063, "window_samples": 10030, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"bind": 1513, "gc": 178, "scan_count": 293, "spill": 19}, "self_samples": {"wisp::eval_step::application": 1178, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 195, "wisp::evaluator::execute": 971, "wisp::eval_step::set_progress": 636, "wisp::eval_step::make_progress": 207, "wisp::eval_step::pop": 80, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 357, "wisp::tab<(wisp::tag)25>::push": 120, "wisp::eval_step::bind": 576, "wisp::eval_step::lookup": 777, "wisp::eval_step::proceed": 1577, "wisp::tidy::copy": 114, "wisp::eval_step::progress": 249, "wisp::eval_step::call": 414, "wisp::eval_step::once": 764, "wisp::eval_step::scan_count": 293, "__memmove_evex_unaligned_erms": 182, "wisp::eval_step::operate": 252, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 94, "_int_free_merge_chunk": 1, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 78, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3addESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 10, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 96, "wisp::eval_step::writable_frame": 60, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 85, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 9, "wisp::tab<(wisp::tag)21>::push": 187, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 112, "memset$plt": 10, "_int_malloc": 2, "wisp::heap::append_words": 147, "memmove$plt": 28, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5quoteEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 6, "_dl_tlsdesc_return": 1, "wisp::eval_step::require": 5, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 11, "__memset_evex_unaligned": 29, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8functionEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 6, "wisp::tidy::tidy": 24, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 21, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 9, "__memset_evex_unaligned_erms": 8, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3do_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 1, "wisp::tab<(wisp::tag)26>::push": 5, "wisp::eval_step::binding": 3, "wisp::eval_step::let": 3, "main": 2, "cfree@GLIBC_2.2.5": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2fnEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 2, "malloc": 2, "nxtrt::alloc_trace::event": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4lessEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 5, "wisp::eval_step::with_list<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}>": 1, "std::array<nxtrt::rack<unsigned int>, 5ul>::~array": 2, "wisp::eval_step::spill": 8, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 1, "wisp::tab<(wisp::tag)23>::push": 1, "wisp::eval_step::sequence": 2, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 5, "wisp::evaluator::advance": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u' (time slices: 700.878930,711.163063)
+# Event count (approx.): 10059177261
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+15.71% 1576 libnxt-core.so [.] wisp::eval_step::proceed - -
+11.46% 1149 libnxt-core.so [.] wisp::eval_step::application - -
+9.68% 971 libnxt-core.so [.] wisp::evaluator::execute - -
+7.26% 728 libnxt-core.so [.] wisp::eval_step::lookup - -
+6.40% 642 libnxt-core.so [.] wisp::eval_step::once - -
+5.65% 567 libnxt-core.so [.] wisp::eval_step::bind - -
+5.38% 540 libnxt-core.so [.] wisp::eval_step::set_progress - -
+3.53% 354 libnxt-core.so [.] wisp::eval_step::call - -
+3.30% 331 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.49% 250 libnxt-core.so [.] wisp::eval_step::operate - -
+2.47% 248 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.97% 198 libnxt-core.so [.] wisp::eval_step::progress - -
+1.94% 195 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.81% 182 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.74% 175 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.62% 162 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.29% 129 libnxt-core.so [.] wisp::heap::append_words - -
+1.22% 122 libnxt-core.so [.] wisp::eval_step::once - -
+1.12% 112 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+1.08% 108 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+1.07% 107 libnxt-core.so [.] wisp::tidy::copy - -
+0.96% 96 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+0.95% 95 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.94% 94 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.79% 79 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.78% 78 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.68% 68 libnxt-core.so [.] wisp::eval_step::pop - -
+0.60% 60 libnxt-core.so [.] wisp::eval_step::call - -
+0.51% 51 libnxt-core.so [.] wisp::eval_step::progress - -
+
+
+#
+# (Tip: Generate a script for your data: perf script -g <lang>)
+#
+
+=== evaluation window / source / tak ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "tak", "phase_samples": {"timed-loop": 9872, "unresolved": 559}, "window_start": 713.24286, "window_end": 723.88809, "window_samples": 10431, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"scan_count": 403, "bind": 1509, "gc": 191}, "self_samples": {"wisp::eval_step::scan_count": 403, "wisp::evaluator::execute": 998, "wisp::eval_step::proceed": 1671, "wisp::eval_step::once": 758, "__memmove_evex_unaligned_erms": 225, "wisp::eval_step::call": 345, "wisp::eval_step::lookup": 1059, "wisp::eval_step::application": 1123, "wisp::eval_step::bind": 585, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 356, "wisp::eval_step::operate": 239, "wisp::eval_step::pop": 33, "wisp::tidy::tidy": 31, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 224, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 232, "wisp::tab<(wisp::tag)25>::push": 82, "wisp::eval_step::writable_frame": 72, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 94, "wisp::tidy::copy": 110, "wisp::eval_step::set_progress": 741, "__memset_evex_unaligned": 32, "wisp::eval_step::make_progress": 208, "wisp::eval_step::progress": 281, "wisp::tab<(wisp::tag)21>::push": 114, "wisp::heap::append_words": 126, "wisp::tab<(wisp::tag)28>::push": 1, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 71, "wisp::heap::filledv32": 1, "wisp::eval_step::subtract": 48, "wisp::tab<(wisp::tag)26>::push": 4, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4lessEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 44, "_int_malloc": 8, "memmove$plt": 24, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 11, "malloc": 3, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 11, "memset$plt": 7, "wisp::eval_step::require": 5, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append": 1, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 15, "__memset_evex_unaligned_erms": 16, "memcpy$plt": 1, "cfree@GLIBC_2.2.5": 3, "wisp::tab<(wisp::tag)27>::push": 1, "std::array<nxtrt::rack<unsigned int>, 3ul>::operator=": 1, "main": 2, "_int_free_create_chunk": 1, "std::__invoke_impl<void, wisp::tidy::tidy(wisp::heap&)::{lambda<wisp::tag... $N0>((wisp::tab<$N0>&)...)#1}, wisp::tab<(wisp::tag)21>&, wisp::tab<(wisp::tag)22>&, wisp::tab<(wisp::tag)23>&, wisp::tab<(wisp::tag)24>&, wisp::tab<(wisp::tag)25>&, wisp::tab<(wisp::tag)26>&, wisp::tab<(wisp::tag)27>&, wisp::tab<(wisp::tag)28>&, wisp::tab<(wisp::tag)29>&, wisp::tab<(wisp::tag)30>&, wisp::tab<(wisp::tag)20>&>": 1, "wisp::tidy::pull<(wisp::tag)22>": 1, "std::_Tuple_impl<5ul, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::~_Tuple_impl": 1, "wisp::tidy::run": 1, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 1, "std::_Tuple_impl<3ul, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::~_Tuple_impl": 1, "wisp::tab<(wisp::tag)22>::push": 1, "nxtrt::alloc_trace::event": 1, "_dl_tlsdesc_return": 1, "wisp::tab<(wisp::tag)23>::push": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cpu-clock:u' (time slices: 713.242860,723.888090)
+# Event count (approx.): 10461383870
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .................... ...........................................................................
+#
+16.01% 1670 libnxt-core.so [.] wisp::eval_step::proceed - -
+10.56% 1101 libnxt-core.so [.] wisp::eval_step::application - -
+9.57% 998 libnxt-core.so [.] wisp::evaluator::execute - -
+9.47% 988 libnxt-core.so [.] wisp::eval_step::lookup - -
+6.31% 658 libnxt-core.so [.] wisp::eval_step::set_progress - -
+6.11% 637 libnxt-core.so [.] wisp::eval_step::once - -
+5.52% 576 libnxt-core.so [.] wisp::eval_step::bind - -
+3.38% 353 libnxt-core.so [.] wisp::eval_step::scan_count - -
+3.19% 333 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+3.00% 313 libnxt-core.so [.] wisp::eval_step::call - -
+2.26% 236 libnxt-core.so [.] wisp::eval_step::operate - -
+2.22% 232 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+2.16% 225 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+2.15% 224 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.98% 207 libnxt-core.so [.] wisp::eval_step::progress - -
+1.77% 185 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.16% 121 libnxt-core.so [.] wisp::eval_step::once - -
+1.11% 116 libnxt-core.so [.] wisp::heap::append_words - -
+0.99% 103 libnxt-core.so [.] wisp::tidy::copy - -
+0.91% 95 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+0.81% 84 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.80% 83 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.71% 74 libnxt-core.so [.] wisp::eval_step::progress - -
+0.68% 71 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.68% 71 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.68% 71 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+
+
+#
+# (Tip: Save output of perf stat using: perf stat record <target workload>)
+#
+
+=== evaluation window / source / deriv ===
+{"type": "stack-analysis", "mode": "source", "benchmark": "deriv", "phase_samples": {"timed-loop": 9518, "unresolved": 462}, "window_start": 725.96685, "window_end": 736.191797, "window_samples": 9980, "scope": "sample-bounded timed-loop window after 2000ms recording delay", "inclusive_samples": {"bind": 1307, "scan_count": 236, "gc": 168}, "self_samples": {"wisp::eval_step::bind": 485, "wisp::eval_step::application": 1417, "wisp::evaluator::execute": 984, "wisp::eval_step::call": 443, "wisp::eval_step::once": 879, "wisp::eval_step::set_progress": 571, "wisp::eval_step::proceed": 1502, "wisp::eval_step::lookup": 635, "wisp::eval_step::scan_count": 236, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 82, "wisp::heap::append_words": 105, "wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator()": 307, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 153, "wisp::eval_step::progress": 235, "__memmove_evex_unaligned_erms": 156, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE": 86, "wisp::tidy::copy": 112, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append": 87, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_": 64, "wisp::tab<(wisp::tag)25>::push": 79, "wisp::eval_step::operate": 339, "wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}>": 204, "wisp::tab<(wisp::tag)21>::push": 151, "wisp::tidy::tidy": 16, "memmove$plt": 22, "_int_malloc": 5, "wisp::eval_step::make_progress": 204, "memset$plt": 12, "wisp::eval_step::pop": 69, "sysmalloc": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8functionEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 1, "wisp::tidy::run()::{lambda((auto:1&)...)#1}::operator()<wisp::tab<(wisp::tag)21>, wisp::tab<(wisp::tag)22>, wisp::tab<(wisp::tag)23>, wisp::tab<(wisp::tag)24>, wisp::tab<(wisp::tag)25>, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >": 8, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5quoteEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 24, "nxtrt::alloc_trace::event": 5, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2eqEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 21, "wisp::eval_step::type_of": 43, "__memset_evex_unaligned": 28, "__memset_evex_unaligned_erms": 10, "wisp::eval_step::writable_frame": 46, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4callEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 6, "_ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE$plt": 14, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step5list_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 40, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step4consEjjEEJjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 24, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step8subtractEjSt4spanIKjLm18446744073709551615EEEEJjS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 9, "wisp::eval_step::sequence": 8, "std::array<nxtrt::rack<unsigned int>, 5ul>::operator=": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step2fnEjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 16, "malloc$plt": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step7type_ofEjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_": 6, "std::vector<unsigned int, std::allocator<unsigned int> >::_M_fill_append": 1, "unlink_chunk.isra.0": 1, "memcpy$plt": 1, "malloc": 1, "_ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3do_ESt4spanIKjLm18446744073709551615EEEEJS6_EEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_S6_E_8__invokeESF_S6_": 4, "wisp::tab<(wisp::tag)28>::reserve": 1, "wisp::tab<(wisp::tag)23>::push": 2, "std::vector<char, std::allocator<char> >::_M_range_insert<char const*>": 4, "std::__invoke_impl<void, wisp::tidy::tidy(wisp::heap&)::{lambda<wisp::tag... $N0>((wisp::tab<$N0>&)...)#1}, wisp::tab<(wisp::tag)21>&, wisp::tab<(wisp::tag)22>&, wisp::tab<(wisp::tag)23>&, wisp::tab<(wisp::tag)24>&, wisp::tab<(wisp::tag)25>&, wisp::tab<(wisp::tag)26>&, wisp::tab<(wisp::tag)27>&, wisp::tab<(wisp::tag)28>&, wisp::tab<(wisp::tag)29>&, wisp::tab<(wisp::tag)30>&, wisp::tab<(wisp::tag)20>&>": 1, "wisp::eval_step::require": 1, "wisp::eval_step::subtract": 2, "__brk": 1, "main": 2, "wisp::tidy::pull<(wisp::tag)23>": 1, "wisp::tidy::pull<(wisp::tag)22>": 1, "wisp::tab<(wisp::tag)26>::push": 1, "std::_Tuple_impl<5ul, wisp::tab<(wisp::tag)26>, wisp::tab<(wisp::tag)27>, wisp::tab<(wisp::tag)28>, wisp::tab<(wisp::tag)29>, wisp::tab<(wisp::tag)30>, wisp::tab<(wisp::tag)20> >::~_Tuple_impl": 1, "__default_morecore@GLIBC_2.2.5": 1, "wisp::evaluator::advance": 1}}
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 9K of event 'cpu-clock:u' (time slices: 725.966850,736.191797)
+# Event count (approx.): 10009026811
+#
+# Overhead Samples Shared Object Symbol IPC [IPC Coverage]
+# ........ ............ .............. .................................................................................
+#
+15.05% 1502 libnxt-core.so [.] wisp::eval_step::proceed - -
+13.81% 1378 libnxt-core.so [.] wisp::eval_step::application - -
+9.86% 984 libnxt-core.so [.] wisp::evaluator::execute - -
+7.62% 760 libnxt-core.so [.] wisp::eval_step::once - -
+5.80% 579 libnxt-core.so [.] wisp::eval_step::lookup - -
+5.01% 500 libnxt-core.so [.] wisp::eval_step::set_progress - -
+4.81% 480 libnxt-core.so [.] wisp::eval_step::bind - -
+3.91% 390 libnxt-core.so [.] wisp::eval_step::call - -
+3.37% 336 libnxt-core.so [.] wisp::eval_step::operate - -
+2.88% 287 libnxt-core.so [.] wisp::eval_step::bind(unsigned int, std::array<unsigned int, 5ul> const&, std::span<unsigned int const, 18446744073709551615ul>)::{lambda(std::span<unsigned int, 18446744073709551615ul>)#1}::operator() - -
+2.04% 204 libnxt-core.so [.] wisp::(anonymous namespace)::with_words<wisp::eval_step::proceed()::{lambda(std::span<unsigned int, 18446744073709551615ul>)#2}> - -
+1.98% 198 libnxt-core.so [.] wisp::eval_step::scan_count - -
+1.82% 182 libnxt-core.so [.] wisp::eval_step::progress - -
+1.71% 171 libnxt-core.so [.] wisp::eval_step::make_progress - -
+1.56% 156 libc.so.6 [.] __memmove_evex_unaligned_erms - -
+1.53% 153 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step3if_EjjjEEJjjjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESC_SF_ - -
+1.29% 129 libnxt-core.so [.] wisp::tab<(wisp::tag)21>::push - -
+1.19% 119 libnxt-core.so [.] wisp::eval_step::once - -
+1.04% 104 libnxt-core.so [.] wisp::tidy::copy - -
+0.97% 97 libnxt-core.so [.] wisp::heap::append_words - -
+0.86% 86 libnxt-core.so [.] _ZN4wisp4heap9new_wordsILNS_3tagE25EQ12word_payloadIXT_EEEEjSt4spanIKjLm18446744073709551615EE - -
+0.82% 82 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE1EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.76% 76 libnxt-core.so [.] std::vector<unsigned int, std::allocator<unsigned int> >::_M_default_append - -
+0.75% 75 libnxt-core.so [.] wisp::tab<(wisp::tag)25>::push - -
+0.71% 71 libnxt-core.so [.] wisp::eval_step::set_progress - -
+0.64% 64 libnxt-core.so [.] _ZZN4wisp12_GLOBAL__N_17builtin4bindITnDaXadL_ZNS_9eval_step9pair_partILNS_5fieldE0EEEvjEEJjEEES1_St17basic_string_viewIcSt11char_traitsIcEEbbMS3_FvDpT0_EENUlRS3_St4spanIKjLm18446744073709551615EEE_8__invokeESE_SH_ - -
+0.59% 59 libnxt-core.so [.] wisp::eval_step::pop - -
+0.55% 55 libnxt-core.so [.] wisp::eval_step::lookup - -
+0.53% 53 libnxt-core.so [.] wisp::eval_step::call - -
+0.53% 53 libnxt-core.so [.] wisp::eval_step::progress - -
+
+
+#
+# (Tip: Save output of perf stat using: perf stat record <target workload>)
+#
+
+=== Source call-16: scan_count callers ===
+perf report -i build/wisp-sampling/profiles/source-call-16.data --stdio --no-inline --symbol-filter='wisp::eval_step::scan_count' --call-graph graph,1,caller --percent-limit 0
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 9K of event 'cpu-clock:u'
+# Event count (approx.): 9916749983
+#
+# Children Self Command Shared Object Symbol
+# ........ ........ .......... .............. ...............................
+#
+23.00% 23.00% wisp-bench libnxt-core.so [.] wisp::eval_step::scan_count
+            |
+            |--22.43%--_start
+            |          __libc_start_main@@GLIBC_2.34
+            |          __libc_start_call_main
+            |          main
+            |          wisp::evaluator::execute
+            |          wisp::eval_step::proceed
+            |          wisp::eval_step::scan_count
+            |
+             --0.57%--wisp::eval_step::proceed
+                       wisp::eval_step::scan_count
+
+0.78% 0.78% wisp-bench libnxt-core.so [.] wisp::eval_step::scan_count
+            |
+            ---_start
+               __libc_start_main@@GLIBC_2.34
+               __libc_start_call_main
+               main
+               wisp::evaluator::execute
+               wisp::eval_step::scan_count
+
+
+
+#
+# (Tip: Customize output of perf script with: perf script -F event,ip,sym)
+#
+
+=== Lowered call-16: immediate instruction annotation ===
+perf annotate -i build/wisp-sampling/profiles/lowered-library-call-16.data --stdio --symbol='wisp::eval_step::immediate' --no-source
+ Percent |	Source code & Disassembly of libnxt-core.so for cpu-clock:u (2525 samples, percent: local period)
+-----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3      Disassembly of section .text:
+         :
+         : 5      0000000000118900 <wisp::eval_step::immediate(unsigned int, unsigned int&)>:
+         : 6      wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.00 :   118900: push   %rbp
+    0.00 :   118901: mov    %rsp,%rbp
+    0.00 :   118904: push   %r14
+    0.04 :   118906: push   %rbx
+    6.38 :   118907: sub    $0x10,%rsp
+    0.00 :   11890b: mov    %fs:0x28,%rax
+    0.00 :   118914: mov    %rax,-0x18(%rbp)
+         : 484    wisp::tag_of(unsigned int):
+    0.00 :   118918: mov    %esi,%eax
+    0.00 :   11891a: sar    $0x1f,%eax
+    0.00 :   11891d: and    %esi,%eax
+         : 42     wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.00 :   11891f: and    $0xf8000000,%eax
+    6.30 :   118924: cmp    $0xa0000000,%eax
+    0.00 :   118929: jne    118a34 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x134>
+    1.31 :   11892f: mov    %rdx,%rbx
+    0.00 :   118932: mov    0x8(%rdi),%rax
+         : 571    wisp::index_of(unsigned int):
+    0.00 :   118936: mov    %esi,%edx
+    0.00 :   118938: shr    %edx
+    1.07 :   11893a: and    $0x3ffffff,%edx
+         : 81     wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.00 :   118940: mov    0x10(%rax),%rcx
+         : 115    std::span<unsigned int const, 18446744073709551615ul>::empty() const:
+    0.04 :   118944: cmpl   $0x0,(%rcx,%rdx,4)
+         : 265    wisp::eval_step::immediate(unsigned int, unsigned int&):
+   13.70 :   118948: je     118a34 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x134>
+         : 163    std::vector<unsigned int, std::allocator<unsigned int> >::data() const:
+    3.13 :   11894e: mov    0x338(%rax),%rcx
+         : 1392   wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.04 :   118955: mov    (%rax),%r8
+    1.39 :   118958: mov    (%r8,%rdx,4),%edx
+    0.04 :   11895c: mov    (%rcx,%rdx,4),%r9d
+         : 163    wisp::tag_of(unsigned int):
+   12.75 :   118960: mov    %r9d,%r8d
+    3.41 :   118963: sar    $0x1f,%r8d
+    5.27 :   118967: and    %r9d,%r8d
+         : 42     wisp::code_operation_of(unsigned int):
+    5.15 :   11896a: cmp    $0x7ffffff,%r8d
+    0.00 :   118971: ja     118a34 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x134>
+         : 150    wisp::integer(unsigned int):
+    5.66 :   118977: mov    %r9d,%r8d
+    0.00 :   11897a: and    $0x3fffffff,%r8d
+    0.24 :   118981: and    $0x40000000,%r9d
+    0.08 :   118988: sub    %r9d,%r8d
+         : 60     wisp::code_operation_of(unsigned int):
+    5.82 :   11898b: add    $0xffffff00,%r8d
+    0.83 :   118992: cmp    $0xd,%r8d
+         : 152    wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.00 :   118996: jae    118a34 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x134>
+    4.44 :   11899c: lea    (%rcx,%rdx,4),%rcx
+    0.00 :   1189a0: cmp    $0x3,%r8d
+    0.00 :   1189a4: je     1189e3 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0xe3>
+    3.05 :   1189a6: cmp    $0x1,%r8d
+    0.00 :   1189aa: je     1189b7 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0xb7>
+    4.75 :   1189ac: test   %r8d,%r8d
+    0.00 :   1189af: jne    118a0c <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x10c>
+         : 484    std::span<unsigned int const, 18446744073709551615ul>::operator[](unsigned long) const:
+    0.95 :   1189b1: add    $0x4,%rcx
+         : 290    wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.00 :   1189b5: jmp    1189f5 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0xf5>
+    0.67 :   1189b7: mov    %rdi,%r14
+    0.12 :   1189ba: call   86920 <_ZN4wisp9eval_step15lowered_addressEj$plt>
+    0.00 :   1189bf: mov    0x8(%r14),%rcx
+         : 485    nxtrt::rack<unsigned int>::data() const:
+    0.00 :   1189c3: mov    0x1a0(%rcx),%rsi
+         : 115    std::span<unsigned int const, 18446744073709551615ul>::operator[](unsigned long) const:
+    0.00 :   1189ca: and    $0x7fffffe,%eax
+         : 290    wisp::tab<(wisp::tag)25>::get(unsigned long, unsigned long) const:
+    0.00 :   1189cf: mov    (%rsi,%rax,2),%eax
+         : 258    std::span<unsigned int const, 18446744073709551615ul>::subspan(unsigned long, unsigned long) const:
+    0.00 :   1189d2: shl    $0x2,%rax
+    0.00 :   1189d6: add    0x338(%rcx),%rax
+         : 446    std::span<unsigned int const, 18446744073709551615ul>::operator[](unsigned long) const:
+    0.00 :   1189dd: lea    (%rax,%rdx,4),%rcx
+    0.67 :   1189e1: jmp    1189f5 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0xf5>
+         : 291    wisp::eval_step::code_operand(unsigned int, unsigned long) const:
+    0.00 :   1189e3: mov    0x4(%rcx),%ecx
+         : 581    std::span<unsigned int const, 18446744073709551615ul>::operator[](unsigned long) const:
+    0.00 :   1189e6: add    %ecx,%ecx
+    0.00 :   1189e8: and    $0xffffffc,%ecx
+    0.00 :   1189ee: add    0x2c0(%rax),%rcx
+         : 292    wisp::eval_step::immediate(unsigned int, unsigned int&):
+    0.00 :   1189f5: mov    (%rcx),%eax
+    1.07 :   1189f7: mov    %eax,(%rbx)
+    0.95 :   1189f9: mov    $0x1,%al
+    0.00 :   1189fb: mov    %fs:0x28,%rcx
+    1.07 :   118a04: cmp    -0x18(%rbp),%rcx
+    0.00 :   118a08: je     118a1d <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x11d>
+    0.00 :   118a0a: jmp    118a59 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x159>
+    0.04 :   118a0c: xor    %eax,%eax
+    0.00 :   118a0e: mov    %fs:0x28,%rcx
+    0.00 :   118a17: cmp    -0x18(%rbp),%rcx
+    0.00 :   118a1b: jne    118a59 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x159>
+    2.97 :   118a1d: add    $0x10,%rsp
+    1.35 :   118a21: pop    %rbx
+    0.00 :   118a22: pop    %r14
+    0.00 :   118a24: pop    %rbp
+    0.75 :   118a25: xor    %ecx,%ecx
+    0.12 :   118a27: xor    %edi,%edi
+    0.00 :   118a29: xor    %edx,%edx
+    0.59 :   118a2b: xor    %esi,%esi
+    2.85 :   118a2d: xor    %r8d,%r8d
+    0.95 :   118a30: xor    %r9d,%r9d
+    0.00 :   118a33: ret
+    0.00 :   118a34: mov    %esi,-0x1c(%rbp)
+    0.00 :   118a37: mov    %fs:0x28,%rax
+    0.00 :   118a40: cmp    -0x18(%rbp),%rax
+    0.00 :   118a44: jne    118a59 <wisp::eval_step::immediate(unsigned int, unsigned int&)+0x159>
+    0.00 :   118a46: lea    -0x1c(%rbp),%rdx
+    0.00 :   118a4a: mov    $0x36,%esi
+    0.00 :   118a4f: mov    $0x1,%ecx
+    0.00 :   118a54: call   86060 <_ZN4wisp9eval_step4failENS_10known_nameESt16initializer_listIjE$plt>
+    0.00 :   118a59: call   88060 <__stack_chk_fail$plt>
+ Percent |	Source code & Disassembly of libnxt-core.so for cpu-clock:u (214 samples, percent: local period)
+----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .plt:
+         :
+         : 5     0000000000086960 <_ZN4wisp9eval_step9immediateEjRj$plt>:
+         : 6     _ZN4wisp9eval_step9immediateEjRj$plt():
+  100.00 :   86960:  mov    $0x2a6,%r11d
+    0.00 :   86966:  jmp    *0xe9c24(%rip)        # 170590 <wisp::eval_step::immediate(unsigned int, unsigned int&)@@Base+0x57c90>
+    0.00 :   8696c:  int3
+    0.00 :   8696d:  int3
+    0.00 :   8696e:  int3
+    0.00 :   8696f:  int3
