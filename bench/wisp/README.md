@@ -15,6 +15,9 @@ The intentionally incorrect, unexercised quotient derivative is preserved.
 
 The [2026-10-02 release baseline](RESULTS.md) includes all 20 cases, 300 checked
 samples across six runtimes, and a separate semantic-counter run.
+The [2026-10-04 lowered-code comparison](LOWERED.md) includes 500 checked
+samples across source, record, and compact execution modes, retained-heap and
+progress-copy diagnostics, and the remaining performance regressions.
 
 ## Build, check, and measure
 

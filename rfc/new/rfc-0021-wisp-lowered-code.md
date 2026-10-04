@@ -328,6 +328,49 @@ Once lowered execution passes everything record execution does, decide
 whether the record executor stays as an executable comparison target or is
 removed. The IR, analyzer, and checker stay either way.
 
+## First compact-node measurements and decision
+
+The [complete results and raw data](https://github.com/mbrock/nxtui/blob/main/bench/wisp/LOWERED.md)
+record 500 checked timing samples (five samples, 20 cases, five modes) and 100
+separate diagnostic records at
+[626484a](https://github.com/mbrock/nxtui/commit/626484af31129089d838fd19ee992faec193ea97).
+This is Clang 23.1 on Linux x86-64 in an orb, serial and CPU-pinned, not the
+earlier macOS measurement. Before timing, collect setup garbage and give each
+mode the same relative allocation headroom; old heap-start numbers are not a
+comparable retained-code baseline.
+
+The fully lowered fixture machine retains 21.8% less than the fully prepared
+one (256 versus 327 KiB in the fixed call fixture), and fully lowered medians
+beat fully prepared medians in all 20 cases. Source remains smaller, because
+it does not load the compiler. Against source, wide calls improve 1.63×,
+shallow effects 1.46×, and the guest routers 1.12×/1.20×. But whole-library
+lowering is not generally faster yet: TAK is 7.4% slower, DERIV/division about
+9–10% slower, and backquote 19.5% slower. Benchmark-only lowering is a little
+faster on TAK (53.7 versus 56.2 ms); the library still has a material cost.
+
+Lowering preserves record execution's transition and frame-push counts
+exactly. TAK still takes 826,921 transitions, pushes 254,437 frames, and
+allocates about 764,000 word-pool words. Its average uninstrumented time per
+diagnostic-counted transition is about 65 ns lowered, 73 ns lowered-library,
+and 38 ns source. These are different mixes of work, not isolated dispatch
+costs, so the expectation of source-like average lowered transition cost is
+not met and does not by itself identify opcode checks as the remaining cause.
+
+The new progress-copy counter also includes copy-on-write after collection,
+which freezes all surviving frames. Differences in library-mode payload-word
+counts equal differences in progress cloning exactly. Smaller retained code
+changes GC boundaries: TAK's instrumented collection time falls, but the
+deep-effect diagnostic collects more often and spends longer collecting.
+Smaller code is a win, not a guarantee of uniformly cheaper GC.
+
+**Keep shape A and per-operation frames for now, keep record execution as
+the reference, and keep installation opt-in.** The next experiment is native
+profiling of call dispatch, argument binding, and frame/vector allocation,
+with effects alongside recursive programs. The high remaining allocation
+counts make that a candidate, not proof of its CPU share. These measurements
+do not yet justify activation-wide copy costs, a PC/run-schema change, an
+immutable code type, or sacrificing source inspection.
+
 ## Open questions
 
 - Whether per-node checks are cheap enough, or a verified immutable code type
