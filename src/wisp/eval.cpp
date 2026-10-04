@@ -40,6 +40,7 @@ struct builtin
 {
     std::string_view name;
     bool control;
+    bool observes;
     std::size_t minimum;
     std::size_t maximum;
     void (*invoke)(eval_step &, values);
@@ -49,9 +50,9 @@ struct builtin
     // function-pointer casts or compiler reflection are needed.
     template<auto Function>
     static consteval builtin
-    bind(std::string_view name, bool control = false)
+    bind(std::string_view name, bool control = false, bool observes = false)
     {
-        return bind<Function>(name, control, Function);
+        return bind<Function>(name, control, observes, Function);
     }
 
 private:
@@ -65,8 +66,11 @@ private:
     }
 
     template<auto Function, typename... Args>
-    static consteval builtin
-    bind(std::string_view name, bool control, void (eval_step::*)(Args...))
+    static consteval builtin bind(
+        std::string_view name,
+        bool control,
+        bool observes,
+        void (eval_step::*)(Args...))
     {
         static_assert(
             ((std::same_as<Args, word> || std::same_as<Args, values>)
@@ -82,6 +86,7 @@ private:
         return {
             name,
             control,
+            observes,
             sizeof...(Args) - rest,
             rest ? std::size_t(-1) : sizeof...(Args),
             [](eval_step & step, values args) {
@@ -307,7 +312,7 @@ evaluation evaluator::status(word run) const noexcept
     return evaluation::runnable;
 }
 
-// Scratch registers for exactly one transition. No guest allocation
+// Scratch registers for a batch of transitions. No guest allocation
 // collects; no borrowed row or payload survives a call that can grow it.
 struct eval_step
 {
@@ -316,6 +321,34 @@ struct eval_step
     word exp, val, err, env, way, meta;
     values active_runs;
     word step_target = nil;
+    row<tag::run> entry{};
+
+    evaluation state() const
+    {
+        if (err != nil)
+            return evaluation::failed;
+        return val != nah && segment_empty() && meta == top
+                   ? evaluation::done
+                   : evaluation::runnable;
+    }
+
+    void begin_transition()
+    {
+        entry = {exp, val, err, env, way, meta};
+    }
+
+    void observe()
+    {
+        // Self-inspection sees the same transition-entry run row as the
+        // one-step evaluator, including in-place heap progress mutations.
+        h.put<tag::run>(active_runs.back(), entry);
+    }
+
+    void commit()
+    {
+        h.put<tag::run>(
+            active_runs.back(), {exp, val, err, env, way, meta});
+    }
 
     [[noreturn]] void
     fail(known_name name, std::initializer_list<word> details = {})
@@ -1128,6 +1161,8 @@ struct eval_step
                 fail(
                     "PROGRAM-ERROR",
                     {vm.known("INVALID-ARGUMENT-COUNT"), jet});
+            if (def.observes)
+                observe();
             def.invoke(*this, args);
         } catch (const condition & c) {
             fail("BUILTIN-FAILURE", {jet, c.value});
@@ -2153,13 +2188,18 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::get_cc>("GET/CC"),
         builtin::bind<&eval_step::compose_continuation>(
             "COMPOSE-CONTINUATION"),
-        builtin::bind<&eval_step::ktx_part<field::hop>>("KTX-HOP"),
-        builtin::bind<&eval_step::ktx_part<field::env>>("KTX-ENV"),
-        builtin::bind<&eval_step::ktx_part<field::fun>>("KTX-FUN"),
-        builtin::bind<&eval_step::ktx_part<field::acc>>("KTX-ACC"),
-        builtin::bind<&eval_step::ktx_part<field::arg>>("KTX-ARG"),
-        builtin::bind<&eval_step::ktx_position>("KTX-POS"),
-        builtin::bind<&eval_step::is_top>("TOP?"),
+        builtin::bind<&eval_step::ktx_part<field::hop>>(
+            "KTX-HOP", false, true),
+        builtin::bind<&eval_step::ktx_part<field::env>>(
+            "KTX-ENV", false, true),
+        builtin::bind<&eval_step::ktx_part<field::fun>>(
+            "KTX-FUN", false, true),
+        builtin::bind<&eval_step::ktx_part<field::acc>>(
+            "KTX-ACC", false, true),
+        builtin::bind<&eval_step::ktx_part<field::arg>>(
+            "KTX-ARG", false, true),
+        builtin::bind<&eval_step::ktx_position>("KTX-POS", false, true),
+        builtin::bind<&eval_step::is_top>("TOP?", false, true),
         builtin::bind<&eval_step::eval>("EVAL"),
         builtin::bind<&eval_step::divide>("/"),
         builtin::bind<&eval_step::mod>("MOD"),
@@ -2233,14 +2273,14 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::in_package>("IN-PACKAGE", true),
         builtin::bind<&eval_step::intern>("INTERN"),
         builtin::bind<&eval_step::run>("RUN"),
-        builtin::bind<&eval_step::step_run>("STEP!"),
+        builtin::bind<&eval_step::step_run>("STEP!", false, true),
         builtin::bind<&eval_step::gc>("GC"),
-        builtin::bind<&eval_step::run_expression>("RUN-EXP"),
-        builtin::bind<&eval_step::run_way>("RUN-WAY"),
+        builtin::bind<&eval_step::run_expression>("RUN-EXP", false, true),
+        builtin::bind<&eval_step::run_way>("RUN-WAY", false, true),
         builtin::bind<&eval_step::get_field<tag::run, field::val>>(
-            "RUN-VAL"),
+            "RUN-VAL", false, true),
         builtin::bind<&eval_step::get_field<tag::run, field::err>>(
-            "RUN-ERR"),
+            "RUN-ERR", false, true),
     };
     static_assert(
         [] {
@@ -2258,6 +2298,16 @@ std::span<const builtin> builtins()
 
 evaluation evaluator::step(word run)
 {
+    return execute(run, 1, false);
+}
+
+evaluation evaluator::advance(word run, std::size_t budget)
+{
+    return execute(run, budget, true);
+}
+
+evaluation evaluator::execute(word run, std::size_t budget, bool poll_gc)
+{
     // STEP! can itself step another run. Commit each row before dispatching
     // the next, without growing the native stack or collecting scratch
     // words. Ordinary transitions fit on the stack; only unusually deep
@@ -2265,52 +2315,57 @@ evaluation evaluator::step(word run)
     std::array<word, 16> local;
     std::optional<nxtrt::rack<word>> overflow;
     std::span<word> active = local;
-    std::size_t depth = 0;
-    auto current = run;
-    while (status(current) == evaluation::runnable) {
-        if (depth == active.size()) {
-            nxtrt::rack<word> grown{2 * depth};
-            std::uninitialized_copy_n(active.data(), depth, grown.data());
-            overflow = std::move(grown);
-            active = {overflow->data(), overflow->size()};
-        }
-        std::construct_at(active.data() + depth++, current);
-        const auto [exp, val, err, env, way, meta] =
-            heap_.read<tag::run>(current);
-        eval_step s{
-            *this,
-            heap_,
-            exp,
-            val,
-            err,
-            env,
-            way,
-            meta,
-            active.first(depth)};
-        try {
-            s.once();
-        } catch (const condition & c) {
-            try {
-                s.send(known("ERROR"), c.value, nah);
-            } catch (const condition & unhandled) {
-                s.err = unhandled.value;
+    auto result = status(run);
+    while (budget != 0 && result == evaluation::runnable
+           && !(poll_gc && collect_)) {
+        std::size_t depth = 0;
+        auto current = run;
+        while (status(current) == evaluation::runnable) {
+            if (depth == active.size()) {
+                nxtrt::rack<word> grown{2 * depth};
+                std::uninitialized_copy_n(
+                    active.data(), depth, grown.data());
+                overflow = std::move(grown);
+                active = {overflow->data(), overflow->size()};
             }
+            std::construct_at(active.data() + depth++, current);
+            const auto [exp, val, err, env, way, meta] =
+                heap_.read<tag::run>(current);
+            eval_step s{
+                *this,
+                heap_,
+                exp,
+                val,
+                err,
+                env,
+                way,
+                meta,
+                active.first(depth)};
+            do {
+                s.begin_transition();
+                try {
+                    s.once();
+                } catch (const condition & c) {
+                    try {
+                        s.send(known("ERROR"), c.value, nah);
+                    } catch (const condition & unhandled) {
+                        s.err = unhandled.value;
+                    }
+                }
+                if (current != run)
+                    break; // A nested STEP! always takes just one step.
+                --budget;
+            } while (budget != 0 && s.step_target == nil
+                     && s.state() == evaluation::runnable
+                     && !(poll_gc && collect_));
+            s.commit();
+            if (s.step_target == nil)
+                break;
+            current = s.step_target;
         }
-        heap_.put<tag::run>(
-            current, {s.exp, s.val, s.err, s.env, s.way, s.meta});
-        if (s.step_target == nil)
-            break;
-        current = s.step_target;
+        result = status(run);
     }
-    return status(run);
-}
-
-evaluation evaluator::advance(word run, std::size_t budget)
-{
-    auto state = status(run);
-    while (budget-- != 0 && state == evaluation::runnable && !collect_)
-        state = step(run);
-    return state;
+    return result;
 }
 
 } // namespace wisp

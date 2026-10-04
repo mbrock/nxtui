@@ -147,6 +147,8 @@ private:
     // saved definitions. Only a validated tape may fill these slots.
     evaluator(heap & storage, std::nullptr_t);
 
+    evaluation execute(word run, std::size_t budget, bool poll_gc);
+
     struct jet_info
     {
         std::string_view name;

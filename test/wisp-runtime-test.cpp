@@ -363,6 +363,107 @@ static suite runtime_tests{
                     == "(#<KEPT> NIL #<KEPT>)");
             };
 
+        "batched run reflection sees the current transition entry"_test =
+            [] {
+                for (const auto quantum : {1u, 7u, 4096u}) {
+                    for (const auto expression :
+                         {"(run-exp self)",
+                          "(run-val self)",
+                          "(run-way self)",
+                          "(call (function run-way) self)",
+                          "(apply (function run-way) (list self))"}) {
+                        runtime_machine m;
+                        m.run.set(m.vm.start(m.form(expression)));
+                        m.h.set<tag::sym, field::val>(
+                            m.vm.intern("SELF"), m.run.get());
+                        auto state = evaluation::runnable;
+                        for (unsigned n = 0;
+                             n < 100 && state == evaluation::runnable;
+                             ++n)
+                            state = m.vm.advance(m.run.get(), quantum);
+                        expect(state == evaluation::done) << expression;
+                        const auto value =
+                            m.h.get<tag::run, field::val>(m.run.get());
+                        const auto text = std::string_view{expression};
+                        if (text == "(run-exp self)") {
+                            expect(
+                                m.h.read<tag::duo>(value)
+                                == row<tag::duo>{
+                                    m.vm.known("VAL"), m.run.get()});
+                        } else if (text == "(run-val self)") {
+                            expect(value == m.run.get());
+                        } else {
+                            const auto name =
+                                text.starts_with("(call")    ? "CALL"
+                                : text.starts_with("(apply") ? "APPLY"
+                                                             : "RUN-WAY";
+                            expect(tag_of(value) == tag::ktx);
+                            expect(
+                                (m.h.get<tag::ktx, field::fun>(value)
+                                 == m.h.get<tag::sym, field::fun>(
+                                     m.vm.intern(name))));
+                            expect(m.h.continuation_frozen(value));
+                        }
+                    }
+                }
+            };
+
+        "self observation preserves frozen and writable entry progress"_test =
+            [] {
+                for (bool frozen : {false, true}) {
+                    runtime_machine m;
+                    const auto observer = m.h.get<tag::sym, field::fun>(
+                        m.vm.intern("RUN-WAY"));
+                    const auto caller =
+                        m.h.get<tag::sym, field::fun>(m.vm.intern("CALL"));
+                    const auto progress =
+                        m.h.newv32(std::array{word{1}, observer, nil});
+                    const auto frame = m.h.make<tag::ktx>(
+                        {top, nil, caller, progress, nil});
+                    m.run.set(m.h.make<tag::run>(
+                        {nah, nil, nil, nil, frame, top}));
+                    m.h.set<tag::run, field::val>(m.run.get(), m.run.get());
+                    if (frozen)
+                        m.h.freeze_continuations();
+                    expect(
+                        m.vm.advance(m.run.get(), 4096)
+                        == evaluation::done);
+                    expect(
+                        (m.h.get<tag::run, field::val>(m.run.get())
+                         == frame));
+                    expect(m.h.v32slice(progress)[0] == (frozen ? 1u : 2u));
+                    expect(
+                        m.h.v32slice(progress)[2]
+                        == (frozen ? nil : m.run.get()));
+                }
+            };
+
+        "nested STEP! observers see committed ancestors before batching resumes"_test =
+            [] {
+                runtime_machine m;
+                m.run.set(m.vm.start(
+                    m.form("(do (+ 2 3) (step! child) (+ 11 17))")));
+                const auto observer =
+                    m.h.get<tag::sym, field::fun>(m.vm.intern("RUN-VAL"));
+                root child{
+                    m.h,
+                    m.h.make<tag::run>(
+                        {nah,
+                         m.run.get(),
+                         nil,
+                         nil,
+                         m.h.make<tag::ktx>({top, nil, observer, nil, nil}),
+                         top})};
+                m.h.set<tag::sym, field::val>(
+                    m.vm.intern("CHILD"), child.get());
+                expect(m.vm.advance(m.run.get(), 4096) == evaluation::done);
+                expect(
+                    (m.h.get<tag::run, field::val>(m.run.get())
+                     == fixnum(28)));
+                expect(m.vm.status(child.get()) == evaluation::done);
+                expect((m.h.get<tag::run, field::val>(child.get()) == nil));
+            };
+
         "STEP! advances once, isolates failure, and rejects active run cycles"_test =
             [] {
                 runtime_machine m;
