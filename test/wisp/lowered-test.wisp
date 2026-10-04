@@ -205,31 +205,49 @@
     (expect-equal (record-type node) (second source-op))
     (expect-equal (head (code-show node)) :source)))
 
-(deftest "invalid explicit lexical addresses signal conditions"
-  (let* ((node (lower (analyze '(let ((x 42)) x))))
-         (load (record-get node 2)))
-    (record-set! load 0 20)
-    (expect-equal (condition-type (fn () (eval node)))
-                  'invalid-expression)))
+(defun opcode (name)
+  (second (head (find (code-operations)
+                      (fn (entry) (eq? (head entry) name))))))
 
-(deftest "malformed lowered operations reject bad opcodes arities and operands"
-  (let* ((operations (code-operations))
-         (constant (head (find operations (fn (entry) (eq? (head entry) :constant)))))
-         (lexical-load
-          (head (find operations (fn (entry) (eq? (head entry) :lexical-load))))))
-    ;; Pick an opcode outside the schema's operation table.
-    (expect-equal
-     (condition-type (fn () (eval (record 999999))))
-     'invalid-expression)
-    ;; CONSTANT takes one operand; a missing operand is malformed.
-    (expect-equal
-     (condition-type (fn () (eval (record (second constant)))))
-     'invalid-expression)
-    ;; LEXICAL-LOAD takes two fixnum addresses, not a symbol operand.
-    (expect-equal
-     (condition-type
-      (fn () (eval (record (second lexical-load) 'not-an-address 0))))
-     'invalid-expression)))
+;; The condition a builtin signaled, inside its BUILTIN-FAILURE.
+(defun builtin-condition-type (thunk)
+  (try (call thunk)
+       (catch (e k)
+         (if (eq? (type-of e) 'builtin-failure)
+             (type-of (record-get e 1))
+           (type-of e)))))
+
+(deftest "invalid explicit lexical addresses signal conditions"
+  (expect-equal (condition-type
+                 (fn () (eval (make-code (opcode :lexical-load) 20 0))))
+                'invalid-expression))
+
+(deftest "make-code checks opcodes arities and operand kinds"
+  (expect-equal (eval (make-code (opcode :constant) 42)) 42)
+  (expect-equal (builtin-condition-type (fn () (make-code 999999)))
+                'invalid-code)
+  (expect-equal (builtin-condition-type
+                 (fn () (make-code (opcode :constant))))
+                'invalid-code)
+  (expect-equal (builtin-condition-type
+                 (fn () (make-code (opcode :lexical-load) 'not-an-address 0)))
+                'invalid-code)
+  (expect-equal (builtin-condition-type
+                 (fn () (make-code (opcode :branch) 1 2 3)))
+                'invalid-code))
+
+(deftest "code records cannot be fabricated or mutated as records"
+  (expect-equal (builtin-condition-type
+                 (fn () (record (opcode :constant) 42)))
+                'invalid-code)
+  (let ((node (lower (analyze '(let ((x 42)) x)))))
+    (expect-equal (builtin-condition-type
+                   (fn () (record-set! (record-get node 2) 0 20)))
+                  'immutable-code)
+    (expect-equal (eval node) 42))
+  ;; Other fixnum-typed records are data, and fail as expressions.
+  (expect-equal (condition-type (fn () (eval (record 999999))))
+                'invalid-expression))
 
 (deftest "lowering rejects unchecked IR and execution rejects source children"
   (expect-equal

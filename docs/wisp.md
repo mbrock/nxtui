@@ -196,8 +196,10 @@ Macros expand when code is lowered, and syntax is
 snapshotted; changing source conses returned by `code` does not change lowered
 instructions. Function cells and global values remain live. `set-code!`
 with a source form restores source execution; existing suspended work retains
-its original nodes. Code records are currently mutable and checked at runtime,
-not immutable verified bytecode. See
+its original nodes. Code records are immutable: `make-code` is their only
+constructor and checks each operation's shape once, `record` refuses a code
+opcode, `record-set!` refuses a code record, and tapes check restored code.
+See
 [RFC 0021](https://github.com/mbrock/nxtui/blob/main/rfc/new/rfc-0021-wisp-lowered-code.md)
 for the representation and the deferred flat-code/activation-frame decisions.
 

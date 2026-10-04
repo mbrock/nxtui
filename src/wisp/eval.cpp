@@ -536,54 +536,22 @@ struct eval_step
 
     bool lowered_code(word x) const
     {
-        return tag_of(x) == tag::rec && !h.words<tag::rec>(x).empty()
-               && tag_of(h.words<tag::rec>(x)[0]) == tag::integer;
+        return code_record_op(h, x).has_value();
     }
 
+    // A code record's shape was checked when it was made or restored, and
+    // it cannot change, so dispatch reads only its opcode.
     code_op
     lowered_operation(word x, known_name error = "INVALID-EXPRESSION")
     {
-        if (!lowered_code(x))
-            fail(error, {x});
-        const auto xs = h.words<tag::rec>(x);
-        const auto op = code_operation_of(xs[0]);
+        const auto op = code_record_op(h, x);
         if (!op)
             fail(error, {x});
-        const auto & shape = code_operations[std::size_t(*op)];
-        if (xs.size() != shape.count + 1)
-            fail(error, {x});
-        for (std::size_t i = 0; i < shape.count; ++i) {
-            const auto value = xs[i + 1];
-            bool valid = false;
-            switch (shape.operands[i]) {
-            case operand_kind::value:
-                valid = true;
-                break;
-            case operand_kind::address:
-                valid =
-                    tag_of(value) == tag::integer && integer(value) >= 0;
-                break;
-            case operand_kind::symbol:
-                valid = tag_of(value) == tag::sym;
-                break;
-            case operand_kind::name:
-                valid = value == nil || tag_of(value) == tag::sym;
-                break;
-            case operand_kind::node:
-                valid = lowered_code(value);
-                break;
-            case operand_kind::nodes:
-            case operand_kind::names:
-                valid = tag_of(value) == tag::v32;
-                break;
-            }
-            if (!valid)
-                fail(error, {x});
-        }
         return *op;
     }
 
-    // Only after checking arity. Reacquire pool slices after allocations.
+    // Only for a code record of a known operation. Reacquire pool slices
+    // after allocations.
     word code_operand(word x, std::size_t at) const
     {
         return h.words<tag::rec>(x)[at + 1];
@@ -767,6 +735,18 @@ struct eval_step
         default:
             fail("INVALID-CONTINUATION", {way});
         }
+    }
+
+    // The only constructor of code records: OPCODE with OPERANDS that fit
+    // its schema.
+    void make_code(word opcode, values operands)
+    {
+        const auto op = code_operation_of(opcode);
+        if (!op || !code_operands_valid(h, *op, operands))
+            fail("INVALID-CODE", {opcode, list(h, operands)});
+        std::vector<word> xs{opcode};
+        xs.insert(xs.end(), operands.begin(), operands.end());
+        give(h.new_words<tag::rec>(xs));
     }
 
     void code_operations_()
@@ -1493,6 +1473,8 @@ struct eval_step
 
     void record(word type, values slots)
     {
+        if (code_operation_of(type))
+            fail("INVALID-CODE", {type});
         std::vector<word> xs{type};
         xs.insert(xs.end(), slots.begin(), slots.end());
         give(h.new_words<tag::rec>(xs));
@@ -1534,6 +1516,8 @@ struct eval_step
 
     void record_set(word r, word idx, word value)
     {
+        if (lowered_code(r))
+            fail("IMMUTABLE-CODE", {r});
         const auto index = record_index(r, idx);
         h.set_word<tag::rec>(r, index, value);
         give(value);
@@ -2174,6 +2158,7 @@ std::span<const builtin> builtins()
         builtin::bind<&eval_step::record_get>("RECORD-GET"),
         builtin::bind<&eval_step::record_set>("RECORD-SET!"),
         builtin::bind<&eval_step::code_operations_>("CODE-OPERATIONS"),
+        builtin::bind<&eval_step::make_code>("MAKE-CODE"),
         builtin::bind<&eval_step::length<tag::v08>>("BYTE-SIZE"),
         builtin::bind<&eval_step::length<tag::v08>>("STRING-LENGTH"),
         builtin::bind<&eval_step::string_equal>("STRING-EQUAL?"),

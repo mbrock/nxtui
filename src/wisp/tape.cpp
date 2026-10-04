@@ -258,6 +258,17 @@ struct tape_codec
                 typed(pkg, tag::pkg);
         }
 
+        // Dispatch trusts code records' shapes (code.hpp), so a restored
+        // one must be as MAKE-CODE would have made it.
+        for (word i = 0; i < sizes[word(tag::rec)]; ++i) {
+            const auto x = pointer(tag::rec, i, h.era_);
+            if (const auto op = code_record_op(h, x))
+                demand(
+                    code_operands_valid(
+                        h, *op, h.words<tag::rec>(x).subspan(1)),
+                    "invalid code record");
+        }
+
         // Only private package indexes are required to be proper lists.
         // Environments, uses, syntax and continuation payloads are mutable
         // guest data. Runtime readers check them on use; a checkpoint must

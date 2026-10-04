@@ -1,9 +1,10 @@
 # RFC 0021: Wisp Lowered Code {#rfc_wisp_lowered_code}
 
 Status: compact-node lowering and execution implemented, opt-in. Record
-execution is retired (stage 4); source execution is the reference. A native
-profile motivates an immutable, checked-once code type next. Flat code and
-per-activation frames remain deferred.
+execution is retired (stage 4); source execution is the reference. Code
+records are immutable and checked once, which made fully lowered execution
+faster than source on every benchmark. Flat code and per-activation frames
+remain deferred.
 
 ## Proposal
 
@@ -205,22 +206,30 @@ identities are part of the tape format and need a version, like builtin names.
 
 ## Trust and checking
 
-Nodes are word vectors, and a guest can mutate a word vector. The executor
-therefore checks what it reads: that an operand is a vector of the expected
-size, that an address is a non-negative fixnum, and that a lexical address
-fits the environment, with lookup by name unavailable as a fallback because
-the name is gone. A failed check signals a condition. These checks are tag
-comparisons and bounds tests, far cheaper than descriptor decoding, and they
-are part of what must be measured.
+Code records are valid by construction. `MAKE-CODE` is their only
+constructor: it checks the opcode, the arity, and each operand's kind
+against the native schema, and a NODE operand must itself be a code record.
+`RECORD` refuses a code opcode (`INVALID-CODE`), `RECORD-SET!` refuses a
+code record (`IMMUTABLE-CODE`), and tape encoding and decoding apply the
+same check to every code record. By induction every code record has a
+valid shape, so dispatch reads only the opcode and trusts the operands.
+
+NODES and NAMES operands are ordinary vectors, which a guest can still
+mutate. Executors check their elements when they use them: an element
+entered or evaluated in place must be a code record, and a LET name must be
+a symbol. A lexical address must still fit the environment at run time,
+with lookup by name unavailable as a fallback because the name is gone. A
+failed check signals a condition.
 
 `ir-check` remains the gate before lowering: only a checked graph is lowered,
 so well-formedness errors are reported against the IR, where they are
-readable. The runtime checks exist so that mutation or a hostile tape cannot
-make native dispatch read out of bounds, not to report compiler bugs.
+readable. The construction and runtime checks exist so that guest code or
+a malformed tape cannot make native dispatch read out of bounds, not to
+report compiler bugs.
 
-An immutable, verified-once code object is a later option. It needs a new heap
-type and a tape version, and it should be justified by the measured cost of
-the runtime checks.
+Immutability needed no new heap type and no tape version: a code record is
+still a record whose type word is a code opcode, and the tape layout is
+unchanged. Earlier tapes whose code records have valid shapes still load.
 
 ## Frame granularity
 
@@ -420,7 +429,34 @@ equally.
 **Make code nodes valid by construction.** Guests may not create or mutate
 records with a code opcode through `RECORD` or `RECORD-SET!`; a native
 constructor checks shape once, tape decoding checks restored code, and
-dispatch reads only the opcode.
+dispatch reads only the opcode. This is now implemented (see Trust and
+checking).
+
+Against the preceding commit, with the same hardened release build and
+five interleaved samples per case, lowered-library medians improved 13–25%
+on every benchmark measured, and lowered TAK fell from 739 to 585
+instructions per transition. Fully lowered execution is now faster than
+source everywhere:
+
+| Case | Source | Lowered library | Ratio |
+| --- | ---: | ---: | ---: |
+| TAK | 32.84 ms | 24.43 ms | 0.744 |
+| DERIV | 22.4 µs | 16.6 µs | 0.740 |
+| DIVITER | 276 µs | 219 µs | 0.792 |
+| DIVREC | 258 µs | 196 µs | 0.760 |
+| Standard-library lists | 430 µs | 296 µs | 0.688 |
+| Backquote | 109 µs | 88.9 µs | 0.814 |
+| Router hit | 74.8 µs | 40.1 µs | 0.536 |
+| Router miss | 46.4 µs | 24.8 µs | 0.536 |
+| call-1 | 0.320 µs | 0.183 µs | 0.572 |
+| call-16 | 0.960 µs | 0.413 µs | 0.430 |
+| lookup-inner-8 | 1.361 µs | 0.954 µs | 0.701 |
+| effect-shallow | 2.87 µs | 1.42 µs | 0.493 |
+| effect-deep | 42.2 µs | 29.4 µs | 0.695 |
+
+Times are per logical run (per iteration for the micro cases) on the faster
+profiling machine, with this comparison's own iteration counts, so they are
+not directly comparable with the sweep in `LOWERED.md`.
 
 ## Open questions
 

@@ -740,7 +740,7 @@
     (if found (head found) (error 'invalid-code-operation name))))
 
 (defun %code-node (name &rest operands)
-  (apply #'record (cons (second (%code-description name)) operands)))
+  (apply #'make-code (cons (second (%code-description name)) operands)))
 
 ;; Only checked semantic graphs cross this boundary. Keep IR diagnostics
 ;; readable, and leave published code stable: edits create a new lowering.

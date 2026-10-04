@@ -116,6 +116,18 @@ static suite compiler_tests{
                     "((1 10 2) (1 20 3))");
             };
 
+        "tapes reject code records that MAKE-CODE would refuse"_test = [] {
+            source_machine m{compiler_image()};
+            m.load("(defvar program (lower (analyze '(+ 1 2))))");
+            const auto program =
+                m.h.get<tag::sym, field::val>(m.vm.intern("PROGRAM"));
+            expect(tape::decode(tape::encode(m.vm)) != nullptr);
+            // CALL's callee operand must be a symbol. Encoding and decoding
+            // share one validation, so neither accepts this machine.
+            m.h.set_word<tag::rec>(program, 1, fixnum(5));
+            expect(throws<tape::error>([&] { (void) tape::encode(m.vm); }));
+        };
+
         "lowered code releases IR bindings"_test = [] {
             source_machine m{compiler_image()};
             m.load(R"((defvar graph
