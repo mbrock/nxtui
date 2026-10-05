@@ -20,6 +20,8 @@ stdenv.mkDerivation {
       ../src/nxtrt
       ../src/nxt
       ../src/nxtai
+      ../src/nxtui
+      ../demo/agent_chat
       ../test/iocp-wand-test.cpp
       ../test/network-probe.cpp
     ];
@@ -38,6 +40,8 @@ stdenv.mkDerivation {
   mesonBuildType = "release";
   mesonFlags = [
     "-Ddefault_wand=iocp"
+    "-Ddefault_library=static"
+    "-Dsdl_ui=disabled"
     "-Dtests=true"
     "-Db_vscrt=mt"
   ];

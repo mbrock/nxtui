@@ -65,10 +65,14 @@ if nxt_wand != 'auto'
 endif
 message('Default Wand: ' + nxt_wand)
 
-# Windows currently builds the portable coroutine core and its UWP backend,
-# not the POSIX terminal/process/filesystem and CLI layers.
+# Windows builds portable networking/runtime and optional standalone graphics,
+# not the POSIX terminal/process/filesystem, Wisp or CLI layers.
 if host_machine.system() == 'windows'
   subdir('src/nxtrt/wand')
+  subdir('src/nxtui')
+  if get_option('demo')
+    subdir('demo/agent_chat')
+  endif
   subdir_done()
 endif
 
