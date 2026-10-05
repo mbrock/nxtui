@@ -1,7 +1,6 @@
 --- a/crypto/getenv.c
 +++ b/crypto/getenv.c
-@@ -17,6 +17,11 @@
- 
+@@ -18,5 +18,10 @@
  char *ossl_safe_getenv(const char *name)
  {
 +#if defined(OPENSSL_SYS_WIN_CORE)
