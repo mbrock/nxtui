@@ -20,6 +20,9 @@
         "x86_64-linux"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # The Xbox (UWP) cross package set for this build host, when nixbox
+      # builds from it (x86_64-linux and aarch64-darwin).
+      xboxFor = system: nixbox.legacyPackages.${system}.pkgsXbox or null;
     in
     {
       packages = forAllSystems (
@@ -41,14 +44,19 @@
               cryptoLibrary = filcPkgs.openssl;
             };
         }
-        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") rec {
-          openssl-uwp = nixbox.legacyPackages.x86_64-linux.pkgsXbox.callPackage ./nix/openssl-uwp.nix { };
-          nxtrt-iocp = nixbox.legacyPackages.x86_64-linux.pkgsXbox.callPackage ./nix/iocp.nix {
-            cryptoLibrary = openssl-uwp;
-            # Only headers are used; do not build POSIX Boost libraries for UWP.
-            boost = nixbox.legacyPackages.x86_64-linux.pkgsXbox.buildPackages.boost;
-          };
-        }
+        // (
+          let
+            xbox = xboxFor pkgs.stdenv.hostPlatform.system;
+          in
+          pkgs.lib.optionalAttrs (xbox != null) rec {
+            openssl-uwp = xbox.callPackage ./nix/openssl-uwp.nix { };
+            nxtrt-iocp = xbox.callPackage ./nix/iocp.nix {
+              cryptoLibrary = openssl-uwp;
+              # Only headers are used; do not build POSIX Boost libraries for UWP.
+              boost = xbox.buildPackages.boost;
+            };
+          }
+        )
       );
 
       devShells = forAllSystems (
@@ -187,13 +195,14 @@
                 touch $out
               '';
         }
-        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-          inherit (self.packages.x86_64-linux) nxtrt-iocp;
-          iocp-consumer =
-            let
-              xbox = nixbox.legacyPackages.x86_64-linux.pkgsXbox;
-            in
-            xbox.stdenv.mkDerivation {
+        // (
+          let
+            system = pkgs.stdenv.hostPlatform.system;
+            xbox = xboxFor system;
+          in
+          pkgs.lib.optionalAttrs (xbox != null) {
+            inherit (self.packages.${system}) nxtrt-iocp;
+            iocp-consumer = xbox.stdenv.mkDerivation {
               name = "nxtrt-iocp-consumer-check";
               dontUnpack = true;
               nativeBuildInputs = [
@@ -203,7 +212,7 @@
               dontUseCmakeConfigure = true;
               # No direct crypto/zlib/Boost inputs: the package must expose
               # its actual public dependencies to a fresh consumer.
-              buildInputs = [ self.packages.x86_64-linux.nxtrt-iocp ];
+              buildInputs = [ self.packages.${system}.nxtrt-iocp ];
               buildPhase = ''
                 $CXX -std=c++23 ${./test/network-probe.cpp} \
                   $($PKG_CONFIG --cflags --libs nxtrt-iocp) -o network-probe.exe
@@ -220,7 +229,8 @@
                 cp crypto-consumer/crypto-consumer.exe "$out/bin/"
               '';
             };
-        }
+          }
+        )
       );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);

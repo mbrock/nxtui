@@ -78,12 +78,13 @@ pkg-config flags, since the application runtime contains a concrete Wand.
 
 ## Windows/UWP and Xbox networking
 
-On x86_64 Linux, the flake uses the pinned `mbrock/nixbox` MSVC-ABI SDK
-(not MinGW) to build the portable runtime/network stack:
+On x86_64 Linux and Apple silicon macOS, the flake uses the pinned
+`mbrock/nixbox` MSVC-ABI SDK (not MinGW) to build the portable runtime/network
+stack:
 
 ```sh
 package=$(nix build .#nxtrt-iocp --no-link --print-out-paths)
-nix build .#checks.x86_64-linux.iocp-consumer --no-link
+nix build .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).iocp-consumer --no-link
 ```
 
 This installs `nxtrt-iocp.lib`, `nxtrt-iocp.pc`, portable `nxtrt`, `nxt`,
