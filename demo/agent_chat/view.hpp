@@ -136,7 +136,7 @@ struct View
                 stretch(),
                 text(status, fg(status_color), false)),
             text(
-                width < 40 * ch ? "Graphical fixture"
+                width < 40 * ch ? "Graphical chat"
                                 : "Character rhythm. Graphical paint.",
                 fg(muted),
                 false));

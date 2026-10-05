@@ -7,10 +7,17 @@ nxtui_ttf = dependency('sdl3-ttf', version : '>= 3.2', required : get_option('sd
 if nxtui_sdl.found() and nxtui_ttf.found()
   nxtui_sdl_available = true
   nxtui_sdl_inc = include_directories('..')
+  nxtui_sdl_naming = {}
+  if host_machine.system() == 'windows' and get_option('default_library') == 'static' and meson.get_compiler('cpp').get_define('_MSC_VER') != ''
+    # GNU-syntax Clang with the MSVC ABI resolves -lnxtui-sdl to
+    # nxtui-sdl.lib, just like nxtrt-iocp. Leave shared/Unix naming alone.
+    nxtui_sdl_naming = {'name_prefix' : '', 'name_suffix' : 'lib'}
+  endif
   nxtui_sdl_lib = library('nxtui-sdl', 'sdl.cpp',
     include_directories : nxtui_sdl_inc,
     dependencies : [nxtui_sdl, nxtui_ttf],
     install : true,
+    kwargs : nxtui_sdl_naming,
   )
   nxtui_sdl_dep = declare_dependency(
     link_with : nxtui_sdl_lib,
