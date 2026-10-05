@@ -41,7 +41,8 @@ struct openai_responses_request
     std::vector<openai::function_tool_definition> tools = {};
     /// Extra output fields to include, e.g. `reasoning.encrypted_content`.
     std::vector<std::string> include = {};
-    /// Continue from a stored response (used with `store`).
+    /// Continue from a stored response, or the active WebSocket's cache
+    /// (which also works with `store=false`). Input contains only new items.
     std::string previous_response_id = {};
     /// Upper bound on generated tokens.
     std::size_t max_output_tokens = 6000;
@@ -186,19 +187,28 @@ inline void write_responses_input(
 }
 
 /// Serialize `request` as the JSON body of a streaming Responses request.
+/// With `websocket`, emit a `response.create` event instead: streaming is
+/// implicit, so the HTTP-only `stream` member is omitted.
 ///
 /// Raw JSON in `input_items` and tool `parameters` is inserted without
 /// validation, so it must already be valid JSON.
 [[nodiscard]] inline std::string
-openai_responses_body(const openai_responses_request & request)
+openai_responses_body(const openai_responses_request & request, bool websocket = false)
 {
     auto json = nxt::json::writer{};
     json.character('{');
+    if (websocket) {
+        json.key("type");
+        json.string("response.create");
+        json.character(',');
+    }
     json.key("model");
     json.string(request.model);
-    json.character(',');
-    json.key("stream");
-    json.boolean(true);
+    if (!websocket) {
+        json.character(',');
+        json.key("stream");
+        json.boolean(true);
+    }
     json.character(',');
     json.key("store");
     json.boolean(request.store);

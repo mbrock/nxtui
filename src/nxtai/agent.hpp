@@ -48,11 +48,12 @@ struct agent_options
 /// `observer.tool_finished(result)` for each result in call order, and
 /// sends the `function_call_output` items in the next request.
 ///
-/// History: with `request.store == false`, every request carries the full
+/// History: with HTTP and `request.store == false`, every request carries the full
 /// transcript (the initial input, every output item as received, including
 /// opaque reasoning items, and every tool output). With `store == true`,
 /// the next request sets `previous_response_id` and carries only the new
-/// tool outputs.
+/// tool outputs. A transport advertising `supports_unstored_continuation`
+/// (Responses WebSocket) uses that incremental path even with store=false.
 ///
 /// Before the first turn, missing registry definitions are appended to
 /// `request.tools` by name, preserving caller definitions. When `store` is
@@ -64,7 +65,7 @@ struct agent_options
 ///
 /// Errors: throws `nxtrt::runtime_error` for zero limits, an output item
 /// without a `type`, a malformed function call or one with empty
-/// arguments, duplicate call ids, a missing response id in `store` mode,
+/// arguments, duplicate call ids, a missing response id in continuation mode,
 /// and when the last allowed turn still asks for tools (those calls are not
 /// run). Tool failures do not throw; they become failed results sent back
 /// to the model. Transport and observer exceptions propagate.
@@ -82,6 +83,9 @@ nxtrt::task<void> run_agent(
 {
     if (options.max_turns == 0 || options.tool_concurrency == 0)
         throw nxtrt::runtime_error{"agent limits must be nonzero"};
+    auto continuation = request.store;
+    if constexpr (requires { Transport::supports_unstored_continuation; })
+        continuation |= Transport::supports_unstored_continuation;
     for (auto & definition : tools::function_tool_definitions(registry)) {
         if (std::ranges::find(
                 request.tools,
@@ -119,7 +123,7 @@ nxtrt::task<void> run_agent(
             co_return;
         if (turn + 1 == options.max_turns)
             throw nxtrt::runtime_error{"agent turn limit reached before executing tools"};
-        if (request.store && response.id.empty())
+        if (continuation && response.id.empty())
             throw nxtrt::runtime_error{"tool response missing response id"};
         for (const auto & call : calls)
             co_await observer.tool_started(call);
@@ -129,7 +133,7 @@ nxtrt::task<void> run_agent(
             co_await observer.tool_finished(result);
         auto outputs = tools::output_items_from_results(results);
         request.input.clear();
-        if (request.store) {
+        if (continuation) {
             request.previous_response_id = std::move(response.id);
             request.input_items = std::move(outputs);
         } else {

@@ -31,6 +31,9 @@ struct options
 {
     std::string ca_file; ///< Explicit PEM roots required on UWP for wss.
     std::size_t max_message_size = 1024 * 1024; ///< Incoming and outgoing.
+    /// Extra Upgrade headers, e.g. Authorization. Protocol-owned headers
+    /// cannot be overridden. Discarded after the handshake.
+    std::vector<http::header> headers = {};
 };
 
 namespace detail {
@@ -445,6 +448,9 @@ private:
                  {"Sec-WebSocket-Key", key},
                  {"Sec-WebSocket-Version", "13"}},
             .body = {}};
+        for (auto & header : config_.headers)
+            request.headers.push_back(std::move(header));
+        config_.headers.clear();
         auto wire = http::serialize(request);
         co_await write_bytes(std::as_bytes(std::span{wire}));
         auto bytes = co_await input().take_until("\r\n\r\n");
@@ -490,6 +496,21 @@ connect(std::string url, options config)
 {
     throw_if_stop_requested();
     auto parsed = detail::parse_url(url);
+    for (const auto & header : config.headers) {
+        if (!detail::token(header.name))
+            throw invalid_argument{"invalid WebSocket header name"};
+        for (unsigned char c : header.value)
+            if ((c < 32 && c != '\t') || c == 127)
+                throw invalid_argument{"invalid WebSocket header value"};
+        if (http::iequals(header.name, "host")
+            || http::iequals(header.name, "upgrade")
+            || http::iequals(header.name, "connection")
+            || http::iequals(header.name, "content-length")
+            || http::iequals(header.name, "transfer-encoding")
+            || (header.name.size() >= 14
+                && http::iequals(header.name.substr(0, 14), "sec-websocket-")))
+            throw invalid_argument{"reserved WebSocket header"};
+    }
     auto result = std::unique_ptr<client>{new client(std::move(config))};
     co_await result->upgrade(std::move(parsed));
     co_return result;

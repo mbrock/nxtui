@@ -7,6 +7,7 @@
 #include <nxtai/agent.hpp>
 #include <nxtai/agent_tools.hpp>
 #include <nxtai/responses_transport.hpp>
+#include <nxtai/responses_websocket_transport.hpp>
 #include <nxtai/tool_json.hpp>
 
 #include <array>
@@ -30,6 +31,7 @@ struct cli_options
     std::string model = "gpt-6-luna";
     std::size_t max_output_tokens = 20000;
     bool store = false;
+    bool websocket = false;
     bool tools = true;
     std::size_t max_turns = 32;
     bool dump_request = false;
@@ -58,6 +60,7 @@ using openai_unexpected_content_type = nxtai::responses_content_type_error;
            "  --max-turns N                     (default: 32)\n"
            "  --no-tools                        disable local file/search/shell tools\n"
            "  --store                           ask OpenAI to store the response\n"
+           "  --websocket                       reuse a connection and send incremental turns\n"
            "  --dump-request                    print serialized Responses JSON\n";
     std::exit(EXIT_SUCCESS);
 }
@@ -99,6 +102,8 @@ cli_options parse_args(int argc, char ** argv)
                 throw nxtrt::runtime_error{"--max-turns must be nonzero"};
         } else if (arg == "--store") {
             options.store = true;
+        } else if (arg == "--websocket") {
+            options.websocket = true;
         } else if (arg == "--dump-request") {
             options.dump_request = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -201,7 +206,7 @@ nxtrt::task<int> run_nxtllm(cli_options options)
 
     if (options.dump_request) {
         co_await nxtrt::print_all(output,
-            "{}\n", nxtai::responses::openai_responses_body(request));
+            "{}\n", nxtai::responses::openai_responses_body(request, options.websocket));
         co_return EXIT_SUCCESS;
     }
 
@@ -210,9 +215,15 @@ nxtrt::task<int> run_nxtllm(cli_options options)
     }
 
     auto observer = console_observer{output};
-    auto transport = nxtai::responses_transport{};
-    co_await nxtai::run_agent(std::move(request), tools, transport, observer,
-        {.max_turns = options.max_turns});
+    if (options.websocket) {
+        auto transport = nxtai::responses_websocket_transport{};
+        co_await nxtai::run_agent(std::move(request), tools, transport, observer,
+            {.max_turns = options.max_turns});
+    } else {
+        auto transport = nxtai::responses_transport{};
+        co_await nxtai::run_agent(std::move(request), tools, transport, observer,
+            {.max_turns = options.max_turns});
+    }
     co_await nxtrt::write_all(output, "\n");
 
     co_return EXIT_SUCCESS;

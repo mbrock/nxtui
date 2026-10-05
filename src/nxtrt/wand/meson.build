@@ -51,6 +51,7 @@ install_headers(
 install_headers('../../nxt/crypto.hpp', '../../nxt/tls.hpp', '../../nxt/json.hpp', '../../nxt/http.hpp', subdir : 'nxt')
 install_headers('../../nxt/tls/cert.hpp', subdir : 'nxt/tls')
 install_headers('../../nxtai/responses_transport.hpp', '../../nxtai/responses_request.hpp',
+  '../../nxtai/responses_websocket_transport.hpp',
   '../../nxtai/responses_stream.hpp', '../../nxtai/openai_types.hpp', '../../nxtai/tool_json.hpp',
   '../../nxtai/tool_batch.hpp', '../../nxtai/agent.hpp', subdir : 'nxtai')
 install_subdir('../task', install_dir : get_option('includedir') / 'nxtrt')

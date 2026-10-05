@@ -7,6 +7,7 @@ deck and wand. It defaults to `gpt-6-luna` and advertises `read_file`,
 ```sh
 nix develop .#filc -c build/filc/nxt-dev nxtllm "Does this repo support Fil-C?"
 build/nxtllm --no-tools "Explain epoll briefly"
+build/src/nxtllm --websocket "Inspect the failing tests and suggest a fix"
 build/nxtllm --dump-request "hello from nxtrt"
 ```
 
@@ -36,11 +37,58 @@ library callers can explicitly choose more concurrency. Cancellation propagates
 through the pool's existing stop/drain behavior. The final allowed model turn
 cannot start tools whose results would require another request.
 
-The default `store=false` mode replays complete output items, preserving opaque
+The default HTTP `store=false` mode replays complete output items, preserving opaque
 reasoning content and unknown fields. Requests include
 `reasoning.encrypted_content`. With `--store`, continuation uses
 `previous_response_id` plus the tool results. Tool definitions are sent on
 every request. Transcript ownership is independent of call parsing.
+
+## WebSocket alternative
+
+`--websocket` selects `responses_websocket_transport.hpp` instead of HTTP/SSE.
+It authenticates the Upgrade to `wss://api.openai.com/v1/responses`, then sends
+`response.create` JSON events and decodes the same Responses streaming events.
+The transport owns one persistent, verified TLS/WebSocket connection across
+turns. `run_agent` sends the previous response ID and **only new tool results**,
+even with `store=false`: OpenAI keeps continuation state in a connection-local
+memory cache. It does not require enabling server-side response storage.
+`--websocket --dump-request` prints the event envelope without credentials.
+
+Native callers can use the same transport without the CLI:
+
+```cpp
+#include <nxtai/responses_websocket_transport.hpp>
+
+auto transport = nxtai::responses_websocket_transport{{.ca_file = public_ca_path}};
+auto request = nxtai::responses::openai_responses_request{
+    .api_key = runtime_key, .model = "gpt-6-luna", .input = prompt,
+};
+auto first = co_await transport(request, observer);
+request.previous_response_id = first.id;
+request.input = "Explain that in more detail."; // Only the new input.
+auto second = co_await transport(request, observer);
+```
+
+Keep the transport and observer alive through their tasks. The transport is
+immovable, confined to one deck, and rejects overlapping turns or changed
+credentials. Omitting `previous_response_id` starts a new chain on the same
+socket. This implementation uses one default lane, not multiplexed streams.
+
+Errors, premature closure, observer exceptions, and cancellation discard the
+connection after draining I/O; no automatic retry or reconnection can duplicate
+generation. Construct a new transport to recover. For `store=false`, the old
+socket's cache is gone: omit the ID and replay the full context (retain output
+items, including encrypted reasoning, if recovery is needed). With `store=true`,
+a persisted ID can continue on a new connection. OpenAI currently limits
+connections to 60 minutes; cache misses surface as `previous_response_not_found`.
+The agent loop propagates these failures rather than automatically replaying.
+
+The [OpenAI WebSocket guide](https://developers.openai.com/api/docs/guides/websocket-mode)
+reports up to roughly 40% faster end-to-end execution for workflows with 20+
+tool calls. That is OpenAI's reported result, not a benchmark of this client.
+The local WSS fixture independently checks authentication, same-connection
+incremental tool continuation, fresh chains, event errors, cancellation/drain,
+and header injection rejection, without external services or real credentials.
 
 The console observer prints model text on stdout and tool names/status on
 stderr. `tool_tui.hpp` and `trace_tui.hpp` remain available for richer observers;
