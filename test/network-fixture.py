@@ -89,12 +89,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-def certificate(directory, name, hostname):
+def certificate(directory, name, hostname, san_type="DNS"):
     # The development shell's AWS-LC CLI supports RSA req and -config, but
     # not OpenSSL's EC -pkeyopt/-addext flags. Exercise both providers alike.
     config = directory / f"{name}.conf"
     config.write_text("[req]\ndistinguished_name=dn\n[dn]\n[ext]\n"
-                      f"subjectAltName=DNS:{hostname}\n"
+                      f"subjectAltName={san_type}:{hostname}\n"
                       "basicConstraints=critical,CA:TRUE\n"
                       "keyUsage=critical,digitalSignature,keyCertSign\n")
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048",

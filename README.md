@@ -30,7 +30,8 @@ computation that is coherent, checkable, and cheap at once. The vocabulary
 - [`nxtrt`][nxtrt] — the coroutine runtime: [tasks][nxtrt-task], the
   [deck][nxtrt-deck] scheduler, [wand][nxtrt-wand] I/O backends (%io_uring,
   epoll, kqueue, Windows/UWP IOCP), structured groups over a bounded [pool][nxtrt-pool], byte
-  streams, [files][nxtrt-fs], [HTTP][nxtrt-http]/[TLS][nxtrt-tls], and
+  streams, [files][nxtrt-fs], [HTTP][nxtrt-http]/[TLS][nxtrt-tls],
+  [WebSocket][nxtrt-websocket], and
   [subprocesses][nxtrt-subprocess].
 - [`nxtui`][nxtui] — terminal rendering: typed geometry, styled text, rasters,
   and composable [layout values][nxtui-tui].
@@ -71,11 +72,13 @@ Cross-build the coroutine core and IOCP backend on x86_64 Linux with the
 nix build .#nxtrt-iocp
 ```
 
-The package installs `nxtrt-iocp.lib`, `nxtrt` core headers,
-`nxtrt-iocp.pc`, and a cross-linked `bin/iocp-tests.exe` Windows test runner.
+The package installs `nxtrt-iocp.lib`, portable runtime/networking/agent headers,
+`nxtrt-iocp.pc`, and cross-linked IOCP, HTTP/TLS and WebSocket probes.
 Meson selects IOCP automatically on Windows (`-Ddefault_wand=iocp` can force
-it). This is a runtime-only port: POSIX terminal, process, filesystem, HTTP
-layers, and Wisp/CLI tools are not built by the Windows target.
+it). DNS, socket wrappers, HTTP/TLS, ws/wss and the reusable Responses transport
+are included; POSIX terminal/process/filesystem layers and Wisp/CLI tools are
+not built by the Windows target. See [building instructions][building] for
+the installed-consumer check and deterministic localhost fixtures.
 
 Include `<nxtrt/wand/iocp.hpp>` and call `nxtrt::run_with_iocp(factory)`, or
 attach `nxtrt::arch::wand` to a deck and use `poll(deck)` from a host event
@@ -128,6 +131,7 @@ validation in a packaged app on hardware. Run it from a writable directory.
 [nxtrt-fs]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1fs.html
 [nxtrt-http]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1http.html
 [nxtrt-tls]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1tls.html
+[nxtrt-websocket]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1websocket.html
 [nxtrt-subprocess]: https://mbrock.github.io/nxtui/namespacenxtrt_1_1subprocess.html
 
 <!-- nxtui -->

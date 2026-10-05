@@ -24,6 +24,7 @@ stdenv.mkDerivation {
       ../demo/agent_chat
       ../test/iocp-wand-test.cpp
       ../test/network-probe.cpp
+      ../test/websocket-probe.cpp
     ];
   };
   nativeBuildInputs = [

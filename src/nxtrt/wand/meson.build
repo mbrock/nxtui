@@ -34,6 +34,10 @@ if get_option('tests')
     install : true,
   )
   test('network-probe', network_probe, timeout : 90)
+  websocket_probe = executable('websocket-probe', '../../../test/websocket-probe.cpp',
+    dependencies : iocp_dep,
+    install : true,
+  )
 endif
 install_headers(
   '../task.hpp', '../deck.hpp', '../wand.hpp', '../wish.hpp', '../wish_ops.hpp',
@@ -41,7 +45,7 @@ install_headers(
   '../exceptions.hpp', '../exec_lifecycle.hpp', '../land.hpp', '../alloc_trace.hpp',
   '../arch.hpp', '../buffers.hpp', '../buffer-core.hpp', '../value-buffers.hpp',
   '../compression.hpp', '../crypto.hpp', '../tls.hpp', '../net.hpp', '../net_dns.hpp',
-  '../http.hpp', '../cares.hpp', '../pool.hpp', '../farm.hpp', '../idea.hpp',
+  '../http.hpp', '../websocket.hpp', '../cares.hpp', '../pool.hpp', '../farm.hpp', '../idea.hpp',
   subdir : 'nxtrt',
 )
 install_headers('../../nxt/crypto.hpp', '../../nxt/tls.hpp', '../../nxt/json.hpp', '../../nxt/http.hpp', subdir : 'nxt')

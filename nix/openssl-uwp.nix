@@ -26,6 +26,9 @@ stdenv.mkDerivation {
     runHook preInstall
     mkdir -p "$out/lib/pkgconfig" "$out/include"
     cp libcrypto.a "$out/lib/crypto.lib"
+    # FindOpenSSL's non-MSVC Windows search uses libcrypto, whereas our
+    # MSVC-ABI pkg-config consumers use -lcrypto. Keep both names valid.
+    ln -s crypto.lib "$out/lib/libcrypto.lib"
     cp -r include/openssl "$out/include/"
     cat > "$out/lib/pkgconfig/libcrypto.pc" <<EOF
     prefix=$out

@@ -87,11 +87,16 @@ nix build .#checks.x86_64-linux.iocp-consumer --no-link
 ```
 
 This installs `nxtrt-iocp.lib`, `nxtrt-iocp.pc`, portable `nxtrt`, `nxt`,
-and `nxtai` headers, plus `bin/iocp-tests.exe` and `bin/network-probe.exe`.
+and `nxtai` headers, plus `bin/iocp-tests.exe`, `bin/network-probe.exe`
+and `bin/websocket-probe.exe`.
 It propagates zlib, header-only Boost and `.#openssl-uwp` libcrypto to
 consumers. The separate `iocp-consumer` check compiles in an isolated
 derivation with only the installed runtime as a build input, catching missing
 public dependency paths rather than inheriting the runtime's build environment.
+It also configures and links `find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)`
+without archive-name overrides. The UWP crypto package installs
+`libcrypto.lib -> crypto.lib` for CMake's GNU-syntax Windows compiler search;
+the actual archive and pkg-config's `-lcrypto` stay unchanged.
 Nix only cross-builds the tests; it does not claim to run them on Xbox.
 External Meson consumers use `dependency('nxtrt-iocp')` and C++23, with the
 same nixbox UWP stdenv and static CRT. Runtime/transport require neither
@@ -144,6 +149,60 @@ call `nxtai::responses_transport` directly. Trust-chain and SAN verification
 cannot be disabled. Wine is useful portability coverage, not a substitute
 for packaged hardware tests. Suspend/resume and long-running soak tests
 remain integration work.
+
+## WebSocket fixtures
+
+`<nxtrt/websocket.hpp>` is header-only, next to the HTTP client; link the
+normal `nxt` dependency on Unix or `nxtrt-iocp` on Windows/UWP. See the
+@ref rt_websocket "WebSocket API and ownership example".
+
+```sh
+nix develop -c meson compile -C build websocket-probe
+nix develop -c meson test -C build websocket-fixture --print-errorlogs
+consumer=$(nix build .#checks.x86_64-linux.iocp-consumer --no-link --print-out-paths)
+WINEPREFIX="$PWD/build/wine-prefix" WINEDEBUG=-all \
+  nix develop -c python3 test/websocket-fixture.py --wine /usr/lib/wine/wine64 \
+  "$consumer/bin/websocket-probe.exe"
+```
+
+The fixture starts disposable localhost ws/wss servers and generates its
+own public CA and private server key outside the source tree. Python and
+the `openssl` command are required. It independently checks client masks,
+payloads, canonical lengths (125/126 and 65535/65536), pong replies and
+close echoes. It exercises fragmented text/binary, UTF-8 split across
+frames, interleaved controls, malformed Upgrade/frame rejection, trust/SAN
+rejection and cancellation during Upgrade, frame headers, payloads,
+fragmentation and backpressured sends. Each cancellation reconnects on the
+same deck, testing completion drain rather than only a fresh runtime.
+The installed UWP consumer compiles without source-tree include paths or
+direct crypto/zlib/Boost inputs. Wine is not Xbox hardware validation.
+
+For a remote diagnostic host, start a foreground fixture with an explicit
+client-reachable DNS name or public IPv4, not an assumed tailnet address:
+
+```sh
+python3 test/websocket-fixture.py --serve --bind 0.0.0.0 \
+  --advertise PUBLIC_IPV4 --ws-port 8765 --wss-port 8766 \
+  --directory /tmp/nxt-websocket-fixture-NEW
+websocket-probe.exe ws://PUBLIC_IPV4:8765 wss://PUBLIC_IPV4:8766 \
+  LOCALSTATE/server.pem LOCALSTATE/wrong.pem 2000
+```
+
+The directory must be new. The server prints WS_BASE, WSS_BASE and the
+two public CA file paths and runs until SIGTERM/Ctrl-C. Open the two TCP
+ports through the host's firewall/NAT; restrict access to the test device
+and stop afterwards (this is a fault-injection fixture, not a production
+WebSocket server). On an orb, use `amp orb service start` for supervision.
+Certificates expire after one day and carry the advertised DNS or IP SAN;
+copy only `server.pem` and `wrong.pem` into the device's LocalState.
+Private `*.key` files stay on the fixture server, never in an app package.
+The probe argv is `WS_BASE WSS_BASE CA WRONG_CA [CANCEL_MS=100]`, where
+bases have no trailing slash. Use a longer cancellation delay for remote
+latency (20..5000 ms; 2000 suggested); each test still has a 15 s deadline.
+IP/DNS advertised runs perform 89 tests and explicitly skip the localhost
+DNS-vs-IP wrong-SAN case; default localhost runs perform all 90. Successful
+remote wss still verifies the exact advertised SAN and CA; there is no
+trust bypass. No hardware session is launched by this fixture.
 
 ## Wisp coverage (GCC)
 

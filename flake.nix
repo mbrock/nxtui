@@ -196,17 +196,28 @@
             xbox.stdenv.mkDerivation {
               name = "nxtrt-iocp-consumer-check";
               dontUnpack = true;
-              nativeBuildInputs = [ xbox.pkg-config ];
+              nativeBuildInputs = [
+                xbox.pkg-config
+                xbox.cmake
+              ];
+              dontUseCmakeConfigure = true;
               # No direct crypto/zlib/Boost inputs: the package must expose
               # its actual public dependencies to a fresh consumer.
               buildInputs = [ self.packages.x86_64-linux.nxtrt-iocp ];
               buildPhase = ''
                 $CXX -std=c++23 ${./test/network-probe.cpp} \
                   $($PKG_CONFIG --cflags --libs nxtrt-iocp) -o network-probe.exe
+                $CXX -std=c++23 ${./test/websocket-probe.cpp} \
+                  $($PKG_CONFIG --cflags --libs nxtrt-iocp) -o websocket-probe.exe
+                cmake -S ${./nix/openssl-consumer} -B crypto-consumer \
+                  -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER="$CC" \
+                  -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+                cmake --build crypto-consumer
               '';
               installPhase = ''
                 mkdir -p "$out/bin"
-                cp network-probe.exe "$out/bin/"
+                cp network-probe.exe websocket-probe.exe "$out/bin/"
+                cp crypto-consumer/crypto-consumer.exe "$out/bin/"
               '';
             };
         }

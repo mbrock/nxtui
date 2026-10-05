@@ -343,11 +343,72 @@ These are libraries written with the pieces above, not scheduler primitives:
   server.
 - @ref nxtrt::tls "nxtrt::tls": a TLS 1.3 client that verifies certificates
   with libcrypto.
+- @ref nxtrt::websocket "nxtrt::websocket": an owning ws/wss client using
+  the same HTTP Upgrade, sockets, TLS and cancellation machinery.
 - @ref nxtrt::subprocess "nxtrt::subprocess" and @ref nxtrt::pty "nxtrt::pty":
   child processes with pipes or a pseudo-terminal, using pidfds on Linux and
   `EVFILT_PROC` on kqueue.
 - `nxtrt::terminal_app`: owns a terminal session for a UI program: raw
   input mode, the terminal size, and an `nxtui` compositor to draw with.
+
+### WebSocket client {#rt_websocket}
+
+```cpp
+#include <nxtrt/websocket.hpp>
+using namespace std::chrono_literals;
+
+nxtrt::task<void> conversation(std::string url, std::string ca_file)
+{
+    namespace ws = nxtrt::websocket;
+    auto client = co_await nxtrt::with_timeout(
+        5s, ws::connect(std::move(url), {.ca_file = std::move(ca_file)}));
+    co_await client->send(ws::message_type::text, "hello");
+    auto reply = co_await nxtrt::with_timeout(5s, client->receive());
+    // reply owns its bytes; type is text, binary, pong or close.
+    if (reply && reply->type != ws::message_type::close) {
+        co_await client->close(1000, "done");
+        while (co_await nxtrt::with_timeout(5s, client->receive())) {}
+    }
+}
+```
+
+Run this task on the usual deck. `connect` owns the URL/options and returns
+an immovable client in a `unique_ptr`, owning its socket, buffers and TLS.
+Keep it alive until all its tasks complete. Public operation arguments are
+owned copies, and received message data is an owned `std::string` (binary
+may include NUL); close events have an optional status `code` and a UTF-8
+reason in `data`. Incoming fragments survive interleaved pong events.
+`receive` answers ping automatically, echoes server close once, then
+returns `nullopt` on subsequent calls. EOF before close is an error.
+
+Only **one operation at a time** is supported per connection, including
+send vs receive; overlap raises `logic_error` without interrupting the
+active operation. There is no background reader or concurrent duplex
+pump: use sequential request/reply exchanges or receive-only phases. A
+parked receive cannot be interrupted to send UI input without losing that
+connection. NXT TLS reads can write a KeyUpdate reply and rotate the same
+outbound keys used by application writes; WebSocket reads also write
+pong/close replies. Simply permitting a reader and writer would violate
+the single-writer sink contract and would not drain both on cancellation.
+`close` sends but does not await the closing handshake: continue
+receiving with a deadline. Cancellation or I/O/protocol failure drains the
+outstanding wish before releasing buffers and closing the socket; that
+connection cannot be resumed. Reconnect on the same deck instead. Invalid
+local payload arguments are rejected before I/O without poisoning the
+connection. Destruction without `close` is an abort, not a graceful close.
+
+`options.max_message_size` defaults to 1 MiB for incoming reassembled
+messages and outgoing data frames. Control payloads are at most 125 bytes,
+independent of that limit; the Upgrade head must fit a 16 KiB buffer.
+Text and close reasons require valid UTF-8. Outgoing messages are single
+FIN frames with fresh cryptographic masks; incoming fragmented messages
+are bounded and assembled before delivery. There are no subprotocols,
+extensions/compression, redirects or reconnect policy. URL restrictions
+match NXT's simple HTTP authority parser: DNS/IPv4, no userinfo, fragments
+or bracketed IPv6, and queries following '/'. wss inherits NXT's TLS 1.3
+profile and strict certificate-chain/SAN verification; UWP must provide
+explicit PEM roots through `ca_file`. See @ref building for fixture and
+installed-consumer build commands.
 
 ## The formal model {#rt_model}
 

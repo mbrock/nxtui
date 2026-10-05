@@ -120,10 +120,18 @@ if get_option('tests')
     cpp_args : nxt_dns_args,
   )
   test('network-probe', network_probe, timeout : 90)
+  websocket_probe = executable('websocket-probe', 'websocket-probe.cpp',
+    dependencies : [nxt_core_dep] + nxt_dns_deps,
+    cpp_args : nxt_dns_args,
+  )
   if find_program('openssl', required : false).found()
     test('network-tls-fixture', find_program('python3'),
       args : [files('network-fixture.py'), network_probe],
       timeout : 90,
+    )
+    test('websocket-fixture', find_program('python3'),
+      args : [files('websocket-fixture.py'), websocket_probe],
+      timeout : 180,
     )
   endif
 
