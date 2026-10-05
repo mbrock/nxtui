@@ -26,6 +26,7 @@
         pkgs:
         rec {
           nxt = pkgs.callPackage ./nix/package.nix { };
+          nxt-graphical = nxt.override { graphicalUi = true; };
           spec-racket = pkgs.callPackage ./nix/spec-racket.nix { };
           spec-sources = pkgs.callPackage ./nix/spec-sources.nix { };
           poxy = pkgs.callPackage ./nix/poxy.nix { };
@@ -80,6 +81,9 @@
                   gnumake
                   bash
                   ripgrep
+                  sdl3
+                  sdl3-ttf
+                  dejavu_fonts
                   self.packages.${stdenv.hostPlatform.system}.spec-racket
 
                   # Trace-analysis scripts use uv; docs use the Nix package.

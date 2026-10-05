@@ -144,6 +144,8 @@ nxt_core_dep = declare_dependency(
   compile_args : nxt_mdspan_args + nxt_compression_args,
 )
 
+subdir('nxtui')
+
 if get_option('wisp_tool')
   wisp_boot = executable('wisp-boot', 'wisp/boot.cpp',
     include_directories : nxt_inc,
@@ -232,6 +234,8 @@ nxt_header_install_excludes = {
     'glyph-table.cpp',
     'input.cpp',
     'raster.cpp',
+    'sdl.cpp',
+    'meson.build',
   ],
   'wisp' : [
     'heap.cpp',

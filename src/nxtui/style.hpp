@@ -183,4 +183,53 @@ inline constexpr Emphasis DEFAULT_EMPHASIS = Emphasis::none;
 /// Color of a freshly cleared cell: the terminal default.
 inline constexpr Rgba8 DEFAULT_COLOR = Rgba8::terminal_default();
 
+namespace tui {
+
+/// Shared compositional style. Default channels inherit the parent;
+/// explicitly set colors replace it and emphasis bits combine with `|`.
+/// The terminal and graphical paths use the same value and operators.
+struct Style
+{
+    Rgba8 fg = DEFAULT_COLOR;
+    Rgba8 bg = DEFAULT_COLOR;
+    Emphasis em = DEFAULT_EMPHASIS;
+
+    constexpr Style operator|(const Style & other) const
+    {
+        return {
+            other.fg != DEFAULT_COLOR ? other.fg : fg,
+            other.bg != DEFAULT_COLOR ? other.bg : bg,
+            em | other.em,
+        };
+    }
+};
+
+constexpr Style fg(Rgba8 color)
+{
+    return {color, DEFAULT_COLOR, DEFAULT_EMPHASIS};
+}
+
+constexpr Style bg(Rgba8 color)
+{
+    return {DEFAULT_COLOR, color, DEFAULT_EMPHASIS};
+}
+
+constexpr Style em(Emphasis emphasis)
+{
+    return {DEFAULT_COLOR, DEFAULT_COLOR, emphasis};
+}
+
+inline constexpr Style bold{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::bold};
+inline constexpr Style faint{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::faint};
+inline constexpr Style italic{
+    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::italic};
+inline constexpr Style underline{
+    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::underline};
+inline constexpr Style reverse{
+    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::reverse};
+inline constexpr Style strikethrough{
+    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::strikethrough};
+
+} // namespace tui
+
 } // namespace nxtui

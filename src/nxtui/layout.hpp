@@ -3,6 +3,8 @@
 #include "nxtui/units.hpp"
 
 #include <concepts>
+#include <ranges>
+#include <tuple>
 
 namespace nxtui {
 class RasterView;
@@ -36,16 +38,16 @@ using hint_extent_t = typename hint_extent<Unit>::type;
 /// splits whatever is left among children in proportion to `flex`. A flex
 /// of zero means the child never grows past `min`. Hints are requests, not
 /// guarantees: when space runs short a child may get less than `min`.
-template<auto Unit>
+template<auto Unit, typename Extent = hint_extent_t<Unit>>
 struct SizeHint
 {
     /// Minimum extent the layout wants.
-    hint_extent_t<Unit> min{0 * Unit};
+    Extent min{};
     /// Share of leftover space; zero for none.
     ratio_t flex{0.0 * one};
 
     /// Exactly `n`, never growing.
-    static constexpr SizeHint fixed(hint_extent_t<Unit> n)
+    static constexpr SizeHint fixed(Extent n)
     {
         return {n, 0.0 * one};
     }
@@ -53,7 +55,7 @@ struct SizeHint
     /// No minimum, growing with weight `factor`.
     static constexpr SizeHint grow(ratio_t factor = 1.0 * one)
     {
-        return {0 * Unit, factor};
+        return {Extent{}, factor};
     }
 };
 
@@ -82,5 +84,37 @@ concept Layout =
         { layout.height_hint() } -> std::convertible_to<HeightHint>;
         { layout.render(raster, size) } -> std::same_as<void>;
     };
+
+/// Visit concrete tuple children or a runtime-sized range. Shared by the
+/// terminal and graphical compositions; neither requires type erasure.
+template<typename... Children, typename F>
+constexpr void
+for_each_child(const std::tuple<Children...> & children, F && f)
+{
+    std::apply([&](const auto &... child) { (f(child), ...); }, children);
+}
+
+template<typename Children, typename F>
+    requires std::ranges::forward_range<const Children>
+constexpr void for_each_child(const Children & children, F && f)
+{
+    for (const auto & child : children)
+        f(child);
+}
+
+/// Preserve minima and share only positive leftover space. The extent's
+/// arithmetic decides quantization: terminal extents truncate to cells,
+/// while graphical extents retain fractions until the renderer boundary.
+template<typename Hint, typename Extent>
+constexpr Extent
+allocate_main_extent(Hint hint, Hint total, Extent available)
+{
+    auto leftover =
+        available > total.min ? available - total.min : Extent{};
+    auto extent = hint.min;
+    if (hint.flex > 0 && total.flex > 0 && leftover.count() > 0)
+        extent += leftover * (hint.flex.value() / total.flex.value());
+    return extent;
+}
 
 } // namespace nxtui::tui

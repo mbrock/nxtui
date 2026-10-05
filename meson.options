@@ -31,3 +31,6 @@ option('cares', type : 'feature', value : 'auto',
 
 option('cpptrace', type : 'feature', value : 'disabled',
   description : 'Use cpptrace for rich exception stack traces')
+
+option('sdl_ui', type : 'feature', value : 'auto',
+  description : 'Build the standalone SDL3/SDL3_ttf graphical UI and agent-chat sample')

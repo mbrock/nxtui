@@ -232,64 +232,6 @@ inline RasterView subraster(RasterView & r, Pos pos, Size size)
     return r.subraster(pos, size);
 }
 
-/// Foreground, background, and emphasis to apply over a cell.
-///
-/// `DEFAULT_COLOR` in `fg` or `bg` means "leave this channel alone" when
-/// layouts render, not "reset to the terminal default", and so does
-/// `Emphasis::none` in `em`. Build styles with `fg`, `bg`, `em`, and the
-/// predefined `bold`, `faint`, ... constants, and combine them with `|`.
-struct Style
-{
-    /// Foreground color, or `DEFAULT_COLOR` to inherit/reset.
-    Rgba8 fg = DEFAULT_COLOR;
-    /// Background color, or `DEFAULT_COLOR` to inherit/reset.
-    Rgba8 bg = DEFAULT_COLOR;
-    /// Emphasis bitset.
-    Emphasis em = DEFAULT_EMPHASIS;
-
-    /// Combine two styles: colors set in `other` win, emphasis bits are
-    /// unioned. `fg(c) | bold` sets a color and bold.
-    constexpr Style operator|(const Style & other) const
-    {
-        return {
-            other.fg != DEFAULT_COLOR ? other.fg : fg,
-            other.bg != DEFAULT_COLOR ? other.bg : bg,
-            em | other.em,
-        };
-    }
-};
-
-/// Build a style that sets only foreground color.
-constexpr Style fg(Rgba8 color)
-{
-    return {color, DEFAULT_COLOR, DEFAULT_EMPHASIS};
-}
-
-/// Build a style that sets only background color.
-constexpr Style bg(Rgba8 color)
-{
-    return {DEFAULT_COLOR, color, DEFAULT_EMPHASIS};
-}
-
-/// Build a style that sets only emphasis flags.
-constexpr Style em(Emphasis e)
-{
-    return {DEFAULT_COLOR, DEFAULT_COLOR, e};
-}
-
-/// Emphasis-only style: bold. `faint`, `italic`, `underline`, `reverse`,
-/// and `strikethrough` follow the same pattern.
-inline constexpr Style bold{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::bold};
-inline constexpr Style faint{DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::faint};
-inline constexpr Style italic{
-    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::italic};
-inline constexpr Style underline{
-    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::underline};
-inline constexpr Style reverse{
-    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::reverse};
-inline constexpr Style strikethrough{
-    DEFAULT_COLOR, DEFAULT_COLOR, Emphasis::strikethrough};
-
 /// Styled text segment used by `styled_text`.
 struct Span
 {
@@ -825,21 +767,6 @@ concept LayoutRange =
     std::ranges::forward_range<const R>
     && Layout<std::ranges::range_value_t<const R>>;
 
-/// Call `f` on each child of a statically shaped child tuple.
-template<typename... Children, typename F>
-constexpr void for_each_child(const std::tuple<Children...> & children, F && f)
-{
-    std::apply([&](const auto &... child) { (f(child), ...); }, children);
-}
-
-/// Call `f` on each child of a runtime-sized child range.
-template<LayoutRange Children, typename F>
-constexpr void for_each_child(const Children & children, F && f)
-{
-    for (const auto & child : children)
-        f(child);
-}
-
 template<Axis A>
 struct axis_traits;
 
@@ -976,15 +903,11 @@ struct Stack
     {
         auto total = main_hint();
         auto available = axis::extent(size);
-        auto leftover = available > total.min ? available - total.min
-                                               : decltype(available){};
 
         Pos cursor = Pos::origin();
         for_each_child(children, [&](const auto & child) {
             auto hint = axis::main(child);
-            auto extent = hint.min;
-            if (hint.flex > 0 && total.flex > 0 && leftover.count() > 0)
-                extent += leftover * (hint.flex.value() / total.flex.value());
+            auto extent = allocate_main_extent(hint, total, available);
             if (extent.count() == 0)
                 return;
             auto child_size = axis::child_size(size, extent);

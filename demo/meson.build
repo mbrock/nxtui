@@ -3,6 +3,8 @@ ls_demo_available = false
 http_client_demo_dependencies = []
 http_client_demo_available = false
 
+subdir('agent_chat')
+
 if host_machine.system() in ['linux', 'darwin']
   ls_demo_available = true
 endif

@@ -18,6 +18,10 @@
   bash,
   coreutils,
   procps,
+  sdl3 ? null,
+  sdl3-ttf ? null,
+  dejavu_fonts ? null,
+  graphicalUi ? false,
   cryptoLibrary ? aws-lc,
   doCheck ? true,
 }:
@@ -55,6 +59,10 @@ stdenv.mkDerivation {
     zstd
     c-ares
     cryptoLibrary
+  ]
+  ++ lib.optionals graphicalUi [
+    sdl3
+    sdl3-ttf
   ];
 
   # libcrypto validates TLS certificates and supplies crypto test fixtures.
@@ -76,7 +84,21 @@ stdenv.mkDerivation {
     (lib.mesonBool "benchmarks" false)
     (lib.mesonBool "tests" doCheck)
     (lib.mesonEnable "cares" true)
+    (lib.mesonEnable "sdl_ui" graphicalUi)
   ];
+
+  preCheck = lib.optionalString graphicalUi ''
+    demo/agent_chat/nxtui-graphical-tests \
+      ${dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf
+    SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+      demo/agent_chat/nxt-agent-chat-demo \
+      --font ${dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf --exercise
+  '';
+
+  postInstall = lib.optionalString graphicalUi ''
+    install -Dm644 ${dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf \
+      $out/share/nxtui/DejaVuSans.ttf
+  '';
 
   inherit doCheck;
 
