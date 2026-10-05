@@ -67,6 +67,42 @@ task<> exchange(std::string base, ws::options options)
         text->data == "hello \xf0\x9f\x8c\x99", "borrowed message storage");
 }
 
+task<> large_send(std::string base, ws::options options)
+{
+    options.max_message_size = 16 * 1024 * 1024;
+    auto c = co_await ws::connect(base + "/large-send", options);
+    auto payload = std::string(options.max_message_size, '\0');
+    // Distinct 64KiB blocks detect missing/reordered chunks, not just size.
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] =
+            static_cast<char>((i * 37 + (i / 65536) * 19 + 11) & 255);
+    auto started = std::chrono::steady_clock::now();
+    co_await c->send(ws::message_type::binary, std::move(payload));
+    auto sent = std::chrono::steady_clock::now();
+    auto receipt = co_await c->receive();
+    // Fixed vector computed independently from the fixture's block pattern.
+    check(
+        receipt && receipt->type == ws::message_type::text
+            && receipt->data
+                   == "16777216:59f99b86a5be4325df9c4ef2d6a028eab97c22ace28e95a0c50c30a73fd7efec",
+        "large send exact-payload receipt missing");
+    std::printf(
+        "LARGE-SEND %s bytes=16777216 send_ms=%lld verified_ms=%lld exact_payload=verified\n",
+        base.c_str(),
+        static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                sent - started)
+                .count()),
+        static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count()));
+    std::fflush(stdout);
+    co_await c->close();
+    check(
+        (co_await c->receive())->code == 1000, "large send close mismatch");
+}
+
 task<> fragments(std::string base, ws::options options)
 {
     options.max_message_size = 6;
@@ -183,6 +219,68 @@ task<> stop_later(std::chrono::milliseconds delay)
     co_await op::timeout::after(delay);
 }
 
+struct send_progress
+{
+    std::size_t completed_frames = 0;
+    task_id pending_task{};
+    std::uint64_t pending_token = 0;
+    std::chrono::milliseconds observed{};
+};
+
+task<> send_until_blocked(ws::client & c, send_progress & progress)
+{
+    // Bound allocation to one 64KiB message and total workload to 256MiB.
+    // No yield, timer or receive: every wish in this subtree is a send.
+    for (std::size_t i = 0; i < 4096; ++i) {
+        co_await c.send(ws::message_type::binary, std::string(65536, 'x'));
+        ++progress.completed_frames;
+    }
+    throw runtime_error{"send backpressure budget exhausted"};
+}
+
+task<> stop_pending_send(
+    send_progress & progress,
+    std::vector<debug::wait_snapshot> baseline,
+    std::chrono::milliseconds delay)
+{
+    auto pending = [&]() -> std::optional<debug::wait_snapshot> {
+        auto result = std::optional<debug::wait_snapshot>{};
+        for (auto const & wait : debug::snapshot_waits()) {
+            if (std::ranges::any_of(baseline, [&](auto const & old) {
+                    return old.task == wait.task && old.token == wait.token;
+                }))
+                continue; // The enclosing per-case deadline is not a send.
+            if (result)
+                return {}; // Ambiguous evidence must never pass.
+            result = wait;
+        }
+        return result;
+    };
+    co_await op::timeout::after(delay);
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        auto before = pending();
+        auto completed = progress.completed_frames;
+        auto observed_start = std::chrono::steady_clock::now();
+        co_await op::timeout::after(100ms);
+        auto after = pending();
+        // Resuming any wish immediately removes it from the registry. The
+        // observer's own timer is gone here. Thus this is the SAME send,
+        // not cancellation between two completed WebSocket frames.
+        if (before && after && before->task == after->task
+            && before->token == after->token
+            && before->parked_at == after->parked_at
+            && completed == progress.completed_frames) {
+            progress.pending_task = after->task;
+            progress.pending_token = after->token;
+            progress.observed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - observed_start);
+            co_return; // Group requests stop synchronously in this turn.
+        }
+    }
+    throw runtime_error{"no stable pending send observed"};
+}
+
 std::string describe(outcome<void> const & result)
 {
     if (result)
@@ -227,12 +325,13 @@ task<> cancelled(
             "cancellation barrier missing");
         if (stage == "send") {
             auto started = std::chrono::steady_clock::now();
+            auto progress = send_progress{};
+            auto baseline = debug::snapshot_waits();
             auto [sent, timer] = co_await settle(
                 std::tuple{
-                    c->send(
-                        ws::message_type::binary,
-                        std::string(options.max_message_size, 'x')),
-                    stop_later(delay)},
+                    send_until_blocked(*c, progress),
+                    stop_pending_send(
+                        progress, std::move(baseline), delay)},
                 first_completion_group{});
             auto elapsed =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -241,9 +340,12 @@ task<> cancelled(
             auto sent_text = describe(sent);
             auto timer_text = describe(timer);
             std::printf(
-                "SEND-CANCEL %s payload=%zu delay_ms=%lld elapsed_ms=%lld send=%s timer=%s\n",
+                "SEND-CANCEL %s frame_bytes=65536 budget_bytes=268435456 completed_frames=%zu pending_task=%u pending_token=%llu stable_ms=%lld delay_ms=%lld elapsed_ms=%lld send=%s timer=%s\n",
                 base.c_str(),
-                options.max_message_size,
+                progress.completed_frames,
+                progress.pending_task.value,
+                static_cast<unsigned long long>(progress.pending_token),
+                static_cast<long long>(progress.observed.count()),
                 static_cast<long long>(delay.count()),
                 static_cast<long long>(elapsed),
                 sent_text.c_str(),
@@ -252,7 +354,8 @@ task<> cancelled(
             auto diagnostic = "send did not cancel (send=" + sent_text
                               + "; timer=" + timer_text + ")";
             check(
-                timer && !sent && is_operation_cancelled(sent.error()),
+                progress.pending_token != 0 && timer && !sent
+                    && is_operation_cancelled(sent.error()),
                 diagnostic.c_str());
         } else if (stage == "overlap") {
             auto [read, attempt] = co_await settle(
@@ -387,6 +490,9 @@ int main(int argc, char ** argv)
         test(
             base + " masked lengths/echo/ping/close",
             exchange(base, options));
+        test(
+            base + " independently verified 16MiB send",
+            large_send(base, options));
         test(
             base + " fragments/interleaved controls",
             fragments(base, options));

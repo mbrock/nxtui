@@ -42,7 +42,7 @@ class Handler(socketserver.StreamRequestHandler):
             raise EOFError()
         return data
 
-    def client_frame(self):
+    def client_frame(self, limit=1024 * 1024):
         first, second = self.exact(2)
         assert first & 128 and not first & 112, "client flags/FIN"
         assert second & 128, "unmasked client frame"
@@ -53,7 +53,7 @@ class Handler(socketserver.StreamRequestHandler):
         elif n == 127:
             n = struct.unpack("!Q", self.exact(8))[0]
             assert 65536 <= n < 2**63, "noncanonical client 64-bit length"
-        assert n <= 1024 * 1024, "fixture client size limit"
+        assert n <= limit, "fixture client size limit"
         mask = self.exact(4)
         raw = self.exact(n)
         return first & 15, bytes(b ^ mask[i % 4] for i, b in enumerate(raw))
@@ -64,7 +64,7 @@ class Handler(socketserver.StreamRequestHandler):
         try:
             self.session()
         except (EOFError, ConnectionError, OSError):
-            if self.path in ("/exchange", "/fragments", "/close-mid"):
+            if self.path in ("/exchange", "/fragments", "/close-mid", "/large-send"):
                 self.server.errors.append("premature EOF on " + self.path)
         except Exception as exc:
             self.server.errors.append(repr(exc))
@@ -157,6 +157,20 @@ class Handler(socketserver.StreamRequestHandler):
                 self.connection.sendall(frame(10 if opcode == 9 else opcode, payload))
                 if opcode == 8:
                     return
+        elif path == "/large-send":
+            opcode, payload = self.client_frame(16 * 1024 * 1024)
+            assert opcode == 2 and len(payload) == 16 * 1024 * 1024, "large send opcode/length"
+            # Independent block-wise vector: check every byte, not an echo
+            # or an acknowledgement based only on the declared frame size.
+            for block in range(256):
+                expected = bytes((i * 37 + block * 19 + 11) & 255 for i in range(256)) * 256
+                assert payload[block * 65536:(block + 1) * 65536] == expected, f"large send block {block}"
+            digest = hashlib.sha256(payload).hexdigest()
+            print(f"LARGE-SEND verified peer={self.client_address} tls={bool(self.server.context)} "
+                  f"bytes={len(payload)} sha256={digest}", flush=True)
+            self.connection.sendall(frame(1, f"{len(payload)}:{digest}".encode()))
+            assert self.client_frame() == (8, b"\x03\xe8"), "large send Close"
+            self.connection.sendall(frame(8, b"\x03\xe8"))
         elif path.startswith("/stall-"):
             suffix = {"header": b"\x82", "payload": b"\x82\x05ab",
                       "fragment": frame(1, b"a", False), "overlap": b"", "send": b""}[path[7:]]
@@ -225,10 +239,13 @@ def main():
     parser.add_argument("--advertise", default="localhost", help="client-reachable DNS name or IPv4; used for SAN and Host")
     parser.add_argument("--ws-port", type=int, default=0)
     parser.add_argument("--wss-port", type=int, default=0)
+    parser.add_argument("--cancel-ms", type=int, default=100, help="probe cancellation delay (20..5000)")
     parser.add_argument("probe", type=Path, nargs="?")
     args = parser.parse_args()
     if args.serve == bool(args.probe) or (args.serve and not args.directory):
         parser.error("supply a probe OR --serve --directory NEW_DIRECTORY")
+    if not 20 <= args.cancel_ms <= 5000:
+        parser.error("--cancel-ms must be 20..5000")
     if not re.fullmatch(r"[A-Za-z0-9.-]+", args.advertise):
         parser.error("advertised identity must be a DNS name or IPv4")
     try:
@@ -268,7 +285,8 @@ def main():
                     pass
             else:
                 command = ([args.wine] if args.wine else []) + [str(args.probe.resolve()),
-                    ws, wss, client_path(directory / "server.pem"), client_path(directory / "wrong.pem")]
+                    ws, wss, client_path(directory / "server.pem"), client_path(directory / "wrong.pem"),
+                    str(args.cancel_ms)]
                 result = subprocess.run(command, timeout=180, env=os.environ).returncode
         finally:
             for server in servers:
@@ -279,6 +297,8 @@ def main():
                 thread.join()
         if not args.serve:
             for server in servers:
+                if "/large-send" not in server.seen:
+                    server.errors.append("large send verification not reached")
                 for stage in ("upgrade", "header", "payload", "fragment", "send", "overlap"):
                     if "/stall-" + stage not in server.seen:
                         server.errors.append("cancellation stage not reached: " + stage)

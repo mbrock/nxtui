@@ -177,18 +177,41 @@ same deck, testing completion drain rather than only a fresh runtime.
 The installed UWP consumer compiles without source-tree include paths or
 direct crypto/zlib/Boost inputs. Wine is not Xbox hardware validation.
 
-Send cancellation races one 16 MiB binary message against the timer. The
-fixture sets `SO_RCVBUF` to 4096 before its ready barrier, never reads that
-message, and holds the connection for up to 30 s (beyond the per-test
-deadline). It logs the actual receive-buffer size, peer, TLS mode and
-ready/end timestamps. The probe prints `SEND-CANCEL` with payload size,
-configured delay, elapsed time and separate send/timer outcomes; I/O
-failures include the error code and category. Only a completed timer plus
-an operation-cancelled send passes: successful sends and other failures
-remain failures. These diagnostics distinguish outcomes, not root causes.
-The probe remains wire-compatible with the earlier unconstrained fixture
-for paired diagnostic runs; a passing retry alone cannot explain an
-earlier failure.
+The `/large-send` case sends one 16 MiB binary message with distinct 64 KiB
+blocks. The server independently verifies its mask, declared length and
+every payload byte before returning a length/SHA-256 receipt checked
+against a fixed vector. `LARGE-SEND` logs distinguish send completion from
+verified remote delivery: an overlapped send completing does not itself
+mean the peer has received the bytes.
+
+Send cancellation uses consecutive 64 KiB messages, bounded to 256 MiB
+total and one message's allocation at a time. After the configured delay,
+an observer requires the **same parked send wish** (task, token and
+parking timestamp), with no completed-frame progress, across 100 ms
+before stopping the sender. The sender awaits only writes; the observer
+excludes pre-existing wishes such as the per-case deadline, and its own
+timer is unparked before each snapshot. This rules out cancellation
+between completed frames, even if tokens/task rows get reused. Observation
+is limited to thirty 100 ms attempts within the per-case deadline;
+exhausting either budget fails, rather than silently passing without
+pending I/O. Each successful case still requires an operation-cancelled
+sender, terminal connection and same-deck reconnect.
+
+The fixture sets `SO_RCVBUF` to 4096 before readiness, never reads the
+cancellation workload, and holds the connection for up to 30 s. This
+does not control sender-side buffering; the pending-wish observation is
+the precondition, not an assumed buffer limit. Fixture logs include the
+actual receive-buffer size, peer, TLS mode and ready/end timestamps.
+`SEND-CANCEL` reports frame/budget sizes, completed frames, observed
+task/token/stability, delay, elapsed time and separate send/observer
+outcomes. Non-cancellation I/O errors and successful sends remain failures.
+Paired Xbox runs of the earlier single-message probe completed plaintext
+sends before cancellation; no deeper cause or dropped-byte explanation is
+inferred from that observation.
+
+Use `--cancel-ms 2000` when the fixture launches a local/Wine probe to
+match the remote delay. The new probe requires the matching fixture with
+`/large-send`; earlier fixtures lack that verification case.
 
 For a remote diagnostic host, start a foreground fixture with an explicit
 client-reachable DNS name or public IPv4, not an assumed tailnet address:
@@ -212,8 +235,8 @@ Private `*.key` files stay on the fixture server, never in an app package.
 The probe argv is `WS_BASE WSS_BASE CA WRONG_CA [CANCEL_MS=100]`, where
 bases have no trailing slash. Use a longer cancellation delay for remote
 latency (20..5000 ms; 2000 suggested); each test still has a 15 s deadline.
-IP/DNS advertised runs perform 89 tests and explicitly skip the localhost
-DNS-vs-IP wrong-SAN case; default localhost runs perform all 90. Successful
+IP/DNS advertised runs perform 91 tests and explicitly skip the localhost
+DNS-vs-IP wrong-SAN case; default localhost runs perform all 92. Successful
 remote wss still verifies the exact advertised SAN and CA; there is no
 trust bypass. No hardware session is launched by this fixture.
 
