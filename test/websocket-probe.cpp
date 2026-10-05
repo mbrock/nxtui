@@ -183,6 +183,24 @@ task<> stop_later(std::chrono::milliseconds delay)
     co_await op::timeout::after(delay);
 }
 
+std::string describe(outcome<void> const & result)
+{
+    if (result)
+        return "completed";
+    if (is_operation_cancelled(result.error()))
+        return "cancelled";
+    try {
+        rethrow(result.error());
+    } catch (std::system_error const & e) {
+        return "failed code=" + std::to_string(e.code().value())
+               + " category=" + e.code().category().name() + " " + e.what();
+    } catch (std::exception const & e) {
+        return "failed " + std::string{e.what()};
+    } catch (...) {
+        return "failed non-standard exception";
+    }
+}
+
 task<> cancelled(
     std::string base,
     ws::options options,
@@ -208,6 +226,7 @@ task<> cancelled(
                 && ready->data == "ready",
             "cancellation barrier missing");
         if (stage == "send") {
+            auto started = std::chrono::steady_clock::now();
             auto [sent, timer] = co_await settle(
                 std::tuple{
                     c->send(
@@ -215,9 +234,26 @@ task<> cancelled(
                         std::string(options.max_message_size, 'x')),
                     stop_later(delay)},
                 first_completion_group{});
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started)
+                    .count();
+            auto sent_text = describe(sent);
+            auto timer_text = describe(timer);
+            std::printf(
+                "SEND-CANCEL %s payload=%zu delay_ms=%lld elapsed_ms=%lld send=%s timer=%s\n",
+                base.c_str(),
+                options.max_message_size,
+                static_cast<long long>(delay.count()),
+                static_cast<long long>(elapsed),
+                sent_text.c_str(),
+                timer_text.c_str());
+            std::fflush(stdout);
+            auto diagnostic = "send did not cancel (send=" + sent_text
+                              + "; timer=" + timer_text + ")";
             check(
                 timer && !sent && is_operation_cancelled(sent.error()),
-                "send did not cancel");
+                diagnostic.c_str());
         } else if (stage == "overlap") {
             auto [read, attempt] = co_await settle(
                 std::tuple{c->receive(), overlapping(*c)},

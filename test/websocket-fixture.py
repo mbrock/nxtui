@@ -12,12 +12,14 @@ import os
 from pathlib import Path
 import re
 import signal
+import socket
 import socketserver
 import ssl
 import struct
 import subprocess
 import tempfile
 import threading
+import time
 
 from contextlib import nullcontext
 from runpy import run_path
@@ -124,6 +126,14 @@ class Handler(socketserver.StreamRequestHandler):
             fields.append("broken-header")
         elif path == "/bad-folded":
             fields.append(" Sec-WebSocket-Accept: " + accept)
+        if path == "/stall-send":
+            # Lock the receive buffer before the ready barrier; otherwise
+            # OS autotuning can absorb much more than this fixture intends.
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+            receive_buffer = self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+            started = time.monotonic()
+            print(f"STALL-SEND ready time={time.time():.3f} peer={self.client_address} "
+                  f"tls={bool(self.server.context)} rcvbuf={receive_buffer}", flush=True)
         # Send the head and a frame together: Upgrade must preserve buffered
         # post-header bytes. Fragment fixtures then split UTF-8 across frames.
         head = (status + "\r\n".join(fields) + "\r\n\r\n").encode()
@@ -152,8 +162,12 @@ class Handler(socketserver.StreamRequestHandler):
                       "fragment": frame(1, b"a", False), "overlap": b"", "send": b""}[path[7:]]
             self.connection.sendall(frame(10, b"ready") + suffix)
             if path == "/stall-send":
-                # Do not drain the client's send; a bounded backpressure test.
-                self.server.finished.wait(20)
+                # Never read client data. Hold beyond the probe's 15s deadline
+                # so a fixture timeout cannot masquerade as cancellation.
+                stopped = self.server.finished.wait(30)
+                print(f"STALL-SEND end time={time.time():.3f} peer={self.client_address} "
+                      f"tls={bool(self.server.context)} elapsed_ms={(time.monotonic() - started) * 1000:.0f} "
+                      f"reason={'server-stopping' if stopped else 'hold-expired'}", flush=True)
             else:
                 assert self.connection.recv(1) == b"", "cancelled receive did not close"
             return

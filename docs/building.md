@@ -177,6 +177,19 @@ same deck, testing completion drain rather than only a fresh runtime.
 The installed UWP consumer compiles without source-tree include paths or
 direct crypto/zlib/Boost inputs. Wine is not Xbox hardware validation.
 
+Send cancellation races one 16 MiB binary message against the timer. The
+fixture sets `SO_RCVBUF` to 4096 before its ready barrier, never reads that
+message, and holds the connection for up to 30 s (beyond the per-test
+deadline). It logs the actual receive-buffer size, peer, TLS mode and
+ready/end timestamps. The probe prints `SEND-CANCEL` with payload size,
+configured delay, elapsed time and separate send/timer outcomes; I/O
+failures include the error code and category. Only a completed timer plus
+an operation-cancelled send passes: successful sends and other failures
+remain failures. These diagnostics distinguish outcomes, not root causes.
+The probe remains wire-compatible with the earlier unconstrained fixture
+for paired diagnostic runs; a passing retry alone cannot explain an
+earlier failure.
+
 For a remote diagnostic host, start a foreground fixture with an explicit
 client-reachable DNS name or public IPv4, not an assumed tailnet address:
 
