@@ -1,0 +1,20 @@
+--- a/crypto/getenv.c
++++ b/crypto/getenv.c
+@@ -17,6 +17,11 @@
+ 
+ char *ossl_safe_getenv(const char *name)
+ {
++#if defined(OPENSSL_SYS_WIN_CORE)
++    /* UWP has no process environment; trust/config is supplied by the app. */
++    (void)name;
++    return NULL;
++#else
+ #if defined(_WIN32) && defined(CP_UTF8) && !defined(_WIN32_WCE)
+     if (GetEnvironmentVariableW(L"OPENSSL_WIN32_UTF8", NULL, 0) != 0) {
+         char *val = NULL;
+@@ -98,4 +103,5 @@
+         return NULL;
+     return getenv(name);
+ #endif
++#endif
+ }

@@ -76,6 +76,75 @@ Use `uring` on Linux or `kqueue` on BSD/macOS instead of `epoll`. The default
 is propagated to library consumers through the Meson dependency and
 pkg-config flags, since the application runtime contains a concrete Wand.
 
+## Windows/UWP and Xbox networking
+
+On x86_64 Linux, the flake uses the pinned `mbrock/nixbox` MSVC-ABI SDK
+(not MinGW) to build the portable runtime/network stack:
+
+```sh
+package=$(nix build .#nxtrt-iocp --no-link --print-out-paths)
+nix build .#checks.x86_64-linux.iocp-consumer --no-link
+```
+
+This installs `nxtrt-iocp.lib`, `nxtrt-iocp.pc`, portable `nxtrt`, `nxt`,
+and `nxtai` headers, plus `bin/iocp-tests.exe` and `bin/network-probe.exe`.
+It propagates zlib, header-only Boost and `.#openssl-uwp` libcrypto to
+consumers. The separate `iocp-consumer` check compiles in an isolated
+derivation with only the installed runtime as a build input, catching missing
+public dependency paths rather than inheriting the runtime's build environment.
+Nix only cross-builds the tests; it does not claim to run them on Xbox.
+External Meson consumers use `dependency('nxtrt-iocp')` and C++23, with the
+same nixbox UWP stdenv and static CRT. Runtime/transport require neither
+POSIX `nxt-core`, Wisp nor libvterm.
+
+Connections attach automatically to the current IOCP deck; listeners must be
+attached once before the first accept. Accepted sockets inherit that port.
+Socket wrappers own pointer-width Winsock SOCKETs, not POSIX/CRT descriptors.
+Windows DNS uses `GetAddrInfoExW` rather than c-ares readiness wishes: the
+completion callback publishes only heap-owned results and an atomic flag;
+2 ms timer wishes wake the deck. Cancellation requests `GetAddrInfoExCancel`
+and shields the completion drain before freeing the query. Socket/TLS stop
+uses the IOCP backend's normal `CancelIoEx` completion-packet drain.
+
+The no-argument network probe checks unsafe credential rejection, DNS,
+buffered sockets/EOF and (Windows) pending native DNS cancellation/reuse.
+On Linux or under Wine:
+
+```sh
+build/test/network-probe
+python3 test/network-fixture.py build/test/network-probe
+WINEPREFIX="$PWD/build/wine-prefix" WINEDEBUG=-all \
+  /usr/lib/wine/wine64 "$package/bin/network-probe.exe"
+WINEPREFIX="$PWD/build/wine-prefix" WINEDEBUG=-all \
+  python3 test/network-fixture.py --wine /usr/lib/wine/wine64 \
+  "$package/bin/network-probe.exe"
+```
+
+The disposable TLS 1.3 fixture requires Python and the `openssl` command. It
+checks chunked gzip SSE (including an embedded NUL), canonical completion,
+untrusted roots, wrong SAN, missing trust file, HTTP/content-type/truncation
+errors, midstream cancellation/draining, and a fresh successful connection.
+It never uses real credentials or makes external requests. Meson runs it on
+Unix when `openssl` is available.
+
+For an explicitly authorized real two-turn GPT-6 Luna probe:
+
+```sh
+network-probe.exe --openai KEY_FILE CA_FILE
+# Linux only: --env reads the runtime OPENAI_API_KEY without a key file.
+nix develop -c bash -c 'build/test/network-probe --openai --env "$SSL_CERT_FILE"'
+```
+
+For Xbox, the host must provide `internetClient`, provision `KEY_FILE` into
+app LocalState separately via Device Portal, and supply a public CA bundle
+(Mozilla's CA PEM is suitable). Neither secrets nor a private fixture key
+belong in an MSIX/Nix derivation. The probe source can be compiled into a
+UWP host with a renamed entry point and captured stdout; a UI can instead
+call `nxtai::responses_transport` directly. Trust-chain and SAN verification
+cannot be disabled. Wine is useful portability coverage, not a substitute
+for packaged hardware tests. Suspend/resume and long-running soak tests
+remain integration work.
+
 ## Wisp coverage (GCC)
 
 Use a separate instrumented build, inside `nix develop` or with a matching

@@ -2,7 +2,9 @@
 
 #include "nxtrt/wish_ops.hpp"
 
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 namespace nxtrt {
 
@@ -45,13 +47,13 @@ template class fixed_sink<std::byte>;
 template class discarding_sink<std::byte>;
 
 task<std::size_t>
-send_some(int fd, std::span<const std::byte> buffer, int flags)
+send_some(socket_handle fd, std::span<const std::byte> buffer, int flags)
 {
     co_return co_await op::send_some{fd, buffer, flags};
 }
 
 task<std::size_t>
-write_some(int fd, std::span<const std::byte> buffer, off_t offset)
+write_some(io_handle fd, std::span<const std::byte> buffer, file_offset offset)
 {
     co_return co_await op::write_some{fd, buffer, offset};
 }
@@ -89,6 +91,7 @@ fd_sink::first_nonempty(value_chunk_view chunks, std::size_t splat) noexcept
     return {};
 }
 
+#if !defined(_WIN32)
 fd_sink standard_output(std::size_t buffer_size)
 {
     return fd_sink{STDOUT_FILENO, buffer_size};
@@ -98,6 +101,7 @@ fd_sink standard_output_sink(std::size_t buffer_size)
 {
     return standard_output(buffer_size);
 }
+#endif
 
 hope<std::size_t>
 socket_sink::drain_more(value_chunk_view chunks, std::size_t splat)

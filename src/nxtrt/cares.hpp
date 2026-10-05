@@ -3,35 +3,40 @@
 #include "nxtrt/task.hpp"
 
 #include <cstring>
-#include <netdb.h>
+#if defined(_WIN32)
+#  include "nxtrt/net.hpp"
+#  include <atomic>
+#else
+#  include <netdb.h>
+#  include <netinet/in.h>
+#  include <sys/socket.h>
+#endif
 #include <memory>
-#include <netinet/in.h>
 #include <stdexcept>
 #include <string>
-#include <sys/socket.h>
 #include <utility>
 #include <vector>
 
 #if defined(NXTRT_HAVE_CARES)
-#include <ares.h>
+#  include <ares.h>
 
-#include <chrono>
-#include <poll.h>
+#  include <chrono>
+#  include <poll.h>
 #  include <array>
 #endif
 
 namespace nxtrt {
 
 #if defined(NXTRT_HAVE_CARES)
-#if defined(__GNUC__) || defined(__clang__)
-#define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN \
-    _Pragma("GCC diagnostic push") \
-    _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
-#define NXT_RT_CARES_IGNORE_DEPRECATED_END _Pragma("GCC diagnostic pop")
-#else
-#define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
-#define NXT_RT_CARES_IGNORE_DEPRECATED_END
-#endif
+#  if defined(__GNUC__) || defined(__clang__)
+#    define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN \
+        _Pragma("GCC diagnostic push") _Pragma(  \
+            "GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#    define NXT_RT_CARES_IGNORE_DEPRECATED_END _Pragma("GCC diagnostic pop")
+#  else
+#    define NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
+#    define NXT_RT_CARES_IGNORE_DEPRECATED_END
+#  endif
 #endif
 
 /// One socket address from name resolution, with the family, socket type
@@ -42,7 +47,7 @@ struct resolved_address
     int socktype = 0;
     int protocol = 0;
     sockaddr_storage address{};
-    socklen_t address_size = 0;
+    socket_length address_size = 0;
 
     [[nodiscard]] sockaddr const * sockaddr_ptr() const noexcept
     {
@@ -51,8 +56,9 @@ struct resolved_address
 };
 
 /// Copies the usable entries of a getaddrinfo(3) result list.
+template<typename AddressInfo>
 inline std::vector<resolved_address>
-resolved_addresses_from(addrinfo * result)
+resolved_addresses_from(AddressInfo * result)
 {
     auto addresses = std::vector<resolved_address>{};
     for (auto * node = result; node != nullptr; node = node->ai_next) {
@@ -65,7 +71,7 @@ resolved_addresses_from(addrinfo * result)
             .socktype = node->ai_socktype,
             .protocol = node->ai_protocol,
             .address = {},
-            .address_size = static_cast<socklen_t>(node->ai_addrlen),
+            .address_size = static_cast<socket_length>(node->ai_addrlen),
         };
         std::memcpy(&address.address, node->ai_addr, node->ai_addrlen);
         addresses.push_back(address);
@@ -100,8 +106,7 @@ public:
             &hints,
             &result);
         auto cleanup = std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)>{
-            result,
-            ::freeaddrinfo};
+            result, ::freeaddrinfo};
         if (rc != 0)
             throw runtime_error{
                 "getaddrinfo failed: " + std::string{::gai_strerror(rc)}};
@@ -109,6 +114,122 @@ public:
         co_return resolved_addresses_from(result);
     }
 };
+
+#if defined(_WIN32)
+/// Native UWP DNS. Only the completion flag crosses threads; query storage
+/// is heap-owned, and timers wake the deck without readiness polling.
+/// Stopping requests native cancellation, then shields the completion drain
+/// before releasing any names, result, or OVERLAPPED storage.
+class windows_resolver
+{
+    struct query : OVERLAPPED
+    {
+        std::wstring name, service;
+        ADDRINFOEXW hints{};
+        PADDRINFOEXW result = nullptr;
+        HANDLE cancel = nullptr;
+        int status = 0;
+        std::atomic<bool> done{false};
+
+        query()
+            : OVERLAPPED{}
+        {
+        }
+
+        ~query()
+        {
+            if (result)
+                FreeAddrInfoExW(result);
+        }
+    };
+
+    static std::wstring wide(std::string const & text)
+    {
+        if (text.find('\0') != std::string::npos)
+            throw invalid_argument{"NUL in DNS name or service"};
+        if (text.empty())
+            return {};
+        auto n = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            text.data(),
+            int(text.size()),
+            nullptr,
+            0);
+        if (!n)
+            throw invalid_argument{"invalid UTF-8 DNS name or service"};
+        std::wstring result(n, L'\0');
+        MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            text.data(),
+            int(text.size()),
+            result.data(),
+            n);
+        return result;
+    }
+
+    static void CALLBACK
+    complete(DWORD status, DWORD, OVERLAPPED * overlapped) noexcept
+    {
+        auto & q = *static_cast<query *>(overlapped);
+        q.status = int(status);
+        q.done.store(true, std::memory_order_release);
+    }
+
+    static task<void> drain(query & q)
+    {
+        while (!q.done.load(std::memory_order_acquire))
+            co_await op::timeout::after(std::chrono::milliseconds{2});
+    }
+public:
+    task<std::vector<resolved_address>> getaddrinfo(
+        std::string name,
+        std::string service,
+        int family = AF_UNSPEC,
+        int socktype = SOCK_STREAM,
+        int protocol = 0)
+    {
+        throw_if_stop_requested();
+        net::ensure_winsock();
+        auto q = std::make_unique<query>();
+        q->name = wide(name);
+        q->service = wide(service);
+        q->hints.ai_family = family;
+        q->hints.ai_socktype = socktype;
+        q->hints.ai_protocol = protocol;
+        auto status = GetAddrInfoExW(
+            q->name.c_str(),
+            q->service.empty() ? nullptr : q->service.c_str(),
+            NS_DNS,
+            nullptr,
+            &q->hints,
+            &q->result,
+            nullptr,
+            q.get(),
+            complete,
+            &q->cancel);
+        if (status == WSA_IO_PENDING) {
+            std::exception_ptr failure;
+            try {
+                co_await drain(*q);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            if (failure) {
+                GetAddrInfoExCancel(&q->cancel);
+                co_await shield(drain(*q));
+                std::rethrow_exception(failure);
+            }
+            status = q->status;
+        }
+        if (status)
+            throw std::system_error{
+                status, std::system_category(), "DNS lookup failed"};
+        co_return resolved_addresses_from(q->result);
+    }
+};
+#endif
 
 #if defined(NXTRT_HAVE_CARES)
 
@@ -233,7 +354,7 @@ private:
     static void ensure_library()
     {
         static auto guard = library_guard{};
-        (void)guard;
+        (void) guard;
     }
 
     static void complete_addrinfo(
@@ -256,7 +377,7 @@ private:
                         .protocol = node->ai_protocol,
                         .address = {},
                         .address_size =
-                            static_cast<socklen_t>(node->ai_addrlen),
+                            static_cast<socket_length>(node->ai_addrlen),
                     };
                     std::memcpy(
                         &address.address, node->ai_addr, node->ai_addrlen);
@@ -327,14 +448,14 @@ private:
     static std::chrono::nanoseconds as_duration(timeval value)
     {
         return std::chrono::seconds{value.tv_sec}
-            + std::chrono::microseconds{value.tv_usec};
+               + std::chrono::microseconds{value.tv_usec};
     }
 
     std::unique_ptr<ares_channel_t, channel_deleter> channel_;
 };
 
-#undef NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
-#undef NXT_RT_CARES_IGNORE_DEPRECATED_END
+#  undef NXT_RT_CARES_IGNORE_DEPRECATED_BEGIN
+#  undef NXT_RT_CARES_IGNORE_DEPRECATED_END
 #endif
 
 } // namespace nxtrt

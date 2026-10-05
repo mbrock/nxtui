@@ -18,9 +18,9 @@
  * bounded batch runner that executes a response's tool calls.
  * `run_agent` ties them together: request, run tools, send results, repeat.
  * The transport itself (TLS connection, HTTP, SSE parsing over
- * `nxtrt::tls` and `nxtrt::http`) lives in the `nxtllm` program, not in
- * these headers. `nxtai::agent_tools` supplies the `read_file`,
- * `rg_search`, and `bash` tools that `nxtllm` uses.
+ * `nxtrt::tls` and `nxtrt::http`) is `responses_transport.hpp`, shared by
+ * `nxtllm` and native application hosts. `nxtai::agent_tools` supplies the
+ * `read_file`, `rg_search`, and `bash` tools that `nxtllm` uses.
  *
  * See @ref ai_overview for the design, ownership, and current limits.
  */

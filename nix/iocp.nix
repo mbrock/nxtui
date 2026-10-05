@@ -5,6 +5,9 @@
   meson,
   ninja,
   pkg-config,
+  boost,
+  zlib,
+  cryptoLibrary,
 }:
 stdenv.mkDerivation {
   pname = "nxtrt-iocp";
@@ -15,7 +18,10 @@ stdenv.mkDerivation {
       ../meson.build
       ../meson.options
       ../src/nxtrt
+      ../src/nxt
+      ../src/nxtai
       ../test/iocp-wand-test.cpp
+      ../test/network-probe.cpp
     ];
   };
   nativeBuildInputs = [
@@ -23,19 +29,20 @@ stdenv.mkDerivation {
     ninja
     pkg-config
   ];
+  # Public headers and pkg-config require these in downstream build environments.
+  propagatedBuildInputs = [
+    boost
+    zlib
+    cryptoLibrary
+  ];
   mesonBuildType = "release";
   mesonFlags = [
     "-Ddefault_wand=iocp"
     "-Dtests=true"
     "-Db_vscrt=mt"
   ];
-  # Verify the installed headers and pkg-config link contract, not only
-  # Meson's in-tree dependency (which links archives by their full path).
-  postInstall = ''
-    $CXX -std=c++23 "$src/test/iocp-wand-test.cpp" \
-      $(PKG_CONFIG_PATH="$out/lib/pkgconfig" $PKG_CONFIG --cflags --libs nxtrt-iocp) \
-      -o "$TMPDIR/iocp-consumer.exe"
-  '';
+  # The separate flake iocp-consumer check tests this package in isolation;
+  # checking here would inherit private dependency paths and mask omissions.
   # The test executable is cross-linked and installed for a Windows runner.
   # Nix cannot execute a UWP binary on the Linux build host.
   doCheck = false;

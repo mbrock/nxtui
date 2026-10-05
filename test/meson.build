@@ -115,6 +115,18 @@ if get_option('tests')
   )
   test('wisp-alloc-tests', wisp_alloc_tests)
 
+  network_probe = executable('network-probe', 'network-probe.cpp',
+    dependencies : [nxt_core_dep] + nxt_dns_deps,
+    cpp_args : nxt_dns_args,
+  )
+  test('network-probe', network_probe, timeout : 90)
+  if find_program('openssl', required : false).found()
+    test('network-tls-fixture', find_program('python3'),
+      args : [files('network-fixture.py'), network_probe],
+      timeout : 90,
+    )
+  endif
+
   if get_option('wisp_tool')
     # Independent host processes exercise replayable timer awaits and console
     # I/O. Keep each process's own timeout active.

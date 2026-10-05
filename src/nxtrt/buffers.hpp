@@ -13,7 +13,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <sys/types.h>
 #include <type_traits>
 #include <utility>
 
@@ -27,7 +26,7 @@ concept byte_read_task = detail::value_read_task<std::byte, Read>;
 /// Send some of `buffer` on socket `fd` with one `op::send_some` wish.
 /// Returns the count sent, which may be short.
 task<std::size_t> send_some(
-    int fd,
+    socket_handle fd,
     std::span<const std::byte> buffer,
     int flags = 0);
 
@@ -35,9 +34,9 @@ task<std::size_t> send_some(
 /// `offset` or, when it is -1, at the current file position. Returns the
 /// count written, which may be short.
 task<std::size_t> write_some(
-    int fd,
+    io_handle fd,
     std::span<const std::byte> buffer,
-    off_t offset = -1);
+    file_offset offset = -1);
 
 namespace detail {
 
@@ -177,12 +176,12 @@ task<void> write(bytesink & writer, Chunks && chunks)
 class fd_sink final : public bytesink
 {
 public:
-    explicit fd_sink(int fd, std::span<std::byte> buffer)
+    explicit fd_sink(io_handle fd, std::span<std::byte> buffer)
         : bytesink(buffer)
         , fd_(fd)
     {}
 
-    explicit fd_sink(int fd, std::size_t buffer_size = 4096)
+    explicit fd_sink(io_handle fd, std::size_t buffer_size = 4096)
         : bytesink(buffer_size)
         , fd_(fd)
     {}
@@ -202,14 +201,16 @@ private:
         value_chunk_view chunks,
         std::size_t splat) noexcept;
 
-    int fd_ = -1;
+    io_handle fd_ = invalid_io_handle;
 };
 
+#if !defined(_WIN32)
 /// An @ref fd_sink over standard output, with an owned buffer.
 fd_sink standard_output(std::size_t buffer_size = 4096);
 
 /// Same as @ref standard_output.
 fd_sink standard_output_sink(std::size_t buffer_size = 4096);
+#endif
 
 /// Buffered byte sink over a connected socket.
 ///
@@ -220,7 +221,7 @@ class socket_sink final : public bytesink
 {
 public:
     explicit socket_sink(
-        int fd,
+        socket_handle fd,
         std::span<std::byte> buffer,
         int flags = 0)
         : bytesink(buffer)
@@ -229,7 +230,7 @@ public:
     {}
 
     explicit socket_sink(
-        int fd,
+        socket_handle fd,
         int flags = 0,
         std::size_t buffer_size = 4096)
         : bytesink(buffer_size)
@@ -258,7 +259,7 @@ private:
         value_chunk_view chunks,
         std::size_t splat) noexcept;
 
-    int fd_ = -1;
+    socket_handle fd_ = invalid_socket_handle;
     int flags_ = 0;
     std::size_t sent_ = 0;
 };
@@ -720,12 +721,12 @@ class fd_source final : public detail::taskfeed_base<std::byte, fd_source>
     using base = detail::taskfeed_base<std::byte, fd_source>;
 
 public:
-    explicit fd_source(int fd, std::span<std::byte> buffer)
+    explicit fd_source(io_handle fd, std::span<std::byte> buffer)
         : base(buffer)
         , fd_(fd)
     {}
 
-    explicit fd_source(int fd, std::size_t buffer_size = 4096)
+    explicit fd_source(io_handle fd, std::size_t buffer_size = 4096)
         : base(buffer_size)
         , fd_(fd)
     {}
@@ -735,7 +736,7 @@ public:
 private:
     friend base;
 
-    int fd_ = -1;
+    io_handle fd_ = invalid_io_handle;
 };
 
 /// Buffered byte feed over a connected socket.
@@ -749,7 +750,7 @@ class socket_source final : public detail::taskfeed_base<std::byte, socket_sourc
 
 public:
     explicit socket_source(
-        int fd,
+        socket_handle fd,
         std::span<std::byte> buffer,
         int flags = 0)
         : base(buffer)
@@ -758,7 +759,7 @@ public:
     {}
 
     explicit socket_source(
-        int fd,
+        socket_handle fd,
         int flags = 0,
         std::size_t buffer_size = 4096)
         : base(buffer_size)
@@ -777,7 +778,7 @@ public:
 private:
     friend base;
 
-    int fd_ = -1;
+    socket_handle fd_ = invalid_socket_handle;
     int flags_ = 0;
     std::size_t received_ = 0;
 };

@@ -2,8 +2,15 @@
 
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <openssl/pem.h>
 
-#include <arpa/inet.h>
+#if defined(_WIN32)
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <fstream>
+#else
+#  include <arpa/inet.h>
+#endif
 #include <memory>
 
 namespace nxt::tls {
@@ -32,16 +39,61 @@ void verify_server_certificate(
         X509_STORE_new(), X509_STORE_free};
     require_tls(store != nullptr, "cannot allocate TLS trust store");
     if (ca_file.empty()) {
+#if defined(_WIN32)
+        // UWP has no Unix trust paths. Require provisioned app-local roots;
+        // never fall back to an empty or unverified store.
+        throw nxtrt::runtime_error{
+            "Windows TLS requires an explicit PEM CA bundle"};
+#else
         // libcrypto honors SSL_CERT_FILE and SSL_CERT_DIR here.
         require_tls(
             X509_STORE_set_default_paths(store.get()) == 1,
             "cannot load default TLS trust store");
+#endif
     } else {
         auto path = std::string{ca_file};
+#if defined(_WIN32)
+        // UWP libcrypto is built without stdio. Application CRT file access
+        // loads app-local public roots into a memory BIO instead.
+        auto file = std::ifstream{path, std::ios::binary};
+        require_tls(bool(file), "cannot open TLS CA file");
+        auto pem = std::string(1024 * 1024 + 1, '\0');
+        file.read(pem.data(), static_cast<std::streamsize>(pem.size()));
+        require_tls(
+            file.eof() && !file.bad() && file.gcount() > 0
+                && file.gcount() <= 1024 * 1024,
+            "invalid TLS CA bundle size or read failure");
+        pem.resize(static_cast<std::size_t>(file.gcount()));
+        auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>{
+            BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())),
+            BIO_free};
+        require_tls(bio != nullptr, "cannot allocate TLS CA reader");
+        auto free_roots = [](STACK_OF(X509_INFO) * roots) {
+            sk_X509_INFO_pop_free(roots, X509_INFO_free);
+        };
+        auto roots =
+            std::unique_ptr<STACK_OF(X509_INFO), decltype(free_roots)>{
+                PEM_X509_INFO_read_bio(
+                    bio.get(), nullptr, nullptr, nullptr),
+                free_roots};
+        require_tls(roots != nullptr, "cannot parse TLS CA bundle");
+        int count = 0;
+        for (int i = 0; i < sk_X509_INFO_num(roots.get()); ++i) {
+            auto * info = sk_X509_INFO_value(roots.get(), i);
+            if (info->x509) {
+                require_tls(
+                    X509_STORE_add_cert(store.get(), info->x509) == 1,
+                    "cannot add TLS trust root");
+                ++count;
+            }
+        }
+        require_tls(count != 0, "TLS CA bundle has no certificates");
+#else
         require_tls(
             X509_STORE_load_locations(store.get(), path.c_str(), nullptr)
                 == 1,
             "cannot load TLS CA file");
+#endif
     }
 
     // Peer's intermediates are untrusted, never added to the trust store.

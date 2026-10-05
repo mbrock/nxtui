@@ -2,7 +2,9 @@
 
 #include <nxt/json.hpp>
 #include <nxtrt/pool.hpp>
+#if !defined(_WIN32)
 #include <nxtrt/scoped_process.hpp>
+#endif
 #include <nxtrt/task.hpp>
 #include <nxtai/openai_types.hpp>
 #include <nxtai/tool_json.hpp>
@@ -50,8 +52,10 @@ struct tool_result
     bool failed = false;
     /// Text returned to the model (output, or an error message).
     std::string output;
+#if !defined(_WIN32)
     /// cgroup samples of the tool's process, when it ran in a systemd scope.
-    std::optional<nxtrt::scoped_process::observation> observed;
+    std::optional<nxtrt::scoped_process::observation> observed = {};
+#endif
 };
 
 /// A statically described function tool.
@@ -347,7 +351,6 @@ nxtrt::task<tool_result> run_one_function_tool(
             co_return tool_result{
                 .failed = true,
                 .output = "invalid tool arguments json",
-                .observed = std::nullopt,
             };
         arguments = std::move(*parsed);
     }
@@ -360,13 +363,11 @@ nxtrt::task<tool_result> run_one_function_tool(
         co_return tool_result{
             .failed = true,
             .output = std::string{"tool execution failed: "} + e.what(),
-            .observed = std::nullopt,
         };
     } catch (...) {
         co_return tool_result{
             .failed = true,
             .output = "tool execution failed: non-std exception",
-            .observed = std::nullopt,
         };
     }
 }
@@ -408,7 +409,6 @@ inline nxtrt::task<tool_result> run_function_tool(
     co_return tool_result{
         .failed = true,
         .output = "unknown tool",
-        .observed = std::nullopt,
     };
 }
 

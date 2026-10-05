@@ -8,6 +8,9 @@
 
 #if defined(__linux__)
 #    include <sys/random.h>
+#elif defined(_WIN32)
+#    include <windows.h>
+#    include <bcrypt.h>
 #else
 #    include <stdlib.h>
 #endif
@@ -475,6 +478,12 @@ void random(std::span<std::byte> out)
         if (n == 0)
             throw crypto_error{"random byte generation made no progress"};
         rest = rest.subspan(static_cast<std::size_t>(n));
+#elif defined(_WIN32)
+        auto count = static_cast<ULONG>(std::min<std::size_t>(rest.size(), MAXDWORD));
+        if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(rest.data()), count,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+            throw crypto_error{"system random byte generation failed"};
+        rest = rest.subspan(count);
 #else
         arc4random_buf(rest.data(), rest.size());
         rest = {};

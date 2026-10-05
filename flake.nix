@@ -40,8 +40,13 @@
               cryptoLibrary = filcPkgs.openssl;
             };
         }
-        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-          nxtrt-iocp = nixbox.legacyPackages.x86_64-linux.pkgsXbox.callPackage ./nix/iocp.nix { };
+        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") rec {
+          openssl-uwp = nixbox.legacyPackages.x86_64-linux.pkgsXbox.callPackage ./nix/openssl-uwp.nix { };
+          nxtrt-iocp = nixbox.legacyPackages.x86_64-linux.pkgsXbox.callPackage ./nix/iocp.nix {
+            cryptoLibrary = openssl-uwp;
+            # Only headers are used; do not build POSIX Boost libraries for UWP.
+            boost = nixbox.legacyPackages.x86_64-linux.pkgsXbox.buildPackages.boost;
+          };
         }
       );
 
@@ -180,6 +185,26 @@
         }
         // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           inherit (self.packages.x86_64-linux) nxtrt-iocp;
+          iocp-consumer =
+            let
+              xbox = nixbox.legacyPackages.x86_64-linux.pkgsXbox;
+            in
+            xbox.stdenv.mkDerivation {
+              name = "nxtrt-iocp-consumer-check";
+              dontUnpack = true;
+              nativeBuildInputs = [ xbox.pkg-config ];
+              # No direct crypto/zlib/Boost inputs: the package must expose
+              # its actual public dependencies to a fresh consumer.
+              buildInputs = [ self.packages.x86_64-linux.nxtrt-iocp ];
+              buildPhase = ''
+                $CXX -std=c++23 ${./test/network-probe.cpp} \
+                  $($PKG_CONFIG --cflags --libs nxtrt-iocp) -o network-probe.exe
+              '';
+              installPhase = ''
+                mkdir -p "$out/bin"
+                cp network-probe.exe "$out/bin/"
+              '';
+            };
         }
       );
 

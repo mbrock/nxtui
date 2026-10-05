@@ -12,17 +12,16 @@ namespace nxtrt::net {
 
 /// Connect a new socket of ADDRESS's family and protocol (a stream socket
 /// if it names no type), with close-on-exec and TCP_NODELAY.
-inline task<nxt::unique_fd> connect(resolved_address address)
+inline task<unique_socket> connect(resolved_address address)
 {
-    auto fd = nxt::unique_fd{::socket(
+    auto fd = make_socket(
         address.family,
         address.socktype == 0 ? SOCK_STREAM : address.socktype,
-        address.protocol)};
-    if (fd.get() < 0)
-        throw_errno("socket");
+        address.protocol);
 
     set_close_on_exec(fd.get());
     set_tcp_no_delay(fd.get());
+    attach_socket(fd.get());
     co_await op::connect::from(
         fd.get(), address.sockaddr_ptr(), address.address_size);
     co_return std::move(fd);
@@ -31,15 +30,19 @@ inline task<nxt::unique_fd> connect(resolved_address address)
 /// Resolve HOST and SERVICE (a port number or service name) to stream
 /// socket addresses of any family.
 ///
-/// Uses a fresh `cares_resolver` when the build defines
-/// `NXTRT_HAVE_CARES`, which suspends only the awaiting task. Otherwise it
+/// Windows uses native `windows_resolver`; POSIX uses a fresh
+/// `cares_resolver` when the build defines `NXTRT_HAVE_CARES`.
+/// Both suspend only the awaiting task. Otherwise it
 /// uses `libc_resolver`, whose getaddrinfo(3) call blocks the whole deck
-/// thread until it returns. Throws `runtime_error` when resolution fails.
+/// thread until it returns. Native Windows errors throw `system_error`;
+/// POSIX errors throw `runtime_error`.
 inline task<std::vector<resolved_address>> resolve_tcp(
     std::string host,
     std::string service)
 {
-#if defined(NXTRT_HAVE_CARES)
+#if defined(_WIN32)
+    auto resolver = windows_resolver{};
+#elif defined(NXTRT_HAVE_CARES)
     auto resolver = cares_resolver{};
 #else
     auto resolver = libc_resolver{};
@@ -60,7 +63,7 @@ inline task<std::vector<resolved_address>> resolve_tcp(
 /// @code
 /// auto fd = co_await nxtrt::net::connect_tcp("example.com", "443");
 /// @endcode
-inline task<nxt::unique_fd> connect_tcp(
+inline task<unique_socket> connect_tcp(
     std::string host,
     std::string service)
 {

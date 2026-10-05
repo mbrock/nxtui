@@ -6,6 +6,7 @@
 #include <nxt/stacktrace.hpp>
 #include <nxtai/agent.hpp>
 #include <nxtai/agent_tools.hpp>
+#include <nxtai/responses_transport.hpp>
 #include <nxtai/tool_json.hpp>
 
 #include <array>
@@ -23,8 +24,6 @@
 #include <vector>
 
 namespace {
-
-constexpr auto openai_sse_body_buffer_size = std::size_t{1024 * 1024};
 
 struct cli_options
 {
@@ -45,32 +44,8 @@ struct missing_prompt : nxtrt::runtime_error
     }
 };
 
-struct openai_http_error : nxtrt::runtime_error
-{
-    openai_http_error(int status, std::string reason)
-        : nxtrt::runtime_error{"OpenAI Responses HTTP error"}
-        , status(status)
-        , reason(std::move(reason))
-    {
-    }
-
-    int status = 0;
-    std::string reason;
-};
-
-struct openai_unexpected_content_type : nxtrt::runtime_error
-{
-    openai_unexpected_content_type(
-        std::string expected, std::optional<std::string> actual)
-        : nxtrt::runtime_error{"OpenAI Responses unexpected content-type"}
-        , expected(std::move(expected))
-        , actual(std::move(actual))
-    {
-    }
-
-    std::string expected;
-    std::optional<std::string> actual;
-};
+using openai_http_error = nxtai::responses_http_error;
+using openai_unexpected_content_type = nxtai::responses_content_type_error;
 
 [[noreturn]] void print_help_and_exit()
 {
@@ -157,18 +132,6 @@ nxtrt::task<std::string> read_env_string(const char * name)
     co_return env_string(name);
 }
 
-std::string nxtllm_accept_encoding_header()
-{
-    auto value = std::string{"gzip, deflate"};
-#if defined(NXTRT_HAVE_ZSTD)
-    value += ", zstd";
-#endif
-#if defined(NXTRT_HAVE_BROTLI)
-    value += ", br";
-#endif
-    return value;
-}
-
 nxtai::responses::openai_responses_request
 make_request(const cli_options & options, std::string api_key)
 {
@@ -181,63 +144,6 @@ make_request(const cli_options & options, std::string api_key)
         .reasoning_summary = {},
         .store = options.store,
     };
-}
-
-nxtrt::http::request
-openai_request(const nxtai::responses::openai_responses_request & request)
-{
-    return nxtrt::http::request{
-        .method = "POST",
-        .target = "/v1/responses",
-        .host = "api.openai.com",
-        .headers =
-            {
-                {"User-Agent", "nxtllm/0"},
-                {"Accept", "text/event-stream"},
-                {"Accept-Encoding", nxtllm_accept_encoding_header()},
-                {"Content-Type", "application/json"},
-                {"Authorization", "Bearer " + request.api_key},
-                {"Connection", "close"},
-            },
-        .body = nxtai::responses::openai_responses_body(request),
-    };
-}
-
-bool response_status_is_success(const nxtrt::http::response_head & head)
-{
-    return head.status >= 200 && head.status < 300;
-}
-
-std::optional<std::string>
-response_content_media_type(const nxtrt::http::response_head & head)
-{
-    auto value = nxtrt::http::header_value(head, "content-type");
-    if (!value)
-        return std::nullopt;
-    auto semicolon = value->find(';');
-    auto media_type = nxtrt::http::trim_ascii(value->substr(0, semicolon));
-    return std::string{media_type};
-}
-
-nxtrt::task<nxtrt::http::response_head> open_response_stream(
-    nxtrt::tls::tls13_client_session & tls, std::string_view request_text)
-{
-    co_await tls.handshake("api.openai.com");
-    co_await tls.write_all(request_text);
-
-    auto head = co_await nxtrt::http::read_response_head(tls);
-    if (!response_status_is_success(head))
-        throw openai_http_error{head.status, head.reason};
-
-    auto media_type = response_content_media_type(head);
-    if (!media_type
-        || !nxtrt::http::iequals(*media_type, "text/event-stream"))
-        throw openai_unexpected_content_type{
-            "text/event-stream",
-            std::move(media_type),
-        };
-
-    co_return head;
 }
 
 struct console_observer
@@ -260,65 +166,6 @@ struct console_observer
         std::cerr << "[tool " << result.call.name
                   << (result.result.failed ? " failed" : " done") << "]\n";
         co_return;
-    }
-};
-
-struct stream_request
-{
-    nxtai::responses::openai_responses_request request;
-    console_observer & observer;
-    std::array<std::byte, 16 * 1024> socktxbuf{};
-    std::array<std::byte, 64 * 1024> sockrxbuf{};
-    std::array<std::byte, 64 * 1024> tlsbuf{};
-
-    nxtrt::task<nxtai::responses::response_result> operator()()
-    {
-        return stream_openai_response();
-    }
-
-private:
-    nxtrt::task<nxtai::responses::response_result> stream_openai_response()
-    {
-        auto request_text = nxtrt::http::serialize(openai_request(request));
-
-        auto socket = nxtrt::net::socket{
-            co_await nxtrt::net::connect_tcp("api.openai.com", "443"),
-            std::span{socktxbuf},
-            std::span{sockrxbuf},
-        };
-
-        auto tls = nxtrt::tls::tls13_client_session{
-            socket,
-            std::span{tlsbuf},
-        };
-
-        auto head = co_await open_response_stream(tls, request_text);
-
-        auto body = nxtrt::http::response_body_decoding_reader{
-            tls,
-            head,
-            openai_sse_body_buffer_size};
-        auto events = nxtrt::http::sse_event_parser(body);
-
-        auto decoder = nxtai::responses::stream_decoder{};
-        while (auto event = co_await events.take()) {
-            if (auto delta = co_await decoder.accept(event->type, event->data))
-                co_await observer.text(std::move(*delta));
-            if (decoder.completed)
-                co_return decoder.finish();
-        }
-        co_return decoder.finish();
-    }
-};
-
-struct openai_transport
-{
-    nxtrt::task<nxtai::responses::response_result> operator()(
-        const nxtai::responses::openai_responses_request & request,
-        console_observer & observer)
-    {
-        auto stream = stream_request{.request = request, .observer = observer};
-        co_return co_await stream();
     }
 };
 
@@ -363,7 +210,7 @@ nxtrt::task<int> run_nxtllm(cli_options options)
     }
 
     auto observer = console_observer{output};
-    auto transport = openai_transport{};
+    auto transport = nxtai::responses_transport{};
     co_await nxtai::run_agent(std::move(request), tools, transport, observer,
         {.max_turns = options.max_turns});
     co_await nxtrt::write_all(output, "\n");

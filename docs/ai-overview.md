@@ -17,8 +17,11 @@ provide both). `--max-turns N` bounds model requests, defaulting to 32.
 
 ## Ownership and response handling
 
-`nxtllm.cpp` owns each connection, verified TLS session, HTTP decoding reader,
-and SSE feed. `responses_stream.hpp` decodes events independently of terminal
+`responses_transport.hpp` owns each connection, verified TLS session, HTTP
+decoding reader, and SSE feed. The CLI and native hosts share this transport;
+each call borrows the transport and an observer with awaitable
+`text(std::string)`, and owns a copied request and its network buffers.
+`responses_stream.hpp` decodes events independently of terminal
 rendering. Text and refusal deltas stream immediately; argument and reasoning
 updates do not trigger tool execution. A successful `response.completed`
 snapshot supplies the canonical ordered output items, so interleaved events
@@ -46,6 +49,45 @@ the old UI runtime is not part of the agent loop.
 Offline fixtures in `test/ai-agent-test.cpp` exercise the model/tool/model
 loop, both history modes, reasoning preservation, multiple calls, unknown-tool
 results, cancellation, turn limits, malformed events, and premature EOF.
+
+## Native Windows/UWP transport
+
+The installed `nxtrt-iocp` package exports the same HTTP/TLS/Responses and
+agent headers without linking POSIX process/terminal code, Wisp, or libvterm:
+
+```cpp
+#include <nxtai/responses_transport.hpp>
+
+// Inside a task running on an IOCP deck. Keep transport and observer alive
+// through completion or cancellation drain. observer.text is awaitable.
+auto transport = nxtai::responses_transport{{.ca_file = public_ca_path}};
+auto request = nxtai::responses::openai_responses_request{
+    .api_key = runtime_key,
+    .model = "gpt-6-luna",
+    .input = prompt,
+};
+auto response = co_await transport(std::move(request), observer);
+```
+
+`run_agent` accepts this transport and a host-defined registry. The supplied
+filesystem/shell tools remain POSIX-only; a conversation needs no registry.
+The caller owns conversational history between calls (append output items
+verbatim, including opaque reasoning content, then the next user item).
+Request `reasoning.encrypted_content` for stateless reasoning continuation.
+
+UWP must supply an explicit public PEM CA bundle from its package or
+LocalState. Chain, server-purpose, expiry, key-usage and SAN hostname/IP
+verification remain mandatory. No native system-store fallback or verification
+switch exists. The bundle is read with the app CRT into libcrypto's memory
+BIO; the UWP library itself has no stdio/config/environment loading. Update
+public roots as part of packaging; the application must not trust certificates
+received from the server merely because they arrived over the network.
+
+Load credentials at runtime from a separately provisioned LocalState file;
+never bake them into source, a derivation, Nix store path, package or logs.
+The transport neither loads nor logs credentials and has no retries or model
+substitution. Hosts provide timeouts/cancellation using ordinary task groups.
+See [building](building.md) for the portable probe and cross-build commands.
 
 ## Tools as pool work
 

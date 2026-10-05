@@ -250,9 +250,8 @@ openai_responses_body(const openai_responses_request & request)
 }
 
 /// Complete `POST https://api.openai.com/v1/responses` request with SSE
-/// `Accept`, JSON body, and bearer authorization. `nxtllm` builds its own
-/// `nxtrt::http::request` instead, adding `Accept-Encoding` and
-/// `Connection: close`.
+/// `Accept`, JSON body, and bearer authorization. `responses_transport`
+/// adds `Accept-Encoding` and changes `Connection` to `close`.
 [[nodiscard]] inline nxt::http::request
 openai_responses_http_request(const openai_responses_request & request)
 {
